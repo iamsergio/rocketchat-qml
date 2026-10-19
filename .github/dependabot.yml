@@ -8,8 +8,22 @@ updates:
     directory: "/"
     schedule:
       interval: "monthly"
+    # Only propose releases that are at least two weeks old.
+    cooldown:
+      default-days: 14
     open-pull-requests-limit: 5
     groups:
       action-updates:
+        patterns:
+          - "*"
+  - package-ecosystem: "cargo"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+    cooldown:
+      default-days: 14
+    open-pull-requests-limit: 5
+    groups:
+      cargo-updates:
         patterns:
           - "*"
