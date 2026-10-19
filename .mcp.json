@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "qt-commander": {
+      "command": "uv",
+      "args": ["run", "--project", "3rdparty/QtCommander", "qt-commander-mcp"]
+    }
+  }
+}

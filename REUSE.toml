@@ -20,7 +20,8 @@ path = [
     "PLAN.md",
     "TRACEABILITY.md",
     "Cargo.lock",
-    "vcpkg.json"
+    "vcpkg.json",
+    ".mcp.json"
 ]
 precedence = "aggregate"
 SPDX-FileCopyrightText = "2026 Sergio Martins"
