@@ -34,7 +34,7 @@ Done when: the app opens a window showing the version string, which comes from R
 - [x] CI: fmt, clippy, `cargo test`, `cargo deny` (licenses/advisories), `reuse lint`, CMake build, GUI tests
 - [x] `.mcp.json` entry for QtCommander (dev only)
 - [x] `scripts/run_test_server.sh`: local Rocket.Chat (docker by default, podman with `RC_ENGINE=podman`) with MongoDB and NATS, admin preset, wizard and rate limits off
-- [ ] Update README (build requirements: Rust, Qt ≥ 6.12, `git submodule update --init`)
+- [x] Update README (build requirements: Rust, Qt ≥ 6.12, `git submodule update --init`)
 
 ## Phase 1: Log in, list rooms
 
