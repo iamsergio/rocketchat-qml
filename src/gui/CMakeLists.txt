@@ -2,13 +2,14 @@
 #
 # SPDX-License-Identifier: MIT
 
-find_package(Qt6 REQUIRED COMPONENTS Core Gui Quick QuickControls2)
-
 qt_policy(SET QTP0001 NEW)
 
 qt_add_executable(rocketchat_qml main.cpp)
 
 set_target_properties(rocketchat_qml PROPERTIES AUTOMOC ON)
+
+# Lets qmllint and qmlcachegen see the Rust QML module (RocketChat.Bridge).
+get_target_property(rc_qt_export_dir rc_qt CXX_QT_EXPORT_DIR)
 
 qt_add_qml_module(
   rocketchat_qml
@@ -17,9 +18,16 @@ qt_add_qml_module(
   VERSION
   1.0
   QML_FILES
-  Main.qml)
+  Main.qml
+  IMPORT_PATH
+  ${rc_qt_export_dir}/qml_modules)
 
-target_link_libraries(rocketchat_qml PRIVATE Qt6::Core Qt6::Gui Qt6::Quick Qt6::QuickControls2)
+target_link_libraries(rocketchat_qml PRIVATE Qt6::Core Qt6::Gui Qt6::Quick Qt6::QuickControls2 rc_qt_qml_module)
+
+if(ROCKETCHATQML_SPIX)
+  target_link_libraries(rocketchat_qml PRIVATE Spix::QtQuick)
+  target_compile_definitions(rocketchat_qml PRIVATE ROCKETCHATQML_SPIX)
+endif()
 
 if(ROCKETCHATQML_DEVELOPER_MODE)
   target_compile_definitions(rocketchat_qml PRIVATE QT_QML_DEBUG ROCKETCHATQML_DEVELOPER_MODE)

@@ -1,0 +1,31 @@
+# SPDX-FileCopyrightText: 2026 Sergio Martins
+# SPDX-License-Identifier: MIT
+
+[package]
+name = "rc_qt"
+description = "cxx-qt bridge exposing rc_core to QML"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+# Linked into the Qt executable by CMake.
+crate-type = ["staticlib"]
+
+[dependencies]
+cxx.workspace = true
+cxx-qt.workspace = true
+cxx-qt-lib.workspace = true
+rc_core.workspace = true
+tracing.workspace = true
+
+[features]
+# Set by CMake with ROCKETCHATQML_DEVELOPER_MODE: also log to a file next to the executable.
+developer-mode = []
+
+[build-dependencies]
+cxx-qt-build.workspace = true
+
+[lints]
+workspace = true

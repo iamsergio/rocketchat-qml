@@ -1,0 +1,18 @@
+# SPDX-FileCopyrightText: 2026 Sergio Martins
+# SPDX-License-Identifier: MIT
+
+[package]
+name = "rc_core"
+description = "GUI-agnostic application core"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+thiserror.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,43 @@
+# SPDX-FileCopyrightText: 2026 Sergio Martins
+# SPDX-License-Identifier: MIT
+
+# Crate names use underscores, not hyphens: cxx-qt-cmake looks crates up by their CMake target
+# name, so a hyphenated crate never exports its generated files.
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+# No version: version.txt is the only source (see rc_core::VERSION).
+edition = "2024"
+rust-version = "1.98"
+license = "MIT"
+publish = false
+
+[workspace.dependencies]
+cxx = "1.0.176"
+cxx-qt = "0.10.0"
+cxx-qt-build = "0.10.0"
+cxx-qt-lib = "0.10.0"
+rc_api = { path = "crates/rc_api" }
+rc_core = { path = "crates/rc_core" }
+roxmltree = "0.21.1"
+thiserror = "2.0.21"
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", default-features = false, features = ["ansi", "env-filter", "fmt", "std"] }
+# Plain HTTP only: no TLS, no compression.
+ureq = { version = "3.4.2", default-features = false }
+
+[workspace.lints.rust]
+# Crates that need unsafe (only rc_qt) allow it at the crate root.
+unsafe_code = "deny"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+todo = "deny"
+unimplemented = "deny"
+unreachable = "deny"

@@ -1,0 +1,13 @@
+{
+  "$comment": "builtin-baseline must be the commit of the 3rdparty/vcpkg submodule: move them together.",
+  "name": "rocketchat-qml",
+  "builtin-baseline": "5bc3a07440d08549832055eaddc3979eeeaad51b",
+  "features": {
+    "spix": {
+      "description": "Spix UI test server, for the GUI tests",
+      "dependencies": [
+        "anyrpc"
+      ]
+    }
+  }
+}

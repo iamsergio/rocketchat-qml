@@ -1,0 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Sergio Martins
+# SPDX-License-Identifier: MIT
+
+[toolchain]
+channel = "1.98.1"
+components = ["clippy", "rustfmt"]
