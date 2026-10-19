@@ -23,6 +23,8 @@ rc_api = { path = "crates/rc_api" }
 rc_core = { path = "crates/rc_core" }
 roxmltree = "0.21.1"
 thiserror = "2.0.21"
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", default-features = false, features = ["ansi", "env-filter", "fmt", "std"] }
 # Plain HTTP only: no TLS, no compression.
 ureq = { version = "3.4.2", default-features = false }
 

@@ -5,5 +5,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod logging;
+
 /// Application version, from `version.txt` at the repository root.
 pub const VERSION: &str = include_str!("../../../version.txt").trim_ascii();

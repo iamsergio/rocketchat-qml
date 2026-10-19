@@ -6,6 +6,8 @@
 #include <QQmlApplicationEngine>
 #include <QUrl>
 
+#include <rc_qt/src/logging.cxx.h>
+
 #include <cstdlib>
 
 #ifdef ROCKETCHATQML_SPIX
@@ -17,6 +19,8 @@
 
 int main(int argc, char *argv[])
 {
+    rc_qt::init_logging();
+
     QGuiApplication app(argc, argv);
 
     QCommandLineParser parser;

@@ -46,12 +46,17 @@ FetchContent_Declare(Corrosion SOURCE_DIR ${PROJECT_SOURCE_DIR}/3rdparty/corrosi
 FetchContent_Declare(CxxQt SOURCE_DIR ${PROJECT_SOURCE_DIR}/3rdparty/cxx-qt-cmake)
 FetchContent_MakeAvailable(CxxQt)
 
+set(rc_qt_features)
+if(ROCKETCHATQML_DEVELOPER_MODE)
+  list(APPEND rc_qt_features FEATURES developer-mode)
+endif()
 cxx_qt_import_crate(
   MANIFEST_PATH
   Cargo.toml
   CRATES
   rc_qt
   LOCKED
+  ${rc_qt_features}
   QT_MODULES
   Qt6::Core
   Qt6::Gui

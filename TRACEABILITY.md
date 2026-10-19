@@ -7,6 +7,7 @@ Every test carries a `// <ID>` comment. A feature can have tests at several leve
 | ID | Feature | Tests |
 |---|---|---|
 | APP-001 | App starts and shows the version from Rust | GUI: `crates/rc_gui_tests/tests/app.rs` |
+| APP-002 | Logs to stderr, and to a file in developer-mode builds | core: `crates/rc_core/tests/logging.rs` |
 
 ## Authentication
 
