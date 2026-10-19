@@ -26,7 +26,7 @@ Done when: the app opens a window showing the version string, which comes from R
 - [x] CMake: Corrosion + cxx-qt, `find_package(Qt6 6.12 ...)`. `rc_qt` builds as a static lib and is linked into the existing `src/gui` executable
 - [x] `AppInfo` QObject (version) exposed to QML and shown in `Main.qml`
 - [x] vcpkg as a submodule in `3rdparty/vcpkg` (the iamsergio fork, same commit Spix pins). Root `vcpkg.json` in manifest mode, with AnyRPC under a `spix` feature so builds without Spix pull nothing. The presets set the vcpkg toolchain
-- [ ] Spix: CMake option `ROCKETCHATQML_SPIX` (ON in `dev`), declared before `project()` so it can add `spix` to `VCPKG_MANIFEST_FEATURES`. `add_subdirectory(3rdparty/spix)` with only the QtQuick scene, no examples or tests. The host starts the test server on the port given by `--spix-port`
+- [x] Spix: CMake option `ROCKETCHATQML_SPIX` (ON in `dev`), declared before `project()` so it can add `spix` to `VCPKG_MANIFEST_FEATURES`. `add_subdirectory(3rdparty/spix)` with only the QtQuick scene, no examples or tests. The host starts the test server on the port given by `--spix-port`
 - [ ] `rc_gui_tests`: harness that launches the app binary (`QT_QPA_PLATFORM=offscreen`) on a free port, waits for Spix, and kills the app on drop. The binary is configurable, so the same tests can target the Slint app later. Smoke test APP-001
 - [ ] `rc_gui_tests`: `Gui` client wrapper that exposes only the Spix calls both servers support, and the path constants module
 - [ ] `tracing` setup: stderr, plus a log file in dev builds

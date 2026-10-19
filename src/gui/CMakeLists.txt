@@ -24,6 +24,11 @@ qt_add_qml_module(
 
 target_link_libraries(rocketchat_qml PRIVATE Qt6::Core Qt6::Gui Qt6::Quick Qt6::QuickControls2 rc_qt_qml_module)
 
+if(ROCKETCHATQML_SPIX)
+  target_link_libraries(rocketchat_qml PRIVATE Spix::QtQuick)
+  target_compile_definitions(rocketchat_qml PRIVATE ROCKETCHATQML_SPIX)
+endif()
+
 if(ROCKETCHATQML_DEVELOPER_MODE)
   target_compile_definitions(rocketchat_qml PRIVATE QT_QML_DEBUG ROCKETCHATQML_DEVELOPER_MODE)
 endif()

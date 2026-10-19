@@ -4,6 +4,12 @@
 
 cmake_minimum_required(VERSION 3.24)
 
+# Before project(): that's where the vcpkg toolchain installs the manifest's features.
+option(ROCKETCHATQML_SPIX "Build the Spix UI test server into the app, for the GUI tests" OFF)
+if(ROCKETCHATQML_SPIX)
+  list(APPEND VCPKG_MANIFEST_FEATURES spix)
+endif()
+
 project(rocketchat_qml LANGUAGES CXX)
 
 option(ROCKETCHATQML_DEVELOPER_MODE "Build with developer options" OFF)
@@ -22,7 +28,11 @@ include(cmake/CompilerFlags.cmake)
 
 find_package(Qt6 6.12 REQUIRED COMPONENTS Core Gui Qml Quick QuickControls2)
 
-foreach(submodule corrosion cxx-qt-cmake)
+set(submodules corrosion cxx-qt-cmake)
+if(ROCKETCHATQML_SPIX)
+  list(APPEND submodules spix)
+endif()
+foreach(submodule ${submodules})
   if(NOT EXISTS ${PROJECT_SOURCE_DIR}/3rdparty/${submodule}/CMakeLists.txt)
     message(FATAL_ERROR "3rdparty/${submodule} is missing. Run: git submodule update --init")
   endif()
@@ -53,5 +63,15 @@ cxx_qt_import_qml_module(rc_qt_qml_module URI ${RC_QT_QML_URI} SOURCE_CRATE rc_q
 # already linked through rc_qt_qml_module, so point the plugin name at it.
 string(REPLACE "." "_" rc_qt_qml_plugin ${RC_QT_QML_URI})
 add_library(${rc_qt_qml_plugin} ALIAS rc_qt_qml_module)
+
+if(ROCKETCHATQML_SPIX)
+  # Only the Qt Quick scene. Spix finds AnyRPC through vcpkg.
+  set(SPIX_BUILD_EXAMPLES OFF)
+  set(SPIX_BUILD_TESTS OFF)
+  set(SPIX_BUILD_QTQUICK ON)
+  set(SPIX_BUILD_QTWIDGETS OFF)
+  set(SPIX_BUILD_SLINT OFF)
+  add_subdirectory(3rdparty/spix)
+endif()
 
 add_subdirectory(src)

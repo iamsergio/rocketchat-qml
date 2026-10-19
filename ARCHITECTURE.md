@@ -22,7 +22,7 @@ Dependencies only point downwards. Nothing in `rc_core` or `rc_api` knows about 
 - **rc_core**: domain types (rooms, messages, users, with ID newtypes), the session state machine, the sync engine and the use cases (log in, open a room, send...). Frontends drive it through a `Client` handle that accepts commands and emits events. It defines ports (traits) for what it needs from outside: secret storage, persistence and a cache directory. Adapters implement them, with in-memory versions for tests.
 - **rc_qt**: cxx-qt QObjects and `QAbstractListModel`s that turn core events into Qt properties, signals and incremental model updates. It is the only crate that uses `unsafe` (cxx-qt bridge code).
 - **QML**: presentation only. It binds to view models and calls their invokables. It has no business logic and makes no network calls.
-- **C++ host** (`src/gui/main.cpp`): creates `QGuiApplication`, registers the Rust QML module, loads `Main.qml`, and starts the Spix test server in test-enabled builds. It does nothing else.
+- **C++ host** (`src/gui/main.cpp`): creates `QGuiApplication`, registers the Rust QML module, loads `Main.qml`, and, in builds with `ROCKETCHATQML_SPIX`, starts the Spix test server when given `--spix-port <port>`. It does nothing else.
 
 Adapter crates (added when needed): `rc_store_sqlite` (persistence) and a keyring-based secret store.
 
