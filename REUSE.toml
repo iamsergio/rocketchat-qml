@@ -14,7 +14,8 @@ path = [
     ".cmake-format.yaml",
     ".github/dependabot.yml",
     ".qmllint.ini",
-    "version.txt"
+    "version.txt",
+    ".gitmodules"
 ]
 precedence = "aggregate"
 SPDX-FileCopyrightText = "2026 Sergio Martins"

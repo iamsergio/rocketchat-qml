@@ -1,0 +1,9 @@
+[submodule "3rdparty/QtCommander"]
+	path = 3rdparty/QtCommander
+	url = ssh://git@projects.kdab.com:222/KDAB/QtCommander.git
+	# Private, development-only (MCP server for agents). Fetch it explicitly with
+	# git submodule update --init --checkout 3rdparty/QtCommander
+	update = none
+[submodule "3rdparty/spix"]
+	path = 3rdparty/spix
+	url = https://github.com/iamsergio/spix.git
