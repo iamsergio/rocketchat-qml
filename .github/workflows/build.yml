@@ -15,7 +15,7 @@ jobs:
     # Also what the runner logs ("Running job: ..."). Changes per branch, so it can't be a required check.
     name: Build (${{ matrix.preset }}, ${{ github.head_ref || github.ref_name }})
     # Self-hosted: see .github/Dockerfile and scripts/run_ci_runner.sh. The image has Qt, Ninja, the
-    # system libraries and rustup baked in.
+    # system libraries, rustup, reuse and cargo-deny baked in.
     runs-on: [self-hosted, linux, x64, rocketchat-qml]
 
     strategy:
@@ -31,12 +31,18 @@ jobs:
     - name: Checkout submodules
       run: git submodule update --init
 
+    - name: Check licensing (REUSE)
+      run: reuse lint
+
     # Qt comes from the runner image (on PATH): rc_qt's build script needs qmake.
     - name: Check Rust formatting
       run: cargo fmt --all --check
 
     - name: Run clippy
       run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+    - name: Check dependencies (licenses, advisories)
+      run: cargo deny check
 
     - name: Run Rust tests
       run: cargo test --workspace --locked
@@ -49,3 +55,7 @@ jobs:
 
     - name: Run qmllint
       run: ninja -C ./build-${{ matrix.preset }} all_qmllint
+
+    # The Rust tests again, then the GUI tests against the app just built.
+    - name: Run tests
+      run: ctest --test-dir build-${{ matrix.preset }} --output-on-failure

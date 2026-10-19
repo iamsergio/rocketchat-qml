@@ -23,6 +23,9 @@ ARG QT_VERSION=6.12.0
 # aqtinstall 3.3.0 (2025-06-02), reuse 6.2.0 (2025-10-27)
 ARG AQTINSTALL_VERSION=3.3.0
 ARG REUSE_VERSION=6.2.0
+# cargo-deny 0.20.2, released 2026-07-09. The checksum is the one published next to the tarball.
+ARG CARGO_DENY_VERSION=0.20.2
+ARG CARGO_DENY_SHA256=9f12ed4c49936e09b48bf862b595cde2fe64fcbd9d74dfacac6131ca824c8d5f
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -55,6 +58,15 @@ RUN /opt/venv/bin/aqt install-qt linux desktop ${QT_VERSION} linux_gcc_64 --outp
     && test -x /opt/Qt/${QT_VERSION}/gcc_64/bin/qmake \
     && echo /opt/Qt/${QT_VERSION}/gcc_64/lib > /etc/ld.so.conf.d/qt.conf \
     && ldconfig
+
+# cargo-deny, the static musl build. Found by cargo as 'cargo deny' through PATH.
+RUN curl -fsSL -o /tmp/cargo-deny.tar.gz \
+        https://github.com/EmbarkStudios/cargo-deny/releases/download/${CARGO_DENY_VERSION}/cargo-deny-${CARGO_DENY_VERSION}-x86_64-unknown-linux-musl.tar.gz \
+    && echo "${CARGO_DENY_SHA256}  /tmp/cargo-deny.tar.gz" | sha256sum -c - \
+    && tar xzf /tmp/cargo-deny.tar.gz -C /usr/local/bin --strip-components=1 --no-same-owner \
+        cargo-deny-${CARGO_DENY_VERSION}-x86_64-unknown-linux-musl/cargo-deny \
+    && rm /tmp/cargo-deny.tar.gz \
+    && cargo-deny --version
 
 ENV PATH=/opt/Qt/${QT_VERSION}/gcc_64/bin:/opt/venv/bin:$PATH
 ENV CC=gcc-14 CXX=g++-14
