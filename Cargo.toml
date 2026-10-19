@@ -15,10 +15,17 @@ license = "MIT"
 publish = false
 
 [workspace.dependencies]
+apple-native-keyring-store = { version = "1.0.2", features = ["keychain"] }
 cxx = "1.0.176"
 cxx-qt = "0.10.0"
 cxx-qt-build = "0.10.0"
 cxx-qt-lib = "0.10.0"
+# Linux Secret Service through the system libdbus (pkg-config), which Qt loads as well: never
+# "vendored", or two libdbus copies would end up in one process. crypto-rust avoids OpenSSL.
+# Not the `keyring` crate: its features always pull in the zbus store, whose crates are flagged
+# unmaintained.
+dbus-secret-service-keyring-store = { version = "1.0.1", default-features = false, features = ["crypto-rust"] }
+keyring-core = "1.0.0"
 rc_api = { path = "crates/rc_api" }
 rc_core = { path = "crates/rc_core" }
 reqwest = { version = "0.13.5", default-features = false, features = ["json", "rustls", "system-proxy"] }
@@ -32,6 +39,7 @@ tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", default-features = false, features = ["ansi", "env-filter", "fmt", "std"] }
 # Plain HTTP only: no TLS, no compression.
 ureq = { version = "3.4.2", default-features = false }
+windows-native-keyring-store = "1.1.0"
 wiremock = "0.6.5"
 
 [workspace.lints.rust]

@@ -14,6 +14,8 @@ use std::process;
 use std::sync::mpsc::{self, Receiver};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use rc_core::adapters::MemoryStore;
+use rc_core::ports::SecretStore;
 use rc_core::session::{LoginFailure, SessionState};
 use rc_core::{Client, Event};
 use secrecy::SecretString;
@@ -31,9 +33,17 @@ fn admin() -> (String, SecretString) {
     (user, SecretString::from(pass))
 }
 
+/// A client with nothing stored, past its first event.
 fn start() -> (Client, Receiver<Event>) {
+    let (client, events) = start_with(MemoryStore::default());
+    assert_eq!(next(&events), SessionState::LoggedOut { failure: None });
+    (client, events)
+}
+
+/// A client on `store`; the first event is left to the caller.
+fn start_with(store: MemoryStore) -> (Client, Receiver<Event>) {
     let (tx, rx) = mpsc::channel();
-    let client = Client::start(move |event| {
+    let client = Client::start(store, move |event| {
         let _ = tx.send(event);
     })
     .unwrap();
@@ -118,4 +128,34 @@ fn admin_logs_out() {
     assert!(matches!(outcome(&events), SessionState::LoggedIn(_)));
     client.logout();
     assert_eq!(next(&events), SessionState::LoggedOut { failure: None });
+}
+
+// AUTH-004
+#[test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+fn a_new_client_resumes_the_stored_session() {
+    let (user, password) = admin();
+    let store = MemoryStore::default();
+
+    let (first, events) = start_with(store.clone());
+    assert_eq!(next(&events), SessionState::LoggedOut { failure: None });
+    first.login(&server_url(), &user, password);
+    assert!(matches!(outcome(&events), SessionState::LoggedIn(_)));
+    // Dropping flushes the queued save, like quitting the app.
+    drop(first);
+    drop(events);
+
+    // No login command this time.
+    let (second, events) = start_with(store.clone());
+    assert_eq!(next(&events), SessionState::Connecting);
+    let SessionState::LoggedIn(account) = next(&events) else {
+        panic!("resume failed");
+    };
+    assert_eq!(account.user.username, user);
+
+    second.logout();
+    assert_eq!(next(&events), SessionState::LoggedOut { failure: None });
+    // Dropping flushes the queued clear.
+    drop(second);
+    assert!(store.load().unwrap().is_none());
 }

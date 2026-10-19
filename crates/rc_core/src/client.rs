@@ -4,23 +4,32 @@
 //! The handle frontends drive the core through, and the session actor behind it.
 
 use std::sync::Arc;
+use std::sync::mpsc as std_mpsc;
+use std::time::Duration;
 
 use secrecy::SecretString;
 use tokio::runtime::{Builder, Runtime};
-use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
-use tokio::task::JoinHandle;
+use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
+use tokio::sync::{mpsc, oneshot};
+use tokio::task::{JoinHandle, JoinSet};
 
 use crate::adapters::RestConnector;
-use crate::domain::Credentials;
+use crate::domain::{Credentials, StoredSession};
 use crate::error::Error;
-use crate::ports::{Connector, ServerApi};
-use crate::session::{Established, LoginFailure, SessionState, log_in};
+use crate::ports::{Connector, SecretStore, ServerApi, StoreError};
+use crate::session::{Established, LoginFailure, SessionState, log_in, resume};
 
 #[cfg(test)]
 mod tests;
 
 /// Worker threads of the async runtime: networking only, the GUI has its own thread.
 const WORKER_THREADS: usize = 2;
+/// How long the actor waits, when stopping, for queued store writes and token revocations.
+const DRAIN_TIMEOUT: Duration = Duration::from_secs(2);
+/// How long dropping a [`Client`] waits for the actor to finish draining.
+const SHUTDOWN_WAIT: Duration = Duration::from_secs(3);
+/// How long dropping a [`Client`] waits for the runtime's threads after that.
+const RUNTIME_WAIT: Duration = Duration::from_secs(1);
 
 /// What the core tells the frontend.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -40,34 +49,45 @@ enum Command {
 
 /// The core, as seen from a frontend: commands go in, events come out through the callback given
 /// at creation. Commands never block.
+///
+/// Dropping the client stops the core. It first lets a pending logout finish (the token revocation
+/// and clearing the stored session), which blocks the dropping thread for two seconds at most, and
+/// a little longer in the worst case. Don't drop it from async code; the GUI thread owns it.
 pub struct Client {
-    // Declared first so that it's dropped first: the actor ends when its commands stop.
-    commands: UnboundedSender<Command>,
-    _runtime: Runtime,
+    // Ending the commands is what stops the actor.
+    commands: Option<UnboundedSender<Command>>,
+    /// Signalled by the actor when it has drained and is about to end.
+    finished: std_mpsc::Receiver<()>,
+    runtime: Option<Runtime>,
 }
 
 impl Client {
-    /// A client for real servers. See [`with_connector`](Self::with_connector) for `on_event`.
+    /// A client for real servers. See [`with_ports`](Self::with_ports) for `on_event`.
     ///
     /// # Errors
     ///
     /// If the async runtime can't be started.
-    pub fn start(on_event: impl Fn(Event) + Send + Sync + 'static) -> Result<Self, Error> {
-        Self::with_connector(RestConnector, on_event)
+    pub fn start(
+        store: impl SecretStore,
+        on_event: impl Fn(Event) + Send + Sync + 'static,
+    ) -> Result<Self, Error> {
+        Self::with_ports(RestConnector, store, on_event)
     }
 
-    /// A client that reaches servers through `connector`; tests pass a fake.
+    /// A client that reaches servers through `connector` and remembers the session in `store`;
+    /// tests pass fakes. If the store holds a session, the client tries to resume it.
     ///
-    /// `on_event` is called once per state change, in order, from a runtime thread. The initial
-    /// state is `LoggedOut { failure: None }` and has no event. It must return quickly and must
-    /// not touch GUI objects: a Qt frontend hops to its GUI thread inside it, e.g. with
-    /// `CxxQtThread::queue`.
+    /// `on_event` is called once per state change, in order, from a runtime thread. The first event
+    /// always comes: `Connecting` if a stored session is being resumed, `LoggedOut` otherwise.
+    /// Until then the state is unknown. It must return quickly and must not touch GUI objects: a Qt
+    /// frontend hops to its GUI thread inside it, e.g. with `CxxQtThread::queue`.
     ///
     /// # Errors
     ///
     /// If the async runtime can't be started.
-    pub fn with_connector<C: Connector>(
+    pub fn with_ports<C: Connector, S: SecretStore>(
         connector: C,
+        store: S,
         on_event: impl Fn(Event) + Send + Sync + 'static,
     ) -> Result<Self, Error> {
         let runtime = Builder::new_multi_thread()
@@ -77,19 +97,31 @@ impl Client {
             .map_err(Error::Runtime)?;
         let (commands, commands_rx) = mpsc::unbounded_channel();
         let (done_tx, done_rx) = mpsc::unbounded_channel();
+        let (finished_tx, finished) = std_mpsc::channel();
+        let (store_tx, store_rx) = mpsc::unbounded_channel();
+        let store_worker = runtime.spawn(run_store_worker(Arc::new(store), store_rx));
         let actor = Actor {
             connector: Arc::new(connector),
             state: SessionState::LoggedOut { failure: None },
             session: None,
+            resuming: None,
             attempt: 0,
             login_task: None,
+            revokes: JoinSet::new(),
+            store: Some(StoreHandle(store_tx)),
+            store_worker,
             done_tx,
             on_event: Arc::new(on_event),
         };
-        runtime.spawn(actor.run(commands_rx, done_rx));
+        runtime.spawn(async move {
+            actor.run(commands_rx, done_rx).await;
+            // Fails only if the client is gone already.
+            let _ = finished_tx.send(());
+        });
         Ok(Self {
-            commands,
-            _runtime: runtime,
+            commands: Some(commands),
+            finished,
+            runtime: Some(runtime),
         })
     }
 
@@ -103,24 +135,97 @@ impl Client {
         });
     }
 
-    /// Cancels a login in progress, or logs out. Ignored when logged out.
+    /// Cancels a login in progress, or logs out and forgets the stored session. Ignored when logged
+    /// out.
     pub fn logout(&self) {
         self.send(Command::Logout);
     }
 
     fn send(&self, command: Command) {
-        if self.commands.send(command).is_err() {
+        let sent = self
+            .commands
+            .as_ref()
+            .is_some_and(|c| c.send(command).is_ok());
+        if !sent {
             tracing::error!("the session actor is gone, command dropped");
         }
     }
 }
 
-// Dropping the client stops the actor and shuts the runtime down, which waits for its threads. Don't
-// drop it from async code; the GUI thread owns it.
+impl Drop for Client {
+    fn drop(&mut self) {
+        self.commands.take();
+        if self.finished.recv_timeout(SHUTDOWN_WAIT).is_err() {
+            tracing::warn!("the core didn't finish in time, pending work is lost");
+        }
+        // A store call stuck on a locked keyring must not hang the exit.
+        if let Some(runtime) = self.runtime.take() {
+            runtime.shutdown_timeout(RUNTIME_WAIT);
+        }
+    }
+}
 
-/// A login task's answer.
+enum StoreOp {
+    Load(oneshot::Sender<Result<Option<StoredSession>, StoreError>>),
+    Save(StoredSession),
+    Clear,
+}
+
+/// Queues secret-store calls for the store worker.
+struct StoreHandle(UnboundedSender<StoreOp>);
+
+impl StoreHandle {
+    async fn load(&self) -> Result<Option<StoredSession>, StoreError> {
+        let (answer, answered) = oneshot::channel();
+        let gone = || StoreError::Unavailable("the store worker is gone".to_owned());
+        self.0.send(StoreOp::Load(answer)).map_err(|_| gone())?;
+        answered.await.map_err(|_| gone())?
+    }
+
+    fn save(&self, session: StoredSession) {
+        self.queue(StoreOp::Save(session));
+    }
+
+    fn clear(&self) {
+        self.queue(StoreOp::Clear);
+    }
+
+    fn queue(&self, op: StoreOp) {
+        if self.0.send(op).is_err() {
+            tracing::warn!("the store worker is gone, the secret store wasn't updated");
+        }
+    }
+}
+
+/// Runs the store calls one at a time, in the order they were queued, off the async threads: they
+/// block, and a keyring can wait for the user to unlock it. Ends when the queue is closed and
+/// empty.
+async fn run_store_worker<S: SecretStore>(store: Arc<S>, mut ops: UnboundedReceiver<StoreOp>) {
+    while let Some(op) = ops.recv().await {
+        let store = Arc::clone(&store);
+        let result = tokio::task::spawn_blocking(move || match op {
+            StoreOp::Load(answer) => {
+                // The asker may have given up.
+                let _ = answer.send(store.load());
+                Ok(())
+            }
+            StoreOp::Save(session) => store.save(&session),
+            StoreOp::Clear => store.clear(),
+        })
+        .await;
+        match result {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => tracing::warn!(%error, "secret store update failed"),
+            Err(error) => tracing::error!(%error, "secret store call panicked"),
+        }
+    }
+}
+
+/// A login or resume task's answer.
 struct LoginDone<A> {
     attempt: u64,
+    /// Whether to remember the session: logins do, resumes already have it stored.
+    persist: bool,
     outcome: Result<Established<A>, LoginFailure>,
 }
 
@@ -131,14 +236,21 @@ struct Session<A> {
 }
 
 /// Owns the session state and handles one message at a time. Network calls run in spawned tasks
-/// that report back through `done_tx`.
+/// that report back through `done_tx`; secret-store calls are queued for the store worker.
 struct Actor<C: Connector> {
     connector: Arc<C>,
     state: SessionState,
     session: Option<Session<C::Api>>,
-    /// Identifies the current login attempt, so that the answer of a cancelled one is dropped.
+    /// The stored session being resumed while `Connecting`.
+    resuming: Option<StoredSession>,
+    /// Identifies the current attempt, so that the answer of a cancelled one is dropped.
     attempt: u64,
     login_task: Option<JoinHandle<()>>,
+    /// Token revocations in flight, so that stopping can wait for them.
+    revokes: JoinSet<()>,
+    /// `None` once stopping.
+    store: Option<StoreHandle>,
+    store_worker: JoinHandle<()>,
     done_tx: UnboundedSender<LoginDone<C::Api>>,
     on_event: Arc<dyn Fn(Event) + Send + Sync>,
 }
@@ -149,6 +261,7 @@ impl<C: Connector> Actor<C> {
         mut commands: UnboundedReceiver<Command>,
         mut done: UnboundedReceiver<LoginDone<C::Api>>,
     ) {
+        self.start().await;
         loop {
             tokio::select! {
                 biased;
@@ -159,8 +272,40 @@ impl<C: Connector> Actor<C> {
                 Some(done) = done.recv() => self.handle_login_done(done),
             }
         }
+        self.stop().await;
+    }
+
+    /// Looks for a stored session, before any command is handled.
+    async fn start(&mut self) {
+        let loaded = match &self.store {
+            Some(store) => store.load().await,
+            None => Ok(None),
+        };
+        let stored = loaded.unwrap_or_else(|error| {
+            tracing::warn!(%error, "can't read the stored session");
+            None
+        });
+        match stored {
+            Some(stored) => self.resume(stored),
+            None => self.set_state(SessionState::LoggedOut { failure: None }),
+        }
+    }
+
+    /// Ends the attempt in flight, then waits, for a bounded time, for what the user asked
+    /// already: store writes and token revocations.
+    async fn stop(&mut self) {
         if let Some(task) = self.login_task.take() {
             task.abort();
+        }
+        drop(self.store.take());
+        let revokes = &mut self.revokes;
+        let worker = &mut self.store_worker;
+        let drain = async {
+            while revokes.join_next().await.is_some() {}
+            let _ = worker.await;
+        };
+        if tokio::time::timeout(DRAIN_TIMEOUT, drain).await.is_err() {
+            tracing::warn!("pending logout work didn't finish in time");
         }
     }
 
@@ -180,16 +325,37 @@ impl<C: Connector> Actor<C> {
             tracing::debug!("login ignored: not logged out");
             return;
         }
-        self.attempt += 1;
-        let attempt = self.attempt;
-        self.set_state(SessionState::Connecting);
         let connector = Arc::clone(&self.connector);
-        let done = self.done_tx.clone();
         // The password lives and dies in this task.
+        self.begin_attempt(true, async move {
+            log_in(&*connector, &server, &username, &password).await
+        });
+    }
+
+    fn resume(&mut self, stored: StoredSession) {
+        let connector = Arc::clone(&self.connector);
+        self.resuming = Some(stored.clone());
+        self.begin_attempt(false, async move { resume(&*connector, &stored).await });
+    }
+
+    /// Goes to `Connecting` and runs `attempt` in a task that reports back.
+    fn begin_attempt(
+        &mut self,
+        persist: bool,
+        attempt: impl Future<Output = Result<Established<C::Api>, LoginFailure>> + Send + 'static,
+    ) {
+        self.attempt += 1;
+        let id = self.attempt;
+        self.set_state(SessionState::Connecting);
+        let done = self.done_tx.clone();
         self.login_task = Some(tokio::spawn(async move {
-            let outcome = log_in(&*connector, &server, &username, &password).await;
+            let outcome = attempt.await;
             // Fails only if the actor is gone.
-            let _ = done.send(LoginDone { attempt, outcome });
+            let _ = done.send(LoginDone {
+                attempt: id,
+                persist,
+                outcome,
+            });
         }));
     }
 
@@ -199,17 +365,32 @@ impl<C: Connector> Actor<C> {
             return;
         }
         self.login_task = None;
+        self.resuming = None;
         match done.outcome {
             Ok(established) => {
+                if done.persist
+                    && let Some(store) = &self.store
+                {
+                    store.save(StoredSession {
+                        server: established.account.server.clone(),
+                        credentials: established.credentials.clone(),
+                    });
+                }
                 self.session = Some(Session {
                     api: established.api,
                     credentials: established.credentials,
                 });
                 self.set_state(SessionState::LoggedIn(established.account));
             }
-            Err(failure) => self.set_state(SessionState::LoggedOut {
-                failure: Some(failure),
-            }),
+            Err(failure) => {
+                // The server refused the stored token for good; other failures may pass.
+                if failure == LoginFailure::SessionExpired {
+                    self.clear_store();
+                }
+                self.set_state(SessionState::LoggedOut {
+                    failure: Some(failure),
+                });
+            }
         }
     }
 
@@ -222,20 +403,38 @@ impl<C: Connector> Actor<C> {
                 // Whatever the aborted task still sends is stale.
                 self.attempt += 1;
                 self.set_state(SessionState::LoggedOut { failure: None });
+                // Cancelling a resume is a logout of the stored session.
+                if let Some(stored) = self.resuming.take() {
+                    self.clear_store();
+                    if let Ok(api) = self.connector.connect(&stored.server) {
+                        self.revoke(api, stored.credentials);
+                    }
+                }
             }
             SessionState::LoggedIn(_) => {
                 self.set_state(SessionState::LoggedOut { failure: None });
+                self.clear_store();
                 if let Some(session) = self.session.take() {
-                    // Logged out locally either way; revoking the token is best effort.
-                    tokio::spawn(async move {
-                        if let Err(error) = session.api.logout(&session.credentials).await {
-                            tracing::warn!(%error, "couldn't revoke the session on the server");
-                        }
-                    });
+                    self.revoke(session.api, session.credentials);
                 }
             }
             SessionState::LoggedOut { .. } => tracing::debug!("logout ignored: not logged in"),
         }
+    }
+
+    fn clear_store(&self) {
+        if let Some(store) = &self.store {
+            store.clear();
+        }
+    }
+
+    /// Revokes the token on the server. Best effort: we're logged out locally either way.
+    fn revoke(&mut self, api: C::Api, credentials: Credentials) {
+        self.revokes.spawn(async move {
+            if let Err(error) = api.logout(&credentials).await {
+                tracing::warn!(%error, "couldn't revoke the session on the server");
+            }
+        });
     }
 
     fn set_state(&mut self, state: SessionState) {

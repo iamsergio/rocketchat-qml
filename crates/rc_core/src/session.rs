@@ -6,7 +6,7 @@
 use rc_api::ServerVersion;
 use secrecy::SecretString;
 
-use crate::domain::{Account, Credentials};
+use crate::domain::{Account, Credentials, StoredSession};
 use crate::ports::{ApiError, Connector, ServerApi};
 
 /// The oldest Rocket.Chat the app supports. Follows the company server (see PLAN.md, Decisions);
@@ -36,6 +36,8 @@ pub enum LoginFailure {
     UnsupportedVersion { found: String, minimum: String },
     #[error("Wrong username or password")]
     InvalidCredentials,
+    #[error("Your session has expired, log in again")]
+    SessionExpired,
     /// Any other server error, with its message.
     #[error("The server reported an error: {0}")]
     Server(String),
@@ -70,6 +72,22 @@ pub(crate) fn normalize_server(input: &str) -> String {
     }
 }
 
+/// Connects and checks the server version.
+async fn connect_checked<C: Connector>(
+    connector: &C,
+    server: &str,
+) -> Result<C::Api, LoginFailure> {
+    let api = connector.connect(server)?;
+    let version = api.version().await?;
+    if version < MIN_SERVER_VERSION {
+        return Err(LoginFailure::UnsupportedVersion {
+            found: version.to_string(),
+            minimum: MIN_SERVER_VERSION.to_string(),
+        });
+    }
+    Ok(api)
+}
+
 /// Connects, checks the server version and logs in. Doesn't try to log in on a server that's too
 /// old.
 pub(crate) async fn log_in<C: Connector>(
@@ -79,19 +97,36 @@ pub(crate) async fn log_in<C: Connector>(
     password: &SecretString,
 ) -> Result<Established<C::Api>, LoginFailure> {
     let server = normalize_server(server);
-    let api = connector.connect(&server)?;
-    let version = api.version().await?;
-    if version < MIN_SERVER_VERSION {
-        return Err(LoginFailure::UnsupportedVersion {
-            found: version.to_string(),
-            minimum: MIN_SERVER_VERSION.to_string(),
-        });
-    }
+    let api = connect_checked(connector, &server).await?;
     let (credentials, user) = api.login(username, password).await?;
     Ok(Established {
         api,
         credentials,
         account: Account { server, user },
+    })
+}
+
+/// Picks up a stored session: same checks as a login, then asks the server who the credentials
+/// belong to. [`LoginFailure::SessionExpired`] means the server doesn't accept them any more.
+pub(crate) async fn resume<C: Connector>(
+    connector: &C,
+    stored: &StoredSession,
+) -> Result<Established<C::Api>, LoginFailure> {
+    let api = connect_checked(connector, &stored.server).await?;
+    let user = api
+        .me(&stored.credentials)
+        .await
+        .map_err(|error| match error {
+            ApiError::Unauthorized => LoginFailure::SessionExpired,
+            other => other.into(),
+        })?;
+    Ok(Established {
+        api,
+        credentials: stored.credentials.clone(),
+        account: Account {
+            server: stored.server.clone(),
+            user,
+        },
     })
 }
 

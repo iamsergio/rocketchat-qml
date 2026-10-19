@@ -40,12 +40,24 @@ impl ServerApi for RestApi {
         Ok((credentials_from(result.credentials), user_from(result.user)))
     }
 
+    async fn me(&self, credentials: &Credentials) -> Result<User, ApiError> {
+        let session = self.client.session(api_credentials(credentials));
+        Ok(user_from(session.me().await?))
+    }
+
     async fn logout(&self, credentials: &Credentials) -> Result<(), ApiError> {
-        let credentials = rc_api::Credentials {
-            user_id: credentials.user_id.as_str().to_owned(),
-            token: credentials.token.clone(),
-        };
-        Ok(self.client.session(credentials).logout().await?)
+        Ok(self
+            .client
+            .session(api_credentials(credentials))
+            .logout()
+            .await?)
+    }
+}
+
+fn api_credentials(credentials: &Credentials) -> rc_api::Credentials {
+    rc_api::Credentials {
+        user_id: credentials.user_id.as_str().to_owned(),
+        token: credentials.token.clone(),
     }
 }
 

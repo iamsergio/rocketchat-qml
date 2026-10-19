@@ -51,3 +51,11 @@ pub struct Account {
     pub server: String,
     pub user: User,
 }
+
+/// What is kept between runs to resume a session.
+#[derive(Clone, Debug)]
+pub struct StoredSession {
+    /// The normalized URL that was used to log in.
+    pub server: String,
+    pub credentials: Credentials,
+}

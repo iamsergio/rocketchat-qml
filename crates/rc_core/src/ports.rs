@@ -7,7 +7,7 @@
 use rc_api::ServerVersion;
 use secrecy::SecretString;
 
-use crate::domain::{Credentials, User};
+use crate::domain::{Credentials, StoredSession, User};
 
 /// Why a server call failed. Owned strings only, so that fakes can build and compare them.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
@@ -48,9 +48,61 @@ pub trait ServerApi: Clone + Send + Sync + 'static {
         password: &SecretString,
     ) -> impl Future<Output = Result<(Credentials, User), ApiError>> + Send;
 
+    /// The user the credentials belong to. Fails with [`ApiError::Unauthorized`] if they have
+    /// expired or were revoked.
+    fn me(&self, credentials: &Credentials) -> impl Future<Output = Result<User, ApiError>> + Send;
+
     /// Revokes the token on the server.
     fn logout(
         &self,
         credentials: &Credentials,
     ) -> impl Future<Output = Result<(), ApiError>> + Send;
+}
+
+/// Why the secret store failed.
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum StoreError {
+    /// No keyring service, it's locked, or access was denied.
+    #[error("the secret store isn't available: {0}")]
+    Unavailable(String),
+    /// An entry that can't be read back.
+    #[error("the stored session is unreadable: {0}")]
+    Corrupt(String),
+}
+
+/// Where the session survives restarts. The calls block: the core runs them off the async threads,
+/// one at a time and in order.
+pub trait SecretStore: Send + Sync + 'static {
+    /// `None` if nothing is stored.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError`] if the store can't be read.
+    fn load(&self) -> Result<Option<StoredSession>, StoreError>;
+
+    /// # Errors
+    ///
+    /// [`StoreError`] if the store can't be written.
+    fn save(&self, session: &StoredSession) -> Result<(), StoreError>;
+
+    /// Succeeds if nothing was stored.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError`] if the store can't be written.
+    fn clear(&self) -> Result<(), StoreError>;
+}
+
+impl SecretStore for Box<dyn SecretStore> {
+    fn load(&self) -> Result<Option<StoredSession>, StoreError> {
+        (**self).load()
+    }
+
+    fn save(&self, session: &StoredSession) -> Result<(), StoreError> {
+        (**self).save(session)
+    }
+
+    fn clear(&self) -> Result<(), StoreError> {
+        (**self).clear()
+    }
 }
