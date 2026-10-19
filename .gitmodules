@@ -7,3 +7,9 @@
 [submodule "3rdparty/spix"]
 	path = 3rdparty/spix
 	url = https://github.com/iamsergio/spix.git
+[submodule "3rdparty/corrosion"]
+	path = 3rdparty/corrosion
+	url = https://github.com/corrosion-rs/corrosion.git
+[submodule "3rdparty/cxx-qt-cmake"]
+	path = 3rdparty/cxx-qt-cmake
+	url = https://github.com/KDAB/cxx-qt-cmake.git

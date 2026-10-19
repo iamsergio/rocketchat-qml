@@ -9,5 +9,18 @@ rust-version.workspace = true
 license.workspace = true
 publish.workspace = true
 
+[lib]
+# Linked into the Qt executable by CMake.
+crate-type = ["staticlib"]
+
+[dependencies]
+cxx.workspace = true
+cxx-qt.workspace = true
+cxx-qt-lib.workspace = true
+rc_core.workspace = true
+
+[build-dependencies]
+cxx-qt-build.workspace = true
+
 [lints]
 workspace = true

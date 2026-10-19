@@ -25,10 +25,14 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v6
 
+    # Not all submodules: QtCommander is private and only used for development.
+    - name: Checkout submodules
+      run: git submodule update --init 3rdparty/corrosion 3rdparty/cxx-qt-cmake
+
     - name: Install Qt
       uses: jurplel/install-qt-action@v4
       with:
-        version: '6.8.*'
+        version: '6.12.0'
         cache: true
 
     - name: Install dependencies
