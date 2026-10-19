@@ -80,3 +80,24 @@ if(ROCKETCHATQML_SPIX)
 endif()
 
 add_subdirectory(src)
+
+# Tests run through cargo, from the source tree, into Cargo's own target directory. Like a plain
+# cargo test, rc_qt's build script finds Qt's qmake on PATH. Rust::Cargo is the toolchain's own cargo,
+# not rustup's proxy, so it is told which rustc to use, as Corrosion does for builds: otherwise
+# rustup's rustc proxy picks a toolchain from the directory of each crate it compiles, and fails for
+# crates outside this tree when there is no default toolchain.
+enable_testing()
+set(cargo_test_env "CARGO_BUILD_RUSTC=$<TARGET_FILE:Rust::Rustc>")
+add_test(
+  NAME rust_tests
+  COMMAND $<TARGET_FILE:Rust::Cargo> test --workspace --locked
+  WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
+set_tests_properties(rust_tests PROPERTIES ENVIRONMENT "${cargo_test_env}")
+if(ROCKETCHATQML_SPIX)
+  # The GUI tests are #[ignore]d so that plain cargo test, which has no app, skips them.
+  add_test(
+    NAME gui_tests
+    COMMAND $<TARGET_FILE:Rust::Cargo> test --package rc_gui_tests --locked -- --ignored
+    WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
+  set_tests_properties(gui_tests PROPERTIES ENVIRONMENT "${cargo_test_env};RC_GUI_TEST_APP=$<TARGET_FILE:rocketchat_qml>")
+endif()

@@ -30,7 +30,7 @@ Done when: the app opens a window showing the version string, which comes from R
 - [x] `rc_gui_tests`: harness that launches the app binary (`QT_QPA_PLATFORM=offscreen`) on a free port, waits for Spix, and kills the app on drop. The binary is configurable, so the same tests can target the Slint app later. Smoke test APP-001
 - [x] `rc_gui_tests`: `Gui` client wrapper that exposes only the Spix calls both servers support, and the path constants module
 - [x] `tracing` setup: stderr, plus a log file in dev builds
-- [ ] `ctest` runs `cargo test` for the workspace and the GUI tests
+- [x] `ctest` runs `cargo test` for the workspace and the GUI tests
 - [ ] CI: fmt, clippy, `cargo test`, `cargo deny` (licenses/advisories), `reuse lint`, CMake build, GUI tests
 - [ ] `.mcp.json` entry for QtCommander (dev only)
 - [x] `scripts/run_test_server.sh`: local Rocket.Chat (docker by default, podman with `RC_ENGINE=podman`) with MongoDB and NATS, admin preset, wizard and rate limits off
