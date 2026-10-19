@@ -40,6 +40,16 @@ jobs:
         sudo apt-get update
         sudo apt-get install -y ninja-build libgl1-mesa-dev libxkbcommon-dev libxcb-cursor0
 
+    # After installing Qt: rc_qt's build script needs qmake.
+    - name: Check Rust formatting
+      run: cargo fmt --all --check
+
+    - name: Run clippy
+      run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+    - name: Run Rust tests
+      run: cargo test --workspace --locked
+
     - name: Configure CMake
       run: cmake --preset=${{ matrix.preset }}
 
