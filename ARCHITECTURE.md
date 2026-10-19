@@ -19,7 +19,7 @@ A Rocket.Chat desktop client. The logic is in Rust and doesn't depend on any GUI
 Dependencies only point downwards. Nothing in `rc_core` or `rc_api` knows about Qt or Slint.
 
 - **rc_api**: a typed client for the Rocket.Chat REST API and the realtime DDP protocol over WebSocket. It keeps no application state. Wire (serde) types stay here, and `rc_core` maps them to domain types so that protocol quirks don't leak upwards.
-- **rc_core**: domain types (rooms, messages, users, with ID newtypes), the session state machine, the sync engine and the use cases (log in, open a room, send...). Frontends drive it through a `Client` handle that accepts commands and emits events. It defines ports (traits) for what it needs from outside: secret storage, persistence and a cache directory. Adapters implement them, with in-memory versions for tests.
+- **rc_core**: domain types (rooms, messages, users, with ID newtypes), the session state machine, the sync engine and the use cases (log in, open a room, send...). Frontends drive it through a `Client` handle that accepts commands and emits events. It defines ports (traits) for what it needs from outside: the server API, secret storage, persistence and a cache directory. Adapters implement them, with in-memory versions for tests.
 - **rc_qt**: cxx-qt QObjects and `QAbstractListModel`s that turn core events into Qt properties, signals and incremental model updates. It is the only crate that uses `unsafe` (cxx-qt bridge code).
 - **QML**: presentation only. It binds to view models and calls their invokables. It has no business logic and makes no network calls.
 - **C++ host** (`src/gui/main.cpp`): sets up logging through `rc_qt` (`rc_core::logging`: stderr, plus `<executable>.log` in developer-mode builds, filtered by `RUST_LOG`), creates `QGuiApplication`, registers the Rust QML module, loads `Main.qml`, and, in builds with `ROCKETCHATQML_SPIX`, starts the Spix test server when given `--spix-port <port>`. It does nothing else.
@@ -38,7 +38,7 @@ Test-only crates:
   - **Session actor**: a single task that owns the authoritative client state, so the state needs no mutexes. It processes commands one at a time.
   - **I/O tasks**: the DDP connection (read loop, ping, reconnect with backoff), REST requests and avatar/file downloads. They report back to the actor through channels.
 - **Commands (GUI → core)**: sent on a non-blocking `mpsc` channel.
-- **Events (core → GUI)**: a forwarder task receives core events and hands each one to the GUI thread through `CxxQtThread::queue`, where the view model applies it as a diff (insert, update or remove rows). Qt objects are never touched from a Tokio thread.
+- **Events (core → GUI)**: the frontend gives `Client` an event callback, which the actor calls in order from a runtime thread. The callback hands each event to the GUI thread through `CxxQtThread::queue`, where the view model applies it as a diff (insert, update or remove rows). Qt objects are never touched from a Tokio thread.
 
 ## GUI testing contract
 

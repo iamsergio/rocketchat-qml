@@ -10,7 +10,10 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+rc_api.workspace = true
+secrecy.workspace = true
 thiserror.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync"] }
 tracing.workspace = true
 tracing-subscriber.workspace = true
 
