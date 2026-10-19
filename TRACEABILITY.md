@@ -1,6 +1,6 @@
 # Traceability
 
-Every test carries a `// <ID>` comment. A feature can have tests at several levels (unit, core integration against `rc-fake-server`, GUI through Spix).
+Every test carries a `// <ID>` comment. A feature can have tests at several levels (unit, core integration against `rc_fake_server`, GUI through Spix).
 
 ## App
 

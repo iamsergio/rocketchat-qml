@@ -18,7 +18,8 @@ path = [
     ".gitmodules",
     "ARCHITECTURE.md",
     "PLAN.md",
-    "TRACEABILITY.md"
+    "TRACEABILITY.md",
+    "Cargo.lock"
 ]
 precedence = "aggregate"
 SPDX-FileCopyrightText = "2026 Sergio Martins"
