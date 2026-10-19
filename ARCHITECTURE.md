@@ -68,6 +68,7 @@ The harness starts the binary named by `RC_GUI_TEST_APP` with `--spix-port <free
 | thiserror | Typed errors in library crates |
 | tracing | Structured logging |
 | ureq, roxmltree | HTTP and XML for the small XML-RPC client in `rc_gui_tests` (Spix uses a handful of value types, so no XML-RPC crate) |
+| wiremock | Dev only: mock HTTP server for the `rc_api` tests |
 | secrecy | Keeps passwords and tokens out of logs and `Debug` output |
 | keyring | OS credential storage for the session token |
 | 3rdparty/spix (fork) | UI test server inside the app, with Qt Quick and Slint backends and XML-RPC control. Needs AnyRPC |

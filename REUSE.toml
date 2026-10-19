@@ -26,3 +26,9 @@ path = [
 precedence = "aggregate"
 SPDX-FileCopyrightText = "2026 Sergio Martins"
 SPDX-License-Identifier = "MIT"
+
+[[annotations]]
+path = "crates/rc_api/tests/fixtures/**"
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2026 Sergio Martins"
+SPDX-License-Identifier = "MIT"

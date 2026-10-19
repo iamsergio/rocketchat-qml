@@ -9,7 +9,7 @@ yanked = "deny"
 
 [licenses]
 # Exactly what the lock file needs: cargo-deny warns about allowed licenses that no crate uses.
-allow = ["Apache-2.0", "MIT", "Unicode-3.0", "Zlib"]
+allow = ["Apache-2.0", "BSD-3-Clause", "CDLA-Permissive-2.0", "ISC", "MIT", "Unicode-3.0", "Zlib"]
 
 [bans]
 # Duplicates come from build dependencies (cxx-qt's generators), which we don't control.
