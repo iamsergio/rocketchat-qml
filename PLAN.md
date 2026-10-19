@@ -27,8 +27,8 @@ Done when: the app opens a window showing the version string, which comes from R
 - [x] `AppInfo` QObject (version) exposed to QML and shown in `Main.qml`
 - [x] vcpkg as a submodule in `3rdparty/vcpkg` (the iamsergio fork, same commit Spix pins). Root `vcpkg.json` in manifest mode, with AnyRPC under a `spix` feature so builds without Spix pull nothing. The presets set the vcpkg toolchain
 - [x] Spix: CMake option `ROCKETCHATQML_SPIX` (ON in `dev`), declared before `project()` so it can add `spix` to `VCPKG_MANIFEST_FEATURES`. `add_subdirectory(3rdparty/spix)` with only the QtQuick scene, no examples or tests. The host starts the test server on the port given by `--spix-port`
-- [ ] `rc_gui_tests`: harness that launches the app binary (`QT_QPA_PLATFORM=offscreen`) on a free port, waits for Spix, and kills the app on drop. The binary is configurable, so the same tests can target the Slint app later. Smoke test APP-001
-- [ ] `rc_gui_tests`: `Gui` client wrapper that exposes only the Spix calls both servers support, and the path constants module
+- [x] `rc_gui_tests`: harness that launches the app binary (`QT_QPA_PLATFORM=offscreen`) on a free port, waits for Spix, and kills the app on drop. The binary is configurable, so the same tests can target the Slint app later. Smoke test APP-001
+- [x] `rc_gui_tests`: `Gui` client wrapper that exposes only the Spix calls both servers support, and the path constants module
 - [ ] `tracing` setup: stderr, plus a log file in dev builds
 - [ ] `ctest` runs `cargo test` for the workspace and the GUI tests
 - [ ] CI: fmt, clippy, `cargo test`, `cargo deny` (licenses/advisories), `reuse lint`, CMake build, GUI tests

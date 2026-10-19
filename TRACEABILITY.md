@@ -6,7 +6,7 @@ Every test carries a `// <ID>` comment. A feature can have tests at several leve
 
 | ID | Feature | Tests |
 |---|---|---|
-| APP-001 | App starts and shows the version from Rust | todo |
+| APP-001 | App starts and shows the version from Rust | GUI: `crates/rc_gui_tests/tests/app.rs` |
 
 ## Authentication
 
@@ -93,3 +93,10 @@ Every test carries a `// <ID>` comment. A feature can have tests at several leve
 | DESK-001 | Desktop notifications for DMs and mentions | todo |
 | DESK-002 | Unread indicator in window title or tray | todo |
 | DESK-003 | Settings page | todo |
+
+## Test infrastructure
+
+| ID | Feature | Tests |
+|---|---|---|
+| INFRA-001 | XML-RPC client encodes Spix calls and decodes its answers and faults | unit: `crates/rc_gui_tests/src/xmlrpc.rs` |
+| INFRA-002 | GUI test harness reports an app that can't start or exits early | unit: `crates/rc_gui_tests/src/app.rs` |

@@ -49,7 +49,9 @@ There is one GUI test suite, `rc_gui_tests`, and it runs unchanged against both 
 
 Paths are kept shallow and decoupled from layout: `<window>/<name>`, where `name` is unique per window (for example `mainWindow/loginServerField`). List rows are addressed with Spix's `"text"` selector. In QML the name is the `objectName`; in Slint it is the `accessible-id`. The path constants live in `rc_gui_tests`, which is the single source of truth.
 
-Tests use only the part of the Spix protocol that both servers implement: clicks, key and text input, `existsAndVisible`, get/set of `text`, `checked`, `enabled`, `count` and geometry, `wait` and `quit`.
+Tests use only the part of the Spix protocol that both servers implement: clicks, key and text input, `existsAndVisible`, get/set of `text`, `checked`, `enabled`, `count` and geometry, `wait` and `quit`, plus `getErrors`, which the `Gui` client checks after every call so that a wrong path fails the test.
+
+The harness starts the binary named by `RC_GUI_TEST_APP` with `--spix-port <free port>` and `QT_QPA_PLATFORM=offscreen`. The GUI tests are `#[ignore]`d, so a plain `cargo test` skips them (it runs before the app is built in CI) and never reports them as passed. ctest runs them with `--ignored` and `RC_GUI_TEST_APP` set; without it they fail.
 
 ## Third-party dependencies
 
@@ -65,6 +67,7 @@ Tests use only the part of the Spix protocol that both servers implement: clicks
 | serde / serde_json | Wire-format (de)serialization |
 | thiserror | Typed errors in library crates |
 | tracing | Structured logging |
+| ureq, roxmltree | HTTP and XML for the small XML-RPC client in `rc_gui_tests` (Spix uses a handful of value types, so no XML-RPC crate) |
 | secrecy | Keeps passwords and tokens out of logs and `Debug` output |
 | keyring | OS credential storage for the session token |
 | 3rdparty/spix (fork) | UI test server inside the app, with Qt Quick and Slint backends and XML-RPC control. Needs AnyRPC |
