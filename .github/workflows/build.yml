@@ -25,9 +25,9 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v6
 
-    # Not all submodules: QtCommander is private and only used for development.
+    # Not recursive: Spix's own vcpkg copy isn't needed. QtCommander is skipped (update = none).
     - name: Checkout submodules
-      run: git submodule update --init 3rdparty/corrosion 3rdparty/cxx-qt-cmake
+      run: git submodule update --init
 
     - name: Install Qt
       uses: jurplel/install-qt-action@v4
