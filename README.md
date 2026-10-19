@@ -13,3 +13,10 @@ The first configure bootstraps vcpkg (`3rdparty/vcpkg`), which needs network acc
 unzip and tar.
 
 See [PLAN.md](PLAN.md) for the roadmap and [ARCHITECTURE.md](ARCHITECTURE.md) for the design.
+
+## CI runner
+
+CI runs on a self-hosted runner in a container (`.github/Dockerfile`). Start it on a host with Docker
+(or `RC_ENGINE=podman`) and the GitHub CLI logged in as a repository admin:
+
+    scripts/run_ci_runner.sh
