@@ -15,7 +15,10 @@ path = [
     ".github/dependabot.yml",
     ".qmllint.ini",
     "version.txt",
-    ".gitmodules"
+    ".gitmodules",
+    "ARCHITECTURE.md",
+    "PLAN.md",
+    "TRACEABILITY.md"
 ]
 precedence = "aggregate"
 SPDX-FileCopyrightText = "2026 Sergio Martins"
