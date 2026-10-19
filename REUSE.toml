@@ -1,0 +1,21 @@
+version = 1
+SPDX-PackageName = "RocketChatQml"
+SPDX-PackageDownloadLocation = "https://www.github.com/iamsergio/rocketchat-qml"
+
+[[annotations]]
+path = [
+    "README.md",
+    "CMakePresets.json",
+    ".gitignore",
+    "code.code-workspace",
+    ".clang-format",
+    ".clangd",
+    ".clang-tidy",
+    ".cmake-format.yaml",
+    ".github/dependabot.yml",
+    ".qmllint.ini",
+    "version.txt"
+]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2026 Sergio Martins"
+SPDX-License-Identifier = "MIT"

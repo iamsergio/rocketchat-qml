@@ -1,0 +1,65 @@
+{
+  "version": 2,
+  "configurePresets": [
+    {
+      "name": "base",
+      "generator": "Ninja",
+      "binaryDir": "build-${presetName}",
+      "hidden": true,
+      "cacheVariables": {
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
+      }
+    },
+    {
+      "name": "dev",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "ROCKETCHATQML_DEVELOPER_MODE": "ON"
+      },
+      "inherits": [
+        "base"
+      ]
+    },
+    {
+      "name": "dev-clang",
+      "cacheVariables": {
+        "CMAKE_C_COMPILER": "clang",
+        "CMAKE_CXX_COMPILER": "clang++"
+      },
+      "inherits": [
+        "dev"
+      ]
+    },
+    {
+      "name": "rel",
+      "inherits": [
+        "base"
+      ],
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo"
+      }
+    },
+    {
+      "name": "dev-asan",
+      "inherits": [
+        "dev"
+      ],
+      "cacheVariables": {
+        "CMAKE_CXX_FLAGS": "-DQT_FORCE_ASSERTS -fsanitize=address -fsanitize=undefined -fno-optimize-sibling-calls",
+        "CMAKE_SHARED_LINKER_FLAGS": "-fsanitize=address -fsanitize=undefined -fno-omit-frame-pointer",
+        "CMAKE_EXE_LINKER_FLAGS": "-fsanitize=address -fsanitize=undefined -fno-omit-frame-pointer"
+      }
+    },
+    {
+      "name": "dev-tsan",
+      "inherits": [
+        "dev"
+      ],
+      "cacheVariables": {
+        "CMAKE_CXX_FLAGS": "-DQT_FORCE_ASSERTS -fsanitize=thread -fno-optimize-sibling-calls",
+        "CMAKE_SHARED_LINKER_FLAGS": "-fsanitize=thread -fno-omit-frame-pointer",
+        "CMAKE_EXE_LINKER_FLAGS": "-fsanitize=thread -fno-omit-frame-pointer"
+      }
+    }
+  ]
+}
