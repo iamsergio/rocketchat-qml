@@ -21,6 +21,6 @@ pub use client::{RestClient, RestSession};
 pub use ddp::{DdpClient, DdpEvents};
 pub use error::Error;
 pub use types::{
-    Author, Credentials, CustomEmoji, DdpEvent, HistoryPage, LoginResult, Message, RoomType,
-    ServerInfo, ServerVersion, Subscription, User,
+    Author, Credentials, CustomEmoji, DdpEvent, Download, HistoryPage, LoginResult, Message,
+    RoomType, ServerInfo, ServerVersion, Subscription, User,
 };

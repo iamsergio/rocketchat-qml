@@ -108,6 +108,26 @@ struct RoomBody {
     /// The time of the last message; absent in a room without messages.
     #[serde(default, deserialize_with = "optional_timestamp")]
     lm: Option<jiff::Timestamp>,
+    /// Present once the room has an avatar of its own.
+    #[serde(default, rename = "avatarETag")]
+    avatar_etag: Option<String>,
+}
+
+/// The `user` of `users.info` and the `room` of `rooms.info`: whether it has an avatar of its own.
+#[derive(Deserialize)]
+struct AvatarOwnerBody {
+    #[serde(default, rename = "avatarETag")]
+    avatar_etag: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct UserInfoBody {
+    user: AvatarOwnerBody,
+}
+
+#[derive(Deserialize)]
+struct RoomInfoBody {
+    room: AvatarOwnerBody,
 }
 
 #[derive(Deserialize)]
@@ -235,6 +255,7 @@ impl From<SubscriptionBody> for Subscription {
             open: body.open,
             created: body.ts,
             last_message: None,
+            avatar_etag: None,
         }
     }
 }
@@ -312,6 +333,32 @@ pub(crate) fn parse_room_activity(
         .into_iter()
         .filter_map(|room| Some((room.id, room.lm?)))
         .collect())
+}
+
+/// The avatar etag of each room that has an avatar of its own, by room id.
+pub(crate) fn parse_room_avatars(
+    bytes: &[u8],
+) -> Result<HashMap<String, String>, serde_json::Error> {
+    let body: RoomsBody = serde_json::from_slice(bytes)?;
+    Ok(body
+        .update
+        .into_iter()
+        .filter_map(|room| Some((room.id, room.avatar_etag?)))
+        .collect())
+}
+
+/// The avatar etag of a `users.info` answer: none for a user with the generated avatar.
+pub(crate) fn parse_user_avatar_etag(bytes: &[u8]) -> Result<Option<String>, serde_json::Error> {
+    Ok(serde_json::from_slice::<UserInfoBody>(bytes)?
+        .user
+        .avatar_etag)
+}
+
+/// The avatar etag of a `rooms.info` answer: none for a room with the generated avatar.
+pub(crate) fn parse_room_avatar_etag(bytes: &[u8]) -> Result<Option<String>, serde_json::Error> {
+    Ok(serde_json::from_slice::<RoomInfoBody>(bytes)?
+        .room
+        .avatar_etag)
 }
 
 /// `count` is what was asked for: fewer messages than that means the history has ended.
@@ -797,8 +844,34 @@ mod tests {
                 open: false,
                 created: None,
                 last_message: None,
+                avatar_etag: None,
             }]
         );
+    }
+
+    // RICH-004
+    #[test]
+    fn only_the_rooms_with_an_avatar_of_their_own_have_an_etag() {
+        let rooms = br#"{"update":[{"_id":"r1","avatarETag":"e1"},{"_id":"r2"}],"remove":[]}"#;
+        let etags = parse_room_avatars(rooms).unwrap();
+        assert_eq!(etags.len(), 1);
+        assert_eq!(etags["r1"], "e1");
+    }
+
+    // RICH-004
+    #[test]
+    fn users_and_rooms_say_whether_they_have_an_avatar_of_their_own() {
+        let with = br#"{"user":{"_id":"u","avatarETag":"e1"},"success":true}"#;
+        let without = br#"{"user":{"_id":"u"},"success":true}"#;
+        assert_eq!(parse_user_avatar_etag(with).unwrap().as_deref(), Some("e1"));
+        assert_eq!(parse_user_avatar_etag(without).unwrap(), None);
+        let room = br#"{"room":{"_id":"r","avatarETag":"e2","avatarOrigin":"upload"}}"#;
+        assert_eq!(parse_room_avatar_etag(room).unwrap().as_deref(), Some("e2"));
+        assert_eq!(
+            parse_room_avatar_etag(br#"{"room":{"_id":"r"}}"#).unwrap(),
+            None
+        );
+        assert!(parse_user_avatar_etag(b"{}").is_err());
     }
 
     // ROOM-005

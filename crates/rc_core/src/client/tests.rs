@@ -505,6 +505,7 @@ fn subscription(id: &str, name: &str, room_type: rc_api::RoomType) -> rc_api::Su
         open: true,
         created: None,
         last_message: None,
+        avatar_etag: None,
     }
 }
 
