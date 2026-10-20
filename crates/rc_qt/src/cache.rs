@@ -5,11 +5,13 @@
 //! Plain Rust, so it can be unit-tested without Qt or a [`Client`](rc_core::Client).
 
 use rc_core::domain::{Message, Room, RoomId};
+use rc_core::emoji::CustomEmojis;
 use rc_core::rooms::RoomChange;
 use rc_core::session::SessionState;
 use rc_core::timeline::{TimelineChange, TimelineStatus};
 use rc_core::{Connection, Event};
 
+use crate::rich_html::Viewer;
 use crate::room_view::{RoomState, room_state};
 use crate::session_view::{SessionView, session_view};
 
@@ -24,6 +26,10 @@ pub struct Cache {
     room: Option<RoomId>,
     messages: Vec<Message>,
     status: TimelineStatus,
+    /// The logged-in user, if any.
+    username: Option<String>,
+    /// `None` until the core sends some: a `HashMap` can't be built in `new`.
+    emoji: Option<CustomEmojis>,
 }
 
 impl Default for Cache {
@@ -48,6 +54,8 @@ impl Cache {
                 reached_start: false,
                 error: None,
             },
+            username: None,
+            emoji: None,
         }
     }
 
@@ -56,10 +64,15 @@ impl Cache {
         match event {
             Event::Session(state) => {
                 self.state = Some(state.clone());
+                self.username = match state {
+                    SessionState::LoggedIn(account) => Some(account.user.username.clone()),
+                    _ => None,
+                };
                 // A session starts connected, and the core says nothing about it then.
                 self.connection = Connection::Connected;
             }
             Event::Connection(connection) => self.connection = *connection,
+            Event::CustomEmoji(emoji) => self.emoji = Some(emoji.clone()),
             Event::Rooms(changes) => {
                 for change in changes {
                     change.apply(&mut self.rooms);
@@ -96,6 +109,15 @@ impl Cache {
         TimelineChange::Reset {
             room: self.room.clone(),
             messages: self.messages.clone(),
+        }
+    }
+
+    /// Who the messages are shown to.
+    #[must_use]
+    pub fn viewer(&self) -> Viewer {
+        Viewer {
+            username: self.username.clone(),
+            emoji: self.emoji.clone().unwrap_or_default(),
         }
     }
 
@@ -159,6 +181,44 @@ mod tests {
             cache.state.as_ref(),
             Some(&SessionState::LoggedOut { failure: None })
         );
+    }
+
+    fn logged_in(username: &str) -> Event {
+        Event::Session(SessionState::LoggedIn(Account {
+            server: "http://h".to_owned(),
+            user: User {
+                id: "u".to_owned().into(),
+                username: username.to_owned(),
+                display_name: None,
+            },
+        }))
+    }
+
+    // RICH-002, RICH-003
+    #[test]
+    fn the_viewer_is_the_logged_in_user_with_the_custom_emoji_of_the_server() {
+        let emoji = CustomEmojis::new(
+            "http://h",
+            &[rc_api::CustomEmoji {
+                name: "party".into(),
+                aliases: Vec::new(),
+                extension: "gif".into(),
+            }],
+        );
+        let mut cache = Cache::new();
+        assert_eq!(cache.viewer(), Viewer::default());
+        cache.apply(&logged_in("alice"));
+        cache.apply(&Event::CustomEmoji(emoji.clone()));
+        assert_eq!(
+            cache.viewer(),
+            Viewer {
+                username: Some("alice".into()),
+                emoji
+            }
+        );
+        cache.apply(&Event::Session(SessionState::LoggedOut { failure: None }));
+        cache.apply(&Event::CustomEmoji(CustomEmojis::default()));
+        assert_eq!(cache.viewer(), Viewer::default());
     }
 
     // RT-004
