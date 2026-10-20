@@ -267,6 +267,9 @@ impl Fake {
     /// The send tasks are done with the server and about to report.
     fn wait_for_sends_returned(&self, count: usize) {
         wait_until(|| (self.state().sends_returned >= count).then_some(()));
+        // A task counted may not have queued its report yet, and what the test sends next must
+        // not overtake it.
+        std::thread::sleep(Duration::from_millis(20));
     }
 
     /// The fetch task has started and is inside `subscriptions`.
