@@ -6,8 +6,8 @@
 use rc_api::{RestClient, ServerVersion};
 use secrecy::SecretString;
 
-use crate::domain::{Credentials, User};
-use crate::ports::{ApiError, Connector, ServerApi};
+use crate::domain::{Credentials, RoomId, RoomKind, User, message_from};
+use crate::ports::{ApiError, Connector, Page, ServerApi};
 
 pub struct RestConnector;
 
@@ -51,6 +51,29 @@ impl ServerApi for RestApi {
     ) -> Result<Vec<rc_api::Subscription>, ApiError> {
         let session = self.client.session(api_credentials(credentials));
         Ok(session.subscriptions().await?)
+    }
+
+    async fn history(
+        &self,
+        credentials: &Credentials,
+        room: &RoomId,
+        kind: RoomKind,
+        before: Option<jiff::Timestamp>,
+        count: usize,
+    ) -> Result<Page, ApiError> {
+        let room_type = match kind {
+            RoomKind::Channel => rc_api::RoomType::Channel,
+            RoomKind::Private => rc_api::RoomType::Private,
+            RoomKind::Direct => rc_api::RoomType::Direct,
+        };
+        let session = self.client.session(api_credentials(credentials));
+        let page = session
+            .history(room.as_str(), &room_type, before, count)
+            .await?;
+        Ok(Page {
+            messages: page.messages.into_iter().filter_map(message_from).collect(),
+            reached_start: page.reached_start,
+        })
     }
 
     async fn logout(&self, credentials: &Credentials) -> Result<(), ApiError> {

@@ -13,12 +13,13 @@ use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::{JoinHandle, JoinSet};
 
-use crate::adapters::RestConnector;
-use crate::domain::{Credentials, StoredSession, room_from};
+use crate::adapters::{MemoryMessageStore, RestConnector};
+use crate::domain::{Credentials, RoomId, RoomKind, StoredSession, room_from};
 use crate::error::Error;
-use crate::ports::{ApiError, Connector, SecretStore, ServerApi, StoreError};
+use crate::ports::{ApiError, Connector, MessageStore, Page, SecretStore, ServerApi, StoreError};
 use crate::rooms::{RoomChange, RoomList};
 use crate::session::{Established, LoginFailure, SessionState, log_in, resume};
+use crate::timeline::{PAGE_SIZE, Timeline, TimelineChange, TimelineError, TimelineStatus};
 
 #[cfg(test)]
 mod tests;
@@ -40,6 +41,11 @@ pub enum Event {
     /// Changes to the room list, to apply in order. After `LoggedIn` it carries the rooms; after
     /// `LoggedOut` it empties the list, unless the list was empty already.
     Rooms(Vec<RoomChange>),
+    /// Changes to the message list of the open room, to apply in order. Opening a room starts with
+    /// a reset, to what is held of it already. Logging out resets to nothing, if a room was open.
+    Timeline(Vec<TimelineChange>),
+    /// What the frontend shows about the message list. Comes after the changes it goes with.
+    TimelineStatus(TimelineStatus),
 }
 
 enum Command {
@@ -49,6 +55,8 @@ enum Command {
         password: SecretString,
     },
     Logout,
+    OpenRoom(RoomId),
+    LoadOlder,
 }
 
 /// The core, as seen from a frontend: commands go in, events come out through the callback given
@@ -113,6 +121,10 @@ impl Client {
             login_task: None,
             rooms_task: None,
             rooms: RoomList::default(),
+            messages: Box::new(MemoryMessageStore::default()),
+            open: None,
+            history_attempt: 0,
+            history_task: None,
             revokes: JoinSet::new(),
             store: Some(StoreHandle(store_tx)),
             store_worker,
@@ -145,6 +157,20 @@ impl Client {
     /// out.
     pub fn logout(&self) {
         self.send(Command::Logout);
+    }
+
+    /// Shows the room's messages: what is held of them at once, then the newest ones as they
+    /// arrive. Replaces the room that was open. Ignored unless logged in, if the room isn't in the
+    /// room list, or if it is the open room already (unless its last load failed: then it tries
+    /// again).
+    pub fn open_room(&self, room: RoomId) {
+        self.send(Command::OpenRoom(room));
+    }
+
+    /// Fetches the messages before the oldest one of the open room. Ignored when no room is open,
+    /// when a fetch is in flight, or when the start of the room is reached.
+    pub fn load_older(&self) {
+        self.send(Command::LoadOlder);
     }
 
     fn send(&self, command: Command) {
@@ -242,10 +268,35 @@ struct RoomsDone {
     outcome: Result<Vec<rc_api::Subscription>, ApiError>,
 }
 
+/// A history fetch's answer.
+struct HistoryDone {
+    /// Identifies the fetch: the answer is stale if the room was closed or another fetch began.
+    attempt: u64,
+    room: RoomId,
+    outcome: Result<Page, ApiError>,
+}
+
 /// What the tasks tell the actor.
 enum Done<A> {
     Login(LoginDone<A>),
     Rooms(RoomsDone),
+    History(HistoryDone),
+}
+
+/// A history fetch in flight.
+struct Fetch {
+    attempt: u64,
+    /// Older messages, not the newest.
+    older: bool,
+}
+
+/// The room whose messages the frontend shows.
+struct OpenRoom {
+    timeline: Timeline,
+    kind: RoomKind,
+    fetch: Option<Fetch>,
+    /// Why the last fetch failed.
+    error: Option<TimelineError>,
 }
 
 /// What the actor keeps while logged in; the next features need both.
@@ -269,6 +320,13 @@ struct Actor<C: Connector> {
     rooms_task: Option<JoinHandle<()>>,
     /// The rooms in display order, as the frontend has them.
     rooms: RoomList,
+    /// The messages of the rooms opened so far. Cleared on logout.
+    messages: Box<dyn MessageStore>,
+    open: Option<OpenRoom>,
+    /// Counts history fetches, to tell the answer of the current one from a stale one.
+    history_attempt: u64,
+    /// The history fetch of the open room, while it runs.
+    history_task: Option<JoinHandle<()>>,
     /// Token revocations in flight, so that stopping can wait for them.
     revokes: JoinSet<()>,
     /// `None` once stopping.
@@ -295,6 +353,7 @@ impl<C: Connector> Actor<C> {
                 Some(done) = done.recv() => match done {
                     Done::Login(done) => self.handle_login_done(done),
                     Done::Rooms(done) => self.handle_rooms_done(done),
+                    Done::History(done) => self.handle_history_done(done),
                 },
             }
         }
@@ -326,6 +385,9 @@ impl<C: Connector> Actor<C> {
         if let Some(task) = self.rooms_task.take() {
             task.abort();
         }
+        if let Some(task) = self.history_task.take() {
+            task.abort();
+        }
         drop(self.store.take());
         let revokes = &mut self.revokes;
         let worker = &mut self.store_worker;
@@ -346,6 +408,8 @@ impl<C: Connector> Actor<C> {
                 password,
             } => self.login(server, username, password),
             Command::Logout => self.logout(),
+            Command::OpenRoom(room) => self.open_room(room),
+            Command::LoadOlder => self.load_older(),
         }
     }
 
@@ -448,6 +512,7 @@ impl<C: Connector> Actor<C> {
             self.abort_rooms_task();
             self.set_state(SessionState::LoggedOut { failure: None });
             self.clear_rooms();
+            self.clear_timeline();
             self.clear_store();
             if let Some(session) = self.session.take() {
                 self.revoke(session.api, session.credentials);
@@ -488,15 +553,168 @@ impl<C: Connector> Actor<C> {
             }
             // The token died between the login and the fetch: same as an expired resume. It's
             // dead already, so there's nothing to revoke.
-            Err(ApiError::Unauthorized) => {
-                self.session = None;
-                self.clear_store();
-                self.set_state(SessionState::LoggedOut {
-                    failure: Some(LoginFailure::SessionExpired),
-                });
-                self.clear_rooms();
-            }
+            Err(ApiError::Unauthorized) => self.expire_session(),
             Err(error) => tracing::warn!(%error, "can't list the rooms"),
+        }
+    }
+
+    /// The server refused the token of a logged-in session: forget it, and everything it showed.
+    /// It's dead already, so there's nothing to revoke.
+    fn expire_session(&mut self) {
+        self.session = None;
+        self.clear_store();
+        self.set_state(SessionState::LoggedOut {
+            failure: Some(LoginFailure::SessionExpired),
+        });
+        self.clear_rooms();
+        self.clear_timeline();
+    }
+
+    /// Shows the room, from what is held of it, and fetches its newest messages.
+    fn open_room(&mut self, id: RoomId) {
+        if !matches!(self.state, SessionState::LoggedIn(_)) {
+            tracing::debug!("open_room ignored: not logged in");
+            return;
+        }
+        if self
+            .open
+            .as_ref()
+            .is_some_and(|open| open.timeline.room() == &id && open.error.is_none())
+        {
+            return;
+        }
+        let Some(kind) = self
+            .rooms
+            .rooms()
+            .iter()
+            .find(|room| room.id == id)
+            .map(|room| room.kind)
+        else {
+            tracing::debug!(room = %id, "open_room ignored: not in the room list");
+            return;
+        };
+        self.abort_history_task();
+        let history = self.messages.load(&id);
+        let timeline = Timeline::new(id, history);
+        (self.on_event)(Event::Timeline(vec![timeline.reset()]));
+        self.open = Some(OpenRoom {
+            timeline,
+            kind,
+            fetch: None,
+            error: None,
+        });
+        self.fetch_history(false);
+    }
+
+    fn load_older(&mut self) {
+        let Some(open) = &self.open else {
+            tracing::debug!("load_older ignored: no room is open");
+            return;
+        };
+        // Nothing is held when the first fetch failed: opening the room again retries that.
+        if open.fetch.is_some() || open.timeline.reached_start() || open.timeline.oldest().is_none()
+        {
+            return;
+        }
+        self.fetch_history(true);
+    }
+
+    /// Fetches a page of the open room: the newest, or the one before the oldest message held.
+    fn fetch_history(&mut self, older: bool) {
+        let (Some(session), Some(open)) = (&self.session, &mut self.open) else {
+            return;
+        };
+        self.history_attempt += 1;
+        let attempt = self.history_attempt;
+        open.fetch = Some(Fetch { attempt, older });
+        open.error = None;
+        let before = if older { open.timeline.oldest() } else { None };
+        let room = open.timeline.room().clone();
+        let kind = open.kind;
+        let api = session.api.clone();
+        let credentials = session.credentials.clone();
+        let done = self.done_tx.clone();
+        self.history_task = Some(tokio::spawn(async move {
+            let outcome = api
+                .history(&credentials, &room, kind, before, PAGE_SIZE)
+                .await;
+            // Fails only if the actor is gone.
+            let _ = done.send(Done::History(HistoryDone {
+                attempt,
+                room,
+                outcome,
+            }));
+        }));
+        self.emit_timeline_status();
+    }
+
+    fn handle_history_done(&mut self, done: HistoryDone) {
+        let Some(open) = &mut self.open else {
+            tracing::debug!("answer of a history fetch for a closed room dropped");
+            return;
+        };
+        let Some(fetch) = open.fetch.take_if(|fetch| fetch.attempt == done.attempt) else {
+            tracing::debug!("answer of a stale history fetch dropped");
+            return;
+        };
+        let older = fetch.older;
+        self.history_task = None;
+        match done.outcome {
+            Ok(page) => {
+                let change = if older {
+                    open.timeline.merge_older(page.messages, page.reached_start)
+                } else {
+                    open.timeline
+                        .merge_latest(page.messages, page.reached_start)
+                };
+                self.messages.save(&done.room, open.timeline.history());
+                if let Some(change) = change {
+                    (self.on_event)(Event::Timeline(vec![change]));
+                }
+            }
+            Err(ApiError::Unauthorized) => {
+                self.expire_session();
+                return;
+            }
+            Err(error) => {
+                tracing::warn!(%error, room = %done.room, "can't load the messages");
+                open.error = Some(TimelineError::from(&error));
+            }
+        }
+        self.emit_timeline_status();
+    }
+
+    fn abort_history_task(&mut self) {
+        if let Some(task) = self.history_task.take() {
+            task.abort();
+        }
+    }
+
+    fn emit_timeline_status(&self) {
+        let status = match &self.open {
+            Some(open) => TimelineStatus {
+                room: Some(open.timeline.room().clone()),
+                loading: open.fetch.as_ref().is_some_and(|f| !f.older),
+                loading_older: open.fetch.as_ref().is_some_and(|f| f.older),
+                reached_start: open.timeline.reached_start(),
+                error: open.error.clone(),
+            },
+            None => TimelineStatus::default(),
+        };
+        (self.on_event)(Event::TimelineStatus(status));
+    }
+
+    /// Closes the open room and forgets every held message, and tells the frontend, unless no room
+    /// was open.
+    fn clear_timeline(&mut self) {
+        self.abort_history_task();
+        self.messages.clear();
+        if self.open.take().is_some() {
+            (self.on_event)(Event::Timeline(vec![TimelineChange::Reset {
+                room: None,
+                messages: Vec::new(),
+            }]));
+            self.emit_timeline_status();
         }
     }
 

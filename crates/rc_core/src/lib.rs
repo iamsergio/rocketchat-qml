@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Sergio Martins
 // SPDX-License-Identifier: MIT
 
-//! Domain types, session state, the room list and use cases. Knows nothing about Qt or Slint.
+//! Domain types, session state, the room list, the message timeline and use cases. Knows nothing about Qt or Slint.
 
 #![forbid(unsafe_code)]
 
@@ -13,6 +13,7 @@ pub mod logging;
 pub mod ports;
 pub mod rooms;
 pub mod session;
+pub mod timeline;
 
 pub use client::{Client, Event};
 pub use error::Error;

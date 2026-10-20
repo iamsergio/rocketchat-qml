@@ -1570,6 +1570,7 @@ version = "0.0.0"
 dependencies = [
  "apple-native-keyring-store",
  "dbus-secret-service-keyring-store",
+ "jiff",
  "keyring-core",
  "rc_api",
  "rc_test_server",
