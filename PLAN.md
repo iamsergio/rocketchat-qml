@@ -87,8 +87,8 @@ Done when: messages render formatting, mentions, emoji, avatars, images and reac
 - [x] `rc_qt`: render blocks to the subset of rich text that Qt supports (links, code, quotes, lists)
 - [x] Mentions (highlight @me), unicode emoji shortcodes, custom server emoji. Custom emoji images are public (`/emoji-custom/<name>.<ext>`), so the message shows them straight from the server; the file-cache item can take them over later. The emoji list is fetched per sync cycle, not kept live by `updateEmojiCustom`
 - [x] `rc_core`: file cache port. Avatars are downloaded to the cache directory and exposed to the GUI as local file URLs. They are kept between sessions and refreshed once per session; the server pushes changes. Only avatars somebody uploaded are shown (`avatarETag`); the others show initials. The test server serves the drawn avatar whatever is uploaded, so the picture of a custom avatar isn't tested
-- [ ] `rc_core`: images through the file cache port, for the attachments below
-- [ ] Image attachments shown inline, other attachments as links
+- [x] `rc_core`: images through the file cache port, for the attachments below. An uploaded file never changes, so an image is downloaded only if the cache lacks it
+- [x] Image attachments shown inline, other attachments as links
 - [ ] Realtime message edits and deletes, plus a reactions display
 - [ ] Features RICH-001…RICH-007 tested
 
@@ -111,7 +111,7 @@ Done when: the app starts instantly from cache (works offline read-only), shows 
 
 - [ ] `rc_store_sqlite`: `MessageStore` and room cache adapter, schema migrations
 - [ ] Startup from cache, then a delta sync
-- [ ] Bound the size of the file cache (avatars so far): evict the least recently used files, never one the GUI shows
+- [ ] Bound the size of the file cache (avatars and attachment images so far): evict the least recently used files, never one the GUI shows
 - [ ] Desktop notifications for DMs and mentions, unread count in the window title or tray
 - [ ] Settings page (notifications, theme)
 - [ ] Features PERS-001, PERS-002, DESK-001…DESK-003 tested
@@ -137,6 +137,7 @@ Done when: you can log in to servers that enforce 2FA or use SSO.
 - **One GUI test suite for both frontends.** It speaks the Spix XML-RPC protocol. The Qt app embeds C++ Spix and the Slint app embeds a Rust Spix server. See ARCHITECTURE.md, GUI testing contract.
 - **Qt ≥ 6.12.0.**
 - **No fake server.** Integration and GUI tests run against a real Rocket.Chat (`scripts/run_test_server.sh`), which CI shares. Failures that a real server can't produce on demand are tested with port fakes (`rc_core`) and wiremock (`rc_api`).
+- **File attachments open their server URL in the browser, without the token.** That works when the browser has a Rocket.Chat session. Downloading them through the app comes with file upload (Phase 5). Images are shown inline from the file cache.
 - **Rocket.Chat server.** Target the version the company server runs (check it with `/api/info` in Phase 1). Support older versions only where it's cheap. No compatibility shims for old servers.
 
 # Issues
