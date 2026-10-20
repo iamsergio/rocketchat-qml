@@ -253,6 +253,65 @@ async fn logout_accepts_a_json_body() {
         .unwrap();
 }
 
+// ROOM-004
+#[tokio::test]
+async fn mark_read_posts_the_room_id_with_the_auth_headers() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/api/v1/subscriptions.read"))
+        .and(header("X-User-Id", USER_ID))
+        .and(header("X-Auth-Token", TOKEN))
+        .and(body_json(json!({ "rid": "room1" })))
+        .respond_with(json_response(200, r#"{"success":true}"#))
+        .expect(1)
+        .mount(&server)
+        .await;
+    session(&RestClient::new(&server.uri()).unwrap())
+        .mark_read("room1")
+        .await
+        .unwrap();
+}
+
+// ROOM-004
+#[tokio::test]
+async fn mark_read_with_an_expired_token_is_unauthorized() {
+    let server = MockServer::start().await;
+    mount(
+        &server,
+        "POST",
+        "/api/v1/subscriptions.read",
+        json_response(401, NOT_LOGGED_IN),
+    )
+    .await;
+    let result = session(&RestClient::new(&server.uri()).unwrap())
+        .mark_read("room1")
+        .await;
+    assert!(matches!(result, Err(Error::Unauthorized)), "{result:?}");
+}
+
+// ROOM-004
+#[tokio::test]
+async fn mark_read_of_a_room_without_subscription_is_a_server_error_with_the_message() {
+    let server = MockServer::start().await;
+    mount(
+        &server,
+        "POST",
+        "/api/v1/subscriptions.read",
+        json_response(
+            400,
+            r#"{"success":false,"error":"error-invalid-subscription"}"#,
+        ),
+    )
+    .await;
+    let result = session(&RestClient::new(&server.uri()).unwrap())
+        .mark_read("nope")
+        .await;
+    assert!(
+        matches!(result, Err(Error::Server { status: 400, ref message }) if message == "error-invalid-subscription"),
+        "{result:?}"
+    );
+}
+
 // ROOM-001
 #[tokio::test]
 async fn subscriptions_lists_the_rooms() {
