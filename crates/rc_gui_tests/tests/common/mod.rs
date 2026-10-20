@@ -8,11 +8,12 @@
 // Not every test file uses every item, and a failed step should just fail the test.
 #![allow(dead_code, clippy::unwrap_used)]
 
-use std::time::Duration;
+use std::thread;
+use std::time::{Duration, Instant};
 
 use rc_gui_tests::paths::{main_window, room, room_row};
 use rc_gui_tests::{App, Gui, Key, Modifiers};
-use rc_test_server::{TestUser, server_url};
+use rc_test_server::{Admin, Posted, TestUser, server_url};
 
 /// The core works asynchronously, against a real server: tests wait this long for the UI to catch
 /// up with it before they fail.
@@ -53,6 +54,32 @@ pub fn open_room(gui: &Gui, room_id: &str) {
 /// The tests launch the app with `TZ=UTC`, which is what the messages are shown in.
 pub fn utc_time(ts: &str) -> String {
     ts.get(11..16).unwrap().to_owned()
+}
+
+/// Types `text` in the composer and presses Enter. Clicks the composer first: keys go to the item
+/// that has the focus.
+pub fn type_and_send(gui: &Gui, text: &str) {
+    gui.mouse_click(main_window::COMPOSER_FIELD).unwrap();
+    gui.set_text(main_window::COMPOSER_FIELD, text).unwrap();
+    gui.enter_key(main_window::COMPOSER_FIELD, Key::RETURN, Modifiers::NONE)
+        .unwrap();
+}
+
+/// The newest message of the channel once it is not `before` any more: how a test learns the id of
+/// a message the app sent, which the app picked.
+pub fn wait_for_message_after(admin: &Admin, channel_id: &str, before: &str) -> Posted {
+    let deadline = Instant::now() + TIMEOUT;
+    loop {
+        let last = admin.last_message(channel_id);
+        if last.id != before {
+            return last;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the message never reached the server"
+        );
+        thread::sleep(Duration::from_millis(100));
+    }
 }
 
 /// Logs in as `user` and waits until the row of the room with this id is there.

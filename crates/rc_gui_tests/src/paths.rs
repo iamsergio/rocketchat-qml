@@ -35,6 +35,18 @@ pub mod main_window {
     pub const HISTORY_START: &str = "mainWindow/historyStart";
     /// Above the first message while older ones load.
     pub const LOADING_OLDER: &str = "mainWindow/loadingOlder";
+
+    /// Where the text to send is typed. Enter sends it, Shift+Enter starts a new line.
+    pub const COMPOSER_FIELD: &str = "mainWindow/composerField";
+    /// Sends the text of the composer. Disabled while it is empty.
+    pub const COMPOSER_SEND: &str = "mainWindow/composerSend";
+
+    // The indicators of a message the server hasn't confirmed, for a test that can't know its id
+    // (the client picks it). They exist only while a message is in that state, so the name alone
+    // finds it, as long as there is one such message in view.
+    pub const UNSENT_PENDING: &str = "mainWindow/msgPending";
+    pub const UNSENT_FAILED: &str = "mainWindow/msgFailed";
+    pub const UNSENT_RETRY: &str = "mainWindow/msgRetry";
 }
 
 /// The parts of a room row, for [`room`].
@@ -66,6 +78,12 @@ pub mod message_row {
     pub const BODY: &str = "msgBody";
     /// What a system message says. These have it instead of an author and a body.
     pub const SYSTEM: &str = "msgSystem";
+    /// Exists while the message is being sent.
+    pub const PENDING: &str = "msgPending";
+    /// Exists when the message couldn't be sent.
+    pub const FAILED: &str = "msgFailed";
+    /// Exists with `FAILED`: sends the message again.
+    pub const RETRY: &str = "msgRetry";
 }
 
 /// A part of the row of the message with this id (see [`message_row`]). Like rooms, messages are
