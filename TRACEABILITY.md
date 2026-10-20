@@ -27,9 +27,9 @@ Every test carries a `// <ID>` comment. A feature can have tests at several leve
 
 | ID | Feature | Tests |
 |---|---|---|
-| ROOM-001 | List subscribed rooms after login | unit: `crates/rc_api/src/wire.rs`; api: `crates/rc_api/tests/rest.rs`; contract: `crates/rc_api/tests/contract.rs`; core, GUI: todo |
-| ROOM-002 | Room shows name and type (channel, private, DM) | unit: `crates/rc_api/src/wire.rs`; api: `crates/rc_api/tests/rest.rs`; contract: `crates/rc_api/tests/contract.rs`; core, GUI: todo |
-| ROOM-003 | Room shows unread and mention counts | unit: `crates/rc_api/src/wire.rs`; api: `crates/rc_api/tests/rest.rs`; contract: `crates/rc_api/tests/contract.rs`; core, GUI: todo |
+| ROOM-001 | List subscribed rooms after login | unit: `crates/rc_api/src/wire.rs`; api: `crates/rc_api/tests/rest.rs`; contract: `crates/rc_api/tests/contract.rs`; unit: `crates/rc_core/src/domain.rs`, `crates/rc_core/src/rooms.rs`, `crates/rc_core/src/client/tests.rs`; contract: `crates/rc_core/tests/contract.rs`; core, GUI: todo |
+| ROOM-002 | Room shows name and type (channel, private, DM) | unit: `crates/rc_api/src/wire.rs`; api: `crates/rc_api/tests/rest.rs`; contract: `crates/rc_api/tests/contract.rs`; unit: `crates/rc_core/src/domain.rs`, `crates/rc_core/src/rooms.rs`; contract: `crates/rc_core/tests/contract.rs`; core, GUI: todo |
+| ROOM-003 | Room shows unread and mention counts | unit: `crates/rc_api/src/wire.rs`; api: `crates/rc_api/tests/rest.rs`; contract: `crates/rc_api/tests/contract.rs`; unit: `crates/rc_core/src/domain.rs`, `crates/rc_core/src/rooms.rs`; core, GUI: todo |
 | ROOM-004 | Opening a room marks it read | todo |
 | ROOM-005 | Rooms ordered by last activity | todo |
 

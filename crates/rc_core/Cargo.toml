@@ -20,6 +20,9 @@ tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync", "ti
 tracing.workspace = true
 tracing-subscriber.workspace = true
 
+[dev-dependencies]
+reqwest.workspace = true
+
 # Where each OS keeps secrets. Linux links the system libdbus, so building needs its development
 # package and pkg-config.
 [target.'cfg(target_os = "linux")'.dependencies]

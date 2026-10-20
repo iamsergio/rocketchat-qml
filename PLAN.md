@@ -43,7 +43,7 @@ Done when: you can log in to the local test server with a username and password,
 - [x] `rc_api`: REST client with auth headers, `GET /api/info` (server version check), `login`, `me`, `logout`, `subscriptions.get`
 - [x] `rc_core`: `Client` handle plus session actor. Session state machine: `LoggedOut → Connecting → LoggedIn`, with failure reasons
 - [x] `rc_core`: `SecretStore` port with keyring and in-memory adapters. Resume the session from the stored token at startup
-- [ ] `rc_core`: room domain model (channel/group/DM, name, unread, mention count)
+- [x] `rc_core`: room domain model (channel/group/DM, name, unread, mention count)
 - [ ] `rc_fake_server`: REST subset for the endpoints above, scriptable users and rooms
 - [ ] `rc_qt`: `SessionVm` (state, error, login/logout invokables), `RoomListModel`
 - [ ] QML: login page (server URL, user, password, error text, busy state), room list, logout

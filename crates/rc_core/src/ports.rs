@@ -52,6 +52,16 @@ pub trait ServerApi: Clone + Send + Sync + 'static {
     /// expired or were revoked.
     fn me(&self, credentials: &Credentials) -> impl Future<Output = Result<User, ApiError>> + Send;
 
+    /// The rooms the user has joined, hidden ones included.
+    ///
+    /// # Errors
+    ///
+    /// [`ApiError::Unauthorized`] if the credentials have expired or were revoked.
+    fn subscriptions(
+        &self,
+        credentials: &Credentials,
+    ) -> impl Future<Output = Result<Vec<rc_api::Subscription>, ApiError>> + Send;
+
     /// Revokes the token on the server.
     fn logout(
         &self,

@@ -15,8 +15,9 @@ use tokio::sync::Notify;
 
 use super::*;
 use crate::adapters::MemoryStore;
-use crate::domain::{Account, User};
+use crate::domain::{Account, Room, RoomKind, User};
 use crate::ports::ApiError;
+use crate::rooms::RoomChange;
 
 const TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -24,6 +25,12 @@ struct LoginScript {
     /// Holds the login until the test notifies it.
     gate: Option<Arc<Notify>>,
     result: Result<(), ApiError>,
+}
+
+struct FetchScript {
+    /// Holds the fetch until the test notifies it.
+    gate: Option<Arc<Notify>>,
+    result: Result<Vec<rc_api::Subscription>, ApiError>,
 }
 
 #[derive(Default)]
@@ -41,6 +48,9 @@ struct FakeState {
     /// Logouts that ran to the end.
     logouts_done: usize,
     me_calls: Vec<(String, String)>,
+    /// One per room fetch; an empty room list once they run out.
+    fetches: VecDeque<FetchScript>,
+    subscriptions_calls: Vec<(String, String)>,
 }
 
 /// Scripted results, plus a record of what it was asked.
@@ -61,6 +71,19 @@ impl Fake {
 
     fn script_login(&self, gate: Option<Arc<Notify>>, result: Result<(), ApiError>) {
         self.state().logins.push_back(LoginScript { gate, result });
+    }
+
+    fn script_fetch(
+        &self,
+        gate: Option<Arc<Notify>>,
+        result: Result<Vec<rc_api::Subscription>, ApiError>,
+    ) {
+        self.state().fetches.push_back(FetchScript { gate, result });
+    }
+
+    /// The fetch task has started and is inside `subscriptions`.
+    fn wait_for_subscriptions_calls(&self, count: usize) {
+        wait_until(|| (self.state().subscriptions_calls.len() >= count).then_some(()));
     }
 
     fn login_calls(&self) -> Vec<(String, String)> {
@@ -149,6 +172,27 @@ impl ServerApi for Fake {
         self.state().me_result.clone().unwrap()
     }
 
+    async fn subscriptions(
+        &self,
+        credentials: &Credentials,
+    ) -> Result<Vec<rc_api::Subscription>, ApiError> {
+        let script = {
+            let mut state = self.state();
+            state.subscriptions_calls.push((
+                credentials.user_id.to_string(),
+                credentials.token.expose_secret().to_owned(),
+            ));
+            state.fetches.pop_front()
+        };
+        let Some(script) = script else {
+            return Ok(Vec::new());
+        };
+        if let Some(gate) = script.gate {
+            gate.notified().await;
+        }
+        script.result
+    }
+
     async fn logout(&self, credentials: &Credentials) -> Result<(), ApiError> {
         let delay = {
             let mut state = self.state();
@@ -199,6 +243,40 @@ fn user(username: &str) -> User {
         username: username.to_owned(),
         display_name: Some("Display".to_owned()),
     }
+}
+
+fn subscription(id: &str, name: &str, room_type: rc_api::RoomType) -> rc_api::Subscription {
+    rc_api::Subscription {
+        room_id: id.to_owned(),
+        room_type,
+        name: name.to_owned(),
+        display_name: None,
+        unread: 0,
+        user_mentions: 0,
+        group_mentions: 0,
+        alert: false,
+        open: true,
+    }
+}
+
+fn room(id: &str, name: &str, kind: RoomKind) -> Room {
+    Room {
+        id: id.to_owned().into(),
+        kind,
+        name: name.to_owned(),
+        unread: 0,
+        user_mentions: 0,
+        group_mentions: 0,
+        alert: false,
+    }
+}
+
+fn session_event(state: SessionState) -> Event {
+    Event::Session(state)
+}
+
+fn rooms_event(rooms: Vec<Room>) -> Event {
+    Event::Rooms(vec![RoomChange::Reset(rooms)])
 }
 
 fn logged_out(failure: Option<LoginFailure>) -> SessionState {
@@ -265,16 +343,31 @@ impl Harness {
             .login(server, username, SecretString::from("secret"));
     }
 
+    fn next_event(&self) -> Event {
+        self.events.recv_timeout(TIMEOUT).expect("no event")
+    }
+
+    /// The next session state. Room events in between are skipped: the session tests don't care
+    /// about them, the room tests use [`next_event`](Self::next_event).
     fn next(&self) -> SessionState {
-        match self.events.recv_timeout(TIMEOUT).expect("no event") {
-            Event::Session(state) => state,
+        loop {
+            if let Event::Session(state) = self.next_event() {
+                return state;
+            }
         }
     }
 
-    /// Checks the next events, in order.
+    /// Checks the next session states, in order.
     fn expect(&self, states: &[SessionState]) {
         for expected in states {
             assert_eq!(&self.next(), expected);
+        }
+    }
+
+    /// Checks the next events, in order, room events included.
+    fn expect_events(&self, events: Vec<Event>) {
+        for expected in events {
+            assert_eq!(self.next_event(), expected);
         }
     }
 }
@@ -652,4 +745,187 @@ fn logout_while_resuming_cancels_and_forgets() {
         fake.wait_for_logout_call(),
         ("uid".to_owned(), "stored-tok".to_owned())
     );
+}
+
+// ROOM-001
+#[test]
+fn login_lists_the_rooms_sorted() {
+    let fake = Fake::new();
+    fake.script_login(None, Ok(()));
+    fake.script_fetch(
+        None,
+        Ok(vec![
+            subscription("2", "random", rc_api::RoomType::Channel),
+            subscription("3", "bob", rc_api::RoomType::Direct),
+            subscription("1", "General", rc_api::RoomType::Channel),
+        ]),
+    );
+    let harness = Harness::new(&fake);
+    harness.login("http://h", "alice");
+    harness.expect_events(vec![
+        session_event(SessionState::Connecting),
+        session_event(logged_in("http://h", "alice")),
+        rooms_event(vec![
+            room("3", "bob", RoomKind::Direct),
+            room("1", "General", RoomKind::Channel),
+            room("2", "random", RoomKind::Channel),
+        ]),
+    ]);
+    assert_eq!(
+        fake.state().subscriptions_calls,
+        [("uid".to_owned(), "tok".to_owned())]
+    );
+}
+
+// ROOM-001
+#[test]
+fn hidden_and_unlisted_rooms_are_not_in_the_list() {
+    let fake = Fake::new();
+    fake.script_login(None, Ok(()));
+    let mut hidden = subscription("h", "hidden", rc_api::RoomType::Channel);
+    hidden.open = false;
+    fake.script_fetch(
+        None,
+        Ok(vec![
+            hidden,
+            subscription("l", "livechat", rc_api::RoomType::Other("l".into())),
+            subscription("p", "private", rc_api::RoomType::Private),
+        ]),
+    );
+    let harness = Harness::new(&fake);
+    harness.login("http://h", "alice");
+    harness.expect_events(vec![
+        session_event(SessionState::Connecting),
+        session_event(logged_in("http://h", "alice")),
+        rooms_event(vec![room("p", "private", RoomKind::Private)]),
+    ]);
+}
+
+// ROOM-001
+#[test]
+fn a_resumed_session_lists_the_rooms() {
+    let fake = Fake::new();
+    fake.script_fetch(
+        None,
+        Ok(vec![subscription(
+            "1",
+            "general",
+            rc_api::RoomType::Channel,
+        )]),
+    );
+    let harness = Harness::with_store(&fake, store_with("http://h"));
+    assert_eq!(harness.first, SessionState::Connecting);
+    harness.expect_events(vec![
+        session_event(logged_in("http://h", "alice")),
+        rooms_event(vec![room("1", "general", RoomKind::Channel)]),
+    ]);
+    assert_eq!(
+        fake.state().subscriptions_calls,
+        [("uid".to_owned(), "stored-tok".to_owned())]
+    );
+}
+
+// ROOM-001
+#[test]
+fn logout_empties_the_room_list() {
+    let fake = Fake::new();
+    fake.script_login(None, Ok(()));
+    fake.script_fetch(
+        None,
+        Ok(vec![subscription(
+            "1",
+            "general",
+            rc_api::RoomType::Channel,
+        )]),
+    );
+    let harness = Harness::new(&fake);
+    harness.login("http://h", "alice");
+    harness.expect_events(vec![
+        session_event(SessionState::Connecting),
+        session_event(logged_in("http://h", "alice")),
+        rooms_event(vec![room("1", "general", RoomKind::Channel)]),
+    ]);
+    harness.client.logout();
+    harness.expect_events(vec![session_event(logged_out(None)), rooms_event(vec![])]);
+}
+
+// AUTH-004
+#[test]
+fn a_token_that_dies_before_the_fetch_expires_the_session() {
+    let fake = Fake::new();
+    fake.script_login(None, Ok(()));
+    fake.script_fetch(None, Err(ApiError::Unauthorized));
+    let store = MemoryStore::default();
+    let harness = Harness::with_store(&fake, store.clone());
+    harness.login("http://h", "alice");
+    harness.expect_events(vec![
+        session_event(SessionState::Connecting),
+        session_event(logged_in("http://h", "alice")),
+        session_event(logged_out(Some(LoginFailure::SessionExpired))),
+    ]);
+    wait_for_empty(&store);
+    // Dropping flushes the actor's work: a revoke would show by now.
+    drop(harness);
+    assert!(fake.state().logout_calls.is_empty());
+}
+
+// ROOM-001
+#[test]
+fn a_failed_fetch_leaves_the_session_logged_in_without_rooms() {
+    let fake = Fake::new();
+    fake.script_login(None, Ok(()));
+    fake.script_fetch(None, Err(ApiError::Unreachable("refused".into())));
+    let harness = Harness::new(&fake);
+    harness.login("http://h", "alice");
+    harness.expect_events(vec![
+        session_event(SessionState::Connecting),
+        session_event(logged_in("http://h", "alice")),
+    ]);
+    fake.wait_for_subscriptions_calls(1);
+    // No rooms event so far, and none for the empty list on logout: the next event is the
+    // logout's own, and the one after it is the next login's.
+    harness.client.logout();
+    fake.script_login(None, Ok(()));
+    harness.login("http://h", "alice");
+    harness.expect_events(vec![
+        session_event(logged_out(None)),
+        session_event(SessionState::Connecting),
+        session_event(logged_in("http://h", "alice")),
+        rooms_event(vec![]),
+    ]);
+}
+
+// ROOM-001
+#[test]
+fn a_fetch_that_finishes_after_logout_is_dropped() {
+    let fake = Fake::new();
+    let gate = Arc::new(Notify::new());
+    fake.script_login(None, Ok(()));
+    fake.script_login(None, Ok(()));
+    fake.script_fetch(
+        Some(Arc::clone(&gate)),
+        Ok(vec![subscription("old", "old", rc_api::RoomType::Channel)]),
+    );
+    fake.script_fetch(
+        None,
+        Ok(vec![subscription("new", "new", rc_api::RoomType::Channel)]),
+    );
+    let harness = Harness::new(&fake);
+    harness.login("http://h", "alice");
+    harness.expect_events(vec![
+        session_event(SessionState::Connecting),
+        session_event(logged_in("http://h", "alice")),
+    ]);
+    fake.wait_for_subscriptions_calls(1);
+
+    harness.client.logout();
+    harness.expect_events(vec![session_event(logged_out(None))]);
+    gate.notify_one();
+
+    harness.login("http://h", "alice");
+    harness.expect_events(vec![
+        session_event(SessionState::Connecting),
+        session_event(logged_in("http://h", "alice")),
+        rooms_event(vec![room("new", "new", RoomKind::Channel)]),
+    ]);
 }

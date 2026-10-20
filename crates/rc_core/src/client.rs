@@ -14,9 +14,10 @@ use tokio::sync::{mpsc, oneshot};
 use tokio::task::{JoinHandle, JoinSet};
 
 use crate::adapters::RestConnector;
-use crate::domain::{Credentials, StoredSession};
+use crate::domain::{Credentials, StoredSession, room_from};
 use crate::error::Error;
-use crate::ports::{Connector, SecretStore, ServerApi, StoreError};
+use crate::ports::{ApiError, Connector, SecretStore, ServerApi, StoreError};
+use crate::rooms::{RoomChange, RoomList};
 use crate::session::{Established, LoginFailure, SessionState, log_in, resume};
 
 #[cfg(test)]
@@ -36,6 +37,9 @@ const RUNTIME_WAIT: Duration = Duration::from_secs(1);
 #[non_exhaustive]
 pub enum Event {
     Session(SessionState),
+    /// Changes to the room list, to apply in order. After `LoggedIn` it carries the rooms; after
+    /// `LoggedOut` it empties the list, unless the list was empty already.
+    Rooms(Vec<RoomChange>),
 }
 
 enum Command {
@@ -107,6 +111,8 @@ impl Client {
             resuming: None,
             attempt: 0,
             login_task: None,
+            rooms_task: None,
+            rooms: RoomList::default(),
             revokes: JoinSet::new(),
             store: Some(StoreHandle(store_tx)),
             store_worker,
@@ -229,6 +235,19 @@ struct LoginDone<A> {
     outcome: Result<Established<A>, LoginFailure>,
 }
 
+/// A room fetch's answer.
+struct RoomsDone {
+    /// The login or resume the fetch belongs to: the answer is stale if another has begun since.
+    attempt: u64,
+    outcome: Result<Vec<rc_api::Subscription>, ApiError>,
+}
+
+/// What the tasks tell the actor.
+enum Done<A> {
+    Login(LoginDone<A>),
+    Rooms(RoomsDone),
+}
+
 /// What the actor keeps while logged in; the next features need both.
 struct Session<A> {
     api: A,
@@ -246,12 +265,16 @@ struct Actor<C: Connector> {
     /// Identifies the current attempt, so that the answer of a cancelled one is dropped.
     attempt: u64,
     login_task: Option<JoinHandle<()>>,
+    /// The room fetch of the current session, while it runs.
+    rooms_task: Option<JoinHandle<()>>,
+    /// The rooms in display order, as the frontend has them.
+    rooms: RoomList,
     /// Token revocations in flight, so that stopping can wait for them.
     revokes: JoinSet<()>,
     /// `None` once stopping.
     store: Option<StoreHandle>,
     store_worker: JoinHandle<()>,
-    done_tx: UnboundedSender<LoginDone<C::Api>>,
+    done_tx: UnboundedSender<Done<C::Api>>,
     on_event: Arc<dyn Fn(Event) + Send + Sync>,
 }
 
@@ -259,7 +282,7 @@ impl<C: Connector> Actor<C> {
     async fn run(
         mut self,
         mut commands: UnboundedReceiver<Command>,
-        mut done: UnboundedReceiver<LoginDone<C::Api>>,
+        mut done: UnboundedReceiver<Done<C::Api>>,
     ) {
         self.start().await;
         loop {
@@ -269,7 +292,10 @@ impl<C: Connector> Actor<C> {
                     Some(command) => self.handle_command(command),
                     None => break,
                 },
-                Some(done) = done.recv() => self.handle_login_done(done),
+                Some(done) = done.recv() => match done {
+                    Done::Login(done) => self.handle_login_done(done),
+                    Done::Rooms(done) => self.handle_rooms_done(done),
+                },
             }
         }
         self.stop().await;
@@ -295,6 +321,9 @@ impl<C: Connector> Actor<C> {
     /// already: store writes and token revocations.
     async fn stop(&mut self) {
         if let Some(task) = self.login_task.take() {
+            task.abort();
+        }
+        if let Some(task) = self.rooms_task.take() {
             task.abort();
         }
         drop(self.store.take());
@@ -351,11 +380,11 @@ impl<C: Connector> Actor<C> {
         self.login_task = Some(tokio::spawn(async move {
             let outcome = attempt.await;
             // Fails only if the actor is gone.
-            let _ = done.send(LoginDone {
+            let _ = done.send(Done::Login(LoginDone {
                 attempt: id,
                 persist,
                 outcome,
-            });
+            }));
         }));
     }
 
@@ -381,6 +410,7 @@ impl<C: Connector> Actor<C> {
                     credentials: established.credentials,
                 });
                 self.set_state(SessionState::LoggedIn(established.account));
+                self.fetch_rooms(done.attempt);
             }
             Err(failure) => {
                 // The server refused the stored token for good; other failures may pass.
@@ -412,7 +442,9 @@ impl<C: Connector> Actor<C> {
                 }
             }
             SessionState::LoggedIn(_) => {
+                self.abort_rooms_task();
                 self.set_state(SessionState::LoggedOut { failure: None });
+                self.clear_rooms();
                 self.clear_store();
                 if let Some(session) = self.session.take() {
                     self.revoke(session.api, session.credentials);
@@ -420,6 +452,64 @@ impl<C: Connector> Actor<C> {
             }
             SessionState::LoggedOut { .. } => tracing::debug!("logout ignored: not logged in"),
         }
+    }
+
+    /// Fetches the rooms of the session that the attempt `attempt` established. Only the first
+    /// fetch is made: a failure other than an expired token leaves the session without rooms until
+    /// the sync engine (Phase 3) retries.
+    fn fetch_rooms(&mut self, attempt: u64) {
+        let Some(session) = &self.session else {
+            return;
+        };
+        let api = session.api.clone();
+        let credentials = session.credentials.clone();
+        let done = self.done_tx.clone();
+        self.rooms_task = Some(tokio::spawn(async move {
+            let outcome = api.subscriptions(&credentials).await;
+            // Fails only if the actor is gone.
+            let _ = done.send(Done::Rooms(RoomsDone { attempt, outcome }));
+        }));
+    }
+
+    fn handle_rooms_done(&mut self, done: RoomsDone) {
+        if done.attempt != self.attempt || !matches!(self.state, SessionState::LoggedIn(_)) {
+            tracing::debug!("answer of a stale room fetch dropped");
+            return;
+        }
+        self.rooms_task = None;
+        match done.outcome {
+            Ok(subscriptions) => {
+                let rooms = subscriptions.into_iter().filter_map(room_from).collect();
+                let change = self.rooms.reset(rooms);
+                (self.on_event)(Event::Rooms(vec![change]));
+            }
+            // The token died between the login and the fetch: same as an expired resume. It's
+            // dead already, so there's nothing to revoke.
+            Err(ApiError::Unauthorized) => {
+                self.session = None;
+                self.clear_store();
+                self.set_state(SessionState::LoggedOut {
+                    failure: Some(LoginFailure::SessionExpired),
+                });
+                self.clear_rooms();
+            }
+            Err(error) => tracing::warn!(%error, "can't list the rooms"),
+        }
+    }
+
+    fn abort_rooms_task(&mut self) {
+        if let Some(task) = self.rooms_task.take() {
+            task.abort();
+        }
+    }
+
+    /// Empties the room list and tells the frontend, unless it was empty already.
+    fn clear_rooms(&mut self) {
+        if self.rooms.rooms().is_empty() {
+            return;
+        }
+        let change = self.rooms.reset(Vec::new());
+        (self.on_event)(Event::Rooms(vec![change]));
     }
 
     fn clear_store(&self) {

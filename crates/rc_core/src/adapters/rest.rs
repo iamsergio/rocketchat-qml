@@ -45,6 +45,14 @@ impl ServerApi for RestApi {
         Ok(user_from(session.me().await?))
     }
 
+    async fn subscriptions(
+        &self,
+        credentials: &Credentials,
+    ) -> Result<Vec<rc_api::Subscription>, ApiError> {
+        let session = self.client.session(api_credentials(credentials));
+        Ok(session.subscriptions().await?)
+    }
+
     async fn logout(&self, credentials: &Credentials) -> Result<(), ApiError> {
         Ok(self
             .client

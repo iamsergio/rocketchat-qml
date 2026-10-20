@@ -15,10 +15,12 @@ use std::sync::mpsc::{self, Receiver};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use rc_core::adapters::MemoryStore;
+use rc_core::domain::{Room, RoomKind};
 use rc_core::ports::SecretStore;
+use rc_core::rooms::RoomChange;
 use rc_core::session::{LoginFailure, SessionState};
 use rc_core::{Client, Event};
-use secrecy::SecretString;
+use secrecy::{ExposeSecret, SecretString};
 
 const TIMEOUT: Duration = Duration::from_secs(15);
 
@@ -50,10 +52,12 @@ fn start_with(store: MemoryStore) -> (Client, Receiver<Event>) {
     (client, rx)
 }
 
+/// The next session state. Room events are skipped: only the room test looks at them.
 fn next(events: &Receiver<Event>) -> SessionState {
-    match events.recv_timeout(TIMEOUT).expect("no event") {
-        Event::Session(state) => state,
-        other => panic!("unexpected event {other:?}"),
+    loop {
+        if let Event::Session(state) = events.recv_timeout(TIMEOUT).expect("no event") {
+            return state;
+        }
     }
 }
 
@@ -158,4 +162,65 @@ fn a_new_client_resumes_the_stored_session() {
     // Dropping flushes the queued clear.
     drop(second);
     assert!(store.load().unwrap().is_none());
+}
+
+/// Creates a channel as admin, who becomes a member, and returns its id and name. The room is
+/// the test's own: the server may hold anything else, and `general` isn't joined by default.
+fn create_channel() -> (String, String) {
+    let (user, password) = admin();
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    runtime.block_on(async {
+        let login = rc_api::RestClient::new(&server_url())
+            .unwrap()
+            .login(&user, &password)
+            .await
+            .unwrap();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let name = format!("ct-room-{}-{nanos}", process::id());
+        let response = reqwest::Client::new()
+            .post(format!(
+                "{}/api/v1/channels.create",
+                server_url().trim_end_matches('/')
+            ))
+            .header("X-User-Id", login.credentials.user_id)
+            .header("X-Auth-Token", login.credentials.token.expose_secret())
+            .json(&serde_json::json!({ "name": name }))
+            .send()
+            .await
+            .unwrap();
+        let status = response.status();
+        let json: serde_json::Value = response.json().await.unwrap();
+        assert!(status.is_success(), "channels.create: {status} {json}");
+        (json["channel"]["_id"].as_str().unwrap().to_owned(), name)
+    })
+}
+
+// ROOM-001, ROOM-002
+#[test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+fn admin_gets_their_rooms_after_logging_in() {
+    let (id, name) = create_channel();
+    let (client, events) = start();
+    let (user, password) = admin();
+    client.login(&server_url(), &user, password);
+    assert!(matches!(outcome(&events), SessionState::LoggedIn(_)));
+    let Event::Rooms(changes) = events.recv_timeout(TIMEOUT).expect("no rooms event") else {
+        panic!("expected the rooms right after logging in");
+    };
+    let [RoomChange::Reset(rooms)] = changes.as_slice() else {
+        panic!("expected a single reset, got {changes:?}");
+    };
+    // Only the test's own room: the server may hold any number of others.
+    let room: &Room = rooms
+        .iter()
+        .find(|room| room.id.as_str() == id)
+        .expect("the new channel isn't listed");
+    assert_eq!(room.kind, RoomKind::Channel);
+    assert_eq!(room.name, name);
 }
