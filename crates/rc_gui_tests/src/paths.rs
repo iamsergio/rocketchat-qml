@@ -21,6 +21,8 @@ pub mod main_window {
     pub const ROOM_LIST: &str = "mainWindow/roomList";
     pub const CURRENT_USER: &str = "mainWindow/currentUser";
     pub const LOGOUT_BUTTON: &str = "mainWindow/logoutButton";
+    /// Shown while the realtime connection is down.
+    pub const CONNECTION_BANNER: &str = "mainWindow/connectionBanner";
 
     /// Shown in place of the messages while no room is open.
     pub const ROOM_PLACEHOLDER: &str = "mainWindow/roomPlaceholder";

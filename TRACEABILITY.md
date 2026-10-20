@@ -50,7 +50,7 @@ Every test carries a `// <ID>` comment. A feature can have tests at several leve
 | RT-001 | New message in the open room appears live | unit: `crates/rc_api/src/ddp.rs`, `crates/rc_api/src/wire.rs`, `crates/rc_core/src/adapters/rest.rs`, `crates/rc_core/src/client/tests.rs`, `crates/rc_core/src/timeline.rs`; contract: `crates/rc_api/tests/contract.rs`, `crates/rc_core/tests/contract.rs`; GUI: `crates/rc_gui_tests/tests/realtime.rs` |
 | RT-002 | Unread counts of other rooms update live, and rooms joined or left show up | unit: `crates/rc_api/src/ddp.rs`, `crates/rc_api/src/wire.rs`, `crates/rc_core/src/adapters/rest.rs`, `crates/rc_core/src/client/tests.rs`; contract: `crates/rc_api/tests/contract.rs`, `crates/rc_core/tests/contract.rs`; GUI: `crates/rc_gui_tests/tests/realtime.rs` |
 | RT-003 | Reconnect after connection loss, catch up on missed messages | unit: `crates/rc_api/src/ddp.rs`, `crates/rc_core/src/backoff.rs`, `crates/rc_core/src/client/tests.rs`, `crates/rc_test_server/src/proxy.rs`; contract: `crates/rc_core/tests/contract.rs`; GUI: `crates/rc_gui_tests/tests/realtime.rs` |
-| RT-004 | Connection status indicator | todo |
+| RT-004 | Connection status indicator | unit: `crates/rc_core/src/client/tests.rs`, `crates/rc_qt/src/cache.rs`, `crates/rc_qt/src/session_view.rs`; GUI: `crates/rc_gui_tests/tests/realtime.rs` |
 
 ## Sending
 

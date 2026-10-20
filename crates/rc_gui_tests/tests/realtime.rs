@@ -7,7 +7,7 @@
 
 mod common;
 
-use rc_gui_tests::paths::{message, message_row, room, room_row};
+use rc_gui_tests::paths::{main_window, message, message_row, room, room_row};
 use rc_test_server::{Admin, Proxy, unique};
 
 use common::{TIMEOUT, launch, log_in_and_wait_for_room, log_in_at_and_wait_for_room, open_room};
@@ -106,5 +106,36 @@ fn what_happens_while_the_connection_is_down_shows_up_after_it_is_back() {
     let live = format!("live again {}", unique());
     let after = admin.post_message(&channel_id, &live);
     gui.wait_until_text(&message(&after.id, message_row::BODY), &live, TIMEOUT)
+        .unwrap();
+}
+
+// RT-004
+#[test]
+#[ignore = "needs the app and a Rocket.Chat server: run through ctest"]
+fn a_banner_shows_while_the_connection_is_down_and_goes_when_it_is_back() {
+    let admin = Admin::login();
+    let user = admin.create_user();
+    let (channel_id, _) = admin.create_channel(&[&user.username]);
+    let proxy = Proxy::start();
+    let app = launch();
+    let gui = app.gui();
+    log_in_at_and_wait_for_room(gui, &proxy.url(), &user, &channel_id);
+    assert!(
+        !gui.exists_and_visible(main_window::CONNECTION_BANNER)
+            .unwrap()
+    );
+
+    proxy.set_accepting(false);
+    proxy.drop_connections();
+    gui.wait_until_visible(main_window::CONNECTION_BANNER, TIMEOUT)
+        .unwrap();
+    // The rooms stay on show meanwhile.
+    assert!(
+        gui.exists_and_visible(&room(&channel_id, room_row::NAME))
+            .unwrap()
+    );
+
+    proxy.set_accepting(true);
+    gui.wait_until_hidden(main_window::CONNECTION_BANNER, TIMEOUT)
         .unwrap();
 }
