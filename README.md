@@ -31,10 +31,11 @@ hand:
 
     RC_GUI_TEST_APP=$PWD/build-dev/bin/rocketchat_qml cargo test -p rc_gui_tests -- --ignored
 
-The `rc_api` contract tests run against a real Rocket.Chat server and are skipped the same way. Start
-one with `scripts/run_test_server.sh`, then:
+The `rc_api` and `rc_core` contract tests run against a real Rocket.Chat server and are skipped the
+same way. Start one with `scripts/run_test_server.sh`, then:
 
     RC_TEST_SERVER_URL=http://127.0.0.1:3000 cargo test -p rc_api --test contract -- --ignored
+    RC_TEST_SERVER_URL=http://127.0.0.1:3000 cargo test -p rc_core --test contract -- --ignored
 
 They create their own users and rooms, so they can run repeatedly against the same server. The admin
 login comes from `RC_ADMIN_USER` / `RC_ADMIN_PASS` (default `admin` / `admin`).
@@ -55,3 +56,7 @@ CI runs on a self-hosted runner in a container (`.github/Dockerfile`). Start it 
 (or `RC_ENGINE=podman`) and the GitHub CLI logged in as a repository admin:
 
     scripts/run_ci_runner.sh
+
+The runner joins the `rc-test` network, and CI runs the `rc_api` and `rc_core` contract tests against
+the test server. It has to be running on the same host (`scripts/run_test_server.sh`). After changing
+`scripts/run_ci_runner.sh`, restart the runner with it.
