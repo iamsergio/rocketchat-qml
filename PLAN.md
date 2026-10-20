@@ -89,8 +89,8 @@ Done when: messages render formatting, mentions, emoji, avatars, images and reac
 - [x] `rc_core`: file cache port. Avatars are downloaded to the cache directory and exposed to the GUI as local file URLs. They are kept between sessions and refreshed once per session; the server pushes changes. Only avatars somebody uploaded are shown (`avatarETag`); the others show initials. The test server serves the drawn avatar whatever is uploaded, so the picture of a custom avatar isn't tested
 - [x] `rc_core`: images through the file cache port, for the attachments below. An uploaded file never changes, so an image is downloaded only if the cache lacks it
 - [x] Image attachments shown inline, other attachments as links
-- [ ] Realtime message edits and deletes, plus a reactions display
-- [ ] Features RICH-001…RICH-007 tested
+- [x] Realtime message edits and deletes, plus a reactions display. The connection follows the open room's deletions (`stream-notify-room`), and `chat.syncMessages` brings a reopened or reconnected room up to date. Bulk deletions (`deleteMessageBulk`, an admin pruning a room) are not followed yet: see Issues
+- [x] Features RICH-001…RICH-007 tested
 
 ## Phase 5: Interacting
 
@@ -142,5 +142,6 @@ Done when: you can log in to servers that enforce 2FA or use SSO.
 
 # Issues
 
+- **Bulk deletions aren't followed.** An admin pruning a room sends `<room id>/deleteMessageBulk` instead of one `deleteMessage` per message. The messages stay on screen until the room is opened again with a catch-up (`chat.syncMessages` lists them as deleted), so subscribe to it next to `deleteMessage`.
 - **MongoDB 8.x won't start on Linux ≥ 6.19** (tcmalloc bug, [SERVER-121912](https://jira.mongodb.org/browse/SERVER-121912)). The test server uses MongoDB 7.0, which Rocket.Chat 8 accepts with a deprecation warning. Rocket.Chat 9 drops 7.0, so revisit before moving the test server to RC 9.
 - **Windows isn't built yet.** MSVC Debug builds need `CMAKE_MSVC_RUNTIME_LIBRARY=MultiThreadedDLL` and `MAP_IMPORTED_CONFIG_DEBUG=RELEASE` on the Qt targets (cxx-qt-cmake warns about this), and vcpkg's debug triplet builds with `/MDd`, which doesn't link against the Rust staticlib. Add a build-only `windows-latest` CI job before adding more C++ dependencies.
