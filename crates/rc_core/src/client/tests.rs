@@ -565,8 +565,26 @@ impl Harness {
             .login(server, username, SecretString::from("secret"));
     }
 
+    /// The next event, connection changes aside: the tests that don't look at them don't wait for
+    /// them either. See [`next_connection`](Self::next_connection).
     fn next_event(&self) -> Event {
-        self.events.recv_timeout(TIMEOUT).expect("no event")
+        loop {
+            match self.events.recv_timeout(TIMEOUT).expect("no event") {
+                Event::Connection(_) => {}
+                event => return event,
+            }
+        }
+    }
+
+    /// The next connection change, skipping the other events.
+    fn next_connection(&self) -> Connection {
+        loop {
+            if let Event::Connection(connection) =
+                self.events.recv_timeout(TIMEOUT).expect("no event")
+            {
+                return connection;
+            }
+        }
     }
 
     /// The next session state. Room events in between are skipped: the session tests don't care
@@ -2783,4 +2801,56 @@ fn a_message_sent_while_the_room_loads_waits_for_the_page_behind_it() {
         }]),
         status("1", false, false, true, None),
     ]);
+}
+// RT-004
+#[test]
+fn a_lost_connection_is_reported_with_the_wait_and_then_the_attempt_and_the_recovery() {
+    let fake = Fake::new();
+    let harness = logged_in_harness_with(&fake, fast());
+    fake.end_connection(0);
+    let Connection::Waiting { retry_in } = harness.next_connection() else {
+        panic!("not waiting");
+    };
+    assert!((BASE / 2..=BASE).contains(&retry_in), "{retry_in:?}");
+    assert_eq!(harness.next_connection(), Connection::Reconnecting);
+    assert_eq!(harness.next_connection(), Connection::Connected);
+}
+
+// RT-004
+#[test]
+fn a_failed_attempt_is_reported_as_waiting_again_with_a_longer_wait() {
+    let fake = Fake::new();
+    let harness = logged_in_harness_with(&fake, fast());
+    fake.script_realtime(
+        None,
+        Vec::new(),
+        Err(ApiError::Unreachable("refused".into())),
+    );
+    fake.end_connection(0);
+    let Connection::Waiting { retry_in: first } = harness.next_connection() else {
+        panic!("not waiting");
+    };
+    assert_eq!(harness.next_connection(), Connection::Reconnecting);
+    let Connection::Waiting { retry_in: second } = harness.next_connection() else {
+        panic!("not waiting");
+    };
+    assert!(second >= BASE, "{first:?} then {second:?}");
+    assert_eq!(harness.next_connection(), Connection::Reconnecting);
+    assert_eq!(harness.next_connection(), Connection::Connected);
+}
+
+// RT-004
+#[test]
+fn a_connection_that_is_never_lost_reports_nothing() {
+    let fake = Fake::new();
+    let harness = logged_in_harness(&fake);
+    fake.wait_for_connections(1);
+    harness.client.logout();
+    loop {
+        match harness.events.recv_timeout(TIMEOUT).expect("no event") {
+            Event::Connection(connection) => panic!("{connection:?}"),
+            Event::Session(SessionState::LoggedOut { .. }) => break,
+            _ => {}
+        }
+    }
 }

@@ -54,6 +54,22 @@ pub enum Event {
     Timeline(Vec<TimelineChange>),
     /// What the frontend shows about the message list. Comes after the changes it goes with.
     TimelineStatus(TimelineStatus),
+    /// The state of the realtime connection of a logged-in session, when it changes. A session
+    /// starts `Connected`, and so does the frontend until told otherwise: nothing is sent at login,
+    /// and a logout or an expiry resets it without an event.
+    Connection(Connection),
+}
+
+/// Whether the session is live. The held rooms and messages stay on show while it is not.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Connection {
+    Connected,
+    /// The connection was lost, or couldn't be opened; the next try comes after `retry_in`.
+    Waiting {
+        retry_in: Duration,
+    },
+    /// A try is under way.
+    Reconnecting,
 }
 
 enum Command {
@@ -149,6 +165,7 @@ impl Client {
             cycle: 0,
             reconnect_task: None,
             backoff,
+            connection: Connection::Connected,
             succeeded_at: None,
             rooms_listed: false,
             backlog: None,
@@ -413,6 +430,8 @@ struct Actor<C: Connector> {
     reconnect_task: Option<JoinHandle<()>>,
     /// How long to wait before the next cycle.
     backoff: Backoff,
+    /// What the frontend was last told about the connection.
+    connection: Connection,
     /// When the current cycle had the connection open and the rooms listed. The wait starts over
     /// only if it lasted: see [`Backoff::lasted`].
     succeeded_at: Option<Instant>,
@@ -725,6 +744,7 @@ impl<C: Connector> Actor<C> {
         }
         let delay = self.backoff.next_delay();
         tracing::info!(?delay, "reconnecting after a wait");
+        self.set_connection(Connection::Waiting { retry_in: delay });
         let done = self.done_tx.clone();
         let cycle = self.cycle;
         self.reconnect_task = Some(tokio::spawn(async move {
@@ -740,7 +760,15 @@ impl<C: Connector> Actor<C> {
             return;
         }
         self.reconnect_task = None;
+        self.set_connection(Connection::Reconnecting);
         self.open_realtime();
+    }
+
+    fn set_connection(&mut self, connection: Connection) {
+        if self.connection != connection {
+            self.connection = connection;
+            (self.on_event)(Event::Connection(connection));
+        }
     }
 
     /// Puts what the server pushed into the state and tells the frontend.
@@ -864,6 +892,7 @@ impl<C: Connector> Actor<C> {
         }
         if self.realtime_open {
             self.succeeded_at = Some(Instant::now());
+            self.set_connection(Connection::Connected);
             self.catch_up_open_room();
         }
         for event in self.backlog.take().unwrap_or_default() {
@@ -1256,6 +1285,7 @@ impl<C: Connector> Actor<C> {
                 "session: logged in"
             ),
         }
+        self.connection = Connection::Connected;
         self.state = state.clone();
         (self.on_event)(Event::Session(state));
     }
