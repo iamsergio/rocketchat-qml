@@ -3,10 +3,11 @@
 
 //! Connects the one `rc_core::Client` to the view models.
 //!
-//! `Session`, `RoomList`, `Room` and `MessageList` need the events of the same client, and QML creates them on its
-//! own schedule. The hub owns the client, remembers what the events said (see [`Cache`]), and
-//! queues each event to the view models that registered. A view model registering later replays
-//! the cache, so it doesn't matter whether it is created before or after the first events.
+//! `Session`, `RoomList`, `Room` and `MessageList` need the events of the same client, and QML
+//! creates them on its own schedule. The hub owns the client, remembers what the events said (see
+//! [`Cache`]), and queues each event to the view models that registered. A view model registering
+//! later replays the cache, so it doesn't matter whether it is created before or after the first
+//! events.
 //!
 //! The event callback runs on a runtime thread and never waits for the GUI thread; the GUI thread
 //! never waits for the runtime either (commands don't block). So queueing while holding the lock
