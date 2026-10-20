@@ -13,7 +13,7 @@ use rc_gui_tests::App;
 use rc_gui_tests::paths::{room, room_row};
 use rc_test_server::Admin;
 
-use common::{TIMEOUT, log_in_and_wait_for_room};
+use common::{TIMEOUT, log_in_and_wait_for_room, open_room, row_y};
 
 // ROOM-001, ROOM-002
 #[test]
@@ -91,4 +91,70 @@ fn unread_and_mention_counts_are_shown() {
         !gui.exists_and_visible(&room(&group_id, room_row::MENTIONS))
             .unwrap()
     );
+}
+
+// ROOM-004
+#[test]
+#[ignore = "needs the app and a Rocket.Chat server: run through ctest"]
+fn opening_a_room_clears_its_badges() {
+    let admin = Admin::login();
+    let user = admin.create_user();
+    let (channel_id, _) = admin.create_channel(&[&user.username]);
+    let (other_id, _) = admin.create_channel(&[&user.username]);
+    let dm_id = admin.create_dm(&user.username);
+    admin.post_message(&channel_id, &format!("hello @{}", user.username));
+    admin.post_message(&other_id, &format!("hello @{}", user.username));
+    admin.post_message(&dm_id, "hi there");
+    let app = App::launch().unwrap();
+    let gui = app.gui();
+    log_in_and_wait_for_room(gui, &user, &dm_id);
+    for id in [&channel_id, &other_id] {
+        gui.wait_until_text(&room(id, room_row::MENTIONS), "1", TIMEOUT)
+            .unwrap();
+    }
+    gui.wait_until_text(&room(&dm_id, room_row::UNREAD), "1", TIMEOUT)
+        .unwrap();
+
+    open_room(gui, &channel_id);
+
+    gui.wait_until_hidden(&room(&channel_id, room_row::MENTIONS), TIMEOUT)
+        .unwrap();
+    gui.wait_until_hidden(&room(&channel_id, room_row::UNREAD), TIMEOUT)
+        .unwrap();
+    // Only the opened room.
+    assert!(
+        gui.exists_and_visible(&room(&other_id, room_row::MENTIONS))
+            .unwrap()
+    );
+    assert!(
+        gui.exists_and_visible(&room(&dm_id, room_row::UNREAD))
+            .unwrap()
+    );
+}
+
+// ROOM-005
+#[test]
+#[ignore = "needs the app and a Rocket.Chat server: run through ctest"]
+fn rooms_are_listed_with_the_most_recently_active_first() {
+    let admin = Admin::login();
+    let user = admin.create_user();
+    // Created in the opposite order of their activity, which a name order would follow.
+    let (older_id, _) = admin.create_channel(&[&user.username]);
+    let (newer_id, _) = admin.create_channel(&[&user.username]);
+    let (quiet_id, _) = admin.create_channel(&[&user.username]);
+    admin.post_message(&newer_id, "first");
+    admin.post_message(&older_id, "second");
+    let app = App::launch().unwrap();
+    let gui = app.gui();
+
+    log_in_and_wait_for_room(gui, &user, &older_id);
+    for id in [&newer_id, &quiet_id] {
+        gui.wait_until_visible(&room(id, room_row::NAME), TIMEOUT)
+            .unwrap();
+    }
+
+    // Named after what it was, `older_id` was posted to last.
+    assert!(row_y(gui, &older_id) < row_y(gui, &newer_id));
+    // A room without messages comes after the ones with.
+    assert!(row_y(gui, &newer_id) < row_y(gui, &quiet_id));
 }

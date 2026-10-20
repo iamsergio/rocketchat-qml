@@ -50,6 +50,11 @@ pub fn open_room(gui: &Gui, room_id: &str) {
     gui.mouse_click(&room(room_id, room_row::NAME)).unwrap();
 }
 
+/// The vertical position of the row of the room with this id, to compare the order of rows.
+pub fn row_y(gui: &Gui, room_id: &str) -> f64 {
+    gui.bounding_box(&room(room_id, room_row::NAME)).unwrap().y
+}
+
 /// The time of day (`HH:MM`) of a timestamp in the server's spelling (`2026-10-20T14:12:48.587Z`).
 /// The tests launch the app with `TZ=UTC`, which is what the messages are shown in.
 pub fn utc_time(ts: &str) -> String {
