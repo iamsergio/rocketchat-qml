@@ -23,6 +23,7 @@ use crate::domain::{
 };
 use crate::emoji::CustomEmojis;
 use crate::error::Error;
+use crate::images::{self, ImageUpdate, Images, images_of};
 use crate::ports::{
     ApiError, CacheError, CacheKey, Connector, FileCache, MessageStore, Page, Pushed, SecretStore,
     ServerApi, StoreError,
@@ -67,6 +68,9 @@ pub enum Event {
     /// The files to show as avatars, for the users and rooms that changed: the first one a user or
     /// room gets, or a new one when the server's differs. After a logout, the ones that go.
     Avatars(Vec<AvatarUpdate>),
+    /// The files to show as attachment images, for the images that got one. After a logout, the
+    /// ones that go.
+    Images(Vec<ImageUpdate>),
 }
 
 /// Whether the session is live. The held rooms and messages stay on show while it is not.
@@ -188,6 +192,8 @@ impl Client {
             cache: Arc::new(cache),
             avatars: Avatars::default(),
             avatar_tasks: JoinSet::new(),
+            images: Images::default(),
+            image_tasks: JoinSet::new(),
             messages: Box::new(MemoryMessageStore::default()),
             open: None,
             history_attempt: 0,
@@ -395,6 +401,48 @@ async fn forget_avatar(owner: &AvatarOwner, key: CacheKey, cache: Arc<dyn FileCa
     Fetched::Missing
 }
 
+/// Downloads an attachment image and stores it.
+async fn fetch_image<A: ServerApi>(
+    api: &A,
+    credentials: &Credentials,
+    path: &str,
+    key: CacheKey,
+    cache: Arc<dyn FileCache>,
+) -> images::Fetched {
+    let image = match api.file(credentials, path).await {
+        Ok(image) => image,
+        Err(error @ ApiError::Unreachable(_)) => {
+            tracing::debug!(%error, path, "can't download the image");
+            return images::Fetched::Unreachable;
+        }
+        // Not the end of the session: the rooms and messages meet the same refusal if the token
+        // is dead.
+        Err(error) => {
+            tracing::debug!(%error, path, "no image");
+            return images::Fetched::Nothing;
+        }
+    };
+    let stored = tokio::task::spawn_blocking(move || {
+        cache.put(&key, image.content_type.as_deref(), &image.bytes)
+    })
+    .await;
+    match stored {
+        Ok(Ok(stored)) => images::Fetched::Stored(stored.path),
+        Ok(Err(error @ CacheError::UnsupportedType(_))) => {
+            tracing::debug!(%error, path, "image not kept");
+            images::Fetched::Nothing
+        }
+        Ok(Err(error)) => {
+            tracing::warn!(%error, path, "can't keep the image");
+            images::Fetched::Nothing
+        }
+        Err(error) => {
+            tracing::error!(%error, "storing an image panicked");
+            images::Fetched::Nothing
+        }
+    }
+}
+
 /// A login or resume task's answer.
 struct LoginDone<A> {
     attempt: u64,
@@ -440,6 +488,14 @@ struct AvatarDone {
     outcome: Fetched,
 }
 
+/// An attachment image download's answer.
+struct ImageDone {
+    /// The login attempt the download belongs to: the answer is stale if another has begun since.
+    attempt: u64,
+    path: String,
+    outcome: images::Fetched,
+}
+
 /// A history fetch's answer.
 struct HistoryDone {
     /// Identifies the fetch: the answer is stale if the room was closed or another fetch began.
@@ -471,6 +527,7 @@ enum Done<A> {
     Rooms(RoomsDone),
     Emoji(EmojiDone),
     Avatar(AvatarDone),
+    Image(ImageDone),
     Realtime(RealtimeReport),
     /// The wait after a lost connection is over; the cycle is the one that was lost.
     Reconnect {
@@ -553,6 +610,10 @@ struct Actor<C: Connector> {
     avatars: Avatars,
     /// The avatar downloads in flight.
     avatar_tasks: JoinSet<()>,
+    /// Which attachment images are wanted, queued and shown.
+    images: Images,
+    /// The attachment image downloads in flight.
+    image_tasks: JoinSet<()>,
     /// The messages of the rooms opened so far. Cleared on logout.
     messages: Box<dyn MessageStore>,
     open: Option<OpenRoom>,
@@ -588,6 +649,7 @@ impl<C: Connector> Actor<C> {
                     Done::Rooms(done) => self.handle_rooms_done(done),
                     Done::Emoji(done) => self.handle_emoji_done(done),
                     Done::Avatar(done) => self.handle_avatar_done(done),
+                    Done::Image(done) => self.handle_image_done(done),
                     Done::Realtime(report) => self.handle_realtime_done(report),
                     Done::Reconnect { cycle } => self.handle_reconnect(cycle),
                     Done::History(done) => self.handle_history_done(done),
@@ -629,6 +691,7 @@ impl<C: Connector> Actor<C> {
         }
         self.abort_realtime_task();
         self.avatar_tasks.abort_all();
+        self.image_tasks.abort_all();
         if let Some(task) = self.history_task.take() {
             task.abort();
         }
@@ -762,6 +825,7 @@ impl<C: Connector> Actor<C> {
             self.clear_rooms();
             self.clear_emoji();
             self.clear_avatars();
+            self.clear_images();
             self.clear_timeline();
             self.clear_store();
             if let Some(session) = self.session.take() {
@@ -1215,6 +1279,75 @@ impl<C: Connector> Actor<C> {
         }
     }
 
+    /// Wants the images at `paths`: what the cache holds goes to the frontend at once, and the
+    /// others are downloaded in the background.
+    fn want_images(&mut self, paths: impl IntoIterator<Item = String>) {
+        let SessionState::LoggedIn(account) = &self.state else {
+            return;
+        };
+        let server = account.server.clone();
+        let cache = &self.cache;
+        let updates: Vec<_> = paths
+            .into_iter()
+            .filter_map(|path| {
+                self.images
+                    .want(path, |path| cache.get(&CacheKey::attachment(&server, path)))
+            })
+            .collect();
+        if !updates.is_empty() {
+            (self.on_event)(Event::Images(updates));
+        }
+        self.start_image_downloads(&server);
+    }
+
+    fn start_image_downloads(&mut self, server: &str) {
+        let Some(session) = &self.session else {
+            return;
+        };
+        while let Some(path) = self.images.next_download() {
+            let api = session.api.clone();
+            let credentials = session.credentials.clone();
+            let key = CacheKey::attachment(server, &path);
+            let cache = Arc::clone(&self.cache);
+            let attempt = self.attempt;
+            let done = self.done_tx.clone();
+            self.image_tasks.spawn(async move {
+                let outcome = fetch_image(&api, &credentials, &path, key, cache).await;
+                // Fails only if the actor is gone.
+                let _ = done.send(Done::Image(ImageDone {
+                    attempt,
+                    path,
+                    outcome,
+                }));
+            });
+        }
+    }
+
+    fn handle_image_done(&mut self, done: ImageDone) {
+        let SessionState::LoggedIn(account) = &self.state else {
+            return;
+        };
+        if done.attempt != self.attempt {
+            tracing::debug!("answer of a stale image download dropped");
+            return;
+        }
+        let server = account.server.clone();
+        if let Some(update) = self.images.finished(done.path, done.outcome) {
+            (self.on_event)(Event::Images(vec![update]));
+        }
+        self.start_image_downloads(&server);
+    }
+
+    /// Forgets the attachment images and tells the frontend, unless it had none. The cache keeps
+    /// its files.
+    fn clear_images(&mut self) {
+        self.image_tasks.abort_all();
+        let forgotten = self.images.reset();
+        if !forgotten.is_empty() {
+            (self.on_event)(Event::Images(forgotten));
+        }
+    }
+
     /// Forgets the custom emoji and tells the frontend, unless there were none.
     fn clear_emoji(&mut self) {
         if let Some(task) = self.emoji_task.take() {
@@ -1256,6 +1389,7 @@ impl<C: Connector> Actor<C> {
         self.clear_rooms();
         self.clear_emoji();
         self.clear_avatars();
+        self.clear_images();
         self.clear_timeline();
     }
 
@@ -1287,8 +1421,10 @@ impl<C: Connector> Actor<C> {
         let timeline = Timeline::new(id, history);
         let reset = timeline.reset();
         let authors = authors_of(std::slice::from_ref(&reset));
+        let images = images_of(std::slice::from_ref(&reset));
         (self.on_event)(Event::Timeline(vec![reset]));
         self.want_avatars(authors);
+        self.want_images(images);
         self.open = Some(OpenRoom {
             timeline,
             kind,
@@ -1370,6 +1506,7 @@ impl<C: Connector> Actor<C> {
         let older = fetch.older;
         self.history_task = None;
         let mut authors = Vec::new();
+        let mut images = Vec::new();
         match done.outcome {
             Ok(page) => {
                 let changes = if older {
@@ -1382,6 +1519,7 @@ impl<C: Connector> Actor<C> {
                 self.messages.save(&done.room, open.timeline.history());
                 if !changes.is_empty() {
                     authors = authors_of(&changes);
+                    images = images_of(&changes);
                     (self.on_event)(Event::Timeline(changes));
                 }
             }
@@ -1395,6 +1533,7 @@ impl<C: Connector> Actor<C> {
             }
         }
         self.want_avatars(authors);
+        self.want_images(images);
         self.emit_timeline_status();
     }
 
@@ -1423,8 +1562,10 @@ impl<C: Connector> Actor<C> {
             if !changes.is_empty() {
                 self.messages.save(room, open.timeline.history());
                 let authors = authors_of(&changes);
+                let images = images_of(&changes);
                 (self.on_event)(Event::Timeline(changes));
                 self.want_avatars(authors);
+                self.want_images(images);
             }
             return;
         }
@@ -1458,6 +1599,7 @@ impl<C: Connector> Actor<C> {
             ts: jiff::Timestamp::now(),
             kind: MessageKind::Text(text.into()),
             delivery: Delivery::Pending,
+            attachments: Vec::new(),
         };
         let id = message.id.clone();
         self.change_timeline(&room, |timeline| vec![timeline.add_unsent(message)]);

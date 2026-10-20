@@ -300,6 +300,47 @@ pub struct Message {
     pub ts: jiff::Timestamp,
     pub kind: MessageKind,
     pub delivery: Delivery,
+    /// The files attached to it. An unsent message has none.
+    pub attachments: Vec<Attachment>,
+}
+
+/// A file uploaded with a message.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Attachment {
+    pub title: String,
+    /// Where the original file is, a path on the server (`/file-upload/...`).
+    pub link: String,
+    pub description: Option<String>,
+    /// In bytes, when the server says.
+    pub size: Option<u64>,
+    /// Set for images.
+    pub image: Option<ImageAttachment>,
+}
+
+/// The picture an image attachment shows: the original, or a thumbnail the server made of it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ImageAttachment {
+    /// A path on the server (`/file-upload/...`), which is also what the file cache knows it by.
+    pub path: String,
+    /// In pixels, when the server says.
+    pub width: Option<u32>,
+    pub height: Option<u32>,
+}
+
+impl From<rc_api::Attachment> for Attachment {
+    fn from(attachment: rc_api::Attachment) -> Self {
+        Self {
+            title: attachment.title,
+            link: attachment.link,
+            description: attachment.description,
+            size: attachment.size,
+            image: attachment.image.map(|image| ImageAttachment {
+                path: image.path,
+                width: image.dimensions.map(|(width, _)| width),
+                height: image.dimensions.map(|(_, height)| height),
+            }),
+        }
+    }
 }
 
 impl Message {
@@ -355,6 +396,7 @@ pub(crate) fn message_from(message: rc_api::Message) -> Option<Message> {
         ts: message.ts,
         kind,
         delivery: Delivery::Sent,
+        attachments: message.attachments.into_iter().map(Into::into).collect(),
     })
 }
 
@@ -504,7 +546,58 @@ mod tests {
             thread_id: None,
             thread_shown: false,
             md: None,
+            attachments: Vec::new(),
         }
+    }
+
+    // RICH-005
+    #[test]
+    fn maps_the_attachments_of_a_message() {
+        let mut entry = entry(None, "");
+        entry.attachments = vec![
+            rc_api::Attachment {
+                title: "pic.png".into(),
+                link: "/file-upload/a/pic.png".into(),
+                description: Some("a pic".into()),
+                size: None,
+                image: Some(rc_api::AttachmentImage {
+                    path: "/file-upload/b/pic.png".into(),
+                    content_type: Some("image/png".into()),
+                    dimensions: Some((480, 360)),
+                }),
+            },
+            rc_api::Attachment {
+                title: "notes.txt".into(),
+                link: "/file-upload/c/notes.txt".into(),
+                description: None,
+                size: Some(6),
+                image: None,
+            },
+        ];
+        let message = message_from(entry).unwrap();
+        assert_eq!(
+            message.attachments,
+            [
+                Attachment {
+                    title: "pic.png".into(),
+                    link: "/file-upload/a/pic.png".into(),
+                    description: Some("a pic".into()),
+                    size: None,
+                    image: Some(ImageAttachment {
+                        path: "/file-upload/b/pic.png".into(),
+                        width: Some(480),
+                        height: Some(360),
+                    }),
+                },
+                Attachment {
+                    title: "notes.txt".into(),
+                    link: "/file-upload/c/notes.txt".into(),
+                    description: None,
+                    size: Some(6),
+                    image: None,
+                },
+            ]
+        );
     }
 
     // MSG-001, MSG-003

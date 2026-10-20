@@ -254,6 +254,7 @@ mod tests {
                 MessageKind::Text("hi".into())
             },
             delivery: Delivery::Sent,
+            attachments: Vec::new(),
         }
     }
 

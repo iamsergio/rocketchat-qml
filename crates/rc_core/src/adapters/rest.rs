@@ -93,6 +93,15 @@ impl ServerApi for RestApi {
         }))
     }
 
+    async fn file(&self, credentials: &Credentials, path: &str) -> Result<Image, ApiError> {
+        let session = self.client.session(api_credentials(credentials));
+        let download = session.file(path).await?;
+        Ok(Image {
+            bytes: download.bytes,
+            content_type: download.content_type,
+        })
+    }
+
     async fn history(
         &self,
         credentials: &Credentials,
@@ -276,6 +285,7 @@ mod tests {
             thread_id: thread_id.map(str::to_owned),
             thread_shown: false,
             md: None,
+            attachments: Vec::new(),
         }
     }
 

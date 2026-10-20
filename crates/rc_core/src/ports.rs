@@ -91,6 +91,18 @@ pub trait ServerApi: Clone + Send + Sync + 'static {
         owner: &AvatarOwner,
     ) -> impl Future<Output = Result<Option<Image>, ApiError>> + Send;
 
+    /// A file uploaded to a room, at the server path a message gives (`/file-upload/...`).
+    ///
+    /// # Errors
+    ///
+    /// [`ApiError::Server`] if the server refuses or the path isn't a file's, and
+    /// [`ApiError::Unauthorized`] if it rejects the credentials.
+    fn file(
+        &self,
+        credentials: &Credentials,
+        path: &str,
+    ) -> impl Future<Output = Result<Image, ApiError>> + Send;
+
     /// A page of the room's history: the newest messages sent before `before`, or the newest of all
     /// without it, at most `count`. `before` is inclusive, so the message sent at that instant
     /// comes back too: the caller de-duplicates.
@@ -268,6 +280,8 @@ impl SecretStore for Box<dyn SecretStore> {
 pub enum CacheKind {
     UserAvatar,
     RoomAvatar,
+    /// A file attached to a message, named by its path on the server.
+    Attachment,
 }
 
 /// Names a cached file: the server it came from, what kind of file it is, and its name there (a
@@ -288,6 +302,16 @@ impl CacheKey {
             AvatarOwner::User(username) => (CacheKind::UserAvatar, username.as_str()),
             AvatarOwner::Room(room) => (CacheKind::RoomAvatar, room.as_str()),
         };
+        Self::new(server, kind, name)
+    }
+
+    /// The key of the attachment image at `path` (`/file-upload/...`) on `server`.
+    #[must_use]
+    pub fn attachment(server: &str, path: &str) -> Self {
+        Self::new(server, CacheKind::Attachment, path)
+    }
+
+    fn new(server: &str, kind: CacheKind, name: &str) -> Self {
         let rest = server.split_once("://").map_or(server, |(_, rest)| rest);
         Self {
             server: rest.trim_end_matches('/').to_ascii_lowercase(),
@@ -385,6 +409,15 @@ mod tests {
         for content_type in ["text/html", "application/json", "image/bmp", "", "png"] {
             assert_eq!(image_extension(content_type), None, "{content_type}");
         }
+    }
+
+    // RICH-005
+    #[test]
+    fn an_attachment_key_is_named_by_its_path() {
+        let key = CacheKey::attachment("https://Chat.Example.com/team/", "/file-upload/a/b.png");
+        assert_eq!(key.server, "chat.example.com/team");
+        assert_eq!(key.kind, CacheKind::Attachment);
+        assert_eq!(key.name, "/file-upload/a/b.png");
     }
 
     // RICH-004

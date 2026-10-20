@@ -46,6 +46,20 @@ pub enum TimelineChange {
 }
 
 impl TimelineChange {
+    /// The messages the change brings or replaces.
+    #[must_use]
+    pub fn messages(&self) -> &[Message] {
+        match self {
+            Self::Reset { messages, .. }
+            | Self::Inserted { messages, .. }
+            | Self::Prepended(messages)
+            | Self::Appended(messages) => messages,
+            Self::Updated { message, .. } | Self::Moved { message, .. } => {
+                std::slice::from_ref(message)
+            }
+        }
+    }
+
     /// Applies the change to a frontend's mirror of the message list, which must be in the state
     /// the change was made against: a change that doesn't fit is a bug in the caller, and panics
     /// like the `Vec` operation it stands for.
@@ -384,6 +398,7 @@ mod tests {
             ts: jiff::Timestamp::from_second(secs).unwrap(),
             kind: MessageKind::Text(id.into()),
             delivery: Delivery::Sent,
+            attachments: Vec::new(),
         }
     }
 

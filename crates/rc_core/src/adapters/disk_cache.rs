@@ -1,7 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Sergio Martins
 // SPDX-License-Identifier: MIT
 
-//! The file cache on disk: `<root>/<server>/avatars/user/<username>.<ext>`.
+//! The file cache on disk: `<root>/<server>/avatars/user/<username>.<ext>`, and `attachments/`
+//! for the files attached to messages.
 
 use std::fmt::Write as _;
 use std::fs;
@@ -30,6 +31,7 @@ impl DiskFileCache {
         let kind: &[&str] = match key.kind {
             CacheKind::UserAvatar => &["avatars", "user"],
             CacheKind::RoomAvatar => &["avatars", "room"],
+            CacheKind::Attachment => &["attachments"],
         };
         let mut dir = self.root.join(file_name(&key.server));
         dir.extend(kind);
