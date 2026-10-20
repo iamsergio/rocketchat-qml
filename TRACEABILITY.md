@@ -63,9 +63,9 @@ Every test carries a `// <ID>` comment. A feature can have tests at several leve
 
 | ID | Feature | Tests |
 |---|---|---|
-| RICH-001 | Markdown formatting (bold, italic, code, quote, lists, links) | unit: `crates/rc_api/src/md.rs`, `crates/rc_api/src/wire.rs`, `crates/rc_core/src/rich.rs`, `crates/rc_core/src/domain.rs`; contract: `crates/rc_api/tests/contract.rs`, `crates/rc_core/tests/contract.rs`. Model only, rendering in rc_qt is todo |
-| RICH-002 | Mentions, @me highlighted | unit: `crates/rc_api/src/wire.rs`, `crates/rc_core/src/rich.rs`; contract: `crates/rc_api/tests/contract.rs`, `crates/rc_core/tests/contract.rs`. Mentions only: highlighting @me is todo |
-| RICH-003 | Unicode and custom emoji | unit: `crates/rc_api/src/md.rs`, `crates/rc_api/src/wire.rs`, `crates/rc_core/src/rich.rs`; contract: `crates/rc_api/tests/contract.rs`, `crates/rc_core/tests/contract.rs`. Emoji nodes only: shortcode lookup and custom emoji are todo |
+| RICH-001 | Markdown formatting (bold, italic, code, quote, lists, links) | unit: `crates/rc_api/src/md.rs`, `crates/rc_api/src/wire.rs`, `crates/rc_core/src/rich.rs`, `crates/rc_core/src/domain.rs`, `crates/rc_qt/src/rich_html.rs`, `crates/rc_qt/src/message_view.rs`; contract: `crates/rc_api/tests/contract.rs`, `crates/rc_core/tests/contract.rs`; GUI: `crates/rc_gui_tests/tests/rich.rs` |
+| RICH-002 | Mentions, @me highlighted | unit: `crates/rc_api/src/wire.rs`, `crates/rc_core/src/rich.rs`, `crates/rc_core/src/domain.rs`, `crates/rc_qt/src/rich_html.rs`, `crates/rc_qt/src/message_view.rs`, `crates/rc_qt/src/cache.rs`; contract: `crates/rc_api/tests/contract.rs`, `crates/rc_core/tests/contract.rs`; GUI: `crates/rc_gui_tests/tests/rich.rs` |
+| RICH-003 | Unicode and custom emoji | unit: `crates/rc_api/src/md.rs`, `crates/rc_api/src/wire.rs`, `crates/rc_core/src/rich.rs`, `crates/rc_core/src/emoji.rs`, `crates/rc_core/src/client/tests.rs`, `crates/rc_qt/src/rich_html.rs`, `crates/rc_qt/src/cache.rs`; api: `crates/rc_api/tests/rest.rs`; contract: `crates/rc_api/tests/contract.rs`, `crates/rc_core/tests/contract.rs`; GUI: `crates/rc_gui_tests/tests/rich.rs` |
 | RICH-004 | Avatars (cached) | todo |
 | RICH-005 | Image attachments inline, other files as links | todo |
 | RICH-006 | Live message edits and deletes | todo |
