@@ -21,7 +21,7 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 
 [dev-dependencies]
-reqwest.workspace = true
+rc_test_server.workspace = true
 
 # Where each OS keeps secrets. Linux links the system libdbus, so building needs its development
 # package and pkg-config.
