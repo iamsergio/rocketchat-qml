@@ -8,7 +8,8 @@ use secrecy::SecretString;
 use serde::Deserialize;
 
 use crate::types::{
-    Credentials, LoginResult, RoomType, ServerInfo, ServerVersion, Subscription, User,
+    Author, Credentials, HistoryPage, LoginResult, Message, RoomType, ServerInfo, ServerVersion,
+    Subscription, User,
 };
 
 #[derive(Deserialize)]
@@ -66,6 +67,39 @@ struct SubscriptionBody {
     open: bool,
 }
 
+#[derive(Deserialize)]
+struct HistoryBody {
+    #[serde(default)]
+    messages: Vec<MessageBody>,
+}
+
+#[derive(Deserialize)]
+struct MessageBody {
+    #[serde(rename = "_id")]
+    id: String,
+    rid: String,
+    ts: jiff::Timestamp,
+    u: AuthorBody,
+    #[serde(default)]
+    msg: String,
+    #[serde(default)]
+    t: Option<String>,
+    #[serde(default)]
+    tmid: Option<String>,
+    #[serde(default)]
+    tshow: bool,
+}
+
+#[derive(Deserialize)]
+struct AuthorBody {
+    #[serde(rename = "_id")]
+    id: String,
+    #[serde(default)]
+    username: String,
+    #[serde(default)]
+    name: Option<String>,
+}
+
 /// The error body of failed calls: `message` is the human-readable one, `error` the short one.
 #[derive(Deserialize)]
 pub(crate) struct ErrorBody {
@@ -111,6 +145,25 @@ impl From<SubscriptionBody> for Subscription {
     }
 }
 
+impl From<MessageBody> for Message {
+    fn from(body: MessageBody) -> Self {
+        Self {
+            id: body.id,
+            room_id: body.rid,
+            ts: body.ts,
+            author: Author {
+                id: body.u.id,
+                username: body.u.username,
+                name: body.u.name,
+            },
+            text: body.msg,
+            kind: body.t,
+            thread_id: body.tmid,
+            thread_shown: body.tshow,
+        }
+    }
+}
+
 /// `None` if the body isn't JSON with a parsable `version`.
 pub(crate) fn parse_info(bytes: &[u8]) -> Option<ServerInfo> {
     let body: InfoBody = serde_json::from_slice(bytes).ok()?;
@@ -140,6 +193,15 @@ pub(crate) fn parse_subscriptions(bytes: &[u8]) -> Result<Vec<Subscription>, ser
     Ok(body.update.into_iter().map(Subscription::from).collect())
 }
 
+/// `count` is what was asked for: fewer messages than that means the history has ended.
+pub(crate) fn parse_history(bytes: &[u8], count: usize) -> Result<HistoryPage, serde_json::Error> {
+    let body: HistoryBody = serde_json::from_slice(bytes)?;
+    Ok(HistoryPage {
+        reached_start: body.messages.len() < count,
+        messages: body.messages.into_iter().map(Message::from).collect(),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use secrecy::ExposeSecret;
@@ -150,6 +212,7 @@ mod tests {
     const LOGIN: &str = include_str!("../tests/fixtures/login.json");
     const ME: &str = include_str!("../tests/fixtures/me.json");
     const SUBSCRIPTIONS: &str = include_str!("../tests/fixtures/subscriptions.json");
+    const HISTORY: &str = include_str!("../tests/fixtures/history.json");
 
     // AUTH-003
     #[test]
@@ -257,5 +320,96 @@ mod tests {
     #[test]
     fn empty_update_is_no_rooms() {
         assert!(parse_subscriptions(br#"{"remove":[]}"#).unwrap().is_empty());
+    }
+
+    fn ts(text: &str) -> jiff::Timestamp {
+        text.parse().unwrap()
+    }
+
+    // MSG-001, MSG-003
+    #[test]
+    fn parses_messages_with_author_and_time() {
+        let page = parse_history(HISTORY.as_bytes(), 50).unwrap();
+        // Newest first, as the server sends them.
+        let ids: Vec<_> = page.messages.iter().map(|m| m.id.as_str()).collect();
+        assert_eq!(
+            ids,
+            [
+                "vWJvPiA5seYwr9Exh",
+                "PgCoLuN95ZJTxpBTQ",
+                "6ad776eb3a2871a71eddd4c9",
+                "6ad776eb3a2871a71eddd4c5"
+            ]
+        );
+        let parent = &page.messages[1];
+        assert_eq!(parent.room_id, "6ad776f43a2871a71eddd4ce");
+        assert_eq!(parent.ts, ts("2026-10-20T14:13:08.207Z"));
+        assert_eq!(parent.text, "parent");
+        assert_eq!(
+            parent.author,
+            Author {
+                id: "6ad72ad3b6de6b54ca599f26".into(),
+                username: "admin".into(),
+                name: Some("Administrator".into()),
+            }
+        );
+        assert_eq!(parent.kind, None);
+        assert_eq!(parent.thread_id, None);
+        assert!(!parent.thread_shown);
+    }
+
+    // MSG-005
+    #[test]
+    fn parses_system_messages() {
+        let page = parse_history(HISTORY.as_bytes(), 50).unwrap();
+        let added = &page.messages[2];
+        assert_eq!(added.kind.as_deref(), Some("au"));
+        assert_eq!(added.text, "probe2502");
+        let topic = &page.messages[3];
+        assert_eq!(topic.kind.as_deref(), Some("room_changed_topic"));
+        assert_eq!(topic.text, "Hello topic");
+    }
+
+    // MSG-001
+    #[test]
+    fn parses_thread_replies() {
+        let page = parse_history(HISTORY.as_bytes(), 50).unwrap();
+        let reply = &page.messages[0];
+        assert_eq!(reply.thread_id.as_deref(), Some("PgCoLuN95ZJTxpBTQ"));
+        assert!(reply.thread_shown);
+    }
+
+    // MSG-001
+    #[test]
+    fn missing_message_fields_default() {
+        let json = br#"{"messages":[{"_id":"m","rid":"r","ts":"2026-10-20T14:00:00.000Z","u":{"_id":"u"}}]}"#;
+        let page = parse_history(json, 50).unwrap();
+        let message = &page.messages[0];
+        assert_eq!(message.text, "");
+        assert_eq!(message.kind, None);
+        assert_eq!(message.thread_id, None);
+        assert!(!message.thread_shown);
+        assert_eq!(message.author.username, "");
+        assert_eq!(message.author.name, None);
+    }
+
+    // MSG-001
+    #[test]
+    fn a_message_without_a_valid_time_is_a_decode_error() {
+        let json = br#"{"messages":[{"_id":"m","rid":"r","ts":"yesterday","u":{"_id":"u"}}]}"#;
+        assert!(parse_history(json, 50).is_err());
+    }
+
+    // MSG-002
+    #[test]
+    fn fewer_messages_than_asked_for_is_the_start() {
+        assert!(parse_history(HISTORY.as_bytes(), 5).unwrap().reached_start);
+        assert!(!parse_history(HISTORY.as_bytes(), 4).unwrap().reached_start);
+        assert!(!parse_history(HISTORY.as_bytes(), 3).unwrap().reached_start);
+        assert!(
+            parse_history(br#"{"success":true}"#, 50)
+                .unwrap()
+                .reached_start
+        );
     }
 }

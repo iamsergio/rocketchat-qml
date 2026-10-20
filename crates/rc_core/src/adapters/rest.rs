@@ -93,6 +93,9 @@ impl From<rc_api::Error> for ApiError {
             rc_api::Error::InvalidCredentials => Self::InvalidCredentials,
             rc_api::Error::Unauthorized => Self::Unauthorized,
             rc_api::Error::Server { status, message } => Self::Server { status, message },
+            rc_api::Error::UnsupportedRoomType(code) => {
+                Self::Unexpected(format!("rooms of type {code:?} have no history"))
+            }
             rc_api::Error::Decode(source) => Self::Unexpected(chain(&source)),
         }
     }
