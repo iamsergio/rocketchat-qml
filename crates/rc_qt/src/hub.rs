@@ -30,7 +30,7 @@ use crate::message_list_model::qobject::MessageListModel;
 use crate::room_list_model::qobject::RoomListModel;
 use crate::room_view::RoomState;
 use crate::room_vm::qobject::RoomVm;
-use crate::session_view::{SessionView, session_view};
+use crate::session_view::SessionView;
 use crate::session_vm::qobject::SessionVm;
 
 /// Environment variable choosing where the session token is kept. `memory` keeps it in memory
@@ -155,7 +155,7 @@ pub fn logout() {
 pub fn register_session(thread: CxxQtThread<SessionVm>) -> SessionView {
     let mut hub = lock();
     hub.session = Some(thread);
-    session_view(hub.cache.state())
+    hub.cache.session_view()
 }
 
 /// Registers the `RoomList` model and returns the change that brings it up to date. Call on the
@@ -220,8 +220,8 @@ fn dispatch(event: Event) {
     let hub = &mut *guard;
     hub.cache.apply(&event);
     match event {
-        Event::Session(state) => {
-            let view = session_view(Some(&state));
+        Event::Session(_) | Event::Connection(_) => {
+            let view = hub.cache.session_view();
             let gone = hub
                 .session
                 .as_ref()

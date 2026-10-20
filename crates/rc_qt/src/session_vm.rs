@@ -30,6 +30,8 @@ pub mod qobject {
         #[qproperty(QString, error_text, cxx_name = "errorText", READ, NOTIFY)]
         #[qproperty(QString, username, READ, NOTIFY)]
         #[qproperty(QString, server, READ, NOTIFY)]
+        // Empty while the realtime connection is up.
+        #[qproperty(QString, connection_text, cxx_name = "connectionText", READ, NOTIFY)]
         // What the login fields start with: empty, unless a developer-mode build got `--dev`.
         #[qproperty(QString, prefill_server, cxx_name = "prefillServer", READ, CONSTANT)]
         #[qproperty(
@@ -85,6 +87,7 @@ pub struct SessionVmRust {
     error_text: QString,
     username: QString,
     server: QString,
+    connection_text: QString,
     prefill_server: QString,
     prefill_username: QString,
     prefill_password: QString,
@@ -112,6 +115,7 @@ impl From<&SessionView> for SessionVmRust {
             error_text: QString::from(&view.error_text),
             username: QString::from(&view.username),
             server: QString::from(&view.server),
+            connection_text: QString::from(&view.connection_text),
             prefill_server: QString::from(&prefill.server),
             prefill_username: QString::from(&prefill.username),
             prefill_password: QString::from(&prefill.password),
@@ -136,6 +140,7 @@ impl qobject::SessionVm {
         let error_text = self.error_text != new.error_text;
         let username = self.username != new.username;
         let server = self.server != new.server;
+        let connection_text = self.connection_text != new.connection_text;
         *self.as_mut().rust_mut() = new;
         if state {
             self.as_mut().state_changed();
@@ -151,6 +156,9 @@ impl qobject::SessionVm {
         }
         if server {
             self.as_mut().server_changed();
+        }
+        if connection_text {
+            self.as_mut().connection_text_changed();
         }
     }
 

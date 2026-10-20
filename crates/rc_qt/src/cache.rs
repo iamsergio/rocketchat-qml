@@ -4,19 +4,21 @@
 //! What the hub remembers of the core's events, so that a view model created late can catch up.
 //! Plain Rust, so it can be unit-tested without Qt or a [`Client`](rc_core::Client).
 
-use rc_core::Event;
 use rc_core::domain::{Message, Room, RoomId};
 use rc_core::rooms::RoomChange;
 use rc_core::session::SessionState;
 use rc_core::timeline::{TimelineChange, TimelineStatus};
+use rc_core::{Connection, Event};
 
 use crate::room_view::{RoomState, room_state};
+use crate::session_view::{SessionView, session_view};
 
 /// The latest session state, a mirror of the room list and a mirror of the open room's messages.
 #[derive(Debug)]
 pub struct Cache {
     /// `None` before the first event.
     state: Option<SessionState>,
+    connection: Connection,
     rooms: Vec<Room>,
     /// The room `messages` belong to.
     room: Option<RoomId>,
@@ -35,6 +37,7 @@ impl Cache {
     pub const fn new() -> Self {
         Self {
             state: None,
+            connection: Connection::Connected,
             rooms: Vec::new(),
             room: None,
             messages: Vec::new(),
@@ -51,7 +54,12 @@ impl Cache {
     /// Takes the event in, as the core emits them: in order.
     pub fn apply(&mut self, event: &Event) {
         match event {
-            Event::Session(state) => self.state = Some(state.clone()),
+            Event::Session(state) => {
+                self.state = Some(state.clone());
+                // A session starts connected, and the core says nothing about it then.
+                self.connection = Connection::Connected;
+            }
+            Event::Connection(connection) => self.connection = *connection,
             Event::Rooms(changes) => {
                 for change in changes {
                     change.apply(&mut self.rooms);
@@ -70,9 +78,10 @@ impl Cache {
         }
     }
 
+    /// What the `Session` view model shows now.
     #[must_use]
-    pub fn state(&self) -> Option<&SessionState> {
-        self.state.as_ref()
+    pub fn session_view(&self) -> SessionView {
+        session_view(self.state.as_ref(), self.connection)
     }
 
     /// The change that brings an empty model to the current room list.
@@ -99,7 +108,7 @@ impl Cache {
 
 #[cfg(test)]
 mod tests {
-    use rc_core::domain::{Author, Delivery, MessageKind, RoomKind};
+    use rc_core::domain::{Account, Author, Delivery, MessageKind, RoomKind, User};
     use rc_core::ports::RoomHistory;
     use rc_core::rooms::RoomList;
     use rc_core::timeline::Timeline;
@@ -141,14 +150,44 @@ mod tests {
     #[test]
     fn remembers_the_latest_session_state() {
         let mut cache = Cache::new();
-        assert_eq!(cache.state(), None);
+        assert_eq!(cache.state, None);
         cache.apply(&Event::Session(SessionState::Connecting));
-        assert_eq!(cache.state(), Some(&SessionState::Connecting));
+        assert_eq!(cache.state.as_ref(), Some(&SessionState::Connecting));
         cache.apply(&Event::Session(SessionState::LoggedOut { failure: None }));
         assert_eq!(
-            cache.state(),
+            cache.state.as_ref(),
             Some(&SessionState::LoggedOut { failure: None })
         );
+    }
+
+    // RT-004
+    #[test]
+    fn the_connection_is_remembered_until_the_session_changes() {
+        use std::time::Duration;
+
+        let mut cache = Cache::new();
+        cache.apply(&Event::Session(SessionState::LoggedOut { failure: None }));
+        assert_eq!(cache.session_view().connection_text, "");
+        cache.apply(&Event::Session(SessionState::LoggedIn(Account {
+            server: "http://h".to_owned(),
+            user: User {
+                id: "u".to_owned().into(),
+                username: "alice".to_owned(),
+                display_name: None,
+            },
+        })));
+        cache.apply(&Event::Connection(Connection::Waiting {
+            retry_in: Duration::from_secs(3),
+        }));
+        assert_eq!(
+            cache.session_view().connection_text,
+            "Connection lost, reconnecting in 3s…"
+        );
+        cache.apply(&Event::Connection(Connection::Connected));
+        assert_eq!(cache.session_view().connection_text, "");
+        cache.apply(&Event::Connection(Connection::Reconnecting));
+        cache.apply(&Event::Session(SessionState::LoggedOut { failure: None }));
+        assert_eq!(cache.connection, Connection::Connected);
     }
 
     // ROOM-001
