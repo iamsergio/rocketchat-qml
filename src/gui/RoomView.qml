@@ -70,7 +70,9 @@ ColumnLayout {
         // Above the oldest message, which in this direction is the footer: the start of the
         // conversation, or a spinner while older messages load.
         footer: Item {
-            width: ListView.view.width
+            // The list's content item, as wide as the list. Not ListView.view.width, which qmllint
+            // rejects here (attached-property-reuse).
+            width: parent?.width ?? 0
             height: startLabel.visible || olderBusy.visible ? 40 : 0
 
             Label {
