@@ -9,6 +9,7 @@ pub mod adapters;
 mod backoff;
 mod client;
 pub mod domain;
+pub mod emoji;
 mod error;
 pub mod logging;
 pub mod ports;
