@@ -443,3 +443,165 @@ async fn same_origin_redirects_keep_the_auth_headers() {
         .unwrap();
     assert_eq!(user.id, USER_ID);
 }
+
+const SENT: &str = r#"{"message":{"_id":"m1","rid":"rid","msg":"hello","ts":"2026-10-20T17:00:57.427Z","u":{"_id":"u8paxsGQXMH9vSnSc","username":"fx9300","name":"Fixture User"},"_updatedAt":"2026-10-20T17:00:57.435Z","urls":[],"mentions":[],"channels":[]},"success":true}"#;
+const DUPLICATE: &str =
+    r#"{"success":false,"error":"Cannot read properties of undefined (reading 'starred')"}"#;
+
+// SEND-001
+#[tokio::test]
+async fn send_message_posts_the_id_the_room_and_the_text() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/api/v1/chat.sendMessage"))
+        .and(header("X-User-Id", USER_ID))
+        .and(header("X-Auth-Token", TOKEN))
+        .and(body_json(
+            json!({ "message": { "_id": "m1", "rid": "rid", "msg": "hello" } }),
+        ))
+        .respond_with(json_response(200, SENT))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let message = session(&RestClient::new(&server.uri()).unwrap())
+        .send_message("rid", "m1", "hello")
+        .await
+        .unwrap();
+
+    assert_eq!(
+        (message.id.as_str(), message.text.as_str()),
+        ("m1", "hello")
+    );
+    assert_eq!(message.ts.to_string(), "2026-10-20T17:00:57.427Z");
+}
+
+// SEND-002
+#[tokio::test]
+async fn a_refused_duplicate_is_a_success_when_the_stored_message_is_ours() {
+    let server = MockServer::start().await;
+    mount(
+        &server,
+        "POST",
+        "/api/v1/chat.sendMessage",
+        json_response(400, DUPLICATE),
+    )
+    .await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/chat.getMessage"))
+        .and(query_param("msgId", "m1"))
+        .respond_with(json_response(200, SENT))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let message = session(&RestClient::new(&server.uri()).unwrap())
+        .send_message("rid", "m1", "hello again")
+        .await
+        .unwrap();
+
+    assert_eq!(message.text, "hello");
+}
+
+// SEND-002
+#[tokio::test]
+async fn a_refusal_stays_an_error_when_the_stored_message_is_not_ours() {
+    let elsewhere = SENT.replace(r#""rid":"rid""#, r#""rid":"other""#);
+    let someone_elses = SENT.replace(r#""_id":"u8paxsGQXMH9vSnSc""#, r#""_id":"u2""#);
+    for stored in [elsewhere, someone_elses] {
+        let server = MockServer::start().await;
+        mount(
+            &server,
+            "POST",
+            "/api/v1/chat.sendMessage",
+            json_response(400, DUPLICATE),
+        )
+        .await;
+        mount(
+            &server,
+            "GET",
+            "/api/v1/chat.getMessage",
+            json_response(200, &stored),
+        )
+        .await;
+        let result = session(&RestClient::new(&server.uri()).unwrap())
+            .send_message("rid", "m1", "hello")
+            .await;
+        assert!(
+            matches!(result, Err(Error::Server { status: 400, .. })),
+            "{result:?}"
+        );
+    }
+}
+
+// SEND-002
+#[tokio::test]
+async fn a_refusal_stays_an_error_when_nothing_is_stored_under_the_id() {
+    let server = MockServer::start().await;
+    let no_room = r#"{"success":false,"error":"Room not found [error-invalid-room]"}"#;
+    mount(
+        &server,
+        "POST",
+        "/api/v1/chat.sendMessage",
+        json_response(400, no_room),
+    )
+    .await;
+    mount(
+        &server,
+        "GET",
+        "/api/v1/chat.getMessage",
+        json_response(400, DUPLICATE),
+    )
+    .await;
+
+    let result = session(&RestClient::new(&server.uri()).unwrap())
+        .send_message("rid", "m1", "hello")
+        .await;
+
+    assert!(
+        matches!(result, Err(Error::Server { status: 400, ref message }) if message.contains("error-invalid-room")),
+        "{result:?}"
+    );
+}
+
+// SEND-002
+#[tokio::test]
+async fn send_message_does_not_look_for_the_message_after_other_failures() {
+    let server = MockServer::start().await;
+    mount(
+        &server,
+        "POST",
+        "/api/v1/chat.sendMessage",
+        json_response(500, "{}"),
+    )
+    .await;
+
+    let result = session(&RestClient::new(&server.uri()).unwrap())
+        .send_message("rid", "m1", "hello")
+        .await;
+
+    assert!(
+        matches!(result, Err(Error::Server { status: 500, .. })),
+        "{result:?}"
+    );
+    assert_eq!(server.received_requests().await.unwrap().len(), 1);
+}
+
+// SEND-002
+#[tokio::test]
+async fn send_message_with_an_expired_token_is_unauthorized() {
+    let server = MockServer::start().await;
+    mount(
+        &server,
+        "POST",
+        "/api/v1/chat.sendMessage",
+        json_response(401, NOT_LOGGED_IN),
+    )
+    .await;
+
+    let result = session(&RestClient::new(&server.uri()).unwrap())
+        .send_message("rid", "m1", "hello")
+        .await;
+
+    assert!(matches!(result, Err(Error::Unauthorized)), "{result:?}");
+}

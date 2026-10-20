@@ -625,3 +625,97 @@ async fn a_message_raises_the_unread_count_of_its_room() {
     assert_eq!(subscription.room_type, RoomType::Direct);
     assert!(subscription.alert);
 }
+
+// SEND-001
+#[tokio::test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+async fn a_sent_message_is_stored_under_the_id_we_picked() {
+    let fixture = Fixture::new();
+    let (room_id, _) = fixture.create_channel();
+    let session = fixture.client.session(fixture.login().await.credentials);
+    let id = unique().replace('-', "");
+
+    let sent = session.send_message(&room_id, &id, "hello").await.unwrap();
+
+    assert_eq!(
+        (sent.id.as_str(), sent.text.as_str()),
+        (id.as_str(), "hello")
+    );
+    assert_eq!(sent.room_id, room_id);
+    assert_eq!(sent.author.id, fixture.user.id);
+    let page = session
+        .history(&room_id, &RoomType::Channel, None, 50)
+        .await
+        .unwrap();
+    let stored: Vec<_> = page.messages.iter().filter(|m| m.id == id).collect();
+    assert_eq!(stored.len(), 1);
+    assert_eq!(stored[0].ts, sent.ts);
+}
+
+// SEND-002
+#[tokio::test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+async fn sending_the_same_id_twice_stores_one_message_and_answers_with_it() {
+    let fixture = Fixture::new();
+    let (room_id, _) = fixture.create_channel();
+    let session = fixture.client.session(fixture.login().await.credentials);
+    let id = unique().replace('-', "");
+
+    let first = session.send_message(&room_id, &id, "once").await.unwrap();
+    // A retry whose first attempt had arrived: the text may even differ, the stored one wins.
+    let second = session.send_message(&room_id, &id, "twice").await.unwrap();
+
+    assert_eq!(second, first);
+    let page = session
+        .history(&room_id, &RoomType::Channel, None, 50)
+        .await
+        .unwrap();
+    let stored: Vec<_> = page.messages.iter().filter(|m| m.id == id).collect();
+    assert_eq!(stored.len(), 1);
+    assert_eq!(stored[0].text, "once");
+}
+
+// SEND-002
+#[tokio::test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+async fn an_id_that_belongs_to_another_room_or_user_is_not_a_success() {
+    let fixture = Fixture::new();
+    let (room_id, _) = fixture.create_channel();
+    let (other_room, _) = fixture.create_channel();
+    let admin_message = fixture.admin.post_message(&room_id, "admin's");
+    let session = fixture.client.session(fixture.login().await.credentials);
+
+    // The id is taken by someone else's message.
+    let result = session
+        .send_message(&room_id, &admin_message.id, "mine")
+        .await;
+    assert!(
+        matches!(result, Err(Error::Server { status: 400, .. })),
+        "{result:?}"
+    );
+
+    // The id is taken by one of ours, in another room.
+    let id = unique().replace('-', "");
+    session.send_message(&room_id, &id, "here").await.unwrap();
+    let result = session.send_message(&other_room, &id, "there").await;
+    assert!(
+        matches!(result, Err(Error::Server { status: 400, .. })),
+        "{result:?}"
+    );
+}
+
+// SEND-002
+#[tokio::test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+async fn sending_to_a_room_that_does_not_exist_is_a_server_error() {
+    let fixture = Fixture::new();
+    let session = fixture.client.session(fixture.login().await.credentials);
+    let id = unique().replace('-', "");
+
+    let result = session.send_message("noSuchRoom", &id, "hi").await;
+
+    assert!(
+        matches!(result, Err(Error::Server { status: 400, .. })),
+        "{result:?}"
+    );
+}

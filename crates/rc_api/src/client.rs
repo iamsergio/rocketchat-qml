@@ -10,7 +10,7 @@ use serde_json::json;
 
 use crate::error::Error;
 use crate::types::{
-    Credentials, HistoryPage, LoginResult, RoomType, ServerInfo, Subscription, User,
+    Credentials, HistoryPage, LoginResult, Message, RoomType, ServerInfo, Subscription, User,
 };
 use crate::wire;
 
@@ -206,6 +206,53 @@ impl RestSession {
         wire::parse_history(&body, count).map_err(Error::Decode)
     }
 
+    /// Posts a text message under an id the caller picked (`POST /api/v1/chat.sendMessage`), and
+    /// returns it as the server stored it, with the server's time. The id is what makes a retry
+    /// safe: the server stores a message once per id.
+    ///
+    /// Sending an id the server has already stored is refused with a 400 whose text is an
+    /// internal error (`Cannot read properties of undefined (reading 'starred')`), not a code to
+    /// recognise. So after any 400 the message is looked up by id, and if it is there, in this
+    /// room and from this user, the first attempt got through and its message is the answer.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Unauthorized`] if the token is expired or revoked, [`Error::Server`] if the server
+    /// refuses the message (no such room, not allowed to post...), or any of the other errors.
+    pub async fn send_message(
+        &self,
+        room_id: &str,
+        id: &str,
+        text: &str,
+    ) -> Result<Message, Error> {
+        let payload = json!({ "message": { "_id": id, "rid": room_id, "msg": text } });
+        let sent = self
+            .call_json(Method::POST, "api/v1/chat.sendMessage", &payload)
+            .await
+            .and_then(|body| wire::parse_message(&body).map_err(Error::Decode));
+        match sent {
+            Err(error @ Error::Server { status: 400, .. }) => match self.stored_message(id).await {
+                Some(stored)
+                    if stored.room_id == room_id
+                        && stored.author.id == self.credentials.user_id =>
+                {
+                    Ok(stored)
+                }
+                _ => Err(error),
+            },
+            other => other,
+        }
+    }
+
+    /// The message with this id, or `None` if there is none or it can't be fetched.
+    async fn stored_message(&self, id: &str) -> Option<Message> {
+        let mut escaped = Url::parse("http://unused/").ok()?;
+        escaped.query_pairs_mut().append_pair("msgId", id);
+        let path = format!("api/v1/chat.getMessage?{}", escaped.query()?);
+        let body = self.call(Method::GET, &path).await.ok()?;
+        wire::parse_message(&body).ok()
+    }
+
     /// Ends the session on the server (`POST /api/v1/logout`), which revokes the token. Servers
     /// answer with an empty body or with a JSON one; both are fine.
     ///
@@ -218,9 +265,27 @@ impl RestSession {
     }
 
     async fn call(&self, method: Method, path: &str) -> Result<Vec<u8>, Error> {
+        self.request(method, path, None).await
+    }
+
+    async fn call_json(
+        &self,
+        method: Method,
+        path: &str,
+        payload: &serde_json::Value,
+    ) -> Result<Vec<u8>, Error> {
+        self.request(method, path, Some(payload)).await
+    }
+
+    async fn request(
+        &self,
+        method: Method,
+        path: &str,
+        payload: Option<&serde_json::Value>,
+    ) -> Result<Vec<u8>, Error> {
         let (status, body) = self
             .client
-            .send(method, path, Some(&self.credentials), None)
+            .send(method, path, Some(&self.credentials), payload)
             .await?;
         check(status, &body, || Error::Unauthorized)?;
         Ok(body)
