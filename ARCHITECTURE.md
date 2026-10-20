@@ -22,7 +22,7 @@ Dependencies only point downwards. Nothing in `rc_core` or `rc_api` knows about 
 - **rc_core**: domain types (rooms, messages, users, with ID newtypes), the session state machine, the sync engine and the use cases (log in, open a room, send...). Frontends drive it through a `Client` handle that accepts commands and emits events. It keeps lists such as the rooms in display order and emits index-based changes (insert, update, move, remove), which view models apply one to one. It defines ports (traits) for what it needs from outside: the server API, secret storage, persistence and a cache directory. Adapters implement them, with in-memory versions for tests.
 - **rc_qt**: cxx-qt QObjects and `QAbstractListModel`s that turn core events into Qt properties, signals and incremental model updates. It is the only crate that uses `unsafe` (cxx-qt bridge code).
 - **QML**: presentation only. It binds to view models and calls their invokables. It has no business logic and makes no network calls.
-- **C++ host** (`src/gui/main.cpp`): sets up logging through `rc_qt` (`rc_core::logging`: stderr, plus `<executable>.log` in developer-mode builds, filtered by `RUST_LOG`), creates `QGuiApplication`, registers the Rust QML module, loads `Main.qml`, and, in builds with `ROCKETCHATQML_SPIX`, starts the Spix test server when given `--spix-port <port>`. It does nothing else.
+- **C++ host** (`src/gui/main.cpp`): sets up logging through `rc_qt` (`rc_core::logging`: stderr, plus `<executable>.log` in developer-mode builds, filtered by `RUST_LOG`), creates `QGuiApplication`, starts the core (`rc_qt::start_core()`; `RC_SECRET_STORE=memory` keeps the session in memory instead of the OS keyring), registers the Rust QML module, loads `Main.qml`, and, in builds with `ROCKETCHATQML_SPIX`, starts the Spix test server when given `--spix-port <port>`. After the event loop ends it stops the core (`rc_qt::stop_core()`). It does nothing else.
 
 Adapter crates (added when needed): `rc_store_sqlite` (persistence) and a keyring-based secret store.
 
@@ -40,7 +40,7 @@ There is no fake Rocket.Chat. Contract and GUI tests use the real local test ser
   - **Store worker**: runs the secret-store calls (keyring or memory), which block and may wait for the user to unlock the keyring. It takes them in order, one at a time, on blocking threads, so a save and a later clear never swap and the async threads never stall.
   - **I/O tasks**: the DDP connection (read loop, ping, reconnect with backoff), REST requests and avatar/file downloads. They report back to the actor through channels.
 - **Commands (GUI → core)**: sent on a non-blocking `mpsc` channel.
-- **Events (core → GUI)**: the frontend gives `Client` an event callback, which the actor calls in order from a runtime thread. The callback hands each event to the GUI thread through `CxxQtThread::queue`, where the view model applies it as a diff (insert, update or remove rows). Qt objects are never touched from a Tokio thread.
+- **Events (core → GUI)**: the frontend gives `Client` an event callback, which the actor calls in order from a runtime thread. In `rc_qt` the callback belongs to a hub (`hub.rs`), the one owner of the `Client` in the process. It updates the hub's cache (the latest session state and a mirror of the room list) and hands each event to every registered view model through `CxxQtThread::queue`, where the view model applies it as a diff (insert, update, move or remove rows). A view model registers when it is created, on the GUI thread, and replays the cache under the same lock that queueing uses, so it misses nothing and applies nothing twice whenever QML creates it. Neither side waits for the other. Qt objects are never touched from a Tokio thread.
 - **Shutdown**: dropping `Client` ends the actor, which first waits briefly (2 s at most) for a pending logout: the token revocation and the store clear. The GUI thread blocks for that bounded time only.
 
 ## GUI testing contract
@@ -54,7 +54,7 @@ Paths are kept shallow and decoupled from layout: `<window>/<name>`, where `name
 
 Tests use only the part of the Spix protocol that both servers implement: clicks, key and text input, `existsAndVisible`, get/set of `text`, `checked`, `enabled`, `count` and geometry, `wait` and `quit`, plus `getErrors`, which the `Gui` client checks after every call so that a wrong path fails the test.
 
-The harness starts the binary named by `RC_GUI_TEST_APP` with `--spix-port <free port>` and `QT_QPA_PLATFORM=offscreen`. The GUI tests are `#[ignore]`d, so a plain `cargo test` skips them (it runs before the app is built in CI) and never reports them as passed. ctest runs them with `--ignored` and `RC_GUI_TEST_APP` set; without it they fail.
+The harness starts the binary named by `RC_GUI_TEST_APP` with `--spix-port <free port>`, `QT_QPA_PLATFORM=offscreen` and `RC_SECRET_STORE=memory` (the app starts the core at launch, and its default secret store is the OS keyring, which on a developer machine is the user's real wallet). The GUI tests are `#[ignore]`d, so a plain `cargo test` skips them (it runs before the app is built in CI) and never reports them as passed. ctest runs them with `--ignored` and `RC_GUI_TEST_APP` set; without it they fail.
 
 ## Third-party dependencies
 

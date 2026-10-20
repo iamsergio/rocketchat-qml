@@ -1494,6 +1494,7 @@ dependencies = [
  "cxx-qt-build",
  "cxx-qt-lib",
  "rc_core",
+ "secrecy",
  "tracing",
 ]
 

@@ -46,8 +46,8 @@ pub struct App {
 }
 
 impl App {
-    /// Starts the binary named by [`APP_ENV`] with `QT_QPA_PLATFORM=offscreen` and waits until its
-    /// Spix server answers.
+    /// Starts the binary named by [`APP_ENV`] with `QT_QPA_PLATFORM=offscreen` and
+    /// `RC_SECRET_STORE=memory`, and waits until its Spix server answers.
     ///
     /// # Errors
     ///
@@ -63,6 +63,10 @@ impl App {
             .arg("--spix-port")
             .arg(port.to_string())
             .env("QT_QPA_PLATFORM", "offscreen")
+            // The app starts the core at launch, and its default secret store is the OS keyring:
+            // on a developer machine that is the user's real wallet, which may even ask them to
+            // unlock it. Tests keep the session in memory.
+            .env("RC_SECRET_STORE", "memory")
             .stdin(Stdio::null())
             .spawn()
             .map_err(|source| LaunchError::Spawn {

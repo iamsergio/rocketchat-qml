@@ -6,6 +6,12 @@ use cxx_qt_build::{CxxQtBuilder, QmlModule};
 fn main() {
     CxxQtBuilder::new_qml_module(QmlModule::new("RocketChat.Bridge"))
         .qt_module("Qml")
-        .files(["src/app_info.rs", "src/logging.rs"])
+        .files([
+            "src/app_info.rs",
+            "src/lifecycle.rs",
+            "src/logging.rs",
+            "src/room_list_model.rs",
+            "src/session_vm.rs",
+        ])
         .build();
 }
