@@ -113,6 +113,33 @@ pub fn message(id: &str, part: &str) -> String {
     format!("{}/msg_{id}/{part}", main_window::WINDOW)
 }
 
+/// The parts of an attachment of a message, for [`attachment`].
+pub mod attachment_row {
+    /// The picture of an image, visible once its file has loaded: its `text` is the file URL.
+    pub const IMAGE: &str = "attachmentImage";
+    /// The grey box of an image's size, visible until the picture has loaded.
+    pub const PLACEHOLDER: &str = "attachmentPlaceholder";
+    /// A file that isn't an image, as a link: visible for files only, its `text` is the address it
+    /// opens.
+    pub const LINK: &str = "attachmentLink";
+    /// The file's name, in the link.
+    pub const TITLE: &str = "attachmentTitle";
+    /// The file's size in words (`1.5 KB`), in the link.
+    pub const SIZE: &str = "attachmentSize";
+    /// What the uploader wrote about the file; visible only if they did.
+    pub const DESCRIPTION: &str = "attachmentDescription";
+}
+
+/// A part of the attachment with this index (0 is the first) of the message with this id (see
+/// [`attachment_row`]). The attachments of a message are named by their index.
+#[must_use]
+pub fn attachment(message_id: &str, index: usize, part: &str) -> String {
+    format!(
+        "{}/msg_{message_id}/attachment{index}/{part}",
+        main_window::WINDOW
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -136,6 +163,15 @@ mod tests {
         assert_eq!(
             message("m7", message_row::DAY_SEPARATOR),
             "mainWindow/msg_m7/msgDaySeparator"
+        );
+    }
+
+    // INFRA-002
+    #[test]
+    fn an_attachment_part_is_addressed_by_the_message_id_and_the_index() {
+        assert_eq!(
+            attachment("m7", 1, attachment_row::LINK),
+            "mainWindow/msg_m7/attachment1/attachmentLink"
         );
     }
 }

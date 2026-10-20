@@ -6,8 +6,9 @@
 //! order and in parallel. Server settings are never changed.
 
 // Not every test file uses every item, and a failed step should just fail the test.
-#![allow(dead_code, clippy::unwrap_used)]
+#![allow(dead_code, clippy::unwrap_used, clippy::panic)]
 
+use std::path::PathBuf;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -108,4 +109,35 @@ pub fn html_containing(gui: &Gui, id: &str, part: &str) -> String {
     })
     .unwrap();
     gui.text(&path).unwrap()
+}
+
+/// The file a `file://` URL names, without the `?v=` that makes QML load a replaced file again.
+pub fn file_of(url: &str) -> PathBuf {
+    let path = url
+        .strip_prefix("file://")
+        .unwrap_or_else(|| panic!("not a file URL: {url}"));
+    let path = path.split('?').next().unwrap();
+    PathBuf::from(percent_decode(path))
+}
+
+fn percent_decode(text: &str) -> String {
+    let bytes = text.as_bytes();
+    let mut out = Vec::new();
+    let mut at = 0;
+    while at < bytes.len() {
+        let hex = bytes
+            .get(at + 1..at + 3)
+            .and_then(|h| std::str::from_utf8(h).ok());
+        match (bytes[at], hex.and_then(|h| u8::from_str_radix(h, 16).ok())) {
+            (b'%', Some(byte)) => {
+                out.push(byte);
+                at += 3;
+            }
+            (byte, _) => {
+                out.push(byte);
+                at += 1;
+            }
+        }
+    }
+    String::from_utf8(out).unwrap()
 }
