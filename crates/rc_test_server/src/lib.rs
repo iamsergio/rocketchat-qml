@@ -7,16 +7,22 @@
 //!
 //! Everything is named with [`unique`], so tests hold on a dirty server, in any order and in
 //! parallel. Calls block: they only stand in for what a person would do in another client.
+//!
+//! [`Proxy`] sits between a client and the server, to cut the connections.
 
 #![forbid(unsafe_code)]
 // Test support: a failed call should just fail the test.
 #![allow(clippy::panic, clippy::unwrap_used, clippy::expect_used)]
+
+mod proxy;
 
 use std::process;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde_json::{Value, json};
+
+pub use proxy::Proxy;
 
 /// The environment variable naming the server.
 pub const SERVER_ENV: &str = "RC_TEST_SERVER_URL";

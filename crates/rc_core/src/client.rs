@@ -12,8 +12,10 @@ use tokio::runtime::{Builder, Runtime};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::{JoinHandle, JoinSet};
+use tokio::time::Instant;
 
 use crate::adapters::{MemoryMessageStore, RestConnector};
+use crate::backoff::Backoff;
 use crate::domain::{Credentials, Message, RoomId, RoomKind, StoredSession, room_from};
 use crate::error::Error;
 use crate::ports::{
@@ -41,7 +43,8 @@ const RUNTIME_WAIT: Duration = Duration::from_secs(1);
 pub enum Event {
     Session(SessionState),
     /// Changes to the room list, to apply in order. After `LoggedIn` it carries the rooms; after
-    /// `LoggedOut` it empties the list, unless the list was empty already.
+    /// `LoggedOut` it empties the list, unless the list was empty already. Reconnecting brings
+    /// what changed meanwhile as inserts, updates, moves and removals, never as a reset.
     Rooms(Vec<RoomChange>),
     /// Changes to the message list of the open room, to apply in order. Opening a room starts with
     /// a reset, to what is held of it already. Logging out resets to nothing, if a room was open.
@@ -104,6 +107,17 @@ impl Client {
         store: S,
         on_event: impl Fn(Event) + Send + Sync + 'static,
     ) -> Result<Self, Error> {
+        Self::with_backoff(connector, store, on_event, Backoff::default())
+    }
+
+    /// [`with_ports`](Self::with_ports) with the waits between reconnects set, so that tests don't
+    /// wait for seconds.
+    fn with_backoff<C: Connector, S: SecretStore>(
+        connector: C,
+        store: S,
+        on_event: impl Fn(Event) + Send + Sync + 'static,
+        backoff: Backoff,
+    ) -> Result<Self, Error> {
         let runtime = Builder::new_multi_thread()
             .worker_threads(WORKER_THREADS)
             .enable_all()
@@ -123,6 +137,12 @@ impl Client {
             login_task: None,
             rooms_task: None,
             realtime_task: None,
+            realtime_open: false,
+            cycle: 0,
+            reconnect_task: None,
+            backoff,
+            succeeded_at: None,
+            rooms_listed: false,
             backlog: None,
             rooms: RoomList::default(),
             messages: Box::new(MemoryMessageStore::default()),
@@ -267,8 +287,8 @@ struct LoginDone<A> {
 
 /// A room fetch's answer.
 struct RoomsDone {
-    /// The login or resume the fetch belongs to: the answer is stale if another has begun since.
-    attempt: u64,
+    /// The sync cycle the fetch belongs to: the answer is stale if another has begun since.
+    cycle: u64,
     outcome: Result<Vec<rc_api::Subscription>, ApiError>,
 }
 
@@ -280,10 +300,10 @@ enum RealtimeDone {
     Ended,
 }
 
-/// The realtime task's report, tagged with the login or resume it belongs to: stale if another has
-/// begun since.
+/// The realtime task's report, tagged with the sync cycle it belongs to: stale if another has begun
+/// since.
 struct RealtimeReport {
-    attempt: u64,
+    cycle: u64,
     done: RealtimeDone,
 }
 
@@ -300,6 +320,10 @@ enum Done<A> {
     Login(LoginDone<A>),
     Rooms(RoomsDone),
     Realtime(RealtimeReport),
+    /// The wait after a lost connection is over; the cycle is the one that was lost.
+    Reconnect {
+        cycle: u64,
+    },
     History(HistoryDone),
 }
 
@@ -344,6 +368,21 @@ struct Actor<C: Connector> {
     /// The realtime connection of the current session, while it is open or opening. The task owns
     /// the receiver of the pushed events: ending it closes the connection.
     realtime_task: Option<JoinHandle<()>>,
+    /// The connection of the current cycle is open.
+    realtime_open: bool,
+    /// Counts sync cycles (see [`open_realtime`](Self::open_realtime)), to tell the reports of the
+    /// current one from stale ones.
+    cycle: u64,
+    /// The wait before the next cycle, while it runs.
+    reconnect_task: Option<JoinHandle<()>>,
+    /// How long to wait before the next cycle.
+    backoff: Backoff,
+    /// When the current cycle had the connection open and the rooms listed. The wait starts over
+    /// only if it lasted: see [`Backoff::lasted`].
+    succeeded_at: Option<Instant>,
+    /// The room list of the session holds a server snapshot: later snapshots are merged into it,
+    /// not reset onto it.
+    rooms_listed: bool,
     /// What the server pushed since the realtime connection opened, until the rooms are listed:
     /// they are replayed on top of the list then. `None` once they are, and outside a session.
     backlog: Option<Vec<Pushed>>,
@@ -383,6 +422,7 @@ impl<C: Connector> Actor<C> {
                     Done::Login(done) => self.handle_login_done(done),
                     Done::Rooms(done) => self.handle_rooms_done(done),
                     Done::Realtime(report) => self.handle_realtime_done(report),
+                    Done::Reconnect { cycle } => self.handle_reconnect(cycle),
                     Done::History(done) => self.handle_history_done(done),
                 },
             }
@@ -507,8 +547,9 @@ impl<C: Connector> Actor<C> {
                     api: established.api,
                     credentials: established.credentials,
                 });
+                self.backoff.reset();
                 self.set_state(SessionState::LoggedIn(established.account));
-                self.open_realtime(done.attempt);
+                self.open_realtime();
             }
             Err(failure) => {
                 // The server refused the stored token for good; other failures may pass.
@@ -554,20 +595,28 @@ impl<C: Connector> Actor<C> {
         }
     }
 
-    /// Opens the realtime connection of the session that the attempt `attempt` established, before
-    /// the rooms are fetched: what happens between the fetch and the subscription would be lost
-    /// otherwise. What the server pushes meanwhile waits in the backlog. No reconnecting yet: when
-    /// the connection ends, the session goes on without it.
-    fn open_realtime(&mut self, attempt: u64) {
+    /// Starts a sync cycle: opens the realtime connection of the session, then (when it is open)
+    /// fetches the rooms and, if a room is open, its newest messages. Logging in runs one, and so
+    /// does every reconnect. The connection comes before the rooms: what happens between the
+    /// fetch and the subscription would be lost otherwise. What the server pushes meanwhile waits
+    /// in the backlog.
+    ///
+    /// A cycle ends when the connection does, or when a fetch fails: the actor waits, with
+    /// [`Backoff`], and starts another.
+    fn open_realtime(&mut self) {
         let Some(session) = &self.session else {
             return;
         };
+        self.cycle += 1;
+        let cycle = self.cycle;
+        self.realtime_open = false;
+        self.succeeded_at = None;
         self.backlog = Some(Vec::new());
         let api = session.api.clone();
         let credentials = session.credentials.clone();
         let done = self.done_tx.clone();
         self.realtime_task = Some(tokio::spawn(async move {
-            let report = |done| Done::Realtime(RealtimeReport { attempt, done });
+            let report = |done| Done::Realtime(RealtimeReport { cycle, done });
             let mut events = match api.realtime(&credentials).await {
                 Ok(events) => events,
                 Err(error) => {
@@ -589,28 +638,70 @@ impl<C: Connector> Actor<C> {
     }
 
     fn handle_realtime_done(&mut self, report: RealtimeReport) {
-        if report.attempt != self.attempt || !matches!(self.state, SessionState::LoggedIn(_)) {
+        // A cycle that ended is waiting for the next one: its queued reports are moot.
+        if report.cycle != self.cycle
+            || self.reconnect_task.is_some()
+            || !matches!(self.state, SessionState::LoggedIn(_))
+        {
             tracing::debug!("report of a stale realtime connection dropped");
             return;
         }
         match report.done {
-            RealtimeDone::Opened(Ok(())) => self.fetch_rooms(report.attempt),
+            RealtimeDone::Opened(Ok(())) => {
+                self.realtime_open = true;
+                self.fetch_rooms();
+            }
             RealtimeDone::Opened(Err(ApiError::Unauthorized)) => self.expire_session(),
-            // The rooms are worth having without live updates.
             RealtimeDone::Opened(Err(error)) => {
-                tracing::warn!(%error, "can't open the realtime connection, going on without it");
-                self.realtime_task = None;
-                self.fetch_rooms(report.attempt);
+                tracing::warn!(%error, "can't open the realtime connection");
+                self.end_cycle();
+                // The first rooms are worth having without live updates.
+                if !self.rooms_listed {
+                    self.fetch_rooms();
+                }
             }
             RealtimeDone::Pushed(event) => match &mut self.backlog {
                 Some(backlog) => backlog.push(event),
                 None => self.handle_pushed(event),
             },
             RealtimeDone::Ended => {
-                tracing::warn!("the realtime connection ended, live updates stop");
-                self.realtime_task = None;
+                tracing::warn!("the realtime connection ended");
+                self.end_cycle();
             }
         }
+    }
+
+    /// Gives up the current cycle: drops the connection and whatever else it was doing, and starts
+    /// the wait for the next one. The held rooms and messages stay on show meanwhile. What the
+    /// cycle's tasks still had queued is dropped as stale while the wait lasts.
+    fn end_cycle(&mut self) {
+        self.abort_rooms_task();
+        self.abort_realtime_task();
+        self.realtime_open = false;
+        // A connection that dropped soon after it worked is no better than one that never did.
+        if let Some(since) = self.succeeded_at.take()
+            && self.backoff.lasted(since.elapsed())
+        {
+            self.backoff.reset();
+        }
+        let delay = self.backoff.next_delay();
+        tracing::info!(?delay, "reconnecting after a wait");
+        let done = self.done_tx.clone();
+        let cycle = self.cycle;
+        self.reconnect_task = Some(tokio::spawn(async move {
+            tokio::time::sleep(delay).await;
+            // Fails only if the actor is gone.
+            let _ = done.send(Done::Reconnect { cycle });
+        }));
+    }
+
+    fn handle_reconnect(&mut self, cycle: u64) {
+        if cycle != self.cycle || !matches!(self.state, SessionState::LoggedIn(_)) {
+            tracing::debug!("end of a stale wait dropped");
+            return;
+        }
+        self.reconnect_task = None;
+        self.open_realtime();
     }
 
     /// Puts what the server pushed into the state and tells the frontend.
@@ -669,52 +760,88 @@ impl<C: Connector> Actor<C> {
         }
     }
 
-    /// Fetches the rooms of the session that the attempt `attempt` established. Only the first
-    /// fetch is made: a failure other than an expired token leaves the session without rooms until
-    /// the sync engine (Phase 3) retries.
-    fn fetch_rooms(&mut self, attempt: u64) {
+    /// Fetches the rooms of the current cycle.
+    fn fetch_rooms(&mut self) {
         let Some(session) = &self.session else {
             return;
         };
+        let cycle = self.cycle;
         let api = session.api.clone();
         let credentials = session.credentials.clone();
         let done = self.done_tx.clone();
         self.rooms_task = Some(tokio::spawn(async move {
             let outcome = api.subscriptions(&credentials).await;
             // Fails only if the actor is gone.
-            let _ = done.send(Done::Rooms(RoomsDone { attempt, outcome }));
+            let _ = done.send(Done::Rooms(RoomsDone { cycle, outcome }));
         }));
     }
 
     fn handle_rooms_done(&mut self, done: RoomsDone) {
-        if done.attempt != self.attempt || !matches!(self.state, SessionState::LoggedIn(_)) {
+        if done.cycle != self.cycle || !matches!(self.state, SessionState::LoggedIn(_)) {
             tracing::debug!("answer of a stale room fetch dropped");
             return;
         }
         self.rooms_task = None;
-        match done.outcome {
-            Ok(subscriptions) => {
-                let rooms = subscriptions.into_iter().filter_map(room_from).collect();
-                let change = self.rooms.reset(rooms);
-                (self.on_event)(Event::Rooms(vec![change]));
-            }
+        let subscriptions = match done.outcome {
+            Ok(subscriptions) => subscriptions,
             // The token died between the login and the fetch: same as an expired resume. It's
             // dead already, so there's nothing to revoke.
             Err(ApiError::Unauthorized) => {
                 self.expire_session();
                 return;
             }
-            // What was pushed still applies, on an empty list.
-            Err(error) => tracing::warn!(%error, "can't list the rooms"),
+            Err(error) => {
+                tracing::warn!(%error, "can't list the rooms");
+                // A connection that opened but can't be followed by the rooms is no use: the
+                // next cycle starts over. If the cycle ended already (the connection never
+                // opened), its wait is under way.
+                if self.realtime_open {
+                    self.end_cycle();
+                }
+                return;
+            }
+        };
+        let rooms = subscriptions.into_iter().filter_map(room_from).collect();
+        let changes = if self.rooms_listed {
+            // Reconnecting: the frontend keeps its rows, and gets what changed meanwhile.
+            self.rooms.sync(rooms)
+        } else {
+            vec![self.rooms.reset(rooms)]
+        };
+        self.rooms_listed = true;
+        if !changes.is_empty() {
+            (self.on_event)(Event::Rooms(changes));
+        }
+        if self.realtime_open {
+            self.succeeded_at = Some(Instant::now());
+            self.catch_up_open_room();
         }
         for event in self.backlog.take().unwrap_or_default() {
             self.handle_pushed(event);
         }
     }
 
+    /// Fetches the newest messages of the open room again, after the connection was lost: what was
+    /// said meanwhile was not pushed. The page joins what is held (see
+    /// [`Timeline::merge_latest`]), and the messages pushed from now on wait for it. A room that
+    /// has left the list is closed instead.
+    fn catch_up_open_room(&mut self) {
+        let Some(open) = &self.open else {
+            return;
+        };
+        let id = open.timeline.room().clone();
+        if self.rooms.rooms().iter().any(|room| room.id == id) {
+            self.abort_history_task();
+            self.fetch_history(false);
+        } else {
+            self.close_room();
+        }
+    }
+
     /// The server refused the token of a logged-in session: forget it, and everything it showed.
     /// It's dead already, so there's nothing to revoke.
     fn expire_session(&mut self) {
+        self.abort_rooms_task();
         self.abort_realtime_task();
         self.session = None;
         self.clear_store();
@@ -887,16 +1014,22 @@ impl<C: Connector> Actor<C> {
         }
     }
 
-    /// Ends the realtime connection, if any, and forgets what it pushed that wasn't applied yet.
+    /// Ends the realtime connection, if any, and a wait for the next one, and forgets what the
+    /// connection pushed that wasn't applied yet.
     fn abort_realtime_task(&mut self) {
         self.backlog = None;
+        self.realtime_open = false;
         if let Some(task) = self.realtime_task.take() {
+            task.abort();
+        }
+        if let Some(task) = self.reconnect_task.take() {
             task.abort();
         }
     }
 
     /// Empties the room list and tells the frontend, unless it was empty already.
     fn clear_rooms(&mut self) {
+        self.rooms_listed = false;
         if self.rooms.rooms().is_empty() {
             return;
         }

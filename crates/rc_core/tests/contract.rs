@@ -21,7 +21,7 @@ use rc_core::rooms::RoomChange;
 use rc_core::session::{LoginFailure, SessionState};
 use rc_core::timeline::{PAGE_SIZE, TimelineChange, TimelineStatus};
 use rc_core::{Client, Event};
-use rc_test_server::{Admin, TestUser, server_url, unique};
+use rc_test_server::{Admin, Proxy, TestUser, server_url, unique};
 use secrecy::SecretString;
 
 const TIMEOUT: Duration = Duration::from_secs(15);
@@ -189,8 +189,13 @@ fn a_user_gets_their_rooms_after_logging_in() {
 
 /// Logs `user` in and waits for the room list. Everything the client reports meanwhile is dropped.
 fn logged_in(user: &TestUser) -> (Client, Receiver<Event>) {
+    logged_in_at(&server_url(), user)
+}
+
+/// As [`logged_in`], through the server at `server`.
+fn logged_in_at(server: &str, user: &TestUser) -> (Client, Receiver<Event>) {
     let (client, events) = start();
-    client.login(&server_url(), &user.username, password(user));
+    client.login(server, &user.username, password(user));
     assert!(matches!(outcome(&events), SessionState::LoggedIn(_)));
     loop {
         if let Event::Rooms(_) = events.recv_timeout(TIMEOUT).expect("no rooms event") {
@@ -379,6 +384,79 @@ fn a_direct_message_raises_the_unread_count() {
     admin.post_message(&dm, "two");
     wait_for(&events, |event| {
         room_changed(event, |room| room.id.as_str() == dm && room.unread == 2)
+    });
+    drop(client);
+}
+
+// RT-003, RT-002, RT-001
+#[test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+fn a_client_catches_up_after_the_connection_was_cut() {
+    let admin = Admin::login();
+    let user = admin.create_user();
+    let (id, _) = admin.create_channel(&[&user.username]);
+    // Something held already, so that what comes later joins it: a first page is a reset.
+    admin.post_message(&id, "said before");
+    let proxy = Proxy::start();
+    let (client, events) = logged_in_at(&proxy.url(), &user);
+    client.open_room(id.clone().into());
+    let mut mirror = Vec::new();
+    settle(&events, &mut mirror);
+
+    // Cut off, and kept out while admin acts.
+    proxy.set_accepting(false);
+    proxy.drop_connections();
+    let posted = admin.post_message(&id, "said while away");
+    let (new_id, new_name) = admin.create_channel(&[&user.username]);
+    proxy.set_accepting(true);
+
+    // The client comes back by itself, and what it missed arrives as changes, not as a new list.
+    let (mut got_message, mut new_room) = (false, None);
+    wait_for(&events, |event| {
+        match event {
+            Event::Rooms(changes) => {
+                assert!(
+                    !changes.iter().any(|c| matches!(c, RoomChange::Reset(_))),
+                    "the room list was reset: {changes:?}"
+                );
+                for change in changes {
+                    if let RoomChange::Inserted { room, .. } = change
+                        && room.id.as_str() == new_id
+                    {
+                        new_room = Some(room.clone());
+                    }
+                }
+            }
+            Event::Timeline(changes) => {
+                for change in changes {
+                    if matches!(change, TimelineChange::Appended(messages)
+                        if messages.iter().any(|m| m.id.as_str() == posted.id))
+                    {
+                        got_message = true;
+                    }
+                    change.apply(&mut mirror);
+                }
+            }
+            _ => {}
+        }
+        (got_message && new_room.is_some()).then_some(())
+    });
+    let new_room = new_room.unwrap();
+    assert_eq!(new_room.name, new_name);
+    assert_eq!(texts(&mirror), ["said before", "said while away"]);
+
+    // And it is live again.
+    let later = admin.post_message(&id, "after coming back");
+    wait_for(&events, |event| {
+        if let Event::Timeline(changes) = event {
+            for change in changes {
+                change.apply(&mut mirror);
+            }
+        }
+        mirror
+            .iter()
+            .any(|m| m.id.as_str() == later.id)
+            .then_some(())
     });
     drop(client);
 }
