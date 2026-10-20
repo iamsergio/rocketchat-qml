@@ -72,9 +72,10 @@ pub fn unique() -> String {
     )
 }
 
-/// The image of the custom emoji [`Admin::create_emoji`] makes and the avatar [`Admin::set_avatar`]
-/// sets: one pixel.
-const PIXEL_PNG: [u8; 70] = [
+/// The image of the custom emoji [`Admin::create_emoji`] makes, the avatar [`Admin::set_avatar`]
+/// sets and the file the tests upload with [`Admin::upload_file`]: one pixel. Too small for the
+/// server to make a thumbnail of it.
+pub const PIXEL_PNG: [u8; 70] = [
     0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
     0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4,
     0x89, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x44, 0x41, 0x54, 0x78, 0xda, 0x63, 0xfc, 0xcf, 0xc0, 0x50,
@@ -281,6 +282,40 @@ impl Admin {
         }
     }
 
+    /// Uploads a file to the room as admin and posts it as a message with the text `msg` (which
+    /// may be empty) and the description `description`, the way the clients do: `rooms.media`, then
+    /// `rooms.mediaConfirm`. Returns the message as the server stored it.
+    ///
+    /// # Panics
+    ///
+    /// If the server refuses.
+    // Most callers only need the message to exist, so the result may be ignored.
+    #[allow(clippy::must_use_candidate)]
+    pub fn upload_file(
+        &self,
+        room_id: &str,
+        file_name: &str,
+        content_type: &str,
+        bytes: &[u8],
+        msg: &str,
+        description: &str,
+    ) -> Posted {
+        let uploaded = self.multipart(
+            &format!("rooms.media/{room_id}"),
+            &[],
+            ("file", file_name, content_type, bytes),
+        );
+        let file_id = uploaded["file"]["_id"].as_str().unwrap();
+        let json = self.post(
+            &format!("rooms.mediaConfirm/{room_id}/{file_id}"),
+            &json!({ "msg": msg, "description": description }),
+        );
+        Posted {
+            id: json["message"]["_id"].as_str().unwrap().to_owned(),
+            ts: json["message"]["ts"].as_str().unwrap().to_owned(),
+        }
+    }
+
     /// Sets the topic of a channel, which adds a system message to it.
     ///
     /// # Panics
@@ -395,6 +430,17 @@ impl Admin {
 
     /// POSTs a multipart form with the text `fields` and the one-pixel PNG as the file `file`.
     fn upload(&self, endpoint: &str, fields: &[(&str, &str)], file: &str, filename: &str) {
+        self.multipart(endpoint, fields, (file, filename, "image/png", &PIXEL_PNG));
+    }
+
+    /// POSTs a multipart form with the text `fields` and a file, given as the name of its field,
+    /// its file name, its media type and its bytes. Returns the JSON, which must say `success`.
+    fn multipart(
+        &self,
+        endpoint: &str,
+        fields: &[(&str, &str)],
+        (file, filename, content_type, bytes): (&str, &str, &str, &[u8]),
+    ) -> Value {
         const BOUNDARY: &str = "----rc-test-server-upload";
         let mut body = Vec::new();
         for (key, value) in fields {
@@ -408,11 +454,11 @@ impl Admin {
         body.extend(
             format!(
                 "--{BOUNDARY}\r\nContent-Disposition: form-data; name=\"{file}\"; \
-                 filename=\"{filename}\"\r\nContent-Type: image/png\r\n\r\n"
+                 filename=\"{filename}\"\r\nContent-Type: {content_type}\r\n\r\n"
             )
             .bytes(),
         );
-        body.extend(PIXEL_PNG);
+        body.extend(bytes);
         body.extend(format!("\r\n--{BOUNDARY}--\r\n").bytes());
         let mut response = self
             .agent
@@ -427,10 +473,13 @@ impl Admin {
             .unwrap();
         let status = response.status();
         let text = response.body_mut().read_to_string().unwrap();
+        let json: Value = serde_json::from_str(&text)
+            .unwrap_or_else(|e| panic!("{endpoint}: {status} {text:?}: {e}"));
         assert!(
-            status.is_success() && text.contains("\"success\":true"),
+            status.is_success() && json["success"] == true,
             "{endpoint}: {status} {text}"
         );
+        json
     }
 
     /// GETs an endpoint (with its query) and returns the JSON, which must say `success`.

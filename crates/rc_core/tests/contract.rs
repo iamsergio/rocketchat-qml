@@ -25,7 +25,7 @@ use rc_core::rooms::RoomChange;
 use rc_core::session::{LoginFailure, SessionState};
 use rc_core::timeline::{PAGE_SIZE, TimelineChange, TimelineStatus};
 use rc_core::{Client, Event};
-use rc_test_server::{Admin, Proxy, TestUser, server_url, unique};
+use rc_test_server::{Admin, PIXEL_PNG, Proxy, TestUser, server_url, unique};
 use secrecy::SecretString;
 
 const TIMEOUT: Duration = Duration::from_secs(15);
@@ -595,6 +595,117 @@ fn rooms_and_users_with_the_generated_avatar_get_none() {
     while let Ok(event) = events.try_recv() {
         assert!(!matches!(event, Event::Avatars(_)), "{event:?}");
     }
+}
+
+/// The image files announced until all of `paths` have one, by path.
+fn images_until(
+    events: &Receiver<Event>,
+    paths: &[String],
+) -> std::collections::HashMap<String, PathBuf> {
+    let mut found = std::collections::HashMap::new();
+    wait_for(events, |event| {
+        if let Event::Images(updates) = event {
+            for update in updates {
+                if let Some(file) = &update.file {
+                    found.insert(update.path.clone(), file.clone());
+                }
+            }
+        }
+        paths
+            .iter()
+            .all(|path| found.contains_key(path))
+            .then_some(())
+    });
+    found
+}
+
+/// The messages of the open room, as a frontend mirrors them, until the status says that nothing
+/// is loading.
+fn loaded_messages(events: &Receiver<Event>) -> Vec<Message> {
+    let mut mirror = Vec::new();
+    settle(events, &mut mirror);
+    mirror
+}
+
+// RICH-005
+#[test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+fn the_attachments_of_a_room_are_read_and_its_image_is_downloaded_into_the_cache() {
+    let admin = Admin::login();
+    let user = admin.create_user();
+    let (channel_id, _) = admin.create_channel(&[&user.username]);
+    let image = admin.upload_file(
+        &channel_id,
+        "pixel.png",
+        "image/png",
+        &PIXEL_PNG,
+        "look",
+        "a pixel",
+    );
+    let file = admin.upload_file(&channel_id, "notes.txt", "text/plain", b"hello\n", "", "");
+    let cache = CacheDir::new();
+    let (client, events) = start_with_cache(MemoryStore::default(), DiskFileCache::new(&cache.0));
+    client.login(&server_url(), &user.username, password(&user));
+    wait_for(&events, |event| {
+        matches!(event, Event::Rooms(_)).then_some(())
+    });
+
+    client.open_room(channel_id.into());
+    let messages = loaded_messages(&events);
+
+    let find = |id: &str| messages.iter().find(|m| m.id.as_str() == id).unwrap();
+    let attachment = &find(&image.id).attachments[0];
+    assert_eq!(attachment.title, "pixel.png");
+    assert_eq!(attachment.description.as_deref(), Some("a pixel"));
+    assert!(attachment.link.starts_with("/file-upload/"));
+    let picture = attachment.image.as_ref().unwrap();
+    assert_eq!((picture.width, picture.height), (Some(1), Some(1)));
+    let stored = images_until(&events, std::slice::from_ref(&picture.path));
+    let path = &stored[&picture.path];
+    assert!(path.starts_with(&cache.0), "{}", path.display());
+    assert_eq!(path.extension().and_then(|e| e.to_str()), Some("png"));
+    // A one-pixel file has no thumbnail: the cache holds the original.
+    assert_eq!(std::fs::read(path).unwrap(), PIXEL_PNG);
+    let notes = &find(&file.id).attachments[0];
+    assert_eq!(notes.title, "notes.txt");
+    assert_eq!(notes.size, Some(6));
+    assert_eq!(notes.image, None);
+}
+
+// RICH-005
+#[test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+fn an_image_in_the_cache_is_shown_in_the_next_session_without_a_download() {
+    let admin = Admin::login();
+    let user = admin.create_user();
+    let (channel_id, _) = admin.create_channel(&[&user.username]);
+    admin.upload_file(&channel_id, "pixel.png", "image/png", &PIXEL_PNG, "", "");
+    let cache = CacheDir::new();
+    let (client, events) = start_with_cache(MemoryStore::default(), DiskFileCache::new(&cache.0));
+    client.login(&server_url(), &user.username, password(&user));
+    wait_for(&events, |event| {
+        matches!(event, Event::Rooms(_)).then_some(())
+    });
+    client.open_room(channel_id.clone().into());
+    let messages = loaded_messages(&events);
+    let path = messages
+        .iter()
+        .find_map(|m| m.attachments.first()?.image.as_ref())
+        .unwrap()
+        .path
+        .clone();
+    let first = images_until(&events, std::slice::from_ref(&path));
+    drop(client);
+
+    let (client, events) = start_with_cache(MemoryStore::default(), DiskFileCache::new(&cache.0));
+    client.login(&server_url(), &user.username, password(&user));
+    wait_for(&events, |event| {
+        matches!(event, Event::Rooms(_)).then_some(())
+    });
+    client.open_room(channel_id.into());
+    let second = images_until(&events, std::slice::from_ref(&path));
+
+    assert_eq!(second[&path], first[&path]);
 }
 
 // RT-002, ROOM-001

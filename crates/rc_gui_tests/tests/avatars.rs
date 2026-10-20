@@ -20,38 +20,7 @@ use rc_gui_tests::paths::{message, message_row, room, room_row};
 use rc_gui_tests::{App, Gui};
 use rc_test_server::Admin;
 
-use common::{TIMEOUT, launch, log_in_and_wait_for_room, open_room};
-
-/// The file a `file://` URL names, without the `?v=` that makes QML load a replaced file again.
-fn file_of(url: &str) -> PathBuf {
-    let path = url
-        .strip_prefix("file://")
-        .unwrap_or_else(|| panic!("not a file URL: {url}"));
-    let path = path.split('?').next().unwrap();
-    PathBuf::from(percent_decode(path))
-}
-
-fn percent_decode(text: &str) -> String {
-    let bytes = text.as_bytes();
-    let mut out = Vec::new();
-    let mut at = 0;
-    while at < bytes.len() {
-        let hex = bytes
-            .get(at + 1..at + 3)
-            .and_then(|h| std::str::from_utf8(h).ok());
-        match (bytes[at], hex.and_then(|h| u8::from_str_radix(h, 16).ok())) {
-            (b'%', Some(byte)) => {
-                out.push(byte);
-                at += 3;
-            }
-            (byte, _) => {
-                out.push(byte);
-                at += 1;
-            }
-        }
-    }
-    String::from_utf8(out).unwrap()
-}
+use common::{TIMEOUT, file_of, launch, log_in_and_wait_for_room, open_room};
 
 /// Waits until the avatar at `path` shows its image, and returns the file it shows.
 fn loaded_avatar(gui: &Gui, path: &str) -> PathBuf {

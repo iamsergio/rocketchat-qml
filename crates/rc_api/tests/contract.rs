@@ -16,7 +16,7 @@ use rc_api::{
     Credentials, DdpClient, DdpEvent, DdpEvents, Error, Message, RestClient, RoomType,
     ServerVersion, Subscription, User,
 };
-use rc_test_server::{Admin, TestUser, server_url, status_without_login, unique};
+use rc_test_server::{Admin, PIXEL_PNG, TestUser, server_url, status_without_login, unique};
 use secrecy::{ExposeSecret, SecretString};
 
 const POLL_TIMEOUT: Duration = Duration::from_secs(3);
@@ -1091,4 +1091,128 @@ async fn a_user_and_a_room_with_an_avatar_of_their_own_have_an_etag() {
     // The download still answers, with what the server draws or serves.
     let avatar = session.user_avatar(&fixture.user.username).await.unwrap();
     assert!(avatar.content_type.is_some_and(|t| t.starts_with("image/")));
+}
+
+/// Uploads a one-pixel PNG with text and a description, and a text file, to the channel as admin.
+/// Returns the ids of the two messages.
+fn upload_image_and_file(fixture: &Fixture, room_id: &str) -> (String, String) {
+    let image = fixture.admin.upload_file(
+        room_id,
+        "pixel.png",
+        "image/png",
+        &PIXEL_PNG,
+        "look **here**",
+        "a pixel",
+    );
+    let file = fixture.admin.upload_file(
+        room_id,
+        "notes.txt",
+        "text/plain",
+        b"hello\n",
+        "",
+        "my notes",
+    );
+    (image.id, file.id)
+}
+
+// RICH-005
+#[tokio::test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+async fn uploaded_files_come_back_as_attachments_and_download_with_the_login() {
+    let fixture = Fixture::new();
+    let (room_id, _) = fixture.create_channel();
+    let (image_id, file_id) = upload_image_and_file(&fixture, &room_id);
+    let session = fixture.client.session(fixture.login().await.credentials);
+
+    let page = session
+        .history(&room_id, &RoomType::Channel, None, 50)
+        .await
+        .unwrap();
+
+    let message = |id: &str| page.messages.iter().find(|m| m.id == id).unwrap();
+    let image = &message(&image_id);
+    assert_eq!(image.text, "look **here**");
+    assert_eq!(image.attachments.len(), 1);
+    let attachment = &image.attachments[0];
+    assert_eq!(attachment.title, "pixel.png");
+    assert_eq!(attachment.description.as_deref(), Some("a pixel"));
+    assert!(
+        attachment.link.starts_with("/file-upload/"),
+        "{attachment:?}"
+    );
+    let picture = attachment.image.as_ref().unwrap();
+    assert!(picture.path.starts_with("/file-upload/"), "{picture:?}");
+    assert_eq!(picture.content_type.as_deref(), Some("image/png"));
+    assert_eq!(picture.dimensions, Some((1, 1)));
+    // A file of one pixel has no thumbnail: the picture is the original.
+    let download = session.file(&picture.path).await.unwrap();
+    assert_eq!(download.bytes, PIXEL_PNG);
+    assert_eq!(download.content_type.as_deref(), Some("image/png"));
+    assert_eq!(
+        session.file(&attachment.link).await.unwrap().bytes,
+        PIXEL_PNG
+    );
+
+    let file = &message(&file_id);
+    assert_eq!(file.text, "");
+    assert_eq!(file.attachments.len(), 1);
+    let attachment = &file.attachments[0];
+    assert_eq!(attachment.title, "notes.txt");
+    assert_eq!(attachment.description.as_deref(), Some("my notes"));
+    assert_eq!(attachment.size, Some(6));
+    assert_eq!(attachment.image, None);
+    let download = session.file(&attachment.link).await.unwrap();
+    assert_eq!(download.bytes, b"hello\n");
+    assert_eq!(download.content_type.as_deref(), Some("text/plain"));
+}
+
+// RICH-005
+#[tokio::test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+async fn an_uploaded_file_is_not_served_without_the_login() {
+    let fixture = Fixture::new();
+    let (room_id, _) = fixture.create_channel();
+    let (image_id, _) = upload_image_and_file(&fixture, &room_id);
+    let session = fixture.client.session(fixture.login().await.credentials);
+    let page = session
+        .history(&room_id, &RoomType::Channel, None, 50)
+        .await
+        .unwrap();
+    let message = page.messages.iter().find(|m| m.id == image_id).unwrap();
+
+    let link = &message.attachments[0].link;
+
+    let url = format!("{}{link}", server_url().trim_end_matches('/'));
+    assert_eq!(status_without_login(&url), 403);
+}
+
+/// The live message with this id.
+async fn message_event(events: &mut DdpEvents, id: &str) -> Message {
+    let event = event_where(events, |e| matches!(e, DdpEvent::Message(m) if m.id == id)).await;
+    let DdpEvent::Message(message) = event else {
+        panic!("not the event that was waited for")
+    };
+    message
+}
+
+// RICH-005
+#[tokio::test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+async fn a_live_message_carries_its_attachments() {
+    let fixture = Fixture::new();
+    let (room_id, _) = fixture.create_channel();
+    let login = fixture.login().await;
+    let (client, mut events) = connect_and_login(&login.credentials).await;
+    client.subscribe_my_messages().await.unwrap();
+
+    let (image_id, file_id) = upload_image_and_file(&fixture, &room_id);
+
+    let image = message_event(&mut events, &image_id).await;
+    assert_eq!(image.attachments.len(), 1);
+    assert_eq!(image.attachments[0].title, "pixel.png");
+    assert!(image.attachments[0].image.is_some());
+    let file = message_event(&mut events, &file_id).await;
+    assert_eq!(file.attachments.len(), 1);
+    assert_eq!(file.attachments[0].title, "notes.txt");
+    assert_eq!(file.attachments[0].image, None);
 }
