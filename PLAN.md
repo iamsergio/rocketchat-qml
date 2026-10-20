@@ -53,12 +53,12 @@ Done when: you can log in to the local test server with a username and password,
 
 Done when: clicking a room shows its history with authors and times, and scrolling up loads older messages.
 
-- [ ] `rc_api`: room history (`channels/groups/im.history`, depending on room type). Covered by contract tests that post their own messages
-- [ ] `rc_core`: message domain model (plain text body for now), `MessageStore` port with an in-memory adapter, pagination cursor per room
-- [ ] `rc_core`: system messages (join, leave, topic changed) as their own kind
-- [ ] `rc_qt`: `MessageListModel` (prepend for older messages, append for newer), `RoomVm` (current room)
-- [ ] QML: room view, message delegate, day separators, load older on reaching the top
-- [ ] Features MSG-001…MSG-005 tested
+- [x] `rc_api`: room history (`channels/groups/im.history`, depending on room type). Covered by contract tests that post their own messages
+- [x] `rc_core`: message domain model (plain text body for now), `MessageStore` port with an in-memory adapter, pagination cursor per room
+- [x] `rc_core`: system messages (join, leave, topic changed) as their own kind
+- [x] `rc_qt`: `MessageListModel` (prepend for older messages, append for newer), `RoomVm` (current room)
+- [x] QML: room view, message delegate, day separators, load older on reaching the top
+- [x] Features MSG-001…MSG-005 tested
 
 ## Phase 3: Realtime and sending
 

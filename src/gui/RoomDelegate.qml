@@ -4,6 +4,7 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import RocketChat.Bridge
 
 // One row of the room list. Named by room id: room names aren't unique.
 ItemDelegate {
@@ -18,6 +19,8 @@ ItemDelegate {
 
     objectName: "room_" + roomId
     width: ListView.view.width
+    highlighted: Room.roomId === roomId
+    onClicked: Room.open(roomId)
 
     contentItem: RowLayout {
         spacing: 12

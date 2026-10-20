@@ -21,6 +21,20 @@ pub mod main_window {
     pub const ROOM_LIST: &str = "mainWindow/roomList";
     pub const CURRENT_USER: &str = "mainWindow/currentUser";
     pub const LOGOUT_BUTTON: &str = "mainWindow/logoutButton";
+
+    /// Shown in place of the messages while no room is open.
+    pub const ROOM_PLACEHOLDER: &str = "mainWindow/roomPlaceholder";
+    /// The name of the open room.
+    pub const ROOM_TITLE: &str = "mainWindow/roomTitle";
+    /// Why the messages of the open room couldn't be loaded.
+    pub const ROOM_ERROR: &str = "mainWindow/roomError";
+    /// The messages of the open room, oldest first. Its `count` is how many are loaded, not how
+    /// many are in view.
+    pub const MESSAGE_LIST: &str = "mainWindow/messageList";
+    /// Above the first message once nothing older exists.
+    pub const HISTORY_START: &str = "mainWindow/historyStart";
+    /// Above the first message while older ones load.
+    pub const LOADING_OLDER: &str = "mainWindow/loadingOlder";
 }
 
 /// The parts of a room row, for [`room`].
@@ -43,6 +57,24 @@ pub fn room(id: &str, part: &str) -> String {
     format!("{}/room_{id}/{part}", main_window::WINDOW)
 }
 
+/// The parts of a message row, for [`message`].
+pub mod message_row {
+    /// The heading of the day, on the first message of each day.
+    pub const DAY_SEPARATOR: &str = "msgDaySeparator";
+    pub const AUTHOR: &str = "msgAuthor";
+    pub const TIME: &str = "msgTime";
+    pub const BODY: &str = "msgBody";
+    /// What a system message says. These have it instead of an author and a body.
+    pub const SYSTEM: &str = "msgSystem";
+}
+
+/// A part of the row of the message with this id (see [`message_row`]). Like rooms, messages are
+/// addressed by id: their texts repeat.
+#[must_use]
+pub fn message(id: &str, part: &str) -> String {
+    format!("{}/msg_{id}/{part}", main_window::WINDOW)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -53,6 +85,19 @@ mod tests {
         assert_eq!(
             room("abc123", room_row::UNREAD),
             "mainWindow/room_abc123/roomUnread"
+        );
+    }
+
+    // INFRA-002
+    #[test]
+    fn a_message_part_is_addressed_by_the_message_id() {
+        assert_eq!(
+            message("m7", message_row::BODY),
+            "mainWindow/msg_m7/msgBody"
+        );
+        assert_eq!(
+            message("m7", message_row::DAY_SEPARATOR),
+            "mainWindow/msg_m7/msgDaySeparator"
         );
     }
 }
