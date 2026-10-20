@@ -95,6 +95,11 @@ impl ServerApi for RestApi {
             .ok_or_else(|| ApiError::Unexpected("the server stored the message as a reply".into()))
     }
 
+    async fn mark_read(&self, credentials: &Credentials, room: &RoomId) -> Result<(), ApiError> {
+        let session = self.client.session(api_credentials(credentials));
+        Ok(session.mark_read(room.as_str()).await?)
+    }
+
     async fn realtime(&self, credentials: &Credentials) -> Result<PushedEvents, ApiError> {
         let (ddp, events) = DdpClient::connect(&self.server).await?;
         ddp.login(&api_credentials(credentials)).await?;

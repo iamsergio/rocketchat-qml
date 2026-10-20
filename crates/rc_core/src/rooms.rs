@@ -129,6 +129,11 @@ impl RoomList {
         Some(RoomChange::Removed { index })
     }
 
+    #[must_use]
+    pub fn get(&self, id: &RoomId) -> Option<&Room> {
+        self.rooms.iter().find(|room| &room.id == id)
+    }
+
     fn position(&self, id: &RoomId) -> Option<usize> {
         self.rooms.iter().position(|room| &room.id == id)
     }

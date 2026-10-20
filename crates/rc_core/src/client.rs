@@ -17,7 +17,7 @@ use tokio::time::Instant;
 use crate::adapters::{MemoryMessageStore, RestConnector};
 use crate::backoff::Backoff;
 use crate::domain::{
-    Author, Credentials, Delivery, Message, MessageId, MessageKind, RoomId, RoomKind,
+    Author, Credentials, Delivery, Message, MessageId, MessageKind, Room, RoomId, RoomKind,
     StoredSession, User, room_from,
 };
 use crate::error::Error;
@@ -209,7 +209,8 @@ impl Client {
     }
 
     /// Shows the room's messages: what is held of them at once, then the newest ones as they
-    /// arrive. Replaces the room that was open. Ignored unless logged in, if the room isn't in the
+    /// arrive. Replaces the room that was open. The room is marked read, on the server and in the
+    /// room list, and stays read while it is open. Ignored unless logged in, if the room isn't in the
     /// room list, or if it is the open room already (unless its last load failed: then it tries
     /// again).
     pub fn open_room(&self, room: RoomId) {
@@ -367,6 +368,14 @@ struct SendDone {
     outcome: Result<Message, ApiError>,
 }
 
+/// A mark-as-read call's answer.
+struct MarkReadDone {
+    /// The login attempt the call belongs to: the answer is stale if the session has changed.
+    attempt: u64,
+    room: RoomId,
+    outcome: Result<(), ApiError>,
+}
+
 /// What the tasks tell the actor.
 enum Done<A> {
     Login(LoginDone<A>),
@@ -378,6 +387,7 @@ enum Done<A> {
     },
     History(HistoryDone),
     Send(SendDone),
+    MarkRead(MarkReadDone),
 }
 
 /// A history fetch in flight.
@@ -480,6 +490,7 @@ impl<C: Connector> Actor<C> {
                     Done::Reconnect { cycle } => self.handle_reconnect(cycle),
                     Done::History(done) => self.handle_history_done(done),
                     Done::Send(done) => self.handle_send_done(done),
+                    Done::MarkRead(done) => self.handle_mark_read_done(done),
                 },
             }
         }
@@ -778,6 +789,7 @@ impl<C: Connector> Actor<C> {
                 let id = RoomId::from(subscription.room_id.clone());
                 match room_from(subscription) {
                     Some(room) => {
+                        let room = self.seen_if_open(room);
                         if let Some(change) = self.rooms.upsert(room) {
                             (self.on_event)(Event::Rooms(vec![change]));
                         }
@@ -788,6 +800,54 @@ impl<C: Connector> Actor<C> {
             }
             Pushed::SubscriptionRemoved(id) => self.remove_room(&id),
             Pushed::Message(message) => self.add_live_message(message),
+        }
+    }
+
+    /// The room as the user sees it: nothing is unread in the open room, whatever the server counts.
+    /// A message that arrives while the room is open is read at once, so the server is told too.
+    fn seen_if_open(&self, room: Room) -> Room {
+        let is_open = self
+            .open
+            .as_ref()
+            .is_some_and(|open| open.timeline.room() == &room.id);
+        if !is_open || !room.has_unread() {
+            return room;
+        }
+        self.mark_read(room.id.clone());
+        room.read()
+    }
+
+    /// Asks the server to mark the room read. The answer only matters if it fails.
+    fn mark_read(&self, room: RoomId) {
+        let Some(session) = &self.session else {
+            return;
+        };
+        let attempt = self.attempt;
+        let api = session.api.clone();
+        let credentials = session.credentials.clone();
+        let done = self.done_tx.clone();
+        tokio::spawn(async move {
+            let outcome = api.mark_read(&credentials, &room).await;
+            // Fails only if the actor is gone.
+            let _ = done.send(Done::MarkRead(MarkReadDone {
+                attempt,
+                room,
+                outcome,
+            }));
+        });
+    }
+
+    fn handle_mark_read_done(&mut self, done: MarkReadDone) {
+        if done.attempt != self.attempt || !matches!(self.state, SessionState::LoggedIn(_)) {
+            tracing::debug!("answer of a stale mark-as-read dropped");
+            return;
+        }
+        match done.outcome {
+            Ok(()) => {}
+            Err(ApiError::Unauthorized) => self.expire_session(),
+            Err(error) => {
+                tracing::warn!(%error, room = %done.room, "can't mark the room read");
+            }
         }
     }
 
@@ -879,7 +939,11 @@ impl<C: Connector> Actor<C> {
                 return;
             }
         };
-        let rooms = subscriptions.into_iter().filter_map(room_from).collect();
+        let rooms = subscriptions
+            .into_iter()
+            .filter_map(room_from)
+            .map(|room| self.seen_if_open(room))
+            .collect();
         let changes = if self.rooms_listed {
             // Reconnecting: the frontend keeps its rows, and gets what changed meanwhile.
             self.rooms.sync(rooms)
@@ -965,7 +1029,24 @@ impl<C: Connector> Actor<C> {
             error: None,
             live: Vec::new(),
         });
+        self.mark_open_room_read();
         self.fetch_history(false);
+    }
+
+    /// The user is looking at the open room: nothing in it is unread. The server is told even if
+    /// the list shows it read already, as the counts may lag behind.
+    fn mark_open_room_read(&mut self) {
+        let Some(open) = &self.open else {
+            return;
+        };
+        let id = open.timeline.room().clone();
+        self.mark_read(id.clone());
+        let Some(room) = self.rooms.get(&id).filter(|room| room.has_unread()) else {
+            return;
+        };
+        if let Some(change) = self.rooms.upsert(room.clone().read()) {
+            (self.on_event)(Event::Rooms(vec![change]));
+        }
     }
 
     fn load_older(&mut self) {
