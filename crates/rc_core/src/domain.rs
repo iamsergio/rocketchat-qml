@@ -455,6 +455,7 @@ mod tests {
             kind: kind.map(str::to_owned),
             thread_id: None,
             thread_shown: false,
+            md: None,
         }
     }
 

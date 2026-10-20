@@ -118,6 +118,9 @@ pub struct Message {
     pub thread_id: Option<String>,
     /// Whether a thread reply is also shown in the channel (`tshow`).
     pub thread_shown: bool,
+    /// The server's parsed markdown of the text. `None` if it sent none or it isn't a list of
+    /// nodes. Some old messages and some system messages have no `md`.
+    pub md: Option<Vec<crate::md::Block>>,
 }
 
 /// One page of a room's history.

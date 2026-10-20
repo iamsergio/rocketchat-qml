@@ -13,6 +13,7 @@
 mod client;
 mod ddp;
 mod error;
+pub mod md;
 mod types;
 mod wire;
 

@@ -10,6 +10,7 @@ use secrecy::SecretString;
 use serde::de::Error as _;
 use serde::{Deserialize, Deserializer};
 
+use crate::md;
 use crate::types::{
     Author, Credentials, DdpEvent, HistoryPage, LoginResult, Message, RoomType, ServerInfo,
     ServerVersion, Subscription, User,
@@ -117,6 +118,8 @@ struct MessageBody {
     tmid: Option<String>,
     #[serde(default)]
     tshow: bool,
+    #[serde(default)]
+    md: Option<serde_json::Value>,
 }
 
 #[derive(Deserialize)]
@@ -232,6 +235,7 @@ impl From<MessageBody> for Message {
             kind: body.t,
             thread_id: body.tmid,
             thread_shown: body.tshow,
+            md: body.md.as_ref().and_then(md::parse),
         }
     }
 }
@@ -343,6 +347,285 @@ mod tests {
     const ME: &str = include_str!("../tests/fixtures/me.json");
     const SUBSCRIPTIONS: &str = include_str!("../tests/fixtures/subscriptions.json");
     const HISTORY: &str = include_str!("../tests/fixtures/history.json");
+
+    const HISTORY_RICH: &str = include_str!("../tests/fixtures/history_rich.json");
+
+    fn rich(text: &str) -> Message {
+        parse_history(HISTORY_RICH.as_bytes(), 50)
+            .unwrap()
+            .messages
+            .into_iter()
+            .find(|m| m.text == text)
+            .unwrap_or_else(|| panic!("no message {text:?} in the fixture"))
+    }
+
+    // RICH-001
+    #[test]
+    fn every_message_of_the_rich_history_has_markdown() {
+        let page = parse_history(HISTORY_RICH.as_bytes(), 50).unwrap();
+        assert_eq!(page.messages.len(), 35);
+        for message in page.messages {
+            let md = message.md.unwrap_or_else(|| panic!("{:?}", message.text));
+            assert!(!md.is_empty(), "{:?}", message.text);
+            let mut unknown = Vec::new();
+            for block in &md {
+                if let md::Block::Unknown { kind, .. } = block {
+                    unknown.push(kind.clone());
+                }
+            }
+            assert!(unknown.is_empty(), "{:?}: {unknown:?}", message.text);
+        }
+    }
+
+    // RICH-001
+    #[test]
+    fn reads_formatting_and_blocks_from_the_server() {
+        use md::{Block, Inline};
+        assert_eq!(
+            rich("`inline code` here").md.unwrap(),
+            [Block::Paragraph(vec![
+                Inline::Code("inline code".into()),
+                Inline::Text(" here".into())
+            ])]
+        );
+        assert_eq!(
+            rich("```js\nconsole.log(1)\n```").md.unwrap(),
+            [Block::Code {
+                language: Some("js".into()),
+                lines: vec!["console.log(1)".into()]
+            }]
+        );
+        assert!(matches!(
+            &rich("```\nno lang\nblock\n```").md.unwrap()[..],
+            [Block::Code { language: None, lines }] if *lines == ["no lang", "block"]
+        ));
+        // A single asterisk is bold for Rocket.Chat.
+        let md = rich("**bold** *italic* ~strike~ _it2_ __b2__ ~~st2~~")
+            .md
+            .unwrap();
+        let [Block::Paragraph(inlines)] = &md[..] else {
+            panic!("{md:?}")
+        };
+        assert!(matches!(&inlines[0], Inline::Bold(_)));
+        assert!(matches!(&inlines[2], Inline::Bold(_)));
+        assert!(matches!(&inlines[4], Inline::Strike(_)));
+        assert!(matches!(&inlines[6], Inline::Italic(_)));
+        assert!(matches!(&inlines[10], Inline::Strike(_)));
+        assert!(matches!(
+            &rich("> a quote\n> second line").md.unwrap()[..],
+            [Block::Quote(paragraphs)] if paragraphs.len() == 2
+        ));
+        assert!(matches!(
+            &rich("# H1\n## H2\n### H3\n#### H4\n##### H5\n###### H6")
+                .md
+                .unwrap()[..],
+            [
+                Block::Heading { level: 1, .. },
+                Block::LineBreak,
+                Block::Heading { level: 2, .. },
+                ..
+            ]
+        ));
+    }
+
+    // RICH-001
+    #[test]
+    fn reads_lists_and_tasks_from_the_server() {
+        use md::{Block, Inline, ListItem, Task};
+        let item = |number, text: &str| ListItem {
+            number,
+            content: vec![Inline::Text(text.into())],
+        };
+        assert_eq!(
+            rich("3. starts at three\n4. four").md.unwrap(),
+            [Block::OrderedList(vec![
+                item(Some(3), "starts at three"),
+                item(Some(4), "four")
+            ])]
+        );
+        assert_eq!(
+            rich("- [ ] todo\n- [x] done").md.unwrap(),
+            [Block::Tasks(vec![
+                Task {
+                    done: false,
+                    content: vec![Inline::Text("todo".into())]
+                },
+                Task {
+                    done: true,
+                    content: vec![Inline::Text("done".into())]
+                }
+            ])]
+        );
+    }
+
+    // RICH-001
+    #[test]
+    fn reads_links_from_the_server() {
+        use md::{Block, Inline};
+        assert_eq!(
+            rich("https://example.com/a?b=1").md.unwrap(),
+            [Block::Paragraph(vec![Inline::Link {
+                url: "https://example.com/a?b=1".into(),
+                label: vec![Inline::Text("https://example.com/a?b=1".into())]
+            }])]
+        );
+        let md = rich("[a link](https://example.com) and <https://example.org|label>")
+            .md
+            .unwrap();
+        let [Block::Paragraph(inlines)] = &md[..] else {
+            panic!("{md:?}")
+        };
+        assert_eq!(
+            inlines[0],
+            Inline::Link {
+                url: "https://example.com".into(),
+                label: vec![Inline::Text("a link".into())]
+            }
+        );
+        assert_eq!(
+            inlines[2],
+            Inline::Link {
+                url: "https://example.org".into(),
+                label: vec![Inline::Text("label".into())]
+            }
+        );
+    }
+
+    // RICH-002
+    #[test]
+    fn reads_mentions_from_the_server() {
+        use md::{Block, Inline};
+        let md = rich("hello @admin and @all and @here").md.unwrap();
+        let [Block::Paragraph(inlines)] = &md[..] else {
+            panic!("{md:?}")
+        };
+        let users: Vec<_> = inlines
+            .iter()
+            .filter_map(|i| match i {
+                Inline::MentionUser(name) => Some(name.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(users, ["admin", "all", "here"]);
+        assert_eq!(
+            rich("see #general").md.unwrap(),
+            [Block::Paragraph(vec![
+                Inline::Text("see ".into()),
+                Inline::MentionChannel("general".into())
+            ])]
+        );
+    }
+
+    // RICH-003
+    #[test]
+    fn reads_emoji_from_the_server() {
+        use md::{Block, Inline};
+        let emoji = |short: Option<&str>, unicode: Option<&str>| Inline::Emoji {
+            short_code: short.map(str::to_owned),
+            unicode: unicode.map(str::to_owned),
+        };
+        assert_eq!(
+            rich("use :smile: and :+1: here").md.unwrap(),
+            [Block::Paragraph(vec![
+                Inline::Text("use ".into()),
+                emoji(Some("smile"), None),
+                Inline::Text(" and ".into()),
+                emoji(Some("+1"), None),
+                Inline::Text(" here".into())
+            ])]
+        );
+        assert_eq!(
+            rich("😀").md.unwrap(),
+            [Block::BigEmoji(vec![emoji(None, Some("😀"))])]
+        );
+        assert_eq!(
+            rich("😀😀 :smile:").md.unwrap(),
+            [Block::BigEmoji(vec![
+                emoji(None, Some("😀")),
+                emoji(None, Some("😀")),
+                emoji(Some("smile"), None)
+            ])]
+        );
+    }
+
+    // RICH-001
+    #[test]
+    fn reads_the_rarer_nodes_from_the_server() {
+        use md::{Block, Inline};
+        assert_eq!(
+            rich("\\[\\frac{1}{2}\\]").md.unwrap(),
+            [Block::Katex("\\frac{1}{2}".into())]
+        );
+        let md = rich("$$x^2 + y^2$$ and \\(a+b\\)").md.unwrap();
+        assert!(matches!(&md[..], [Block::Paragraph(i)] if i[1] == Inline::Katex("a+b".into())));
+        assert_eq!(
+            rich("color:#ff0000").md.unwrap(),
+            [Block::Paragraph(vec![Inline::Color {
+                r: 255,
+                g: 0,
+                b: 0,
+                a: 255
+            }])]
+        );
+        let md = rich("<t:1735689600:R> <t:1735689600:f>").md.unwrap();
+        let [Block::Paragraph(inlines)] = &md[..] else {
+            panic!("{md:?}")
+        };
+        assert_eq!(
+            inlines[0],
+            Inline::Timestamp {
+                timestamp: "1735689600".into(),
+                format: "R".into(),
+                fallback: "<t:1735689600:R>".into()
+            }
+        );
+        assert_eq!(
+            rich("![alt](https://example.com/i.png)").md.unwrap(),
+            [Block::Paragraph(vec![Inline::Image {
+                url: "https://example.com/i.png".into(),
+                alt: "alt".into()
+            }])]
+        );
+        assert!(matches!(
+            &rich("two\n\nparagraphs").md.unwrap()[..],
+            [Block::Paragraph(_), Block::LineBreak, Block::Paragraph(_)]
+        ));
+    }
+
+    // RICH-001
+    #[test]
+    fn a_message_with_odd_markdown_still_parses() {
+        let message = |md: &str| {
+            let body = format!(
+                r#"{{"message":{{"_id":"m","rid":"r","msg":"hi","ts":"2026-10-20T17:00:57.427Z",
+                "u":{{"_id":"u"}}{md}}}}}"#
+            );
+            parse_message(body.as_bytes()).unwrap()
+        };
+        assert_eq!(message("").md, None);
+        assert_eq!(message(r#","md":null"#).md, None);
+        assert_eq!(message(r#","md":"text""#).md, None);
+        assert_eq!(message(r#","md":{"type":"PARAGRAPH"}"#).md, None);
+        assert_eq!(message(r#","md":[]"#).md, Some(vec![]));
+        let unknown =
+            message(r#","md":[{"type":"FUTURE","value":"x"},{"type":"PARAGRAPH","value":[]}]"#);
+        assert_eq!(unknown.md.unwrap().len(), 2);
+    }
+
+    // RICH-001
+    #[test]
+    fn a_live_message_carries_its_markdown() {
+        let event = stream_event("stream-room-messages", DDP_MESSAGE).unwrap();
+        let Some(DdpEvent::Message(message)) = event else {
+            panic!("expected a message, got {event:?}");
+        };
+        assert_eq!(
+            message.md,
+            Some(vec![md::Block::Paragraph(vec![md::Inline::Text(
+                "hello live".into()
+            )])])
+        );
+    }
 
     // SEND-001
     #[test]
