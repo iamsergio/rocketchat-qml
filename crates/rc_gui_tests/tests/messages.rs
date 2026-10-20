@@ -7,13 +7,18 @@
 
 mod common;
 
-use rc_core::timeline::PAGE_SIZE;
 use rc_gui_tests::GuiError;
 use rc_gui_tests::paths::{main_window, message, message_row, room, room_row};
 
 use rc_test_server::{Admin, TestUser};
 
 use common::{TIMEOUT, launch, log_in_and_wait_for_room, open_room, press_home, utc_time};
+
+/// More than one page of history, so that opening a room loads only the newest part.
+const TOTAL: usize = 60;
+/// How many messages the first page holds: `rc_core`'s `PAGE_SIZE`. The tests don't link to the
+/// core; `count < TOTAL` after opening a room is what shows that paging happens at all.
+const NEWEST_PAGE: usize = 50;
 
 /// What the app shows as the author of admin's messages.
 fn admin_name(admin: &Admin) -> &str {
@@ -110,7 +115,7 @@ fn opening_another_room_replaces_the_messages() {
 fn scrolling_to_the_top_loads_older_messages() {
     let admin = Admin::login();
     let user = admin.create_user();
-    let total = PAGE_SIZE + 10;
+    let total = TOTAL;
     let texts: Vec<String> = (0..total).map(|n| format!("message {n:03}")).collect();
     let (channel_id, posted) = channel_with_messages(&admin, &user, &texts);
     let (oldest, newest) = (&posted[0].id, &posted[total - 1].id);
@@ -155,12 +160,12 @@ fn scrolling_to_the_top_loads_older_messages() {
 fn loading_older_messages_keeps_the_view_in_place() {
     let admin = Admin::login();
     let user = admin.create_user();
-    let total = PAGE_SIZE + 10;
+    let total = TOTAL;
     let texts: Vec<String> = (0..total).map(|n| format!("message {n:03}")).collect();
     let (channel_id, posted) = channel_with_messages(&admin, &user, &texts);
     // The first message of the newest page: it is at the top of the list when the older ones
     // arrive, and must still be there.
-    let anchor = &posted[total - PAGE_SIZE].id;
+    let anchor = &posted[total - NEWEST_PAGE].id;
     let app = launch();
     let gui = app.gui();
     log_in_and_wait_for_room(gui, &user, &channel_id);

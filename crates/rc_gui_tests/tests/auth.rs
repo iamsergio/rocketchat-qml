@@ -10,7 +10,6 @@ use std::net::TcpListener;
 use std::path::PathBuf;
 use std::{env, fs};
 
-use rc_core::session::LoginFailure;
 use rc_gui_tests::App;
 use rc_gui_tests::paths::main_window;
 use rc_test_server::{Admin, server_url, unique};
@@ -66,7 +65,7 @@ fn a_wrong_password_shows_an_error_on_the_login_page() {
 
     gui.wait_until_text(
         main_window::LOGIN_ERROR,
-        &LoginFailure::InvalidCredentials.to_string(),
+        "Wrong username or password",
         TIMEOUT,
     )
     .unwrap();
@@ -96,12 +95,8 @@ fn an_unreachable_server_shows_an_error() {
         "secret",
     );
 
-    gui.wait_until_text(
-        main_window::LOGIN_ERROR,
-        &LoginFailure::Unreachable.to_string(),
-        TIMEOUT,
-    )
-    .unwrap();
+    gui.wait_until_text(main_window::LOGIN_ERROR, "Can't reach the server", TIMEOUT)
+        .unwrap();
     assert!(!gui.exists_and_visible(main_window::ROOM_LIST).unwrap());
 }
 
