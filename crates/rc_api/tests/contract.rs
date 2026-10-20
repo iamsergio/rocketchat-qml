@@ -12,7 +12,7 @@
 
 use std::time::{Duration, Instant};
 
-use rc_api::{Error, RestClient, RoomType, ServerVersion, Subscription, User};
+use rc_api::{Error, Message, RestClient, RoomType, ServerVersion, Subscription, User};
 use rc_test_server::{Admin, TestUser, server_url, unique};
 use secrecy::{ExposeSecret, SecretString};
 
@@ -85,6 +85,19 @@ async fn subscriptions_when(
         }
         tokio::time::sleep(POLL_INTERVAL).await;
     }
+}
+
+/// Posts `texts` to the room as admin, in order, and returns their ids.
+fn post_all(fixture: &Fixture, room_id: &str, texts: &[&str]) -> Vec<String> {
+    texts
+        .iter()
+        .map(|text| fixture.admin.post_message(room_id, text).id)
+        .collect()
+}
+
+/// The ordinary messages of `page`: rooms also hold system messages, such as the creator joining.
+fn ordinary(messages: &[Message]) -> Vec<&Message> {
+    messages.iter().filter(|m| m.kind.is_none()).collect()
 }
 
 fn find<'a>(rooms: &'a [Subscription], rid: &str) -> &'a Subscription {
@@ -248,4 +261,157 @@ async fn logout_revokes_the_token() {
     assert!(matches!(me, Err(Error::Unauthorized)), "{me:?}");
     let again = session.logout().await;
     assert!(matches!(again, Err(Error::Unauthorized)), "{again:?}");
+}
+
+/// Checks the history of one room: what was posted comes back newest first, with its author and
+/// time.
+async fn check_history(fixture: &Fixture, room_id: &str, room_type: RoomType) {
+    let texts = ["first", "second", "third"];
+    let ids = post_all(fixture, room_id, &texts);
+    let session = fixture.client.session(fixture.login().await.credentials);
+
+    let page = session
+        .history(room_id, &room_type, None, 50)
+        .await
+        .unwrap();
+
+    assert!(page.reached_start, "fewer than 50 messages in a new room");
+    let messages = ordinary(&page.messages);
+    let got: Vec<_> = messages
+        .iter()
+        .map(|m| (m.id.as_str(), m.text.as_str()))
+        .collect();
+    assert_eq!(
+        got,
+        [
+            (ids[2].as_str(), "third"),
+            (ids[1].as_str(), "second"),
+            (ids[0].as_str(), "first")
+        ]
+    );
+    let newest = messages[0];
+    assert_eq!(newest.room_id, room_id);
+    assert_eq!(newest.author.id, fixture.admin.user_id);
+    assert_eq!(newest.author.username, fixture.admin.username);
+    assert_eq!(newest.author.name, fixture.admin.name);
+    assert!(messages[0].ts >= messages[1].ts && messages[1].ts >= messages[2].ts);
+    assert_eq!(newest.thread_id, None);
+}
+
+// MSG-001, MSG-003
+#[tokio::test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+async fn channel_history_has_the_messages_with_author_and_time() {
+    let fixture = Fixture::new();
+    let (room_id, _) = fixture.create_channel();
+    check_history(&fixture, &room_id, RoomType::Channel).await;
+}
+
+// MSG-001, MSG-003
+#[tokio::test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+async fn group_history_has_the_messages_with_author_and_time() {
+    let fixture = Fixture::new();
+    let (room_id, _) = fixture.create_group();
+    check_history(&fixture, &room_id, RoomType::Private).await;
+}
+
+// MSG-001, MSG-003
+#[tokio::test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+async fn direct_history_has_the_messages_with_author_and_time() {
+    let fixture = Fixture::new();
+    let room_id = fixture.create_dm();
+    check_history(&fixture, &room_id, RoomType::Direct).await;
+}
+
+// MSG-002
+#[tokio::test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+async fn history_pages_back_with_latest_until_the_start() {
+    let fixture = Fixture::new();
+    let (room_id, _) = fixture.create_channel();
+    let ids = post_all(&fixture, &room_id, &["m1", "m2", "m3", "m4", "m5"]);
+    let session = fixture.client.session(fixture.login().await.credentials);
+    let channel = RoomType::Channel;
+
+    let first = session.history(&room_id, &channel, None, 2).await.unwrap();
+    assert!(!first.reached_start);
+    let got: Vec<_> = first.messages.iter().map(|m| m.id.as_str()).collect();
+    assert_eq!(got, [ids[4].as_str(), ids[3].as_str()]);
+
+    // The next page starts at the oldest message held, which is inclusive: it comes back.
+    let latest = first.messages[1].ts;
+    let second = session
+        .history(&room_id, &channel, Some(latest), 2)
+        .await
+        .unwrap();
+    assert!(!second.reached_start);
+    let got: Vec<_> = second.messages.iter().map(|m| m.id.as_str()).collect();
+    assert_eq!(got, [ids[3].as_str(), ids[2].as_str()]);
+
+    // Everything older, including the system message of the creator joining.
+    let latest = second.messages[1].ts;
+    let rest = session
+        .history(&room_id, &channel, Some(latest), 50)
+        .await
+        .unwrap();
+    assert!(rest.reached_start);
+    let texts: Vec<_> = ordinary(&rest.messages)
+        .iter()
+        .map(|m| m.text.as_str())
+        .collect();
+    assert_eq!(texts, ["m3", "m2", "m1"]);
+}
+
+// MSG-005
+#[tokio::test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+async fn history_has_system_messages_with_their_kind() {
+    let fixture = Fixture::new();
+    let (room_id, _) = fixture.create_channel();
+    let other = fixture.admin.create_user();
+    fixture.admin.set_topic(&room_id, "A new topic");
+    fixture.admin.invite(&room_id, &other.id);
+    fixture.admin.kick(&room_id, &other.id);
+    let session = fixture.client.session(fixture.login().await.credentials);
+
+    let page = session
+        .history(&room_id, &RoomType::Channel, None, 50)
+        .await
+        .unwrap();
+
+    // Newest first.
+    let events: Vec<_> = page
+        .messages
+        .iter()
+        .filter_map(|m| Some((m.kind.as_deref()?, m.text.as_str())))
+        .collect();
+    assert_eq!(
+        &events[..3],
+        [
+            ("ru", other.username.as_str()),
+            ("au", other.username.as_str()),
+            ("room_changed_topic", "A new topic"),
+        ]
+    );
+    let topic = page
+        .messages
+        .iter()
+        .find(|m| m.kind.as_deref() == Some("room_changed_topic"))
+        .unwrap();
+    assert_eq!(topic.author.username, fixture.admin.username);
+}
+
+// MSG-001
+#[tokio::test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+async fn history_of_a_room_the_user_cannot_see_is_a_server_error() {
+    let fixture = Fixture::new();
+    let (room_id, _) = fixture.admin.create_group(&[]);
+    let session = fixture.client.session(fixture.login().await.credentials);
+    let result = session
+        .history(&room_id, &RoomType::Private, None, 50)
+        .await;
+    assert!(matches!(result, Err(Error::Server { .. })), "{result:?}");
 }

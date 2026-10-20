@@ -8,9 +8,10 @@ use std::net::TcpListener;
 use rc_api::{Credentials, Error, RestClient, RestSession, RoomType, ServerVersion};
 use secrecy::{ExposeSecret, SecretString};
 use serde_json::json;
-use wiremock::matchers::{body_json, header, method, path};
+use wiremock::matchers::{body_json, header, method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
+const HISTORY: &str = include_str!("fixtures/history.json");
 const INFO: &str = include_str!("fixtures/info.json");
 const LOGIN: &str = include_str!("fixtures/login.json");
 const LOGIN_UNAUTHORIZED: &str = include_str!("fixtures/login_unauthorized.json");
@@ -270,6 +271,132 @@ async fn subscriptions_lists_the_rooms() {
     let names: Vec<_> = rooms.iter().map(|r| r.name.as_str()).collect();
     assert_eq!(names, ["general", "fx9300-chan", "fx9300-priv", "admin"]);
     assert_eq!(rooms[3].room_type, RoomType::Direct);
+}
+
+/// The history of `route` for the room `rid`, asking for `count` messages, expected once.
+fn history_mock(route: &str, count: &str) -> Mock {
+    Mock::given(method("GET"))
+        .and(path(route))
+        .and(header("X-User-Id", USER_ID))
+        .and(header("X-Auth-Token", TOKEN))
+        .and(query_param("roomId", "rid"))
+        .and(query_param("count", count))
+        .respond_with(json_response(200, HISTORY))
+        .expect(1)
+}
+
+// MSG-001
+#[tokio::test]
+async fn history_picks_the_endpoint_by_room_type() {
+    let server = MockServer::start().await;
+    for route in [
+        "/api/v1/channels.history",
+        "/api/v1/groups.history",
+        "/api/v1/im.history",
+    ] {
+        history_mock(route, "50").mount(&server).await;
+    }
+    let session = session(&RestClient::new(&server.uri()).unwrap());
+    for room_type in [RoomType::Channel, RoomType::Private, RoomType::Direct] {
+        let page = session.history("rid", &room_type, None, 50).await.unwrap();
+        assert_eq!(page.messages.len(), 4);
+        assert!(page.reached_start);
+    }
+    // Each endpoint was called exactly once (checked when the server drops).
+}
+
+// MSG-002
+#[tokio::test]
+async fn history_pages_back_with_an_inclusive_latest() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/channels.history"))
+        .and(query_param("latest", "2026-10-20T14:12:59.379Z"))
+        .and(query_param("inclusive", "true"))
+        .and(query_param("count", "4"))
+        .respond_with(json_response(200, HISTORY))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let latest = "2026-10-20T14:12:59.379Z".parse().unwrap();
+    let page = session(&RestClient::new(&server.uri()).unwrap())
+        .history("rid", &RoomType::Channel, Some(latest), 4)
+        .await
+        .unwrap();
+    assert!(!page.reached_start);
+}
+
+// MSG-001
+#[tokio::test]
+async fn history_without_latest_sends_no_latest() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/channels.history"))
+        .respond_with(json_response(200, HISTORY))
+        .mount(&server)
+        .await;
+    session(&RestClient::new(&server.uri()).unwrap())
+        .history("rid", &RoomType::Channel, None, 50)
+        .await
+        .unwrap();
+    let requests = server.received_requests().await.unwrap();
+    let query = requests[0].url.query().unwrap_or_default();
+    assert!(
+        !query.contains("latest") && !query.contains("inclusive"),
+        "{query}"
+    );
+}
+
+// MSG-001
+#[tokio::test]
+async fn history_of_an_unlisted_room_type_is_an_error_not_a_guess() {
+    let server = MockServer::start().await;
+    let result = session(&RestClient::new(&server.uri()).unwrap())
+        .history("rid", &RoomType::Other("l".into()), None, 50)
+        .await;
+    assert!(
+        matches!(result, Err(Error::UnsupportedRoomType(ref code)) if code == "l"),
+        "{result:?}"
+    );
+    assert!(server.received_requests().await.unwrap().is_empty());
+}
+
+// MSG-001
+#[tokio::test]
+async fn history_with_an_expired_token_is_unauthorized() {
+    let server = MockServer::start().await;
+    mount(
+        &server,
+        "GET",
+        "/api/v1/channels.history",
+        json_response(401, NOT_LOGGED_IN),
+    )
+    .await;
+    let result = session(&RestClient::new(&server.uri()).unwrap())
+        .history("rid", &RoomType::Channel, None, 50)
+        .await;
+    assert!(matches!(result, Err(Error::Unauthorized)), "{result:?}");
+}
+
+// MSG-001
+#[tokio::test]
+async fn history_of_a_missing_room_is_a_server_error_with_the_message() {
+    let server = MockServer::start().await;
+    let body = r#"{"success":false,"error":"The required \"roomId\" or \"roomName\" param provided does not match any channel [error-room-not-found]","errorType":"error-room-not-found"}"#;
+    mount(
+        &server,
+        "GET",
+        "/api/v1/channels.history",
+        json_response(400, body),
+    )
+    .await;
+    let result = session(&RestClient::new(&server.uri()).unwrap())
+        .history("nope", &RoomType::Channel, None, 50)
+        .await;
+    assert!(
+        matches!(result, Err(Error::Server { status: 400, ref message }) if message.contains("error-room-not-found")),
+        "{result:?}"
+    );
 }
 
 // AUTH-004

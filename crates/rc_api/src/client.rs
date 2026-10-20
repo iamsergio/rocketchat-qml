@@ -9,7 +9,9 @@ use secrecy::{ExposeSecret, SecretString};
 use serde_json::json;
 
 use crate::error::Error;
-use crate::types::{Credentials, LoginResult, ServerInfo, Subscription, User};
+use crate::types::{
+    Credentials, HistoryPage, LoginResult, RoomType, ServerInfo, Subscription, User,
+};
 use crate::wire;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -170,6 +172,49 @@ impl RestSession {
     pub async fn subscriptions(&self) -> Result<Vec<Subscription>, Error> {
         let body = self.call(Method::GET, "api/v1/subscriptions.get").await?;
         wire::parse_subscriptions(&body).map_err(Error::Decode)
+    }
+
+    /// A page of a room's history, newest message first (`channels.history`, `groups.history` or
+    /// `im.history`, by room type). Without `latest` it starts at the newest message; with it, at
+    /// the newest one sent at or before that instant. That is inclusive, so the message at
+    /// `latest` comes back again: pass the time of the oldest message already held, and the
+    /// messages that share its millisecond can't be skipped, which is for the caller to
+    /// de-duplicate. The page has at most `count` messages; [`HistoryPage::reached_start`] says
+    /// when there are no more.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::UnsupportedRoomType`] for a room type that has no history call,
+    /// [`Error::Unauthorized`] if the token is expired or revoked, [`Error::Server`] if the room
+    /// doesn't exist or isn't visible to the user, or any of the other errors.
+    pub async fn history(
+        &self,
+        room_id: &str,
+        room_type: &RoomType,
+        latest: Option<jiff::Timestamp>,
+        count: usize,
+    ) -> Result<HistoryPage, Error> {
+        let endpoint = match room_type {
+            RoomType::Channel => "channels.history",
+            RoomType::Private => "groups.history",
+            RoomType::Direct => "im.history",
+            RoomType::Other(code) => return Err(Error::UnsupportedRoomType(code.clone())),
+        };
+        // Only a URL to escape the query with; the host is never used.
+        let mut escaped =
+            Url::parse("http://unused/").map_err(|e| Error::InvalidUrl(e.to_string()))?;
+        {
+            let mut pairs = escaped.query_pairs_mut();
+            pairs.append_pair("roomId", room_id);
+            pairs.append_pair("count", &count.to_string());
+            if let Some(latest) = latest {
+                pairs.append_pair("latest", &latest.to_string());
+                pairs.append_pair("inclusive", "true");
+            }
+        }
+        let path = format!("api/v1/{endpoint}?{}", escaped.query().unwrap_or_default());
+        let body = self.call(Method::GET, &path).await?;
+        wire::parse_history(&body, count).map_err(Error::Decode)
     }
 
     /// Ends the session on the server (`POST /api/v1/logout`), which revokes the token. Servers

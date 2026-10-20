@@ -84,6 +84,43 @@ pub struct Subscription {
     pub open: bool,
 }
 
+/// Who wrote a message, as the message carries it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Author {
+    pub id: String,
+    pub username: String,
+    pub name: Option<String>,
+}
+
+/// One message of a room, as the history gives it. System messages (someone joined, the topic
+/// changed...) are messages too: [`kind`](Self::kind) tells them apart.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Message {
+    pub id: String,
+    pub room_id: String,
+    pub ts: jiff::Timestamp,
+    pub author: Author,
+    /// The text. For system messages it is not prose but what the event is about: the new topic,
+    /// or the username that was added or removed.
+    pub text: String,
+    /// The server's type code (`t`): `None` for an ordinary message, `uj` for "user joined" and so
+    /// on.
+    pub kind: Option<String>,
+    /// The thread this message replies to, if it is a thread reply (`tmid`).
+    pub thread_id: Option<String>,
+    /// Whether a thread reply is also shown in the channel (`tshow`).
+    pub thread_shown: bool,
+}
+
+/// One page of a room's history.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HistoryPage {
+    /// Newest first, as the server sends them.
+    pub messages: Vec<Message>,
+    /// The server had fewer messages than asked for, so there is nothing before them.
+    pub reached_start: bool,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

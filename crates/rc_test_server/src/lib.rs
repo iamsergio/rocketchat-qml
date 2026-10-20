@@ -61,11 +61,20 @@ pub struct TestUser {
     pub name: String,
 }
 
+/// A message made by [`Admin::post_message`], or found by [`Admin::last_message`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Posted {
+    pub id: String,
+    /// When the server stored it, in its ISO 8601 spelling (`2026-10-20T14:12:48.587Z`).
+    pub ts: String,
+}
+
 /// The admin account, logged in. Its token is its own: every `Admin` is a new login.
 pub struct Admin {
     agent: ureq::Agent,
     base: String,
-    user_id: String,
+    /// The user id, which messages carry as their author's.
+    pub user_id: String,
     token: String,
     pub username: String,
     /// The display name, which is what a direct message with the admin is called.
@@ -184,16 +193,94 @@ impl Admin {
         json["room"]["_id"].as_str().unwrap().to_owned()
     }
 
-    /// Posts `text` to the room as admin.
+    /// Posts `text` to the room as admin and returns the message as the server stored it.
     ///
     /// # Panics
     ///
     /// If the server refuses.
-    pub fn post_message(&self, room_id: &str, text: &str) {
-        self.post(
+    // Most callers only need the message to exist, so the result may be ignored.
+    #[allow(clippy::must_use_candidate)]
+    pub fn post_message(&self, room_id: &str, text: &str) -> Posted {
+        let json = self.post(
             "chat.postMessage",
             &json!({ "roomId": room_id, "text": text }),
         );
+        Posted {
+            id: json["message"]["_id"].as_str().unwrap().to_owned(),
+            ts: json["message"]["ts"].as_str().unwrap().to_owned(),
+        }
+    }
+
+    /// Sets the topic of a channel, which adds a system message to it.
+    ///
+    /// # Panics
+    ///
+    /// If the server refuses.
+    pub fn set_topic(&self, room_id: &str, topic: &str) {
+        self.post(
+            "channels.setTopic",
+            &json!({ "roomId": room_id, "topic": topic }),
+        );
+    }
+
+    /// Adds the user to a channel, which adds a system message to it.
+    ///
+    /// # Panics
+    ///
+    /// If the server refuses.
+    pub fn invite(&self, room_id: &str, user_id: &str) {
+        self.post(
+            "channels.invite",
+            &json!({ "roomId": room_id, "userId": user_id }),
+        );
+    }
+
+    /// Removes the user from a channel, which adds a system message to it.
+    ///
+    /// # Panics
+    ///
+    /// If the server refuses.
+    pub fn kick(&self, room_id: &str, user_id: &str) {
+        self.post(
+            "channels.kick",
+            &json!({ "roomId": room_id, "userId": user_id }),
+        );
+    }
+
+    /// The newest message of a channel, whatever its kind: how a test finds the id of a system
+    /// message.
+    ///
+    /// # Panics
+    ///
+    /// If the server refuses or the channel has no messages.
+    #[must_use]
+    pub fn last_message(&self, channel_id: &str) -> Posted {
+        let json = self.get(&format!("channels.history?roomId={channel_id}&count=1"));
+        let message = &json["messages"][0];
+        Posted {
+            id: message["_id"].as_str().unwrap().to_owned(),
+            ts: message["ts"].as_str().unwrap().to_owned(),
+        }
+    }
+
+    /// GETs an endpoint (with its query) and returns the JSON, which must say `success`.
+    fn get(&self, endpoint: &str) -> Value {
+        let mut response = self
+            .agent
+            .get(format!("{}/{endpoint}", self.base))
+            .header("X-User-Id", &self.user_id)
+            .header("X-Auth-Token", &self.token)
+            .call()
+            .unwrap();
+        let status = response.status();
+        let text = response.body_mut().read_to_string().unwrap();
+        let json: Value = serde_json::from_str(&text)
+            .unwrap_or_else(|e| panic!("{endpoint}: {status} {text:?}: {e}"));
+        assert!(
+            status.is_success() && json["success"] == true,
+            "{endpoint}: {status} {json}"
+        );
+        json
     }
 
     /// POSTs to an endpoint and returns the JSON, which must say `success`.

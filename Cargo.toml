@@ -25,6 +25,7 @@ cxx-qt-lib = "0.10.0"
 # Not the `keyring` crate: its features always pull in the zbus store, whose crates are flagged
 # unmaintained.
 dbus-secret-service-keyring-store = { version = "1.0.1", default-features = false, features = ["crypto-rust"] }
+jiff = "0.2.38"
 keyring-core = "1.0.0"
 rc_api = { path = "crates/rc_api" }
 rc_core = { path = "crates/rc_core" }

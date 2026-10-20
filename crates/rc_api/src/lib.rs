@@ -17,5 +17,6 @@ mod wire;
 pub use client::{RestClient, RestSession};
 pub use error::Error;
 pub use types::{
-    Credentials, LoginResult, RoomType, ServerInfo, ServerVersion, Subscription, User,
+    Author, Credentials, HistoryPage, LoginResult, Message, RoomType, ServerInfo, ServerVersion,
+    Subscription, User,
 };
