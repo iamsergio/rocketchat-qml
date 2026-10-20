@@ -58,6 +58,15 @@ The server stores a message once per id. Sending an id it holds already (the fir
 
 In the `Timeline` the messages the server confirmed come first, in display order, and the unsent ones after them in the order they were written: their time is the user's clock, which says nothing about where they fall among the server's. History pages, live messages and the catch-up after a reconnect therefore go in front of the unsent messages, which they never drop, and a page or a pushed message that carries the id of an unsent one settles it. Settling is an `Updated` change (same position) or, if the server's time puts the message elsewhere among the confirmed ones, a `Moved` one. The message list is never reset for it. A message confirmed while the room's newest page is still loading is also kept for that page, which may predate it.
 
+## Rich text
+
+A message's body is a `RichText` (`rc_core::rich`): `text`, what the author wrote (markdown source included, for previews, notifications and search), and `blocks`, what to show. `MessageKind::Text` holds it. Frontends render the blocks and know nothing of the server's wire format.
+
+- **Blocks:** paragraph, heading (level 1 to 6), code (language, text), quote (holds blocks), bullet list, numbered list (first number, items), task list, big emoji (a message of nothing but emoji) and math. List items are inlines; the server doesn't nest lists, so an indented item comes out as text between two lists.
+- **Inlines:** text, bold, italic, strike (they nest), code, link (URL and label, never empty), image, mention (`User`, `All`, `Here`), channel mention, emoji, math, color, timestamp and line break. An emoji has a shortcode, a Unicode character, or both: the server sends only the character for emoji typed as such, and only the shortcode for those typed by name (`:smile:`), so a frontend or a later lookup table turns shortcodes into characters or custom emoji. Whether a mention is of the user is for the frontend to say, by username.
+- **Source:** the server's `md` tree, read by `rc_api::md` and mapped by `RichText::from_markdown`. Reading is lenient: a node type it doesn't know becomes its text (and is logged at debug), a malformed node is read as far as it goes, and none of it fails the message. The blank-line marker the server puts between blocks is dropped, since blocks stand apart anyway. Beware that Rocket.Chat's markdown differs from CommonMark: a single asterisk is bold, and `_x_` or `__x__` are italic.
+- **Fallback:** a message without `md`, with one that isn't a list, or with one that shows nothing, is one paragraph of the text, with a line break inline for each newline. A message sent from here is such a message until the server's copy arrives.
+
 ## GUI testing contract
 
 There is one GUI test suite, `rc_gui_tests`, and it runs unchanged against both frontends. It is a Spix XML-RPC client and never links to either GUI. Each frontend embeds a server that speaks the same protocol:
