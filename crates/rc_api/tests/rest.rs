@@ -17,6 +17,7 @@ const LOGIN: &str = include_str!("fixtures/login.json");
 const LOGIN_UNAUTHORIZED: &str = include_str!("fixtures/login_unauthorized.json");
 const ME: &str = include_str!("fixtures/me.json");
 const NOT_LOGGED_IN: &str = include_str!("fixtures/not_logged_in.json");
+const ROOMS: &str = include_str!("fixtures/rooms.json");
 const SUBSCRIPTIONS: &str = include_str!("fixtures/subscriptions.json");
 
 const USER_ID: &str = "u8paxsGQXMH9vSnSc";
@@ -323,6 +324,13 @@ async fn subscriptions_lists_the_rooms() {
         json_response(200, SUBSCRIPTIONS),
     )
     .await;
+    mount_authenticated(
+        &server,
+        "GET",
+        "/api/v1/rooms.get",
+        json_response(200, ROOMS),
+    )
+    .await;
     let rooms = session(&RestClient::new(&server.uri()).unwrap())
         .subscriptions()
         .await
@@ -330,6 +338,65 @@ async fn subscriptions_lists_the_rooms() {
     let names: Vec<_> = rooms.iter().map(|r| r.name.as_str()).collect();
     assert_eq!(names, ["general", "fx9300-chan", "fx9300-priv", "admin"]);
     assert_eq!(rooms[3].room_type, RoomType::Direct);
+}
+
+// ROOM-005
+#[tokio::test]
+async fn subscriptions_have_the_last_message_time_of_their_room() {
+    let server = MockServer::start().await;
+    mount(
+        &server,
+        "GET",
+        "/api/v1/subscriptions.get",
+        json_response(200, SUBSCRIPTIONS),
+    )
+    .await;
+    mount(
+        &server,
+        "GET",
+        "/api/v1/rooms.get",
+        json_response(200, ROOMS),
+    )
+    .await;
+    let rooms = session(&RestClient::new(&server.uri()).unwrap())
+        .subscriptions()
+        .await
+        .unwrap();
+    let times: Vec<_> = rooms.iter().map(|r| r.last_message).collect();
+    let at = |text: &str| Some(text.parse::<jiff::Timestamp>().unwrap());
+    assert_eq!(
+        times,
+        [
+            at("2026-10-19T22:38:04.040Z"),
+            at("2026-10-19T22:38:04.360Z"),
+            None,
+            at("2026-10-19T22:38:04.420Z"),
+        ]
+    );
+}
+
+// ROOM-005
+#[tokio::test]
+async fn subscriptions_fail_if_the_rooms_cannot_be_listed() {
+    let server = MockServer::start().await;
+    mount(
+        &server,
+        "GET",
+        "/api/v1/subscriptions.get",
+        json_response(200, SUBSCRIPTIONS),
+    )
+    .await;
+    mount(
+        &server,
+        "GET",
+        "/api/v1/rooms.get",
+        json_response(401, NOT_LOGGED_IN),
+    )
+    .await;
+    let result = session(&RestClient::new(&server.uri()).unwrap())
+        .subscriptions()
+        .await;
+    assert!(matches!(result, Err(Error::Unauthorized)), "{result:?}");
 }
 
 /// The history of `route` for the room `rid`, asking for `count` messages, expected once.

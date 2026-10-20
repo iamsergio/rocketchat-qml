@@ -275,6 +275,47 @@ async fn subscriptions_have_unread_and_mention_counts() {
     assert!(dm.unread >= 1, "{dm:?}");
 }
 
+// ROOM-005
+#[tokio::test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+async fn subscriptions_have_the_time_of_the_last_message() {
+    let fixture = Fixture::new();
+    let (quiet_id, _) = fixture.create_channel();
+    let (busy_id, _) = fixture.create_channel();
+    let posted = fixture.admin.post_message(&busy_id, "latest");
+    let session = fixture.client.session(fixture.login().await.credentials);
+
+    let rooms = session.subscriptions().await.unwrap();
+
+    let busy = find(&rooms, &busy_id);
+    assert_eq!(busy.last_message, Some(posted.ts.parse().unwrap()));
+    assert!(busy.created.is_some(), "{busy:?}");
+    assert!(find(&rooms, &quiet_id).created.is_some());
+}
+
+// ROOM-005
+#[tokio::test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+async fn a_message_arrives_as_room_activity_with_its_time() {
+    let fixture = Fixture::new();
+    let (room_id, _) = fixture.create_channel();
+    let login = fixture.login().await;
+    let (client, mut events) = connect_and_login(&login.credentials).await;
+    client
+        .subscribe_room_activity(&fixture.user.id)
+        .await
+        .unwrap();
+
+    let posted = fixture.admin.post_message(&room_id, "something new");
+
+    let event = event_where(
+        &mut events,
+        |e| matches!(e, DdpEvent::RoomActivity { room_id: r, last_message } if *r == room_id && *last_message == posted.ts.parse::<jiff::Timestamp>().unwrap()),
+    )
+    .await;
+    assert!(matches!(event, DdpEvent::RoomActivity { .. }));
+}
+
 // ROOM-004
 #[tokio::test]
 #[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]

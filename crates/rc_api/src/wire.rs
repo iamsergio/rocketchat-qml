@@ -4,6 +4,8 @@
 //! The JSON as Rocket.Chat sends it. Private to the crate: everything is converted into the public
 //! types. Unknown fields are ignored and optional ones default, so newer servers keep working.
 
+use std::collections::HashMap;
+
 use secrecy::SecretString;
 use serde::de::Error as _;
 use serde::{Deserialize, Deserializer};
@@ -66,6 +68,26 @@ struct SubscriptionBody {
     alert: bool,
     #[serde(default)]
     open: bool,
+    /// When the user joined.
+    #[serde(default, deserialize_with = "optional_timestamp")]
+    ts: Option<jiff::Timestamp>,
+}
+
+#[derive(Deserialize)]
+struct RoomsBody {
+    #[serde(default)]
+    update: Vec<RoomBody>,
+}
+
+/// A room as `rooms.get` and the `rooms-changed` event send it: the parts that tell when it was
+/// last active.
+#[derive(Deserialize)]
+struct RoomBody {
+    #[serde(rename = "_id")]
+    id: String,
+    /// The time of the last message; absent in a room without messages.
+    #[serde(default, deserialize_with = "optional_timestamp")]
+    lm: Option<jiff::Timestamp>,
 }
 
 #[derive(Deserialize)]
@@ -118,11 +140,25 @@ enum Time {
     },
 }
 
-fn timestamp<'de, D: Deserializer<'de>>(deserializer: D) -> Result<jiff::Timestamp, D::Error> {
-    match Time::deserialize(deserializer)? {
-        Time::Iso(ts) => Ok(ts),
-        Time::Ejson { date } => jiff::Timestamp::from_millisecond(date).map_err(D::Error::custom),
+impl Time {
+    fn into_timestamp<E: serde::de::Error>(self) -> Result<jiff::Timestamp, E> {
+        match self {
+            Self::Iso(ts) => Ok(ts),
+            Self::Ejson { date } => jiff::Timestamp::from_millisecond(date).map_err(E::custom),
+        }
     }
+}
+
+fn timestamp<'de, D: Deserializer<'de>>(deserializer: D) -> Result<jiff::Timestamp, D::Error> {
+    Time::deserialize(deserializer)?.into_timestamp()
+}
+
+fn optional_timestamp<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<jiff::Timestamp>, D::Error> {
+    Option::<Time>::deserialize(deserializer)?
+        .map(Time::into_timestamp)
+        .transpose()
 }
 
 /// The `fields` of a stream's `changed` frame: which event, and its arguments.
@@ -175,6 +211,8 @@ impl From<SubscriptionBody> for Subscription {
             group_mentions: body.group_mentions,
             alert: body.alert,
             open: body.open,
+            created: body.ts,
+            last_message: None,
         }
     }
 }
@@ -227,6 +265,18 @@ pub(crate) fn parse_subscriptions(bytes: &[u8]) -> Result<Vec<Subscription>, ser
     Ok(body.update.into_iter().map(Subscription::from).collect())
 }
 
+/// The time of each room's last message, by room id, for the rooms that have messages.
+pub(crate) fn parse_room_activity(
+    bytes: &[u8],
+) -> Result<HashMap<String, jiff::Timestamp>, serde_json::Error> {
+    let body: RoomsBody = serde_json::from_slice(bytes)?;
+    Ok(body
+        .update
+        .into_iter()
+        .filter_map(|room| Some((room.id, room.lm?)))
+        .collect())
+}
+
 /// `count` is what was asked for: fewer messages than that means the history has ended.
 pub(crate) fn parse_history(bytes: &[u8], count: usize) -> Result<HistoryPage, serde_json::Error> {
     let body: HistoryBody = serde_json::from_slice(bytes)?;
@@ -268,6 +318,15 @@ pub(crate) fn parse_stream_event(
                 Some("removed") => Some(DdpEvent::SubscriptionRemoved { room_id: body.rid }),
                 _ => None,
             })
+        }
+        // What happened, then the room. Rooms without a last message (just created) say nothing.
+        "stream-notify-user" if fields.event_name.ends_with("/rooms-changed") => {
+            next_arg()?;
+            let room: RoomBody = serde_json::from_value(next_arg()?)?;
+            Ok(room.lm.map(|last_message| DdpEvent::RoomActivity {
+                room_id: room.id,
+                last_message,
+            }))
         }
         _ => Ok(None),
     }
@@ -398,8 +457,35 @@ mod tests {
                 group_mentions: 0,
                 alert: false,
                 open: false,
+                created: None,
+                last_message: None,
             }]
         );
+    }
+
+    // ROOM-005
+    #[test]
+    fn subscriptions_have_the_join_time() {
+        let rooms = parse_subscriptions(SUBSCRIPTIONS.as_bytes()).unwrap();
+        assert_eq!(rooms[0].created, Some(ts("2026-10-19T22:38:04.040Z")));
+        assert!(rooms.iter().all(|r| r.last_message.is_none()));
+    }
+
+    // ROOM-005
+    #[test]
+    fn rooms_have_the_time_of_their_last_message_unless_empty() {
+        let activity = parse_room_activity(ROOMS.as_bytes()).unwrap();
+        assert_eq!(activity.len(), 3);
+        assert_eq!(activity["GENERAL"], ts("2026-10-19T22:38:04.040Z"));
+        assert_eq!(
+            activity["6ad69bcccaea8883e7e075fe"],
+            ts("2026-10-19T22:38:04.360Z")
+        );
+        assert_eq!(
+            activity["6ad69bcccaea8883e7e07604"],
+            ts("2026-10-19T22:38:04.420Z")
+        );
+        assert!(!activity.contains_key("6ad69bcccaea8883e7e07601"));
     }
 
     // ROOM-001
@@ -508,6 +594,9 @@ mod tests {
     const DDP_SUBSCRIPTION_REMOVED: &str =
         include_str!("../tests/fixtures/ddp_subscription_removed.json");
     const DDP_ROOMS_CHANGED: &str = include_str!("../tests/fixtures/ddp_rooms_changed.json");
+    const DDP_ROOMS_CHANGED_MESSAGE: &str =
+        include_str!("../tests/fixtures/ddp_rooms_changed_message.json");
+    const ROOMS: &str = include_str!("../tests/fixtures/rooms.json");
 
     fn stream_event(
         collection: &str,
@@ -612,14 +701,30 @@ mod tests {
         );
     }
 
-    // RT-002
+    // ROOM-005
     #[test]
-    fn other_streams_and_events_are_not_followed() {
-        // The user's rooms changing is a different event of the same stream.
+    fn a_room_change_with_a_last_message_is_activity() {
+        assert_eq!(
+            stream_event("stream-notify-user", DDP_ROOMS_CHANGED_MESSAGE).unwrap(),
+            Some(DdpEvent::RoomActivity {
+                room_id: "6ad7a58d3a2871a71ede2062".into(),
+                last_message: ts("2026-10-20T17:31:59.831Z"),
+            })
+        );
+    }
+
+    // ROOM-005
+    #[test]
+    fn a_room_change_without_a_last_message_is_not_activity() {
         assert_eq!(
             stream_event("stream-notify-user", DDP_ROOMS_CHANGED).unwrap(),
             None
         );
+    }
+
+    // RT-002
+    #[test]
+    fn other_streams_and_events_are_not_followed() {
         assert_eq!(
             stream_event("stream-notify-room", DDP_MESSAGE).unwrap(),
             None

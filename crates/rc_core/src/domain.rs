@@ -301,6 +301,8 @@ mod tests {
             group_mentions: 0,
             alert: false,
             open: true,
+            created: None,
+            last_message: None,
         }
     }
 
