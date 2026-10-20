@@ -46,8 +46,8 @@ Done when: you can log in to the local test server with a username and password,
 - [x] `rc_core`: room domain model (channel/group/DM, name, unread, mention count)
 - [x] CI runs the `rc_api` and `rc_core` contract tests against the local test server (the runner joins its network)
 - [x] `rc_qt`: `SessionVm` (state, error, login/logout invokables), `RoomListModel`
-- [ ] QML: login page (server URL, user, password, error text, busy state), room list, logout
-- [ ] Features AUTH-001…AUTH-005, ROOM-001…ROOM-003 tested
+- [x] QML: login page (server URL, user, password, error text, busy state), room list, logout
+- [x] Features AUTH-001…AUTH-005, ROOM-001…ROOM-003 tested
 
 ## Phase 2: Read messages
 

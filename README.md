@@ -26,10 +26,18 @@ to `build-dev/bin/rocketchat_qml.log`.
     ctest --test-dir build-dev --output-on-failure
 
 That runs `cargo test --workspace` and the GUI tests (`crates/rc_gui_tests`), which start the built
-app offscreen and drive it through Spix. A plain `cargo test` skips the GUI tests; to run them by
-hand:
+app offscreen and drive it through Spix. The GUI tests log in to the local test server, so ctest needs
+it: start it with `scripts/run_test_server.sh` and set `RC_TEST_SERVER_URL`:
 
-    RC_GUI_TEST_APP=$PWD/build-dev/bin/rocketchat_qml cargo test -p rc_gui_tests -- --ignored
+    RC_TEST_SERVER_URL=http://127.0.0.1:3000 ctest --test-dir build-dev --output-on-failure
+
+A plain `cargo test` skips the GUI tests; to run them by hand:
+
+    RC_GUI_TEST_APP=$PWD/build-dev/bin/rocketchat_qml RC_TEST_SERVER_URL=http://127.0.0.1:3000 \
+        cargo test -p rc_gui_tests -- --ignored
+
+The app under test keeps its session in memory or in a temporary file, never in your keyring
+(`RC_SECRET_STORE`, see [ARCHITECTURE.md](ARCHITECTURE.md)).
 
 The `rc_api` and `rc_core` contract tests run against a real Rocket.Chat server and are skipped the
 same way. Start one with `scripts/run_test_server.sh`, then:
@@ -37,8 +45,8 @@ same way. Start one with `scripts/run_test_server.sh`, then:
     RC_TEST_SERVER_URL=http://127.0.0.1:3000 cargo test -p rc_api --test contract -- --ignored
     RC_TEST_SERVER_URL=http://127.0.0.1:3000 cargo test -p rc_core --test contract -- --ignored
 
-They create their own users and rooms, so they can run repeatedly against the same server. The admin
-login comes from `RC_ADMIN_USER` / `RC_ADMIN_PASS` (default `admin` / `admin`).
+The GUI tests and these create their own users and rooms (`crates/rc_test_server`), so they can run
+repeatedly against the same server. The admin login comes from `RC_ADMIN_USER` / `RC_ADMIN_PASS` (default `admin` / `admin`).
 
 See [PLAN.md](PLAN.md) for the roadmap, [ARCHITECTURE.md](ARCHITECTURE.md) for the design and
 [TRACEABILITY.md](TRACEABILITY.md) for the features and their tests.
