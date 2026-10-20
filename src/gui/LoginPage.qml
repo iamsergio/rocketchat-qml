@@ -54,7 +54,8 @@ Item {
             Layout.fillWidth: true
             visible: text !== ""
             text: Session.errorText
-            color: palette.link
+            // A plain error red; the default style has no palette role for it.
+            color: "#c62828"
             wrapMode: Text.Wrap
         }
 
