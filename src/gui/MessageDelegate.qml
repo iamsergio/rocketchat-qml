@@ -15,6 +15,9 @@ Item {
 
     required property string messageId
     required property string author
+    required property string avatar
+    required property string avatarInitials
+    required property string avatarColor
     required property string time
     required property string body
     required property string html
@@ -78,79 +81,100 @@ Item {
         RowLayout {
             Layout.fillWidth: true
             visible: !root.isSystem
-            spacing: 8
+            spacing: 10
 
-            Label {
-                objectName: "msgAuthor"
-                font.bold: true
-                text: root.author
-                textFormat: Text.PlainText
+            Avatar {
+                Layout.alignment: Qt.AlignTop
+                Layout.preferredWidth: 32
+                Layout.preferredHeight: 32
+                url: root.avatar
+                initials: root.avatarInitials
+                fillColor: root.avatarColor
+                imageName: "msgAvatar"
+                placeholderName: "msgAvatarPlaceholder"
+                initialsName: "msgAvatarInitials"
             }
 
-            Label {
-                objectName: "msgTime"
-                color: root.palette.placeholderText
-                text: root.time
-            }
+            ColumnLayout {
+                Layout.fillWidth: true
+                spacing: 2
 
-            // These exist only while the message is in that state, so that a test can find the one
-            // unsent message without knowing its id: the client picks it.
-            Loader {
-                active: root.delivery === "pending"
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 8
 
-                sourceComponent: Label {
-                    objectName: "msgPending"
-                    color: root.palette.placeholderText
-                    font.italic: true
-                    text: qsTr("Sending…")
+                    Label {
+                        objectName: "msgAuthor"
+                        font.bold: true
+                        text: root.author
+                        textFormat: Text.PlainText
+                    }
+
+                    Label {
+                        objectName: "msgTime"
+                        color: root.palette.placeholderText
+                        text: root.time
+                    }
+
+                    // These exist only while the message is in that state, so that a test can find the one
+                    // unsent message without knowing its id: the client picks it.
+                    Loader {
+                        active: root.delivery === "pending"
+
+                        sourceComponent: Label {
+                            objectName: "msgPending"
+                            color: root.palette.placeholderText
+                            font.italic: true
+                            text: qsTr("Sending…")
+                        }
+                    }
+
+                    Loader {
+                        active: root.delivery === "failed"
+
+                        sourceComponent: Label {
+                            objectName: "msgFailed"
+                            color: "#c62828"
+                            text: qsTr("Not sent")
+                        }
+                    }
+
+                    Loader {
+                        active: root.delivery === "failed"
+
+                        sourceComponent: ToolButton {
+                            objectName: "msgRetry"
+                            text: qsTr("Retry")
+                            onClicked: Room.retry(root.messageId)
+                        }
+                    }
                 }
-            }
 
-            Loader {
-                active: root.delivery === "failed"
+                // `text` is the message as written, which the tests read; `msgBodyHtml` is what is shown.
+                Item {
+                    id: bodyItem
 
-                sourceComponent: Label {
-                    objectName: "msgFailed"
-                    color: "#c62828"
-                    text: qsTr("Not sent")
-                }
-            }
+                    objectName: "msgBody"
+                    Layout.fillWidth: true
+                    implicitHeight: bodyText.implicitHeight
+                    opacity: root.delivery === "sent" ? 1 : 0.6
+                    property string text: root.body
 
-            Loader {
-                active: root.delivery === "failed"
+                    Label {
+                        id: bodyText
 
-                sourceComponent: ToolButton {
-                    objectName: "msgRetry"
-                    text: qsTr("Retry")
-                    onClicked: Room.retry(root.messageId)
-                }
-            }
-        }
+                        objectName: "msgBodyHtml"
+                        width: parent.width
+                        text: root.html
+                        textFormat: Text.RichText
+                        wrapMode: Text.Wrap
+                        linkColor: root.palette.link
+                        onLinkActivated: link => Qt.openUrlExternally(link)
 
-        // `text` is the message as written, which the tests read; `msgBodyHtml` is what is shown.
-        Item {
-            id: bodyItem
-
-            objectName: "msgBody"
-            Layout.fillWidth: true
-            implicitHeight: bodyText.implicitHeight
-            visible: !root.isSystem
-            opacity: root.delivery === "sent" ? 1 : 0.6
-            property string text: root.body
-
-            Label {
-                id: bodyText
-
-                objectName: "msgBodyHtml"
-                width: parent.width
-                text: root.html
-                textFormat: Text.RichText
-                wrapMode: Text.Wrap
-                linkColor: root.palette.link
-                onLinkActivated: link => Qt.openUrlExternally(link)
-
-                HoverHandler {
-                    cursorShape: bodyText.hoveredLink ? Qt.PointingHandCursor : Qt.ArrowCursor
+                        HoverHandler {
+                            cursorShape: bodyText.hoveredLink ? Qt.PointingHandCursor : Qt.ArrowCursor
+                        }
+                    }
                 }
             }
         }

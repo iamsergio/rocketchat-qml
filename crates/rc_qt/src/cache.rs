@@ -4,13 +4,15 @@
 //! What the hub remembers of the core's events, so that a view model created late can catch up.
 //! Plain Rust, so it can be unit-tested without Qt or a [`Client`](rc_core::Client).
 
-use rc_core::domain::{Message, Room, RoomId};
+use rc_core::AvatarUpdate;
+use rc_core::domain::{AvatarOwner, Message, Room, RoomId};
 use rc_core::emoji::CustomEmojis;
 use rc_core::rooms::RoomChange;
 use rc_core::session::SessionState;
 use rc_core::timeline::{TimelineChange, TimelineStatus};
 use rc_core::{Connection, Event};
 
+use crate::avatar_view::AvatarUrls;
 use crate::rich_html::Viewer;
 use crate::room_view::{RoomState, room_state};
 use crate::session_view::{SessionView, session_view};
@@ -30,6 +32,8 @@ pub struct Cache {
     username: Option<String>,
     /// `None` until the core sends some: a `HashMap` can't be built in `new`.
     emoji: Option<CustomEmojis>,
+    /// `None` until the core sends some, like `emoji`.
+    avatars: Option<AvatarUrls>,
 }
 
 impl Default for Cache {
@@ -56,6 +60,7 @@ impl Cache {
             },
             username: None,
             emoji: None,
+            avatars: None,
         }
     }
 
@@ -73,6 +78,9 @@ impl Cache {
             }
             Event::Connection(connection) => self.connection = *connection,
             Event::CustomEmoji(emoji) => self.emoji = Some(emoji.clone()),
+            Event::Avatars(updates) => {
+                self.avatars.get_or_insert_default().apply(updates);
+            }
             Event::Rooms(changes) => {
                 for change in changes {
                     change.apply(&mut self.rooms);
@@ -119,6 +127,22 @@ impl Cache {
             username: self.username.clone(),
             emoji: self.emoji.clone().unwrap_or_default(),
         }
+    }
+
+    /// The avatar files known now, as URLs.
+    #[must_use]
+    pub fn avatars(&self) -> AvatarUrls {
+        self.avatars.clone().unwrap_or_default()
+    }
+
+    /// The URLs, as they are now, of the owners of `updates` (empty for an avatar that is gone).
+    #[must_use]
+    pub fn avatar_changes(&self, updates: &[AvatarUpdate]) -> Vec<(AvatarOwner, String)> {
+        let urls = self.avatars();
+        updates
+            .iter()
+            .map(|update| (update.owner.clone(), urls.url(&update.owner).to_owned()))
+            .collect()
     }
 
     /// What the `Room` view model shows now.
@@ -431,5 +455,46 @@ mod tests {
         assert_eq!(cache.room_state().name, "beta");
         cache.apply(&Event::TimelineStatus(TimelineStatus::default()));
         assert_eq!(cache.room_state(), RoomState::default());
+    }
+
+    fn avatar(username: &str, path: Option<&str>) -> AvatarUpdate {
+        AvatarUpdate {
+            owner: AvatarOwner::User(username.to_owned()),
+            path: path.map(std::path::PathBuf::from),
+        }
+    }
+
+    // RICH-004
+    #[test]
+    fn a_model_created_late_gets_the_avatars_known_so_far() {
+        let mut cache = Cache::new();
+        assert_eq!(cache.avatars(), AvatarUrls::default());
+        cache.apply(&Event::Avatars(vec![avatar("alice", Some("/c/alice.png"))]));
+        cache.apply(&Event::Avatars(vec![
+            avatar("bob", Some("/c/bob.svg")),
+            avatar("alice", None),
+        ]));
+        let urls = cache.avatars();
+        assert_eq!(urls.url(&AvatarOwner::User("alice".into())), "");
+        assert_eq!(
+            urls.url(&AvatarOwner::User("bob".into())),
+            "file:///c/bob.svg?v=1"
+        );
+    }
+
+    // RICH-004
+    #[test]
+    fn the_changes_for_the_models_carry_the_urls_as_they_are_now() {
+        let mut cache = Cache::new();
+        let first = [avatar("alice", Some("/c/alice.png"))];
+        cache.apply(&Event::Avatars(first.to_vec()));
+        let changes = cache.avatar_changes(&first);
+        assert_eq!(changes[0].1, "file:///c/alice.png?v=1");
+        // The same file again, replaced: another URL.
+        cache.apply(&Event::Avatars(first.to_vec()));
+        assert_eq!(cache.avatar_changes(&first)[0].1, "file:///c/alice.png?v=2");
+        let gone = [avatar("alice", None)];
+        cache.apply(&Event::Avatars(gone.to_vec()));
+        assert_eq!(cache.avatar_changes(&gone)[0].1, "");
     }
 }

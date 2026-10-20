@@ -18,13 +18,14 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use cxx_qt::CxxQtThread;
 use rc_core::adapters::{DiskFileCache, MemoryStore, default_store};
-use rc_core::domain::{MessageId, RoomId};
+use rc_core::domain::{AvatarOwner, MessageId, RoomId};
 use rc_core::ports::SecretStore;
 use rc_core::rooms::RoomChange;
 use rc_core::timeline::TimelineChange;
 use rc_core::{Client, Event};
 use secrecy::SecretString;
 
+use crate::avatar_view::AvatarUrls;
 use crate::cache::Cache;
 use crate::message_list_model::qobject::MessageListModel;
 use crate::rich_html::Viewer;
@@ -172,12 +173,12 @@ pub fn register_session(thread: CxxQtThread<SessionVm>) -> SessionView {
     hub.cache.session_view()
 }
 
-/// Registers the `RoomList` model and returns the change that brings it up to date. Call on the
-/// GUI thread; the events that follow are queued to `thread`.
-pub fn register_rooms(thread: CxxQtThread<RoomListModel>) -> RoomChange {
+/// Registers the `RoomList` model and returns the change that brings it up to date, and the
+/// avatars it shows. Call on the GUI thread; the events that follow are queued to `thread`.
+pub fn register_rooms(thread: CxxQtThread<RoomListModel>) -> (RoomChange, AvatarUrls) {
     let mut hub = lock();
     hub.rooms = Some(thread);
-    hub.cache.rooms_snapshot()
+    (hub.cache.rooms_snapshot(), hub.cache.avatars())
 }
 
 pub fn open_room(room_id: String) {
@@ -220,13 +221,19 @@ pub fn register_room(thread: CxxQtThread<RoomVm>) -> RoomState {
     hub.cache.room_state()
 }
 
-/// Registers the `MessageList` model and returns the change that brings it up to date, and who it
-/// shows the messages to. Call on
-/// the GUI thread; the events that follow are queued to `thread`.
-pub fn register_messages(thread: CxxQtThread<MessageListModel>) -> (TimelineChange, Viewer) {
+/// Registers the `MessageList` model and returns the change that brings it up to date, who it
+/// shows the messages to, and the avatars it shows. Call on the GUI thread; the events that follow
+/// are queued to `thread`.
+pub fn register_messages(
+    thread: CxxQtThread<MessageListModel>,
+) -> (TimelineChange, Viewer, AvatarUrls) {
     let mut hub = lock();
     hub.messages = Some(thread);
-    (hub.cache.timeline_snapshot(), hub.cache.viewer())
+    (
+        hub.cache.timeline_snapshot(),
+        hub.cache.viewer(),
+        hub.cache.avatars(),
+    )
 }
 
 /// The core's event callback, on a runtime thread.
@@ -270,7 +277,35 @@ fn dispatch(event: Event) {
             }
         }
         Event::TimelineStatus(_) => show_room(hub),
+        Event::Avatars(updates) => {
+            let changes = hub.cache.avatar_changes(&updates);
+            show_avatars(hub, &changes);
+        }
         _ => {}
+    }
+}
+
+/// Tells the models that show avatars which ones changed.
+fn show_avatars(hub: &mut Hub, changes: &[(AvatarOwner, String)]) {
+    let for_rooms = changes.to_vec();
+    let rooms_gone = hub.rooms.as_ref().is_some_and(|thread| {
+        thread
+            .queue(move |model| model.set_avatars(&for_rooms))
+            .is_err()
+    });
+    if rooms_gone {
+        tracing::debug!("the RoomList object is gone, unregistered");
+        hub.rooms = None;
+    }
+    let for_messages = changes.to_vec();
+    let messages_gone = hub.messages.as_ref().is_some_and(|thread| {
+        thread
+            .queue(move |model| model.set_avatars(&for_messages))
+            .is_err()
+    });
+    if messages_gone {
+        tracing::debug!("the MessageList object is gone, unregistered");
+        hub.messages = None;
     }
 }
 
