@@ -3,10 +3,12 @@
 
 //! Launches the app under test with its Spix server on a free port.
 
+use std::collections::BTreeSet;
 use std::ffi::OsStr;
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
+use std::sync::{Mutex, PoisonError};
 use std::time::{Duration, Instant};
 use std::{env, io, thread};
 
@@ -203,10 +205,25 @@ fn app_command(path: &OsStr, port: u16, cache: &Path, env: &[(&str, &str)]) -> C
     command
 }
 
-/// A port nothing listens on right now. The app binds it shortly after, so another process could
-/// take it in between; with the kernel handing out ephemeral ports in turn, that's unlikely.
+/// Ports `free_port` has handed out. They're never reused, so parallel tests can't share one,
+/// nor talk to an earlier app that is still shutting down.
+static USED_PORTS: Mutex<BTreeSet<u16>> = Mutex::new(BTreeSet::new());
+
+/// A port nothing listens on right now and that this process hasn't returned before. The app
+/// binds it shortly after, so another process could take it in between.
 fn free_port() -> io::Result<u16> {
-    Ok(TcpListener::bind("127.0.0.1:0")?.local_addr()?.port())
+    for _ in 0..100 {
+        let port = TcpListener::bind("127.0.0.1:0")?.local_addr()?.port();
+        // A panic elsewhere can't leave the set inconsistent, so a poisoned lock is fine.
+        let mut used = USED_PORTS.lock().unwrap_or_else(PoisonError::into_inner);
+        if used.insert(port) {
+            return Ok(port);
+        }
+    }
+    Err(io::Error::new(
+        io::ErrorKind::AddrInUse,
+        "no unused port found",
+    ))
 }
 
 #[cfg(test)]
@@ -285,6 +302,20 @@ mod tests {
             Some("/c/1234")
         );
         assert_ne!(CacheDir::new(1234).0, CacheDir::new(1235).0);
+    }
+
+    // INFRA-002
+    #[test]
+    fn never_hands_out_a_port_twice() {
+        let threads: Vec<_> = (0..4)
+            .map(|_| thread::spawn(|| (0..50).map(|_| free_port().unwrap()).collect::<Vec<_>>()))
+            .collect();
+        let ports: Vec<u16> = threads
+            .into_iter()
+            .flat_map(|t| t.join().unwrap())
+            .collect();
+        let distinct: BTreeSet<_> = ports.iter().collect();
+        assert_eq!(distinct.len(), ports.len());
     }
 
     /// An `App` around any process; nothing listens on its Spix port.
