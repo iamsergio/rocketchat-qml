@@ -66,10 +66,10 @@ Done when: messages from others appear live, unread badges update, you can send 
 
 - [x] `rc_api`: DDP client (connect, ping/pong, method calls, subscriptions, resume-token login)
 - [x] `rc_core`: sync engine. Subscribe to `__my_messages__` and `stream-notify-user` (subscriptions/rooms changed), route events into state
-- [ ] `rc_core`: reconnect with exponential backoff and jitter. Catch up on missed messages after reconnecting
+- [x] `rc_core`: reconnect with exponential backoff and jitter. Catch up on missed messages after reconnecting
 - [ ] `rc_core`: send with an optimistic local echo (pending → sent / failed), retry
 - [ ] `rc_core`: mark a room read when it's opened. Room list ordered by last activity
-- [ ] Tests: a small TCP proxy in front of the test server to drop connections on demand
+- [x] Tests: a small TCP proxy in front of the test server to drop connections on demand
 - [ ] `rc_qt` / QML: composer, pending/failed indicators with retry, connection status banner
 - [ ] Contract tests for DDP and realtime. The REST contract tests already exist and run in CI (since Phase 1) on the shared server
 - [x] Contract tests must pass on a dirty server, in any order and in parallel:

@@ -105,6 +105,23 @@ impl RoomList {
         })
     }
 
+    /// Makes the list equal to `rooms`, a fresh snapshot, with the smallest changes: the removals
+    /// first, then the new and changed rooms. Unlike [`reset`](Self::reset), a frontend keeps its
+    /// rows (and what they show, such as a selection) for the rooms that didn't change.
+    pub fn sync(&mut self, rooms: Vec<Room>) -> Vec<RoomChange> {
+        let gone: Vec<RoomId> = self
+            .rooms
+            .iter()
+            .filter(|old| !rooms.iter().any(|room| room.id == old.id))
+            .map(|old| old.id.clone())
+            .collect();
+        let mut changes: Vec<RoomChange> = gone.iter().filter_map(|id| self.remove(id)).collect();
+        let mut rooms = rooms;
+        rooms.sort_by(display_order);
+        changes.extend(rooms.into_iter().filter_map(|room| self.upsert(room)));
+        changes
+    }
+
     /// `None` if there's no such room.
     pub fn remove(&mut self, id: &RoomId) -> Option<RoomChange> {
         let index = self.position(id)?;
@@ -240,6 +257,91 @@ mod tests {
         );
         assert_eq!(names(&list), ["a"]);
         assert_eq!(list.remove(&"zzz".to_owned().into()), None);
+    }
+
+    // ROOM-001
+    #[test]
+    fn sync_turns_a_snapshot_into_fine_grained_changes() {
+        let mut list = list_of(vec![
+            room("a", "a"),
+            room("b", "b"),
+            room("c", "c"),
+            room("d", "d"),
+        ]);
+        let mut busy = room("d", "d");
+        busy.unread = 4;
+        let changes = list.sync(vec![
+            busy.clone(),
+            room("c", "c"),
+            room("a", "e"),
+            room("n", "bb"),
+        ]);
+        assert_eq!(
+            changes,
+            [
+                RoomChange::Removed { index: 1 },
+                RoomChange::Inserted {
+                    index: 1,
+                    room: room("n", "bb")
+                },
+                RoomChange::Updated {
+                    index: 3,
+                    room: busy
+                },
+                RoomChange::Moved {
+                    from: 0,
+                    to: 3,
+                    room: room("a", "e")
+                },
+            ]
+        );
+        assert_eq!(names(&list), ["bb", "c", "d", "e"]);
+    }
+
+    // ROOM-001
+    #[test]
+    fn sync_of_the_same_rooms_changes_nothing() {
+        let mut list = list_of(vec![room("a", "a"), room("b", "b")]);
+        assert_eq!(list.sync(vec![room("b", "b"), room("a", "a")]), []);
+        assert_eq!(names(&list), ["a", "b"]);
+    }
+
+    // ROOM-001
+    #[test]
+    fn sync_of_an_empty_snapshot_removes_every_room() {
+        let mut list = list_of(vec![room("a", "a"), room("b", "b")]);
+        assert_eq!(
+            list.sync(Vec::new()),
+            [
+                RoomChange::Removed { index: 0 },
+                RoomChange::Removed { index: 0 }
+            ]
+        );
+        assert_eq!(list.sync(Vec::new()), []);
+    }
+
+    // ROOM-001
+    #[test]
+    fn a_mirror_following_the_sync_changes_equals_the_list() {
+        let (mut list, mut mirror) = (RoomList::default(), Vec::new());
+        let mut flagged = room("q", "queue");
+        flagged.alert = true;
+        let snapshots = [
+            vec![room("c", "Charlie"), room("a", "alpha"), room("q", "queue")],
+            vec![room("q", "Alpha"), room("z", "zulu"), room("c", "Charlie")],
+            vec![flagged.clone(), room("y", "yankee"), room("c", "zzz")],
+            vec![],
+            vec![flagged, room("a", "alpha")],
+        ];
+        for snapshot in snapshots {
+            for change in list.sync(snapshot.clone()) {
+                change.apply(&mut mirror);
+            }
+            let mut expected = snapshot;
+            expected.sort_by(display_order);
+            assert_eq!(mirror, expected);
+            assert_eq!(mirror, list.rooms());
+        }
     }
 
     /// Runs `action` on the list and applies its change to the mirror, which must then equal the

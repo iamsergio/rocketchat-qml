@@ -8,9 +8,9 @@
 mod common;
 
 use rc_gui_tests::paths::{message, message_row, room, room_row};
-use rc_test_server::{Admin, unique};
+use rc_test_server::{Admin, Proxy, unique};
 
-use common::{TIMEOUT, launch, log_in_and_wait_for_room, open_room};
+use common::{TIMEOUT, launch, log_in_and_wait_for_room, log_in_at_and_wait_for_room, open_room};
 
 // RT-001
 #[test]
@@ -67,5 +67,44 @@ fn the_unread_badges_of_other_rooms_update_while_a_room_is_open() {
     gui.wait_until_text(&room(&channel_id, room_row::MENTIONS), "1", TIMEOUT)
         .unwrap();
     gui.wait_until_text(&room(&channel_id, room_row::UNREAD), "1", TIMEOUT)
+        .unwrap();
+}
+
+// RT-003, RT-002
+#[test]
+#[ignore = "needs the app and a Rocket.Chat server: run through ctest"]
+fn what_happens_while_the_connection_is_down_shows_up_after_it_is_back() {
+    let admin = Admin::login();
+    let user = admin.create_user();
+    let (channel_id, _) = admin.create_channel(&[&user.username]);
+    let before = admin.post_message(&channel_id, &format!("before {}", unique()));
+    let proxy = Proxy::start();
+    let app = launch();
+    let gui = app.gui();
+    log_in_at_and_wait_for_room(gui, &proxy.url(), &user, &channel_id);
+    open_room(gui, &channel_id);
+    gui.wait_until_visible(&message(&before.id, message_row::BODY), TIMEOUT)
+        .unwrap();
+
+    // The app is cut off, and can't come back for as long as admin takes to act.
+    proxy.set_accepting(false);
+    proxy.drop_connections();
+    let text = format!("while away {}", unique());
+    let posted = admin.post_message(&channel_id, &text);
+    let (new_id, _) = admin.create_channel(&[&user.username]);
+    proxy.set_accepting(true);
+
+    gui.wait_until_text(&message(&posted.id, message_row::BODY), &text, TIMEOUT)
+        .unwrap();
+    gui.wait_until_visible(&room(&new_id, room_row::NAME), TIMEOUT)
+        .unwrap();
+    // What was there stays, and the connection is live again: the next message arrives too.
+    assert!(
+        gui.exists_and_visible(&message(&before.id, message_row::BODY))
+            .unwrap()
+    );
+    let live = format!("live again {}", unique());
+    let after = admin.post_message(&channel_id, &live);
+    gui.wait_until_text(&message(&after.id, message_row::BODY), &live, TIMEOUT)
         .unwrap();
 }

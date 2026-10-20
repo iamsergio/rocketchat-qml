@@ -57,7 +57,13 @@ pub fn utc_time(ts: &str) -> String {
 
 /// Logs in as `user` and waits until the row of the room with this id is there.
 pub fn log_in_and_wait_for_room(gui: &Gui, user: &TestUser, room_id: &str) {
-    log_in(gui, &server_url(), &user.username, &user.password);
+    log_in_at_and_wait_for_room(gui, &server_url(), user, room_id);
+}
+
+/// As [`log_in_and_wait_for_room`], through the server at `server`: a proxy to the test server,
+/// for instance.
+pub fn log_in_at_and_wait_for_room(gui: &Gui, server: &str, user: &TestUser, room_id: &str) {
+    log_in(gui, server, &user.username, &user.password);
     gui.wait_until_visible(&room(room_id, room_row::NAME), TIMEOUT)
         .unwrap();
 }
