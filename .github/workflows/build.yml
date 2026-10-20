@@ -18,6 +18,11 @@ jobs:
     # system libraries, rustup, reuse and cargo-deny baked in.
     runs-on: [self-hosted, linux, x64, rocketchat-qml]
 
+    env:
+      # The test server (scripts/run_test_server.sh) on the runner's host. The runner container joins
+      # its network (scripts/run_ci_runner.sh), where the server is rc-test-rocketchat.
+      RC_TEST_SERVER_URL: http://rc-test-rocketchat:3000
+
     strategy:
       fail-fast: false
       matrix:
@@ -46,6 +51,18 @@ jobs:
 
     - name: Run Rust tests
       run: cargo test --workspace --locked
+
+    - name: Check the Rocket.Chat test server
+      run: |
+        curl -fsS --max-time 10 "$RC_TEST_SERVER_URL/api/info" ||
+          { echo "::error::The Rocket.Chat test server at $RC_TEST_SERVER_URL isn't reachable. Start it on the runner host with scripts/run_test_server.sh."; exit 1; }
+
+    # Only these two suites: --workspace --ignored would also run the GUI tests (they need the built
+    # app) and the OS keyring test, which must never run in CI.
+    - name: Run contract tests
+      run: |
+        cargo test -p rc_api --test contract --locked -- --ignored
+        cargo test -p rc_core --test contract --locked -- --ignored
 
     - name: Configure CMake
       run: cmake --preset=${{ matrix.preset }}

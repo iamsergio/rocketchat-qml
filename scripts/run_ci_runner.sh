@@ -22,6 +22,10 @@
 #   RC_ENGINE  docker (default) or podman
 #   RC_REPO    owner/repo to register with (default: taken from the 'origin' git remote)
 #
+# The runner joins the test server's network (scripts/run_test_server.sh), so the contract tests in CI
+# reach it as rc-test-rocketchat:3000. The test server has to run on the same host. 'run_test_server.sh
+# reset' can't remove the network while the runner is attached: it keeps the network and carries on.
+#
 # Caches live in named volumes (rc-ci-*) and survive 'start': Cargo registry and git checkouts,
 # rustup toolchains, vcpkg downloads and binary cache, and the runner's work directory.
 # 'docker volume rm' them to start cold.
@@ -33,6 +37,9 @@ ENGINE=${RC_ENGINE:-docker}
 IMAGE=rc-ci-runner
 CONTAINER=rc-ci-runner
 LABELS=self-hosted,linux,x64,rocketchat-qml
+# Must match NETWORK in run_test_server.sh. The server's port is bound to the host's 127.0.0.1, which
+# a container on the default bridge can't reach. On this network the runner reaches the server by name.
+NETWORK=rc-test
 
 cd "$(dirname "$0")/.."
 
@@ -80,11 +87,13 @@ cmd_start() {
     if e container inspect $CONTAINER >/dev/null 2>&1; then
         e rm -f $CONTAINER >/dev/null
     fi
+    e network inspect $NETWORK >/dev/null 2>&1 || e network create $NETWORK >/dev/null
     # The token goes through the environment, not the command line: 'ps' and 'inspect' of the
     # container still show it, but it is useless after an hour and after registering.
     e run -d --name $CONTAINER \
         --restart unless-stopped \
         --stop-timeout 60 \
+        --network $NETWORK \
         -e RUNNER_REPO_URL="https://github.com/$slug" \
         -e RUNNER_TOKEN="$token" \
         -e RUNNER_NAME="rocketchat-qml-$(uname -n)" \
