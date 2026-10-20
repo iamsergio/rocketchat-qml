@@ -25,6 +25,7 @@ cxx-qt-lib = "0.10.0"
 # Not the `keyring` crate: its features always pull in the zbus store, whose crates are flagged
 # unmaintained.
 dbus-secret-service-keyring-store = { version = "1.0.1", default-features = false, features = ["crypto-rust"] }
+futures-util = { version = "0.3.34", default-features = false, features = ["sink", "std"] }
 jiff = "0.2.38"
 keyring-core = "1.0.0"
 rc_api = { path = "crates/rc_api" }
@@ -32,11 +33,16 @@ rc_core = { path = "crates/rc_core" }
 rc_test_server = { path = "crates/rc_test_server" }
 reqwest = { version = "0.13.5", default-features = false, features = ["json", "rustls", "system-proxy"] }
 roxmltree = "0.21.1"
+# The crypto provider reqwest's rustls uses, so there is only one.
+rustls = { version = "0.23.46", default-features = false, features = ["aws-lc-rs", "std"] }
+rustls-platform-verifier = "0.7.1"
 secrecy = "0.10.3"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 thiserror = "2.0.21"
 tokio = "1.53.2"
+# TLS through the rustls config rc_api builds, with the same verifier as reqwest.
+tokio-tungstenite = { version = "0.30.0", default-features = false, features = ["connect", "__rustls-tls"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", default-features = false, features = ["ansi", "env-filter", "fmt", "std"] }
 # Plain HTTP only: no TLS, no compression.

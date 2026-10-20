@@ -5,11 +5,12 @@
 //! types. Unknown fields are ignored and optional ones default, so newer servers keep working.
 
 use secrecy::SecretString;
-use serde::Deserialize;
+use serde::de::Error as _;
+use serde::{Deserialize, Deserializer};
 
 use crate::types::{
-    Author, Credentials, HistoryPage, LoginResult, Message, RoomType, ServerInfo, ServerVersion,
-    Subscription, User,
+    Author, Credentials, DdpEvent, HistoryPage, LoginResult, Message, RoomType, ServerInfo,
+    ServerVersion, Subscription, User,
 };
 
 #[derive(Deserialize)]
@@ -78,6 +79,7 @@ struct MessageBody {
     #[serde(rename = "_id")]
     id: String,
     rid: String,
+    #[serde(deserialize_with = "timestamp")]
     ts: jiff::Timestamp,
     u: AuthorBody,
     #[serde(default)]
@@ -98,6 +100,33 @@ struct AuthorBody {
     username: String,
     #[serde(default)]
     name: Option<String>,
+}
+
+/// A time as REST sends it (ISO 8601) or as DDP does (EJSON: `{"$date": <ms since the epoch>}`).
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum Time {
+    Iso(jiff::Timestamp),
+    Ejson {
+        #[serde(rename = "$date")]
+        date: i64,
+    },
+}
+
+fn timestamp<'de, D: Deserializer<'de>>(deserializer: D) -> Result<jiff::Timestamp, D::Error> {
+    match Time::deserialize(deserializer)? {
+        Time::Iso(ts) => Ok(ts),
+        Time::Ejson { date } => jiff::Timestamp::from_millisecond(date).map_err(D::Error::custom),
+    }
+}
+
+/// The `fields` of a stream's `changed` frame: which event, and its arguments.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StreamFields {
+    event_name: String,
+    #[serde(default)]
+    args: Vec<serde_json::Value>,
 }
 
 /// The error body of failed calls: `message` is the human-readable one, `error` the short one.
@@ -200,6 +229,38 @@ pub(crate) fn parse_history(bytes: &[u8], count: usize) -> Result<HistoryPage, s
         reached_start: body.messages.len() < count,
         messages: body.messages.into_iter().map(Message::from).collect(),
     })
+}
+
+/// The event in the `fields` of a `changed` frame of `collection`. `None` for the streams and
+/// events this crate doesn't follow.
+pub(crate) fn parse_stream_event(
+    collection: &str,
+    fields: serde_json::Value,
+) -> Result<Option<DdpEvent>, serde_json::Error> {
+    let fields: StreamFields = serde_json::from_value(fields)?;
+    let mut args = fields.args.into_iter();
+    let mut next_arg = || {
+        args.next()
+            .ok_or_else(|| serde_json::Error::custom("missing argument"))
+    };
+    match collection {
+        // The message, then what the server says about the room.
+        "stream-room-messages" => {
+            let message: MessageBody = serde_json::from_value(next_arg()?)?;
+            Ok(Some(DdpEvent::Message(message.into())))
+        }
+        // What happened, then the subscription. A removed one still comes whole.
+        "stream-notify-user" if fields.event_name.ends_with("/subscriptions-changed") => {
+            let action = next_arg()?;
+            let body: SubscriptionBody = serde_json::from_value(next_arg()?)?;
+            Ok(match action.as_str() {
+                Some("inserted" | "updated") => Some(DdpEvent::SubscriptionChanged(body.into())),
+                Some("removed") => Some(DdpEvent::SubscriptionRemoved { room_id: body.rid }),
+                _ => None,
+            })
+        }
+        _ => Ok(None),
+    }
 }
 
 #[cfg(test)]
@@ -410,6 +471,139 @@ mod tests {
             parse_history(br#"{"success":true}"#, 50)
                 .unwrap()
                 .reached_start
+        );
+    }
+
+    const DDP_MESSAGE: &str = include_str!("../tests/fixtures/ddp_message.json");
+    const DDP_SYSTEM_MESSAGE: &str = include_str!("../tests/fixtures/ddp_system_message.json");
+    const DDP_SUBSCRIPTION_INSERTED: &str =
+        include_str!("../tests/fixtures/ddp_subscription_inserted.json");
+    const DDP_SUBSCRIPTION_UPDATED: &str =
+        include_str!("../tests/fixtures/ddp_subscription_updated.json");
+    const DDP_SUBSCRIPTION_REMOVED: &str =
+        include_str!("../tests/fixtures/ddp_subscription_removed.json");
+    const DDP_ROOMS_CHANGED: &str = include_str!("../tests/fixtures/ddp_rooms_changed.json");
+
+    fn stream_event(
+        collection: &str,
+        fixture: &str,
+    ) -> Result<Option<DdpEvent>, serde_json::Error> {
+        parse_stream_event(collection, serde_json::from_str(fixture).unwrap())
+    }
+
+    // RT-001
+    #[test]
+    fn parses_a_live_message() {
+        let event = stream_event("stream-room-messages", DDP_MESSAGE).unwrap();
+        let Some(DdpEvent::Message(message)) = event else {
+            panic!("expected a message, got {event:?}");
+        };
+        assert_eq!(message.id, "u3ypgHtNkxNsvxXpZ");
+        assert_eq!(message.room_id, "6ad78dc43a2871a71eddee74");
+        assert_eq!(message.text, "hello live");
+        assert_eq!(message.kind, None);
+        assert_eq!(message.author.username, "admin");
+        assert_eq!(message.author.name.as_deref(), Some("Administrator"));
+        // EJSON dates are milliseconds since the epoch.
+        assert_eq!(message.ts, ts("2026-10-20T15:50:28.626Z"));
+    }
+
+    // RT-001, MSG-005
+    #[test]
+    fn parses_a_live_system_message() {
+        let event = stream_event("stream-room-messages", DDP_SYSTEM_MESSAGE).unwrap();
+        let Some(DdpEvent::Message(message)) = event else {
+            panic!("expected a message, got {event:?}");
+        };
+        assert_eq!(message.kind.as_deref(), Some("ru"));
+        assert_eq!(message.text, "probe29920");
+    }
+
+    // RT-001
+    #[test]
+    fn a_stream_message_missing_its_argument_is_a_decode_error() {
+        let fields = r#"{"eventName":"__my_messages__","args":[]}"#;
+        assert!(stream_event("stream-room-messages", fields).is_err());
+        assert!(stream_event("stream-room-messages", "{}").is_err());
+        let not_a_message = r#"{"eventName":"__my_messages__","args":["text"]}"#;
+        assert!(stream_event("stream-room-messages", not_a_message).is_err());
+    }
+
+    // RT-001
+    #[test]
+    fn message_times_can_be_iso_or_ejson() {
+        let message = |ts: &str| {
+            let fields = format!(
+                r#"{{"eventName":"x","args":[{{"_id":"m","rid":"r","ts":{ts},"u":{{"_id":"u"}}}}]}}"#
+            );
+            stream_event("stream-room-messages", &fields)
+        };
+        let time = |event: Option<DdpEvent>| match event {
+            Some(DdpEvent::Message(message)) => message.ts,
+            other => panic!("{other:?}"),
+        };
+        let expected = ts("2026-10-20T14:13:08.207Z");
+        assert_eq!(
+            time(message(r#""2026-10-20T14:13:08.207Z""#).unwrap()),
+            expected
+        );
+        assert_eq!(
+            time(message(r#"{"$date":1792505588207}"#).unwrap()),
+            expected
+        );
+        assert!(message(r#"{"$date":"soon"}"#).is_err());
+        assert!(message(r#"{"$date":9223372036854775807}"#).is_err());
+        assert!(message("12").is_err());
+    }
+
+    // RT-002
+    #[test]
+    fn parses_subscription_changes() {
+        let changed = |fixture| match stream_event("stream-notify-user", fixture).unwrap() {
+            Some(DdpEvent::SubscriptionChanged(subscription)) => subscription,
+            other => panic!("{other:?}"),
+        };
+        let inserted = changed(DDP_SUBSCRIPTION_INSERTED);
+        assert_eq!(inserted.room_id, "6ad78dc43a2871a71eddee74");
+        assert_eq!(inserted.room_type, RoomType::Channel);
+        assert_eq!(inserted.name, "probe29920-c");
+        assert_eq!(inserted.display_name.as_deref(), Some("probe29920-c"));
+        assert!(inserted.open);
+        assert!(!inserted.alert);
+
+        let updated = changed(DDP_SUBSCRIPTION_UPDATED);
+        assert_eq!(updated.room_id, inserted.room_id);
+        assert!(updated.alert);
+    }
+
+    // RT-002
+    #[test]
+    fn a_removed_subscription_names_its_room() {
+        assert_eq!(
+            stream_event("stream-notify-user", DDP_SUBSCRIPTION_REMOVED).unwrap(),
+            Some(DdpEvent::SubscriptionRemoved {
+                room_id: "6ad78dc43a2871a71eddee74".into()
+            })
+        );
+    }
+
+    // RT-002
+    #[test]
+    fn other_streams_and_events_are_not_followed() {
+        // The user's rooms changing is a different event of the same stream.
+        assert_eq!(
+            stream_event("stream-notify-user", DDP_ROOMS_CHANGED).unwrap(),
+            None
+        );
+        assert_eq!(
+            stream_event("stream-notify-room", DDP_MESSAGE).unwrap(),
+            None
+        );
+        let unknown_action =
+            r#"{"eventName":"u/subscriptions-changed","args":["moved",{"rid":"r","t":"c"}]}"#;
+        assert_eq!(
+            stream_event("stream-notify-user", unknown_action).unwrap(),
+            None
         );
     }
 }

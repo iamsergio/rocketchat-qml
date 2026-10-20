@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Sergio Martins
 // SPDX-License-Identifier: MIT
 
-//! The REST client against a real Rocket.Chat server, named by `RC_TEST_SERVER_URL`. Run with
-//! `--ignored` (see the README).
+//! The REST and realtime clients against a real Rocket.Chat server, named by
+//! `RC_TEST_SERVER_URL`. Run with `--ignored` (see the README).
 //!
 //! Every test makes its own user and rooms with unique names and only looks at those, so the tests
 //! hold on a dirty server, in any order and in parallel. Server settings are never changed.
@@ -12,12 +12,17 @@
 
 use std::time::{Duration, Instant};
 
-use rc_api::{Error, Message, RestClient, RoomType, ServerVersion, Subscription, User};
+use rc_api::{
+    Credentials, DdpClient, DdpEvent, DdpEvents, Error, Message, RestClient, RoomType,
+    ServerVersion, Subscription, User,
+};
 use rc_test_server::{Admin, TestUser, server_url, unique};
 use secrecy::{ExposeSecret, SecretString};
 
 const POLL_TIMEOUT: Duration = Duration::from_secs(3);
 const POLL_INTERVAL: Duration = Duration::from_millis(100);
+/// How long to wait for an event the server should push right away.
+const EVENT_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// A fresh user, plus what's needed to create rooms and messages for it as admin.
 struct Fixture {
@@ -85,6 +90,29 @@ async fn subscriptions_when(
         }
         tokio::time::sleep(POLL_INTERVAL).await;
     }
+}
+
+/// A realtime connection that has logged in with `credentials`, as the app does after a REST login.
+async fn connect_and_login(credentials: &Credentials) -> (DdpClient, DdpEvents) {
+    let (client, events) = DdpClient::connect(&server_url()).await.unwrap();
+    client.login(credentials).await.unwrap();
+    (client, events)
+}
+
+/// The first event `matches` accepts, for up to [`EVENT_TIMEOUT`]. Events about anything else are
+/// skipped: the stream also carries the system messages of the room being set up.
+async fn event_where(events: &mut DdpEvents, matches: impl Fn(&DdpEvent) -> bool) -> DdpEvent {
+    let wait = async {
+        while let Some(event) = events.recv().await {
+            if matches(&event) {
+                return event;
+            }
+        }
+        panic!("the events ended");
+    };
+    tokio::time::timeout(EVENT_TIMEOUT, wait)
+        .await
+        .expect("the event never came")
 }
 
 /// Posts `texts` to the room as admin, in order, and returns their ids.
@@ -414,4 +442,186 @@ async fn history_of_a_room_the_user_cannot_see_is_a_server_error() {
         .history(&room_id, &RoomType::Private, None, 50)
         .await;
     assert!(matches!(result, Err(Error::Server { .. })), "{result:?}");
+}
+
+// AUTH-004
+#[tokio::test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+async fn realtime_login_resumes_with_the_rest_token() {
+    let fixture = Fixture::new();
+    let login = fixture.login().await;
+    let (client, _events) = DdpClient::connect(&server_url()).await.unwrap();
+    client.login(&login.credentials).await.unwrap();
+}
+
+// AUTH-004
+#[tokio::test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+async fn realtime_login_with_a_revoked_token_is_unauthorized() {
+    let fixture = Fixture::new();
+    let login = fixture.login().await;
+    fixture
+        .client
+        .session(login.credentials.clone())
+        .logout()
+        .await
+        .unwrap();
+    let (client, _events) = DdpClient::connect(&server_url()).await.unwrap();
+    let result = client.login(&login.credentials).await;
+    assert!(matches!(result, Err(Error::Unauthorized)), "{result:?}");
+}
+
+// AUTH-004
+#[tokio::test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+async fn realtime_login_with_a_made_up_token_is_unauthorized() {
+    let fixture = Fixture::new();
+    let credentials = Credentials {
+        user_id: fixture.user.id.clone(),
+        token: SecretString::from(format!("not-a-token-{}", unique())),
+    };
+    let (client, _events) = DdpClient::connect(&server_url()).await.unwrap();
+    let result = client.login(&credentials).await;
+    assert!(matches!(result, Err(Error::Unauthorized)), "{result:?}");
+}
+
+// RT-001
+#[tokio::test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+async fn live_messages_arrive_as_events() {
+    let fixture = Fixture::new();
+    let (room_id, _) = fixture.create_channel();
+    let login = fixture.login().await;
+    let (client, mut events) = connect_and_login(&login.credentials).await;
+    client.subscribe_my_messages().await.unwrap();
+
+    let posted = fixture.admin.post_message(&room_id, "hello live");
+
+    let event = event_where(
+        &mut events,
+        |e| matches!(e, DdpEvent::Message(m) if m.id == posted.id),
+    )
+    .await;
+    let DdpEvent::Message(message) = event else {
+        panic!("not the event that was waited for")
+    };
+    assert_eq!(message.text, "hello live");
+    assert_eq!(message.room_id, room_id);
+    assert_eq!(message.kind, None);
+    assert_eq!(message.author.username, fixture.admin.username);
+}
+
+// RT-001
+#[tokio::test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+async fn live_system_messages_arrive_with_their_kind() {
+    let fixture = Fixture::new();
+    let (room_id, _) = fixture.create_channel();
+    let login = fixture.login().await;
+    let (client, mut events) = connect_and_login(&login.credentials).await;
+    client.subscribe_my_messages().await.unwrap();
+
+    fixture.admin.set_topic(&room_id, "A live topic");
+
+    let event = event_where(&mut events, |e| {
+        matches!(e, DdpEvent::Message(m) if m.room_id == room_id
+            && m.kind.as_deref() == Some("room_changed_topic"))
+    })
+    .await;
+    let DdpEvent::Message(message) = event else {
+        panic!("not the event that was waited for")
+    };
+    assert_eq!(message.text, "A live topic");
+}
+
+// RT-001
+#[tokio::test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+async fn messages_of_private_rooms_the_user_is_not_in_do_not_arrive() {
+    let fixture = Fixture::new();
+    // Not a channel: the server also sends the messages of public channels the user isn't in.
+    let (elsewhere, _) = fixture.admin.create_group(&[]);
+    let (room_id, _) = fixture.create_channel();
+    let login = fixture.login().await;
+    let (client, mut events) = connect_and_login(&login.credentials).await;
+    client.subscribe_my_messages().await.unwrap();
+
+    fixture.admin.post_message(&elsewhere, "not for the user");
+    let last = fixture.admin.post_message(&room_id, "for the user");
+
+    // Events keep their order, so seeing the second message without the first proves it.
+    let seen = tokio::time::timeout(EVENT_TIMEOUT, async {
+        while let Some(event) = events.recv().await {
+            match event {
+                DdpEvent::Message(m) if m.room_id == elsewhere => panic!("{m:?}"),
+                DdpEvent::Message(m) if m.id == last.id => return true,
+                _ => {}
+            }
+        }
+        false
+    })
+    .await
+    .unwrap();
+    assert!(seen);
+}
+
+// RT-002
+#[tokio::test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+async fn subscription_changes_arrive_as_events() {
+    let fixture = Fixture::new();
+    let login = fixture.login().await;
+    let (client, mut events) = connect_and_login(&login.credentials).await;
+    client
+        .subscribe_subscription_changes(&fixture.user.id)
+        .await
+        .unwrap();
+
+    let (room_id, name) = fixture.create_channel();
+    let event = event_where(
+        &mut events,
+        |e| matches!(e, DdpEvent::SubscriptionChanged(s) if s.room_id == room_id),
+    )
+    .await;
+    let DdpEvent::SubscriptionChanged(subscription) = event else {
+        panic!("not the event that was waited for")
+    };
+    assert_eq!(subscription.room_type, RoomType::Channel);
+    assert_eq!(subscription.name, name);
+
+    fixture.admin.kick(&room_id, &fixture.user.id);
+    let removed = event_where(
+        &mut events,
+        |e| matches!(e, DdpEvent::SubscriptionRemoved { room_id: r } if *r == room_id),
+    )
+    .await;
+    assert_eq!(removed, DdpEvent::SubscriptionRemoved { room_id });
+}
+
+// RT-002
+#[tokio::test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+async fn a_message_raises_the_unread_count_of_its_room() {
+    let fixture = Fixture::new();
+    // A channel only counts mentions as unread by default, a direct message counts everything.
+    let room_id = fixture.create_dm();
+    let login = fixture.login().await;
+    let (client, mut events) = connect_and_login(&login.credentials).await;
+    client
+        .subscribe_subscription_changes(&fixture.user.id)
+        .await
+        .unwrap();
+
+    fixture.admin.post_message(&room_id, "unread one");
+
+    let event = event_where(
+        &mut events,
+        |e| matches!(e, DdpEvent::SubscriptionChanged(s) if s.room_id == room_id && s.unread >= 1),
+    )
+    .await;
+    let DdpEvent::SubscriptionChanged(subscription) = event else {
+        panic!("not the event that was waited for")
+    };
+    assert_eq!(subscription.room_type, RoomType::Direct);
+    assert!(subscription.alert);
 }

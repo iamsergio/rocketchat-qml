@@ -120,6 +120,9 @@ impl From<rc_api::Error> for ApiError {
                 Self::Unexpected(format!("rooms of type {code:?} have no history"))
             }
             rc_api::Error::Decode(source) => Self::Unexpected(chain(&source)),
+            rc_api::Error::WebSocket(source) => Self::Unreachable(chain(&source)),
+            error @ rc_api::Error::ConnectionClosed => Self::Unreachable(error.to_string()),
+            error @ rc_api::Error::Refused { .. } => Self::Unexpected(error.to_string()),
         }
     }
 }

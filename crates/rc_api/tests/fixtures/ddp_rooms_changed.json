@@ -1,0 +1,28 @@
+{
+  "eventName": "Ye3dR5vXE3r2C6DFh/rooms-changed",
+  "args": [
+    "inserted",
+    {
+      "_id": "6ad78dc43a2871a71eddee74",
+      "fname": "probe29920-c",
+      "_updatedAt": {
+        "$date": 1792511428107
+      },
+      "name": "probe29920-c",
+      "t": "c",
+      "msgs": 0,
+      "usersCount": 2,
+      "u": {
+        "_id": "6ad72ad3b6de6b54ca599f26",
+        "username": "admin",
+        "name": "Administrator"
+      },
+      "ts": {
+        "$date": 1792511428093
+      },
+      "ro": false,
+      "default": false,
+      "sysMes": true
+    }
+  ]
+}

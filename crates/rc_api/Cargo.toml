@@ -13,15 +13,20 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+futures-util.workspace = true
 jiff = { workspace = true, features = ["serde"] }
 reqwest.workspace = true
+rustls.workspace = true
+rustls-platform-verifier.workspace = true
 secrecy.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }
+tokio-tungstenite.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
 rc_test_server.workspace = true
-tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+tokio = { workspace = true, features = ["io-util", "macros", "rt-multi-thread", "test-util"] }
 wiremock.workspace = true
