@@ -787,8 +787,11 @@ impl<C: Connector> Actor<C> {
         match event {
             Pushed::Subscription(subscription) => {
                 let id = RoomId::from(subscription.room_id.clone());
+                // The server doesn't push the time of the last message with the subscription.
+                let known_activity = self.rooms.get(&id).map(|room| room.last_activity);
                 match room_from(subscription) {
-                    Some(room) => {
+                    Some(mut room) => {
+                        room.last_activity = known_activity.unwrap_or(room.last_activity);
                         let room = self.seen_if_open(room);
                         if let Some(change) = self.rooms.upsert(room) {
                             (self.on_event)(Event::Rooms(vec![change]));
@@ -799,6 +802,11 @@ impl<C: Connector> Actor<C> {
                 }
             }
             Pushed::SubscriptionRemoved(id) => self.remove_room(&id),
+            Pushed::Activity { room, at } => {
+                if let Some(change) = self.rooms.bump(&room, at) {
+                    (self.on_event)(Event::Rooms(vec![change]));
+                }
+            }
             Pushed::Message(message) => self.add_live_message(message),
         }
     }

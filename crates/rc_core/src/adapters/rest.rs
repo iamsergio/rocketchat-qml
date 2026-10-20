@@ -106,6 +106,8 @@ impl ServerApi for RestApi {
         ddp.subscribe_my_messages().await?;
         ddp.subscribe_subscription_changes(credentials.user_id.as_str())
             .await?;
+        ddp.subscribe_room_activity(credentials.user_id.as_str())
+            .await?;
         let (pushed, receiver) = mpsc::unbounded_channel();
         tokio::spawn(forward(ddp, events, pushed));
         Ok(receiver)
@@ -145,7 +147,13 @@ fn pushed_from(event: DdpEvent) -> Option<Pushed> {
         DdpEvent::Message(message) => Pushed::Message(message_from(message)?),
         DdpEvent::SubscriptionChanged(subscription) => Pushed::Subscription(subscription),
         DdpEvent::SubscriptionRemoved { room_id } => Pushed::SubscriptionRemoved(room_id.into()),
-        DdpEvent::RoomActivity { .. } => return None,
+        DdpEvent::RoomActivity {
+            room_id,
+            last_message,
+        } => Pushed::Activity {
+            room: room_id.into(),
+            at: last_message,
+        },
     })
 }
 
@@ -230,6 +238,23 @@ mod tests {
         let shown = pushed_from(DdpEvent::Message(entry(None)));
         assert!(matches!(shown, Some(Pushed::Message(m)) if m.id.as_str() == "m1"));
         assert_eq!(pushed_from(DdpEvent::Message(entry(Some("t")))), None);
+    }
+
+    // ROOM-005
+    #[test]
+    fn room_activity_is_pushed_by_room_id() {
+        let at: jiff::Timestamp = "2026-10-20T14:12:48.587Z".parse().unwrap();
+        let activity = pushed_from(DdpEvent::RoomActivity {
+            room_id: "r1".into(),
+            last_message: at,
+        });
+        assert_eq!(
+            activity,
+            Some(Pushed::Activity {
+                room: "r1".to_owned().into(),
+                at
+            })
+        );
     }
 
     // RT-002
