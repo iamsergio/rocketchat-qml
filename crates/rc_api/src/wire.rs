@@ -75,6 +75,11 @@ struct HistoryBody {
 }
 
 #[derive(Deserialize)]
+struct SentBody {
+    message: MessageBody,
+}
+
+#[derive(Deserialize)]
 struct MessageBody {
     #[serde(rename = "_id")]
     id: String,
@@ -231,6 +236,11 @@ pub(crate) fn parse_history(bytes: &[u8], count: usize) -> Result<HistoryPage, s
     })
 }
 
+/// The answer of `chat.sendMessage` and `chat.getMessage`: the message as the server stored it.
+pub(crate) fn parse_message(bytes: &[u8]) -> Result<Message, serde_json::Error> {
+    Ok(serde_json::from_slice::<SentBody>(bytes)?.message.into())
+}
+
 /// The event in the `fields` of a `changed` frame of `collection`. `None` for the streams and
 /// events this crate doesn't follow.
 pub(crate) fn parse_stream_event(
@@ -274,6 +284,21 @@ mod tests {
     const ME: &str = include_str!("../tests/fixtures/me.json");
     const SUBSCRIPTIONS: &str = include_str!("../tests/fixtures/subscriptions.json");
     const HISTORY: &str = include_str!("../tests/fixtures/history.json");
+
+    // SEND-001
+    #[test]
+    fn parses_a_stored_message() {
+        let body =
+            br#"{"message":{"_id":"m1","rid":"r1","msg":"hi","ts":"2026-10-20T17:00:57.427Z",
+            "u":{"_id":"u1","username":"admin","name":"Administrator"},"md":[]},"success":true}"#;
+        let message = parse_message(body).unwrap();
+        assert_eq!(message.id, "m1");
+        assert_eq!(message.room_id, "r1");
+        assert_eq!(message.text, "hi");
+        assert_eq!(message.ts.to_string(), "2026-10-20T17:00:57.427Z");
+        assert_eq!(message.author.id, "u1");
+        assert!(parse_message(br#"{"success":true}"#).is_err());
+    }
 
     // AUTH-003
     #[test]
