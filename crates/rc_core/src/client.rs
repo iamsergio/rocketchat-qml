@@ -82,7 +82,7 @@ impl Client {
     /// tests pass fakes. If the store holds a session, the client tries to resume it.
     ///
     /// `on_event` is called once per state change, in order, from a runtime thread. The first event
-    /// always comes: `Connecting` if a stored session is being resumed, `LoggedOut` otherwise.
+    /// always comes: `Resuming` if a stored session is being resumed, `LoggedOut` otherwise.
     /// Until then the state is unknown. It must return quickly and must not touch GUI objects: a Qt
     /// frontend hops to its GUI thread inside it, e.g. with `CxxQtThread::queue`.
     ///
@@ -260,7 +260,7 @@ struct Actor<C: Connector> {
     connector: Arc<C>,
     state: SessionState,
     session: Option<Session<C::Api>>,
-    /// The stored session being resumed while `Connecting`.
+    /// The stored session being resumed while `Resuming`.
     resuming: Option<StoredSession>,
     /// Identifies the current attempt, so that the answer of a cancelled one is dropped.
     attempt: u64,
@@ -356,7 +356,7 @@ impl<C: Connector> Actor<C> {
         }
         let connector = Arc::clone(&self.connector);
         // The password lives and dies in this task.
-        self.begin_attempt(true, async move {
+        self.begin_attempt(SessionState::Connecting, true, async move {
             log_in(&*connector, &server, &username, &password).await
         });
     }
@@ -364,18 +364,21 @@ impl<C: Connector> Actor<C> {
     fn resume(&mut self, stored: StoredSession) {
         let connector = Arc::clone(&self.connector);
         self.resuming = Some(stored.clone());
-        self.begin_attempt(false, async move { resume(&*connector, &stored).await });
+        self.begin_attempt(SessionState::Resuming, false, async move {
+            resume(&*connector, &stored).await
+        });
     }
 
-    /// Goes to `Connecting` and runs `attempt` in a task that reports back.
+    /// Goes to `state`, `Connecting` or `Resuming`, and runs `attempt` in a task that reports back.
     fn begin_attempt(
         &mut self,
+        state: SessionState,
         persist: bool,
         attempt: impl Future<Output = Result<Established<C::Api>, LoginFailure>> + Send + 'static,
     ) {
         self.attempt += 1;
         let id = self.attempt;
-        self.set_state(SessionState::Connecting);
+        self.set_state(state);
         let done = self.done_tx.clone();
         self.login_task = Some(tokio::spawn(async move {
             let outcome = attempt.await;
@@ -389,7 +392,7 @@ impl<C: Connector> Actor<C> {
     }
 
     fn handle_login_done(&mut self, done: LoginDone<C::Api>) {
-        if done.attempt != self.attempt || self.state != SessionState::Connecting {
+        if done.attempt != self.attempt || !self.state.attempting() {
             tracing::debug!("answer of a cancelled login dropped");
             return;
         }
@@ -425,32 +428,32 @@ impl<C: Connector> Actor<C> {
     }
 
     fn logout(&mut self) {
-        match self.state {
-            SessionState::Connecting => {
-                if let Some(task) = self.login_task.take() {
-                    task.abort();
-                }
-                // Whatever the aborted task still sends is stale.
-                self.attempt += 1;
-                self.set_state(SessionState::LoggedOut { failure: None });
-                // Cancelling a resume is a logout of the stored session.
-                if let Some(stored) = self.resuming.take() {
-                    self.clear_store();
-                    if let Ok(api) = self.connector.connect(&stored.server) {
-                        self.revoke(api, stored.credentials);
-                    }
-                }
+        if self.state.attempting() {
+            if let Some(task) = self.login_task.take() {
+                task.abort();
             }
-            SessionState::LoggedIn(_) => {
-                self.abort_rooms_task();
-                self.set_state(SessionState::LoggedOut { failure: None });
-                self.clear_rooms();
+            // Whatever the aborted task still sends is stale.
+            self.attempt += 1;
+            self.set_state(SessionState::LoggedOut { failure: None });
+            // Cancelling a resume is a logout of the stored session.
+            if let Some(stored) = self.resuming.take() {
                 self.clear_store();
-                if let Some(session) = self.session.take() {
-                    self.revoke(session.api, session.credentials);
+                if let Ok(api) = self.connector.connect(&stored.server) {
+                    self.revoke(api, stored.credentials);
                 }
             }
-            SessionState::LoggedOut { .. } => tracing::debug!("logout ignored: not logged in"),
+            return;
+        }
+        if matches!(self.state, SessionState::LoggedIn(_)) {
+            self.abort_rooms_task();
+            self.set_state(SessionState::LoggedOut { failure: None });
+            self.clear_rooms();
+            self.clear_store();
+            if let Some(session) = self.session.take() {
+                self.revoke(session.api, session.credentials);
+            }
+        } else {
+            tracing::debug!("logout ignored: not logged in");
         }
     }
 
@@ -533,6 +536,7 @@ impl<C: Connector> Actor<C> {
                 tracing::info!(?failure, "session: logged out");
             }
             SessionState::Connecting => tracing::info!("session: connecting"),
+            SessionState::Resuming => tracing::info!("session: resuming"),
             SessionState::LoggedIn(account) => tracing::info!(
                 server = %account.server,
                 user = %account.user.username,

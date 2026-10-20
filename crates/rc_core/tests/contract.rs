@@ -142,7 +142,7 @@ fn a_new_client_resumes_the_stored_session() {
 
     // No login command this time.
     let (second, events) = start_with(store.clone());
-    assert_eq!(next(&events), SessionState::Connecting);
+    assert_eq!(next(&events), SessionState::Resuming);
     let SessionState::LoggedIn(account) = next(&events) else {
         panic!("resume failed");
     };

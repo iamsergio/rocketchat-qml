@@ -126,8 +126,13 @@ fn the_session_resumes_after_a_restart() {
     // No login this time.
     let second = App::launch_with(&[("RC_SECRET_STORE", &store)]).unwrap();
     let gui = second.gui();
-    gui.wait_until_visible(main_window::ROOM_LIST, TIMEOUT)
-        .unwrap();
+    // The login page must not show while the session resumes. A poll can miss a short flash, so
+    // this never fails on a good build; it catches the regression most of the time.
+    gui.wait_until("the room list, without the login page", TIMEOUT, || {
+        assert!(!gui.exists_and_visible(main_window::LOGIN_BUTTON)?);
+        gui.exists_and_visible(main_window::ROOM_LIST)
+    })
+    .unwrap();
     let current = gui.text(main_window::CURRENT_USER).unwrap();
     assert!(current.contains(&user.username), "{current:?}");
     assert!(!gui.exists_and_visible(main_window::LOGIN_BUTTON).unwrap());

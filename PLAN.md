@@ -41,7 +41,7 @@ Done when: the app opens a window showing the version string, which comes from R
 Done when: you can log in to the local test server with a username and password, see your rooms, restart without logging in again, and log out.
 
 - [x] `rc_api`: REST client with auth headers, `GET /api/info` (server version check), `login`, `me`, `logout`, `subscriptions.get`
-- [x] `rc_core`: `Client` handle plus session actor. Session state machine: `LoggedOut → Connecting → LoggedIn`, with failure reasons
+- [x] `rc_core`: `Client` handle plus session actor. Session state machine: `LoggedOut → Connecting → LoggedIn` (`Resuming` instead of `Connecting` for a stored session), with failure reasons
 - [x] `rc_core`: `SecretStore` port with keyring and in-memory adapters. Resume the session from the stored token at startup
 - [x] `rc_core`: room domain model (channel/group/DM, name, unread, mention count)
 - [x] CI runs the `rc_api` and `rc_core` contract tests against the local test server (the runner joins its network)

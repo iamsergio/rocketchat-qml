@@ -16,7 +16,8 @@ ApplicationWindow {
 
     // One page per session state. A Loader, so that a page starts empty each time it shows: the
     // login fields don't keep the password after a logout. While logging in the state is
-    // Connecting, which keeps the login page and its fields.
+    // Connecting, which keeps the login page and its fields. Resuming a stored session at startup
+    // shows the startup page, so that the login page doesn't flash before the room list.
     Loader {
         anchors.fill: parent
         source: {
@@ -24,6 +25,7 @@ ApplicationWindow {
             case Session.LoggedIn:
                 return "RoomPage.qml";
             case Session.Unknown:
+            case Session.Resuming:
                 return "StartupPage.qml";
             default:
                 return "LoginPage.qml";

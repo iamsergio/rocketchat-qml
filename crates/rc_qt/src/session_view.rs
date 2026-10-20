@@ -14,6 +14,8 @@ pub enum Status {
     Unknown,
     LoggedOut,
     Connecting,
+    /// A stored session is being picked up at startup.
+    Resuming,
     LoggedIn,
 }
 
@@ -21,7 +23,7 @@ pub enum Status {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct SessionView {
     pub status: Status,
-    /// Waiting for something: the first event, or a login in progress. Derived here so that QML
+    /// Waiting for something: the first event, or a login or a resume in progress. Derived here so that QML
     /// has no logic.
     pub busy: bool,
     /// Why the last login failed, as it is to be shown. Empty if it didn't.
@@ -49,6 +51,11 @@ pub fn session_view(state: Option<&SessionState>) -> SessionView {
         },
         Some(SessionState::Connecting) => SessionView {
             status: Status::Connecting,
+            busy: true,
+            ..SessionView::default()
+        },
+        Some(SessionState::Resuming) => SessionView {
+            status: Status::Resuming,
             busy: true,
             ..SessionView::default()
         },
@@ -93,6 +100,14 @@ mod tests {
     fn is_busy_while_connecting() {
         let view = session_view(Some(&SessionState::Connecting));
         assert_eq!(view.status, Status::Connecting);
+        assert!(view.busy);
+    }
+
+    // AUTH-004
+    #[test]
+    fn is_busy_while_resuming() {
+        let view = session_view(Some(&SessionState::Resuming));
+        assert_eq!(view.status, Status::Resuming);
         assert!(view.busy);
     }
 

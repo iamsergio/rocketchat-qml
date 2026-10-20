@@ -19,8 +19,20 @@ pub enum SessionState {
     LoggedOut {
         failure: Option<LoginFailure>,
     },
+    /// A login is in flight.
     Connecting,
+    /// A stored session is being picked up at startup. Apart from the name it's the same as
+    /// `Connecting`, so that a frontend can tell it from a login the user started.
+    Resuming,
     LoggedIn(Account),
+}
+
+impl SessionState {
+    /// Whether a login or a resume is in flight.
+    #[must_use]
+    pub fn attempting(&self) -> bool {
+        matches!(self, Self::Connecting | Self::Resuming)
+    }
 }
 
 /// Why a login failed. The texts are meant to be shown as they are.
