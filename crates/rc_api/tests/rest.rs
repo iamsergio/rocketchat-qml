@@ -1012,3 +1012,101 @@ async fn avatar_etags_need_a_login_and_an_existing_user() {
         .await;
     assert!(matches!(result, Err(Error::Unauthorized)), "{result:?}");
 }
+
+const PNG: &[u8] = b"\x89PNG\r\n\x1a\n";
+
+fn png_response() -> ResponseTemplate {
+    ResponseTemplate::new(200).set_body_raw(PNG, "image/png")
+}
+
+// RICH-005
+#[tokio::test]
+async fn an_uploaded_file_is_downloaded_with_the_login_headers() {
+    let server = MockServer::start().await;
+    mount_authenticated(
+        &server,
+        "GET",
+        "/file-upload/abc123/big.png",
+        png_response(),
+    )
+    .await;
+    let file = session(&RestClient::new(&server.uri()).unwrap())
+        .file("/file-upload/abc123/big.png")
+        .await
+        .unwrap();
+    assert_eq!(file.bytes, PNG);
+    assert_eq!(file.content_type.as_deref(), Some("image/png"));
+}
+
+// RICH-005
+#[tokio::test]
+async fn an_encoded_file_name_is_not_encoded_twice() {
+    let server = MockServer::start().await;
+    mount_authenticated(
+        &server,
+        "GET",
+        "/file-upload/abc123/my%20file%C3%A9.png",
+        png_response(),
+    )
+    .await;
+    let file = session(&RestClient::new(&server.uri()).unwrap())
+        .file("/file-upload/abc123/my%20file%C3%A9.png")
+        .await
+        .unwrap();
+    assert_eq!(file.bytes, PNG);
+}
+
+// RICH-005
+#[tokio::test]
+async fn files_keep_the_path_prefix_of_the_server() {
+    let server = MockServer::start().await;
+    mount_authenticated(
+        &server,
+        "GET",
+        "/team/file-upload/abc/a.png",
+        png_response(),
+    )
+    .await;
+    let client = RestClient::new(&format!("{}/team/", server.uri())).unwrap();
+    session(&client)
+        .file("/file-upload/abc/a.png")
+        .await
+        .unwrap();
+}
+
+// RICH-005
+#[tokio::test]
+async fn paths_outside_file_upload_are_refused_without_a_request() {
+    let server = MockServer::start().await;
+    let session = session(&RestClient::new(&server.uri()).unwrap());
+    for path in [
+        "https://evil.example/file-upload/abc/a.png",
+        "/api/v1/me",
+        "/file-upload/../api/v1/me",
+        "/file-upload/%2E%2E/api/v1/me",
+    ] {
+        let result = session.file(path).await;
+        assert!(matches!(result, Err(Error::InvalidUrl(_))), "{path}");
+    }
+    assert!(server.received_requests().await.unwrap().is_empty());
+}
+
+// RICH-005
+#[tokio::test]
+async fn a_forbidden_file_is_a_server_error() {
+    let server = MockServer::start().await;
+    mount(
+        &server,
+        "GET",
+        "/file-upload/abc/a.png",
+        ResponseTemplate::new(403),
+    )
+    .await;
+    let result = session(&RestClient::new(&server.uri()).unwrap())
+        .file("/file-upload/abc/a.png")
+        .await;
+    assert!(
+        matches!(result, Err(Error::Server { status: 403, .. })),
+        "{result:?}"
+    );
+}

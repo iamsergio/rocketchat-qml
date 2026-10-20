@@ -255,6 +255,23 @@ impl RestSession {
         self.download(&["avatar", "room", room_id]).await
     }
 
+    /// A file uploaded to a room (`GET /file-upload/...`), given the path the message carries:
+    /// an attachment's link or image. The server wants the login headers for it.
+    ///
+    /// Only paths below `/file-upload/` are accepted, and they are taken as the server's own, so
+    /// the login headers can't be sent anywhere else. Each segment is percent-decoded and then
+    /// escaped again by the request.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::InvalidUrl`] for any other path (a full URL, another place on the server, `..`,
+    /// a query), or as [`user_avatar`](Self::user_avatar).
+    pub async fn file(&self, path: &str) -> Result<Download, Error> {
+        let segments = file_segments(path).ok_or_else(|| Error::InvalidUrl(path.to_owned()))?;
+        let segments: Vec<&str> = segments.iter().map(String::as_str).collect();
+        self.download(&segments).await
+    }
+
     /// Gets the file at `segments` below the server's base URL. Each segment is escaped, so a name
     /// can't climb out of its place in the path.
     async fn download(&self, segments: &[&str]) -> Result<Download, Error> {
@@ -427,6 +444,43 @@ fn query(name: &str, value: &str) -> Result<String, Error> {
     Ok(escaped.query().unwrap_or_default().to_owned())
 }
 
+/// The decoded segments of a server path below `/file-upload/`, or `None` if it is anything else:
+/// no leading `/file-upload/`, an empty, `.` or `..` segment (also when percent-encoded), a
+/// segment that decodes to something that isn't UTF-8 or holds a `/`, or a query or fragment.
+fn file_segments(path: &str) -> Option<Vec<String>> {
+    let rest = path.strip_prefix("/file-upload/")?;
+    if rest.contains(['?', '#', '\\']) {
+        return None;
+    }
+    let mut segments = vec!["file-upload".to_owned()];
+    for raw in rest.split('/') {
+        let segment = percent_decode(raw)?;
+        if matches!(segment.as_str(), "" | "." | "..") || segment.contains('/') {
+            return None;
+        }
+        segments.push(segment);
+    }
+    Some(segments)
+}
+
+/// `%XX` escapes decoded. `None` for a broken escape or a result that isn't UTF-8.
+fn percent_decode(text: &str) -> Option<String> {
+    let bytes = text.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' {
+            let hex = text.get(i + 1..i + 3)?;
+            out.push(u8::from_str_radix(hex, 16).ok()?);
+            i += 3;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8(out).ok()
+}
+
 /// The media type of a `Content-Type` value, without parameters, in lower case.
 fn media_type(value: &str) -> String {
     value
@@ -515,6 +569,43 @@ mod tests {
 
     fn url(server: &str) -> String {
         RestClient::new(server).unwrap().server_url().to_string()
+    }
+
+    // RICH-005
+    #[test]
+    fn file_paths_are_split_and_decoded() {
+        assert_eq!(
+            file_segments("/file-upload/6ad7f2c6/my%20big%C3%A9.png"),
+            Some(vec![
+                "file-upload".to_owned(),
+                "6ad7f2c6".to_owned(),
+                "my bigé.png".to_owned()
+            ])
+        );
+    }
+
+    // RICH-005
+    #[test]
+    fn only_paths_below_file_upload_are_files() {
+        for path in [
+            "",
+            "/file-upload/",
+            "/file-upload",
+            "/avatar/alice",
+            "file-upload/a/b.png",
+            "https://evil.example/file-upload/a/b.png",
+            "//evil.example/file-upload/a/b.png",
+            "/file-upload/../api/v1/me",
+            "/file-upload/%2e%2e/api",
+            "/file-upload/a//b.png",
+            "/file-upload/a%2Fb.png",
+            "/file-upload/a/b.png?token=1",
+            "/file-upload/a/b.png#frag",
+            "/file-upload/a%/b.png",
+            "/file-upload/a/%FF.png",
+        ] {
+            assert_eq!(file_segments(path), None, "{path:?}");
+        }
     }
 
     // AUTH-003

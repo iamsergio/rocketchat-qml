@@ -146,6 +146,7 @@ mod tests {
             ts: at(ts),
             kind,
             delivery: Delivery::Sent,
+            attachments: Vec::new(),
         }
     }
 

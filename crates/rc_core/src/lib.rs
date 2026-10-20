@@ -12,6 +12,7 @@ mod client;
 pub mod domain;
 pub mod emoji;
 mod error;
+mod images;
 pub mod logging;
 pub mod ports;
 mod random;
@@ -23,6 +24,7 @@ pub mod timeline;
 pub use avatars::AvatarUpdate;
 pub use client::{Client, Connection, Event};
 pub use error::Error;
+pub use images::ImageUpdate;
 
 /// Application version, from `version.txt` at the repository root.
 pub const VERSION: &str = include_str!("../../../version.txt").trim_ascii();

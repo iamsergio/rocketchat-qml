@@ -1,0 +1,80 @@
+{
+  "messages": [
+    {
+      "_id": "msgmalformed",
+      "rid": "6ad7f2c63a2871a71eddd4ce",
+      "msg": "odd ones",
+      "ts": "2026-10-21T09:03:00.000Z",
+      "u": { "_id": "6ad72ad3b6de6b54ca599f26", "username": "admin", "name": "Administrator" },
+      "attachments": [
+        { "type": "file", "title": "no link" },
+        { "type": "file", "title": "wrong size", "title_link": "/file-upload/x/y.txt", "size": "big" },
+        "not an object",
+        { "text": "no type", "title_link": "/file-upload/x/z.txt" },
+        { "type": "file", "title": "ok.txt", "title_link": "/file-upload/x/ok.txt", "size": 3 }
+      ]
+    },
+    {
+      "_id": "msgquote",
+      "rid": "6ad7f2c63a2871a71eddd4ce",
+      "msg": "[ ](http://localhost:3000/channel/general?msg=abc) quoted",
+      "ts": "2026-10-21T09:02:00.000Z",
+      "u": { "_id": "6ad72ad3b6de6b54ca599f26", "username": "admin", "name": "Administrator" },
+      "attachments": [
+        {
+          "text": "the original",
+          "author_name": "bob",
+          "author_icon": "/avatar/bob",
+          "message_link": "http://localhost:3000/channel/general?msg=abc",
+          "ts": "2026-10-21T09:00:00.000Z"
+        }
+      ]
+    },
+    {
+      "_id": "msgtext",
+      "rid": "6ad7f2c63a2871a71eddd4ce",
+      "msg": "",
+      "ts": "2026-10-21T09:01:00.000Z",
+      "u": { "_id": "6ad72ad3b6de6b54ca599f26", "username": "admin", "name": "Administrator" },
+      "file": { "_id": "6ad7f2c6aa", "name": "notes.txt", "type": "text/plain", "size": 6, "format": "TXT" },
+      "files": [{ "_id": "6ad7f2c6aa", "name": "notes.txt", "type": "text/plain", "size": 6, "format": "TXT" }],
+      "attachments": [
+        {
+          "title": "notes.txt",
+          "title_link": "/file-upload/6ad7f2c6aa/notes.txt",
+          "title_link_download": true,
+          "type": "file",
+          "description": "my notes",
+          "descriptionMd": [{ "type": "PARAGRAPH", "value": [{ "type": "PLAIN_TEXT", "value": "my notes" }] }],
+          "size": 6,
+          "format": "TXT"
+        }
+      ]
+    },
+    {
+      "_id": "msgimage",
+      "rid": "6ad7f2c63a2871a71eddd4ce",
+      "msg": "hello **text**",
+      "ts": "2026-10-21T09:00:00.000Z",
+      "u": { "_id": "6ad72ad3b6de6b54ca599f26", "username": "admin", "name": "Administrator" },
+      "file": { "_id": "6ad7f2c6bb", "name": "big pic.png", "type": "image/png", "size": 90000, "format": "png" },
+      "files": [
+        { "_id": "6ad7f2c6bb", "name": "big pic.png", "type": "image/png", "size": 90000, "format": "png" },
+        { "_id": "6ad7f2c6cc", "name": "thumb-big pic.png", "type": "image/png", "size": 5258, "format": "png" }
+      ],
+      "attachments": [
+        {
+          "title": "big pic.png",
+          "title_link": "/file-upload/6ad7f2c6bb/big%20pic.png",
+          "title_link_download": true,
+          "type": "file",
+          "image_dimensions": { "width": 480, "height": 360 },
+          "image_preview": "/9j/4AAQSkZJRg==",
+          "image_url": "/file-upload/6ad7f2c6cc/big%20pic.png",
+          "image_type": "image/png",
+          "image_size": 5258
+        }
+      ]
+    }
+  ]
+}

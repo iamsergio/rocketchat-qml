@@ -129,26 +129,12 @@ impl Avatars {
 /// The owners of the avatars of the people who wrote the messages in `changes`. System messages
 /// show no avatar.
 pub(crate) fn authors_of(changes: &[TimelineChange]) -> Vec<AvatarOwner> {
-    let mut owners = Vec::new();
-    let mut add = |messages: &[crate::domain::Message]| {
-        for message in messages {
-            if matches!(message.kind, MessageKind::Text(_)) {
-                owners.push(AvatarOwner::User(message.author.username.clone()));
-            }
-        }
-    };
-    for change in changes {
-        match change {
-            TimelineChange::Reset { messages, .. }
-            | TimelineChange::Inserted { messages, .. }
-            | TimelineChange::Prepended(messages)
-            | TimelineChange::Appended(messages) => add(messages),
-            TimelineChange::Updated { message, .. } | TimelineChange::Moved { message, .. } => {
-                add(std::slice::from_ref(message));
-            }
-        }
-    }
-    owners
+    changes
+        .iter()
+        .flat_map(TimelineChange::messages)
+        .filter(|message| matches!(message.kind, MessageKind::Text(_)))
+        .map(|message| AvatarOwner::User(message.author.username.clone()))
+        .collect()
 }
 
 #[cfg(test)]

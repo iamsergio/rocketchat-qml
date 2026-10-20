@@ -298,6 +298,7 @@ mod tests {
             ts: jiff::Timestamp::UNIX_EPOCH,
             kind: MessageKind::Text(id.into()),
             delivery: Delivery::Sent,
+            attachments: Vec::new(),
         }
     }
 

@@ -12,8 +12,8 @@ use serde::{Deserialize, Deserializer};
 
 use crate::md;
 use crate::types::{
-    Author, AvatarOwner, Credentials, CustomEmoji, DdpEvent, HistoryPage, LoginResult, Message,
-    RoomType, ServerInfo, ServerVersion, Subscription, User,
+    Attachment, AttachmentImage, Author, AvatarOwner, Credentials, CustomEmoji, DdpEvent,
+    HistoryPage, LoginResult, Message, RoomType, ServerInfo, ServerVersion, Subscription, User,
 };
 
 #[derive(Deserialize)]
@@ -159,6 +159,33 @@ struct MessageBody {
     tshow: bool,
     #[serde(default)]
     md: Option<serde_json::Value>,
+    /// Read entry by entry (see [`parse_attachments`]), so one odd entry doesn't fail the message.
+    #[serde(default)]
+    attachments: Option<serde_json::Value>,
+}
+
+/// A file attachment (`type` is `file`). The fields of images are `image_*`.
+#[derive(Deserialize)]
+struct AttachmentBody {
+    #[serde(default)]
+    title: String,
+    title_link: String,
+    #[serde(default)]
+    description: Option<String>,
+    #[serde(default)]
+    size: Option<u64>,
+    #[serde(default)]
+    image_url: Option<String>,
+    #[serde(default)]
+    image_type: Option<String>,
+    #[serde(default)]
+    image_dimensions: Option<DimensionsBody>,
+}
+
+#[derive(Deserialize)]
+struct DimensionsBody {
+    width: u32,
+    height: u32,
 }
 
 #[derive(Deserialize)]
@@ -283,8 +310,33 @@ impl From<MessageBody> for Message {
             thread_id: body.tmid,
             thread_shown: body.tshow,
             md: body.md.as_ref().and_then(md::parse),
+            attachments: parse_attachments(body.attachments.as_ref()),
         }
     }
+}
+
+/// The file attachments of a message. Entries of another type, and entries that are malformed, are
+/// skipped.
+fn parse_attachments(value: Option<&serde_json::Value>) -> Vec<Attachment> {
+    let Some(entries) = value.and_then(serde_json::Value::as_array) else {
+        return Vec::new();
+    };
+    entries
+        .iter()
+        .filter(|entry| entry.get("type").and_then(serde_json::Value::as_str) == Some("file"))
+        .filter_map(|entry| AttachmentBody::deserialize(entry).ok())
+        .map(|body| Attachment {
+            title: body.title,
+            link: body.title_link,
+            description: body.description.filter(|text| !text.is_empty()),
+            size: body.size,
+            image: body.image_url.map(|path| AttachmentImage {
+                path,
+                content_type: body.image_type,
+                dimensions: body.image_dimensions.map(|d| (d.width, d.height)),
+            }),
+        })
+        .collect()
 }
 
 /// `None` if the body isn't JSON with a parsable `version`.
@@ -444,6 +496,7 @@ mod tests {
     const SUBSCRIPTIONS: &str = include_str!("../tests/fixtures/subscriptions.json");
     const HISTORY: &str = include_str!("../tests/fixtures/history.json");
 
+    const HISTORY_ATTACHMENTS: &str = include_str!("../tests/fixtures/history_attachments.json");
     const HISTORY_RICH: &str = include_str!("../tests/fixtures/history_rich.json");
     const EMOJI_CUSTOM: &str = include_str!("../tests/fixtures/emoji_custom.json");
 
@@ -454,6 +507,115 @@ mod tests {
             .into_iter()
             .find(|m| m.text == text)
             .unwrap_or_else(|| panic!("no message {text:?} in the fixture"))
+    }
+
+    fn attached(id: &str) -> Message {
+        parse_history(HISTORY_ATTACHMENTS.as_bytes(), 50)
+            .unwrap()
+            .messages
+            .into_iter()
+            .find(|m| m.id == id)
+            .unwrap()
+    }
+
+    // RICH-005
+    #[test]
+    fn reads_an_image_attachment() {
+        let message = attached("msgimage");
+        assert_eq!(message.text, "hello **text**");
+        assert_eq!(
+            message.attachments,
+            [Attachment {
+                title: "big pic.png".into(),
+                link: "/file-upload/6ad7f2c6bb/big%20pic.png".into(),
+                description: None,
+                size: None,
+                image: Some(AttachmentImage {
+                    path: "/file-upload/6ad7f2c6cc/big%20pic.png".into(),
+                    content_type: Some("image/png".into()),
+                    dimensions: Some((480, 360)),
+                }),
+            }]
+        );
+    }
+
+    // RICH-005
+    #[test]
+    fn reads_a_file_attachment_without_an_image() {
+        let message = attached("msgtext");
+        assert_eq!(message.text, "");
+        assert_eq!(
+            message.attachments,
+            [Attachment {
+                title: "notes.txt".into(),
+                link: "/file-upload/6ad7f2c6aa/notes.txt".into(),
+                description: Some("my notes".into()),
+                size: Some(6),
+                image: None,
+            }]
+        );
+    }
+
+    // RICH-005
+    #[test]
+    fn attachments_that_are_not_files_are_left_out() {
+        assert_eq!(attached("msgquote").attachments, []);
+        assert_eq!(attached("msgtext").attachments.len(), 1);
+    }
+
+    // RICH-005
+    #[test]
+    fn a_malformed_attachment_is_skipped_and_the_message_stays() {
+        let message = attached("msgmalformed");
+        assert_eq!(message.text, "odd ones");
+        let titles: Vec<_> = message
+            .attachments
+            .iter()
+            .map(|a| a.title.as_str())
+            .collect();
+        assert_eq!(titles, ["ok.txt"]);
+    }
+
+    // RICH-005
+    #[test]
+    fn attachments_that_are_not_a_list_mean_none() {
+        for attachments in ["null", "{}", "\"x\"", "3"] {
+            let json = format!(
+                r#"{{"messages":[{{"_id":"m","rid":"r","ts":"2026-10-20T14:00:00.000Z","u":{{"_id":"u"}},"attachments":{attachments}}}]}}"#
+            );
+            let page = parse_history(json.as_bytes(), 50).unwrap();
+            assert_eq!(page.messages[0].attachments, [], "{attachments}");
+        }
+    }
+
+    // RICH-005
+    #[test]
+    fn a_live_message_carries_its_attachments() {
+        let fixture = serde_json::json!({
+            "eventName": "r",
+            "args": [{
+                "_id": "m",
+                "rid": "r",
+                "msg": "",
+                "ts": { "$date": 1_792_511_428_626_i64 },
+                "u": { "_id": "u", "username": "bob" },
+                "attachments": [{
+                    "type": "file",
+                    "title": "p.png",
+                    "title_link": "/file-upload/id/p.png",
+                    "image_url": "/file-upload/id/p.png",
+                    "image_type": "image/png",
+                    "image_dimensions": { "width": 2, "height": 1 }
+                }]
+            }]
+        });
+        let event = parse_stream_event("stream-room-messages", fixture).unwrap();
+        let Some(DdpEvent::Message(message)) = event else {
+            panic!("expected a message, got {event:?}");
+        };
+        let image = message.attachments[0].image.as_ref().unwrap();
+        assert_eq!(image.path, "/file-upload/id/p.png");
+        assert_eq!(image.dimensions, Some((2, 1)));
     }
 
     // RICH-003

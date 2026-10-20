@@ -126,6 +126,37 @@ pub struct Message {
     /// The server's parsed markdown of the text. `None` if it sent none or it isn't a list of
     /// nodes. Some old messages and some system messages have no `md`.
     pub md: Option<Vec<crate::md::Block>>,
+    /// The files attached to the message. Other kinds of attachment (quotes, integrations) are
+    /// left out.
+    pub attachments: Vec<Attachment>,
+}
+
+/// A file attached to a message, as uploaded. Its paths are relative to the server, below
+/// `/file-upload/`, and need the login headers to download.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Attachment {
+    /// The file's name, or what the uploader called it. Empty if the server sent none.
+    pub title: String,
+    /// The path of the original file (`title_link`).
+    pub link: String,
+    /// What the uploader wrote about it.
+    pub description: Option<String>,
+    /// The size of the original in bytes, when the server says (not for images).
+    pub size: Option<u64>,
+    /// Set for images.
+    pub image: Option<AttachmentImage>,
+}
+
+/// The picture an image attachment shows. The server makes a thumbnail of big images, so this may
+/// not be the original.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AttachmentImage {
+    /// The path of the picture (`image_url`).
+    pub path: String,
+    /// The media type of the picture.
+    pub content_type: Option<String>,
+    /// The size in pixels of the picture, when the server says.
+    pub dimensions: Option<(u32, u32)>,
 }
 
 /// An emoji the server has added, shown as the image at `/emoji-custom/<name>.<extension>`.

@@ -325,6 +325,7 @@ mod tests {
             ts: jiff::Timestamp::from_second(secs).unwrap(),
             kind: MessageKind::Text(id.into()),
             delivery: Delivery::Sent,
+            attachments: Vec::new(),
         }
     }
 
