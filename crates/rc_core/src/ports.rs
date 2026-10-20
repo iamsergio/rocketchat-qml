@@ -77,6 +77,20 @@ pub trait ServerApi: Clone + Send + Sync + 'static {
         credentials: &Credentials,
     ) -> impl Future<Output = Result<Vec<rc_api::CustomEmoji>, ApiError>> + Send;
 
+    /// The avatar a user or room has uploaded: `None` if it has none, as the server draws one
+    /// for those and the frontend shows initials instead. Asks the server whether there is one
+    /// before downloading.
+    ///
+    /// # Errors
+    ///
+    /// [`ApiError::Server`] if the server refuses, [`ApiError::Unauthorized`] if it rejects the
+    /// credentials.
+    fn avatar(
+        &self,
+        credentials: &Credentials,
+        owner: &AvatarOwner,
+    ) -> impl Future<Output = Result<Option<Image>, ApiError>> + Send;
+
     /// A page of the room's history: the newest messages sent before `before`, or the newest of all
     /// without it, at most `count`. `before` is inclusive, so the message sent at that instant
     /// comes back too: the caller de-duplicates.
@@ -143,6 +157,14 @@ pub trait ServerApi: Clone + Send + Sync + 'static {
     ) -> impl Future<Output = Result<(), ApiError>> + Send;
 }
 
+/// An image as the server sent it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Image {
+    pub bytes: Vec<u8>,
+    /// The media type the server said, lower case and without parameters.
+    pub content_type: Option<String>,
+}
+
 /// What the server pushes over the realtime connection, as the core understands it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Pushed {
@@ -156,6 +178,8 @@ pub enum Pushed {
     /// One of the user's rooms has a message at that time. Comes with every new message, and with
     /// other changes of the room too, then with a time the room has already.
     Activity { room: RoomId, at: jiff::Timestamp },
+    /// The server says this avatar changed, whoever's it is: fetch it again if it is shown.
+    AvatarChanged(AvatarOwner),
 }
 
 /// What [`ServerApi::realtime`] returns: the pushed events in the order the server sent them.

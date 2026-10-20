@@ -18,7 +18,7 @@ mod proxy;
 
 use std::process;
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde_json::{Value, json};
 
@@ -72,7 +72,8 @@ pub fn unique() -> String {
     )
 }
 
-/// The image of the custom emoji [`Admin::create_emoji`] makes: one pixel.
+/// The image of the custom emoji [`Admin::create_emoji`] makes and the avatar [`Admin::set_avatar`]
+/// sets: one pixel.
 const PIXEL_PNG: [u8; 70] = [
     0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
     0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4,
@@ -80,6 +81,28 @@ const PIXEL_PNG: [u8; 70] = [
     0x0f, 0x00, 0x04, 0x85, 0x01, 0x80, 0x84, 0xa9, 0x8c, 0x21, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45,
     0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
 ];
+
+/// `bytes` as standard base64, with padding.
+fn base64(bytes: &[u8]) -> String {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let [a, b, c] = [
+            chunk[0],
+            *chunk.get(1).unwrap_or(&0),
+            *chunk.get(2).unwrap_or(&0),
+        ];
+        let group = (u32::from(a) << 16) | (u32::from(b) << 8) | u32::from(c);
+        for (at, shift) in [18, 12, 6, 0].into_iter().enumerate() {
+            if at <= chunk.len() {
+                out.push(char::from(ALPHABET[((group >> shift) & 63) as usize]));
+            } else {
+                out.push('=');
+            }
+        }
+    }
+    out
+}
 
 /// A user made by [`Admin::create_user`].
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -89,6 +112,23 @@ pub struct TestUser {
     pub password: String,
     /// The display name.
     pub name: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // RICH-004
+    #[test]
+    fn base64_pads_and_encodes_like_the_standard() {
+        assert_eq!(base64(b""), "");
+        assert_eq!(base64(b"f"), "Zg==");
+        assert_eq!(base64(b"fo"), "Zm8=");
+        assert_eq!(base64(b"foo"), "Zm9v");
+        assert_eq!(base64(b"foob"), "Zm9vYg==");
+        assert_eq!(base64(b"fooba"), "Zm9vYmE=");
+        assert_eq!(base64(b"foobar"), "Zm9vYmFy");
+    }
 }
 
 /// A message made by [`Admin::post_message`], or found by [`Admin::last_message`].
@@ -300,21 +340,75 @@ impl Admin {
     ///
     /// If the server refuses, for example because the name is taken.
     pub fn create_emoji(&self, name: &str) {
-        const BOUNDARY: &str = "----rc-test-server-emoji";
+        self.upload(
+            "emoji-custom.create",
+            &[("name", name)],
+            "emoji",
+            "emoji.png",
+        );
+    }
+
+    /// Sets the avatar of the user to a one-pixel PNG (`users.setAvatar`) and waits until the
+    /// server says the user has one (`avatarETag` of `users.info`), which it does a moment later.
+    /// The server announces it on its stream of avatar changes, but this server keeps serving the
+    /// generated avatar from `/avatar/<username>` anyway.
+    ///
+    /// # Panics
+    ///
+    /// If the server refuses, or still says there is none after a while.
+    pub fn set_avatar(&self, username: &str) {
+        self.upload(
+            "users.setAvatar",
+            &[("username", username)],
+            "image",
+            "avatar.png",
+        );
+        self.wait_for_etag(&format!("users.info?username={username}"), "user");
+    }
+
+    /// Sets the avatar of the room to a one-pixel PNG (`rooms.saveRoomSettings`) and waits until
+    /// the server says the room has one (`avatarETag` of `rooms.info`). The server keeps serving
+    /// the generated avatar from `/avatar/room/<id>` anyway.
+    ///
+    /// # Panics
+    ///
+    /// If the server refuses, or still says there is none after a while.
+    pub fn set_room_avatar(&self, room_id: &str) {
+        let uri = format!("data:image/png;base64,{}", base64(&PIXEL_PNG));
+        self.post(
+            "rooms.saveRoomSettings",
+            &json!({ "rid": room_id, "roomAvatar": uri }),
+        );
+        self.wait_for_etag(&format!("rooms.info?roomId={room_id}"), "room");
+    }
+
+    fn wait_for_etag(&self, endpoint: &str, field: &str) {
+        let deadline = Instant::now() + Duration::from_secs(15);
+        while self.get(endpoint)[field]["avatarETag"].as_str().is_none() {
+            assert!(
+                Instant::now() < deadline,
+                "{endpoint} never had an avatarETag"
+            );
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    }
+
+    /// POSTs a multipart form with the text `fields` and the one-pixel PNG as the file `file`.
+    fn upload(&self, endpoint: &str, fields: &[(&str, &str)], file: &str, filename: &str) {
+        const BOUNDARY: &str = "----rc-test-server-upload";
         let mut body = Vec::new();
-        let field = |body: &mut Vec<u8>, key: &str, value: &str| {
+        for (key, value) in fields {
             body.extend(
                 format!(
                     "--{BOUNDARY}\r\nContent-Disposition: form-data; name=\"{key}\"\r\n\r\n{value}\r\n"
                 )
                 .bytes(),
             );
-        };
-        field(&mut body, "name", name);
+        }
         body.extend(
             format!(
-                "--{BOUNDARY}\r\nContent-Disposition: form-data; name=\"emoji\"; \
-                 filename=\"emoji.png\"\r\nContent-Type: image/png\r\n\r\n"
+                "--{BOUNDARY}\r\nContent-Disposition: form-data; name=\"{file}\"; \
+                 filename=\"{filename}\"\r\nContent-Type: image/png\r\n\r\n"
             )
             .bytes(),
         );
@@ -322,7 +416,7 @@ impl Admin {
         body.extend(format!("\r\n--{BOUNDARY}--\r\n").bytes());
         let mut response = self
             .agent
-            .post(format!("{}/emoji-custom.create", self.base))
+            .post(format!("{}/{endpoint}", self.base))
             .header("X-User-Id", &self.user_id)
             .header("X-Auth-Token", &self.token)
             .header(
@@ -335,7 +429,7 @@ impl Admin {
         let text = response.body_mut().read_to_string().unwrap();
         assert!(
             status.is_success() && text.contains("\"success\":true"),
-            "emoji-custom.create: {status} {text}"
+            "{endpoint}: {status} {text}"
         );
     }
 

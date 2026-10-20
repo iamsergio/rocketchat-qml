@@ -8,8 +8,9 @@ pub mod ffi {
     extern "Rust" {
         /// Starts the core. Call on the GUI thread after `QGuiApplication` exists and before the
         /// QML is loaded. `RC_SECRET_STORE` picks where the session is kept: the OS keyring by
-        /// default, `memory`, or `file:<path>` (test builds only).
-        fn start_core();
+        /// default, `memory`, or `file:<path>` (test builds only). Downloaded files (avatars) are
+        /// kept in `cache_dir`, which is created when needed.
+        fn start_core(cache_dir: &str);
 
         /// Stops the core, waiting a moment for a pending logout to finish. Call on the GUI
         /// thread after the event loop has ended.
@@ -22,8 +23,8 @@ pub mod ffi {
     }
 }
 
-fn start_core() {
-    crate::hub::start();
+fn start_core(cache_dir: &str) {
+    crate::hub::start(cache_dir);
 }
 
 fn stop_core() {

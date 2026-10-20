@@ -12,8 +12,8 @@ use serde::{Deserialize, Deserializer};
 
 use crate::md;
 use crate::types::{
-    Author, Credentials, CustomEmoji, DdpEvent, HistoryPage, LoginResult, Message, RoomType,
-    ServerInfo, ServerVersion, Subscription, User,
+    Author, AvatarOwner, Credentials, CustomEmoji, DdpEvent, HistoryPage, LoginResult, Message,
+    RoomType, ServerInfo, ServerVersion, Subscription, User,
 };
 
 #[derive(Deserialize)]
@@ -210,6 +210,13 @@ struct StreamFields {
     event_name: String,
     #[serde(default)]
     args: Vec<serde_json::Value>,
+}
+
+/// What `updateAvatar` carries: the username of the user, or the id of the room.
+#[derive(Deserialize)]
+struct AvatarChangeBody {
+    username: Option<String>,
+    rid: Option<String>,
 }
 
 /// The error body of failed calls: `message` is the human-readable one, `error` the short one.
@@ -411,6 +418,15 @@ pub(crate) fn parse_stream_event(
                 room_id: room.id,
                 last_message,
             }))
+        }
+        "stream-notify-logged" if fields.event_name == "updateAvatar" => {
+            let body: AvatarChangeBody = serde_json::from_value(next_arg()?)?;
+            Ok(match (body.username, body.rid) {
+                (Some(username), _) => Some(AvatarOwner::User { username }),
+                (None, Some(room_id)) => Some(AvatarOwner::Room { room_id }),
+                (None, None) => None,
+            }
+            .map(DdpEvent::AvatarChanged))
         }
         _ => Ok(None),
     }
