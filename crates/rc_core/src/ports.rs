@@ -63,6 +63,16 @@ pub trait ServerApi: Clone + Send + Sync + 'static {
         credentials: &Credentials,
     ) -> impl Future<Output = Result<Vec<rc_api::Subscription>, ApiError>> + Send;
 
+    /// The custom emoji of the server.
+    ///
+    /// # Errors
+    ///
+    /// [`ApiError::Unauthorized`] if the credentials have expired or were revoked.
+    fn custom_emoji(
+        &self,
+        credentials: &Credentials,
+    ) -> impl Future<Output = Result<Vec<rc_api::CustomEmoji>, ApiError>> + Send;
+
     /// A page of the room's history: the newest messages sent before `before`, or the newest of all
     /// without it, at most `count`. `before` is inclusive, so the message sent at that instant
     /// comes back too: the caller de-duplicates.

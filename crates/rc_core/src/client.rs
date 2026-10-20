@@ -20,6 +20,7 @@ use crate::domain::{
     Author, Credentials, Delivery, Message, MessageId, MessageKind, Room, RoomId, RoomKind,
     StoredSession, User, room_from,
 };
+use crate::emoji::CustomEmojis;
 use crate::error::Error;
 use crate::ports::{
     ApiError, Connector, MessageStore, Page, Pushed, SecretStore, ServerApi, StoreError,
@@ -58,6 +59,9 @@ pub enum Event {
     /// starts `Connected`, and so does the frontend until told otherwise: nothing is sent at login,
     /// and a logout or an expiry resets it without an event.
     Connection(Connection),
+    /// The custom emoji of the server, whenever the list changes. Logging out empties it, if it
+    /// held any.
+    CustomEmoji(CustomEmojis),
 }
 
 /// Whether the session is live. The held rooms and messages stay on show while it is not.
@@ -170,6 +174,8 @@ impl Client {
             rooms_listed: false,
             backlog: None,
             rooms: RoomList::default(),
+            emoji: CustomEmojis::default(),
+            emoji_task: None,
             messages: Box::new(MemoryMessageStore::default()),
             open: None,
             history_attempt: 0,
@@ -336,6 +342,13 @@ struct RoomsDone {
     outcome: Result<Vec<rc_api::Subscription>, ApiError>,
 }
 
+/// A custom emoji fetch's answer.
+struct EmojiDone {
+    /// The sync cycle the fetch belongs to: the answer is stale if another has begun since.
+    cycle: u64,
+    outcome: Result<Vec<rc_api::CustomEmoji>, ApiError>,
+}
+
 /// What the realtime task tells the actor, in this order: the connection opens or fails, events
 /// follow, the connection ends.
 enum RealtimeDone {
@@ -380,6 +393,7 @@ struct MarkReadDone {
 enum Done<A> {
     Login(LoginDone<A>),
     Rooms(RoomsDone),
+    Emoji(EmojiDone),
     Realtime(RealtimeReport),
     /// The wait after a lost connection is over; the cycle is the one that was lost.
     Reconnect {
@@ -453,6 +467,10 @@ struct Actor<C: Connector> {
     backlog: Option<Vec<Pushed>>,
     /// The rooms in display order, as the frontend has them.
     rooms: RoomList,
+    /// The custom emoji the frontend was last told about.
+    emoji: CustomEmojis,
+    /// The custom emoji fetch of the current cycle, while it runs.
+    emoji_task: Option<JoinHandle<()>>,
     /// The messages of the rooms opened so far. Cleared on logout.
     messages: Box<dyn MessageStore>,
     open: Option<OpenRoom>,
@@ -486,6 +504,7 @@ impl<C: Connector> Actor<C> {
                 Some(done) = done.recv() => match done {
                     Done::Login(done) => self.handle_login_done(done),
                     Done::Rooms(done) => self.handle_rooms_done(done),
+                    Done::Emoji(done) => self.handle_emoji_done(done),
                     Done::Realtime(report) => self.handle_realtime_done(report),
                     Done::Reconnect { cycle } => self.handle_reconnect(cycle),
                     Done::History(done) => self.handle_history_done(done),
@@ -520,6 +539,9 @@ impl<C: Connector> Actor<C> {
             task.abort();
         }
         if let Some(task) = self.rooms_task.take() {
+            task.abort();
+        }
+        if let Some(task) = self.emoji_task.take() {
             task.abort();
         }
         self.abort_realtime_task();
@@ -654,6 +676,7 @@ impl<C: Connector> Actor<C> {
             self.abort_realtime_task();
             self.set_state(SessionState::LoggedOut { failure: None });
             self.clear_rooms();
+            self.clear_emoji();
             self.clear_timeline();
             self.clear_store();
             if let Some(session) = self.session.take() {
@@ -962,6 +985,7 @@ impl<C: Connector> Actor<C> {
         if !changes.is_empty() {
             (self.on_event)(Event::Rooms(changes));
         }
+        self.fetch_emoji();
         if self.realtime_open {
             self.succeeded_at = Some(Instant::now());
             self.set_connection(Connection::Connected);
@@ -969,6 +993,60 @@ impl<C: Connector> Actor<C> {
         }
         for event in self.backlog.take().unwrap_or_default() {
             self.handle_pushed(event);
+        }
+    }
+
+    /// Fetches the custom emoji of the current cycle. Messages show without them until they come.
+    fn fetch_emoji(&mut self) {
+        let Some(session) = &self.session else {
+            return;
+        };
+        if let Some(task) = self.emoji_task.take() {
+            task.abort();
+        }
+        let cycle = self.cycle;
+        let api = session.api.clone();
+        let credentials = session.credentials.clone();
+        let done = self.done_tx.clone();
+        self.emoji_task = Some(tokio::spawn(async move {
+            let outcome = api.custom_emoji(&credentials).await;
+            // Fails only if the actor is gone.
+            let _ = done.send(Done::Emoji(EmojiDone { cycle, outcome }));
+        }));
+    }
+
+    fn handle_emoji_done(&mut self, done: EmojiDone) {
+        let SessionState::LoggedIn(account) = &self.state else {
+            return;
+        };
+        if done.cycle != self.cycle {
+            tracing::debug!("answer of a stale custom emoji fetch dropped");
+            return;
+        }
+        self.emoji_task = None;
+        let list = match done.outcome {
+            Ok(list) => list,
+            // The rooms fetch of the cycle meets the same refusal and ends the session.
+            Err(error) => {
+                tracing::warn!(%error, "can't list the custom emoji");
+                return;
+            }
+        };
+        let emoji = CustomEmojis::new(&account.server, &list);
+        if emoji != self.emoji {
+            self.emoji = emoji.clone();
+            (self.on_event)(Event::CustomEmoji(emoji));
+        }
+    }
+
+    /// Forgets the custom emoji and tells the frontend, unless there were none.
+    fn clear_emoji(&mut self) {
+        if let Some(task) = self.emoji_task.take() {
+            task.abort();
+        }
+        if self.emoji != CustomEmojis::default() {
+            self.emoji = CustomEmojis::default();
+            (self.on_event)(Event::CustomEmoji(CustomEmojis::default()));
         }
     }
 
@@ -1000,6 +1078,7 @@ impl<C: Connector> Actor<C> {
             failure: Some(LoginFailure::SessionExpired),
         });
         self.clear_rooms();
+        self.clear_emoji();
         self.clear_timeline();
     }
 
