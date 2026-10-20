@@ -6,6 +6,7 @@
 #include <QQmlApplicationEngine>
 #include <QUrl>
 
+#include <rc_qt/src/lifecycle.cxx.h>
 #include <rc_qt/src/logging.cxx.h>
 
 #include <cstdlib>
@@ -44,6 +45,10 @@ int main(int argc, char *argv[])
     }
 #endif
 
+    // After QGuiApplication, so the core's events can reach the GUI thread; before the QML is
+    // loaded, which creates the view models that listen to it.
+    rc_qt::start_core();
+
     QQmlApplicationEngine engine;
     QObject::connect(
         &engine, &QQmlApplicationEngine::objectCreationFailed, &app, [] { QCoreApplication::exit(1); }, Qt::QueuedConnection);
@@ -61,5 +66,9 @@ int main(int argc, char *argv[])
     }
 #endif
 
-    return QGuiApplication::exec();
+    const int exitCode = QGuiApplication::exec();
+
+    // The core lives in a static, so nothing else drops it: this lets a pending logout finish.
+    rc_qt::stop_core();
+    return exitCode;
 }

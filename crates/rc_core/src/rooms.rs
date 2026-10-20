@@ -36,6 +36,27 @@ pub enum RoomChange {
     },
 }
 
+impl RoomChange {
+    /// Applies the change to a frontend's mirror of the room list. The mirror must be in the state
+    /// the change was made against, i.e. all earlier changes were applied in order, and the indices
+    /// must be in range: a change that doesn't fit is a bug in the caller, and panics like the
+    /// `Vec` operation it stands for.
+    pub fn apply(&self, rooms: &mut Vec<Room>) {
+        match self {
+            Self::Reset(all) => rooms.clone_from(all),
+            Self::Inserted { index, room } => rooms.insert(*index, room.clone()),
+            Self::Updated { index, room } => rooms[*index] = room.clone(),
+            Self::Moved { from, to, room } => {
+                rooms.remove(*from);
+                rooms.insert(*to, room.clone());
+            }
+            Self::Removed { index } => {
+                rooms.remove(*index);
+            }
+        }
+    }
+}
+
 /// The rooms in display order.
 #[derive(Debug, Default)]
 pub struct RoomList {
@@ -121,22 +142,6 @@ mod tests {
 
     fn names(list: &RoomList) -> Vec<&str> {
         list.rooms().iter().map(|r| r.name.as_str()).collect()
-    }
-
-    /// What a frontend does with the changes.
-    fn apply(mirror: &mut Vec<Room>, change: &RoomChange) {
-        match change {
-            RoomChange::Reset(rooms) => mirror.clone_from(rooms),
-            RoomChange::Inserted { index, room } => mirror.insert(*index, room.clone()),
-            RoomChange::Updated { index, room } => mirror[*index] = room.clone(),
-            RoomChange::Moved { from, to, room } => {
-                mirror.remove(*from);
-                mirror.insert(*to, room.clone());
-            }
-            RoomChange::Removed { index } => {
-                mirror.remove(*index);
-            }
-        }
     }
 
     fn list_of(rooms: Vec<Room>) -> RoomList {
@@ -245,7 +250,7 @@ mod tests {
         action: impl FnOnce(&mut RoomList) -> Option<RoomChange>,
     ) {
         if let Some(change) = action(list) {
-            apply(mirror, &change);
+            change.apply(mirror);
         }
         assert_eq!(mirror, list.rooms());
     }
