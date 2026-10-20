@@ -159,6 +159,8 @@ mod tests {
                     }),
                 })
                 .collect(),
+            edited: false,
+            reactions: Vec::new(),
         }
     }
 

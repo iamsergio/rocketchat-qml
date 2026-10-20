@@ -8,7 +8,7 @@ use std::path::PathBuf;
 
 use rc_api::ServerVersion;
 use secrecy::SecretString;
-use tokio::sync::mpsc::UnboundedReceiver;
+use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 
 use crate::domain::{
     AvatarOwner, Credentials, Message, MessageId, RoomId, RoomKind, StoredSession, User,
@@ -149,10 +149,25 @@ pub trait ServerApi: Clone + Send + Sync + 'static {
         room: &RoomId,
     ) -> impl Future<Output = Result<(), ApiError>> + Send;
 
+    /// What happened to the room's messages since `since`: the ones sent or changed (whole) and the
+    /// ids of the ones deleted. It may list more than changed, so the caller applies it to what
+    /// it holds. The server decides by its own clock, so the caller leaves a margin.
+    ///
+    /// # Errors
+    ///
+    /// [`ApiError::Unauthorized`] if the credentials have expired or were revoked,
+    /// [`ApiError::Server`] if the room doesn't exist or isn't visible to the user.
+    fn changes_since(
+        &self,
+        credentials: &Credentials,
+        room: &RoomId,
+        since: jiff::Timestamp,
+    ) -> impl Future<Output = Result<Changes, ApiError>> + Send;
+
     /// Opens the realtime connection for the session: connects, logs in with the credentials and
-    /// subscribes to the user's messages, subscription changes and room activity. What the server pushes from then
-    /// on comes out of the receiver, which ends when the connection does. Dropping the receiver
-    /// closes the connection. Reconnecting is up to the caller.
+    /// subscribes to the user's messages, subscription changes and room activity. What the server
+    /// pushes from then on comes out of [`Realtime::events`], which ends when the connection
+    /// does. Dropping the events closes the connection. Reconnecting is up to the caller.
     ///
     /// # Errors
     ///
@@ -160,7 +175,7 @@ pub trait ServerApi: Clone + Send + Sync + 'static {
     fn realtime(
         &self,
         credentials: &Credentials,
-    ) -> impl Future<Output = Result<PushedEvents, ApiError>> + Send;
+    ) -> impl Future<Output = Result<Realtime, ApiError>> + Send;
 
     /// Revokes the token on the server.
     fn logout(
@@ -180,8 +195,8 @@ pub struct Image {
 /// What the server pushes over the realtime connection, as the core understands it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Pushed {
-    /// A new or edited message. Not only of the user's rooms: the server also pushes the messages
-    /// of public channels the user isn't in, so check the room.
+    /// A new or changed message (edited, reacted to...), whole. Not only of the user's rooms: the
+    /// server also pushes the messages of public channels the user isn't in, so check the room.
     Message(Message),
     /// The user joined a room, or one of their rooms changed: its unread count, its name...
     Subscription(rc_api::Subscription),
@@ -192,10 +207,33 @@ pub enum Pushed {
     Activity { room: RoomId, at: jiff::Timestamp },
     /// The server says this avatar changed, whoever's it is: fetch it again if it is shown.
     AvatarChanged(AvatarOwner),
+    /// A message was deleted. Only comes for the room the connection was told is open.
+    MessageDeleted { room: RoomId, id: MessageId },
 }
 
 /// What [`ServerApi::realtime`] returns: the pushed events in the order the server sent them.
 pub type PushedEvents = UnboundedReceiver<Pushed>;
+
+/// An open realtime connection.
+#[derive(Debug)]
+pub struct Realtime {
+    pub events: PushedEvents,
+    /// Says which room is open. The server pushes a deleted message only for the room it was told
+    /// about, so the connection follows the room that is open: send `Some(room)` when one opens
+    /// and `None` when it closes. Only one room is followed at a time. A room that can't be
+    /// followed is logged and nothing else.
+    pub watch: UnboundedSender<Option<RoomId>>,
+}
+
+/// What [`ServerApi::changes_since`] returns.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Changes {
+    /// Messages sent or changed since then, whole. The timeline shows only those of the room's
+    /// own messages, as in a page.
+    pub updated: Vec<Message>,
+    /// Messages deleted since then.
+    pub deleted: Vec<MessageId>,
+}
 
 /// What [`ServerApi::history`] returns.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -213,6 +251,10 @@ pub struct RoomHistory {
     pub messages: Vec<Message>,
     /// Nothing exists before the first message.
     pub reached_start: bool,
+    /// When the messages were last known to be up to date: the client's clock just before it sent
+    /// the request that brought them up to date (the newest page, or a catch-up). `None` if they
+    /// never were.
+    pub synced_at: Option<jiff::Timestamp>,
 }
 
 /// The messages loaded so far, per room. Owned by the session actor, which calls it one room at a

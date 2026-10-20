@@ -44,8 +44,11 @@ mod tests {
                 kind: MessageKind::Text("hi".into()),
                 delivery: Delivery::Sent,
                 attachments: Vec::new(),
+                edited: false,
+                reactions: Vec::new(),
             }],
             reached_start: true,
+            synced_at: Some(jiff::Timestamp::UNIX_EPOCH),
         }
     }
 

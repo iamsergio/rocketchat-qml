@@ -81,7 +81,7 @@ fn is_safe_url(url: &str) -> bool {
         .any(|scheme| lower.starts_with(scheme))
 }
 
-fn is_web_url(url: &str) -> bool {
+pub(crate) fn is_web_url(url: &str) -> bool {
     let lower = url.trim_start().to_ascii_lowercase();
     lower.starts_with("http://") || lower.starts_with("https://")
 }

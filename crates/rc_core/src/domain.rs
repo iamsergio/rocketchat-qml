@@ -302,6 +302,20 @@ pub struct Message {
     pub delivery: Delivery,
     /// The files attached to it. An unsent message has none.
     pub attachments: Vec<Attachment>,
+    /// The author changed the text after sending it. An unsent message isn't.
+    pub edited: bool,
+    /// What users reacted with, in the order the server lists it. An unsent message has none.
+    pub reactions: Vec<Reaction>,
+}
+
+/// One emoji that users reacted to a message with.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Reaction {
+    /// The shortcode with its colons (`:thumbsup:`). The server's custom emoji are named the same
+    /// way.
+    pub emoji: String,
+    /// Who reacted, by username. Never empty.
+    pub usernames: Vec<String>,
 }
 
 /// A file uploaded with a message.
@@ -325,6 +339,15 @@ pub struct ImageAttachment {
     /// In pixels, when the server says.
     pub width: Option<u32>,
     pub height: Option<u32>,
+}
+
+impl From<rc_api::Reaction> for Reaction {
+    fn from(reaction: rc_api::Reaction) -> Self {
+        Self {
+            emoji: reaction.emoji,
+            usernames: reaction.usernames,
+        }
+    }
 }
 
 impl From<rc_api::Attachment> for Attachment {
@@ -397,6 +420,8 @@ pub(crate) fn message_from(message: rc_api::Message) -> Option<Message> {
         kind,
         delivery: Delivery::Sent,
         attachments: message.attachments.into_iter().map(Into::into).collect(),
+        edited: message.edited,
+        reactions: message.reactions.into_iter().map(Into::into).collect(),
     })
 }
 
@@ -547,7 +572,44 @@ mod tests {
             thread_shown: false,
             md: None,
             attachments: Vec::new(),
+            edited: false,
+            reactions: Vec::new(),
         }
+    }
+
+    // RICH-006, RICH-007
+    #[test]
+    fn maps_the_edit_flag_and_the_reactions_in_order() {
+        let mut entry = entry(None, "hi");
+        entry.edited = true;
+        entry.reactions = vec![
+            rc_api::Reaction {
+                emoji: ":b:".into(),
+                usernames: vec!["x".into(), "y".into()],
+            },
+            rc_api::Reaction {
+                emoji: ":a:".into(),
+                usernames: vec!["z".into()],
+            },
+        ];
+        let message = message_from(entry).unwrap();
+        assert!(message.edited);
+        assert_eq!(
+            message.reactions,
+            [
+                Reaction {
+                    emoji: ":b:".into(),
+                    usernames: vec!["x".into(), "y".into()],
+                },
+                Reaction {
+                    emoji: ":a:".into(),
+                    usernames: vec!["z".into()],
+                },
+            ]
+        );
+        let plain = message_from(self::entry(None, "hi")).unwrap();
+        assert!(!plain.edited);
+        assert_eq!(plain.reactions, []);
     }
 
     // RICH-005

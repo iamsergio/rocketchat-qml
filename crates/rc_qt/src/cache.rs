@@ -357,6 +357,8 @@ mod tests {
             kind: MessageKind::Text(id.into()),
             delivery: Delivery::Sent,
             attachments: Vec::new(),
+            edited: false,
+            reactions: Vec::new(),
         }
     }
 

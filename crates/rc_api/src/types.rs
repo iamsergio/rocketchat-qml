@@ -129,6 +129,19 @@ pub struct Message {
     /// The files attached to the message. Other kinds of attachment (quotes, integrations) are
     /// left out.
     pub attachments: Vec<Attachment>,
+    /// The message was edited after it was sent (`editedAt`).
+    pub edited: bool,
+    /// The reactions, in the order the server lists them. Empty if there are none.
+    pub reactions: Vec<Reaction>,
+}
+
+/// An emoji that users reacted to a message with.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Reaction {
+    /// The shortcode with its colons, as the server sends it (`:thumbsup:`).
+    pub emoji: String,
+    /// Who reacted, in the order the server lists them.
+    pub usernames: Vec<String>,
 }
 
 /// A file attached to a message, as uploaded. Its paths are relative to the server, below
@@ -179,6 +192,15 @@ pub struct HistoryPage {
     pub reached_start: bool,
 }
 
+/// What happened to a room's messages since a time (`chat.syncMessages`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MessageChanges {
+    /// Messages sent or changed (edited, reacted to...) since then.
+    pub updated: Vec<Message>,
+    /// The ids of messages deleted since then.
+    pub deleted: Vec<String>,
+}
+
 /// A file the server sent.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Download {
@@ -190,9 +212,9 @@ pub struct Download {
 /// What the server pushes over the realtime connection, for the streams the client subscribed to.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DdpEvent {
-    /// A new or edited message in one of the user's rooms. System messages are messages too. The
-    /// server also sends the messages of public channels the user isn't in, so a caller that cares
-    /// checks the room against its subscriptions.
+    /// A new or changed message in one of the user's rooms (edited, reacted to...), whole. System
+    /// messages are messages too. The server also sends the messages of public channels the user
+    /// isn't in, so a caller that cares checks the room against its subscriptions.
     Message(Message),
     /// The user joined a room, or one of their rooms changed: its unread count, its name...
     SubscriptionChanged(Subscription),
@@ -207,6 +229,9 @@ pub enum DdpEvent {
     /// A user's or a room's avatar changed: fetch it again. The server announces every user's and
     /// every room's, not only those the client knows.
     AvatarChanged(AvatarOwner),
+    /// A message was deleted. Only pushed for the rooms subscribed to with
+    /// [`DdpClient::subscribe_room_deletions`](crate::DdpClient::subscribe_room_deletions).
+    MessageDeleted { room_id: String, message_id: String },
 }
 
 /// Whose avatar changed.

@@ -10,8 +10,8 @@ use serde_json::json;
 
 use crate::error::Error;
 use crate::types::{
-    Credentials, CustomEmoji, Download, HistoryPage, LoginResult, Message, RoomType, ServerInfo,
-    Subscription, User,
+    Credentials, CustomEmoji, Download, HistoryPage, LoginResult, Message, MessageChanges,
+    RoomType, ServerInfo, Subscription, User,
 };
 use crate::wire;
 
@@ -334,6 +334,36 @@ impl RestSession {
         let path = format!("api/v1/{endpoint}?{}", escaped.query().unwrap_or_default());
         let body = self.call(Method::GET, &path).await?;
         wire::parse_history(&body, count).map_err(Error::Decode)
+    }
+
+    /// What happened to a room's messages since `since` (`GET /api/v1/chat.syncMessages`): the
+    /// ones sent or changed, whole, and the ids of the ones deleted. It works for every room type.
+    /// The server decides by its own clock, so a caller that takes `since` from its clock should
+    /// leave a margin; applying a change twice does no harm.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Unauthorized`] if the token is expired or revoked, [`Error::Server`] if the room
+    /// doesn't exist or isn't visible to the user, or any of the other errors.
+    pub async fn sync_messages(
+        &self,
+        room_id: &str,
+        since: jiff::Timestamp,
+    ) -> Result<MessageChanges, Error> {
+        // Only a URL to escape the query with; the host is never used.
+        let mut escaped =
+            Url::parse("http://unused/").map_err(|e| Error::InvalidUrl(e.to_string()))?;
+        {
+            let mut pairs = escaped.query_pairs_mut();
+            pairs.append_pair("roomId", room_id);
+            pairs.append_pair("lastUpdate", &since.to_string());
+        }
+        let path = format!(
+            "api/v1/chat.syncMessages?{}",
+            escaped.query().unwrap_or_default()
+        );
+        let body = self.call(Method::GET, &path).await?;
+        wire::parse_changes(&body).map_err(Error::Decode)
     }
 
     /// Posts a text message under an id the caller picked (`POST /api/v1/chat.sendMessage`), and
