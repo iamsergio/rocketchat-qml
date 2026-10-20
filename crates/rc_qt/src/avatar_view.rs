@@ -98,11 +98,16 @@ pub fn rows_using(
     changed: &HashSet<AvatarOwner>,
     owner: impl Fn(usize) -> Option<AvatarOwner>,
 ) -> Vec<(usize, usize)> {
+    runs(count, |row| {
+        owner(row).is_some_and(|owner| changed.contains(&owner))
+    })
+}
+
+/// The rows `0..count` for which `wanted` holds, as runs `(first, last)` of consecutive rows.
+#[must_use]
+pub fn runs(count: usize, wanted: impl Fn(usize) -> bool) -> Vec<(usize, usize)> {
     let mut runs: Vec<(usize, usize)> = Vec::new();
-    for row in 0..count {
-        if !owner(row).is_some_and(|owner| changed.contains(&owner)) {
-            continue;
-        }
+    for row in (0..count).filter(|row| wanted(*row)) {
         match runs.last_mut() {
             Some((_, last)) if *last + 1 == row => *last = row,
             _ => runs.push((row, row)),

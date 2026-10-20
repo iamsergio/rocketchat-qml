@@ -27,6 +27,9 @@ Item {
     required property bool firstOfDay
     required property string dayLabel
     required property string delivery
+    // A list of maps: title, description, size, link, isImage, image (a file URL, empty until it is
+    // downloaded), width and height.
+    required property var attachments
 
     objectName: "msg_" + messageId
     width: ListView.view.width
@@ -96,6 +99,8 @@ Item {
             }
 
             ColumnLayout {
+                id: content
+
                 Layout.fillWidth: true
                 spacing: 2
 
@@ -157,6 +162,8 @@ Item {
                     objectName: "msgBody"
                     Layout.fillWidth: true
                     implicitHeight: bodyText.implicitHeight
+                    // A message of only files has no text to leave a blank line for.
+                    visible: root.body !== "" || root.attachments.length === 0
                     opacity: root.delivery === "sent" ? 1 : 0.6
                     property string text: root.body
 
@@ -173,6 +180,108 @@ Item {
 
                         HoverHandler {
                             cursorShape: bodyText.hoveredLink ? Qt.PointingHandCursor : Qt.ArrowCursor
+                        }
+                    }
+                }
+
+                // The files of the message: images inline, other files as links. They open on the
+                // server's page in the browser, as the app can't hand the browser its login.
+                Repeater {
+                    model: root.attachments
+
+                    delegate: ColumnLayout {
+                        id: attachment
+
+                        required property int index
+                        required property var modelData
+                        // The image is shown at its size, at most this wide and tall.
+                        readonly property real naturalWidth: modelData.width > 0 ? modelData.width : 360
+                        readonly property real naturalHeight: modelData.height > 0 ? modelData.height : 240
+                        readonly property real fit: Math.min(1, Math.min(360, content.width) / naturalWidth, 480 / naturalHeight)
+
+                        objectName: "attachment" + index
+                        Layout.fillWidth: true
+                        spacing: 2
+
+                        Item {
+                            Layout.preferredWidth: attachment.naturalWidth * attachment.fit
+                            Layout.preferredHeight: attachment.naturalHeight * attachment.fit
+                            visible: attachment.modelData.isImage
+
+                            Rectangle {
+                                objectName: "attachmentPlaceholder"
+                                anchors.fill: parent
+                                color: root.palette.mid
+                                opacity: 0.3
+                                visible: picture.status !== Image.Ready
+                            }
+
+                            Image {
+                                id: picture
+
+                                // The URL, which is what the tests read: Spix reads text.
+                                property string text: attachment.modelData.image
+
+                                objectName: "attachmentImage"
+                                anchors.fill: parent
+                                asynchronous: true
+                                fillMode: Image.PreserveAspectFit
+                                source: attachment.modelData.image
+                                sourceSize.width: width
+                                visible: status === Image.Ready
+                            }
+
+                            TapHandler {
+                                onTapped: Qt.openUrlExternally(attachment.modelData.link)
+                            }
+
+                            HoverHandler {
+                                cursorShape: Qt.PointingHandCursor
+                            }
+                        }
+
+                        RowLayout {
+                            // The address the file opens, which is what the tests read: Spix reads text.
+                            property string text: attachment.modelData.link
+
+                            objectName: "attachmentLink"
+                            Layout.fillWidth: true
+                            visible: !attachment.modelData.isImage
+                            spacing: 8
+
+                            Label {
+                                objectName: "attachmentTitle"
+                                Layout.maximumWidth: content.width
+                                color: root.palette.link
+                                elide: Text.ElideMiddle
+                                font.underline: true
+                                text: attachment.modelData.title
+                                textFormat: Text.PlainText
+                            }
+
+                            Label {
+                                objectName: "attachmentSize"
+                                color: root.palette.placeholderText
+                                text: attachment.modelData.size
+                                textFormat: Text.PlainText
+                            }
+
+                            TapHandler {
+                                onTapped: Qt.openUrlExternally(attachment.modelData.link)
+                            }
+
+                            HoverHandler {
+                                cursorShape: Qt.PointingHandCursor
+                            }
+                        }
+
+                        Label {
+                            objectName: "attachmentDescription"
+                            Layout.fillWidth: true
+                            text: attachment.modelData.description
+                            textFormat: Text.PlainText
+                            visible: attachment.modelData.description !== ""
+                            wrapMode: Text.Wrap
                         }
                     }
                 }

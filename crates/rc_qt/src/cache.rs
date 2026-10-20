@@ -4,14 +4,15 @@
 //! What the hub remembers of the core's events, so that a view model created late can catch up.
 //! Plain Rust, so it can be unit-tested without Qt or a [`Client`](rc_core::Client).
 
-use rc_core::AvatarUpdate;
 use rc_core::domain::{AvatarOwner, Message, Room, RoomId};
 use rc_core::emoji::CustomEmojis;
 use rc_core::rooms::RoomChange;
 use rc_core::session::SessionState;
 use rc_core::timeline::{TimelineChange, TimelineStatus};
+use rc_core::{AvatarUpdate, ImageUpdate};
 use rc_core::{Connection, Event};
 
+use crate::attachment_view::ImageUrls;
 use crate::avatar_view::AvatarUrls;
 use crate::rich_html::Viewer;
 use crate::room_view::{RoomState, room_state};
@@ -30,10 +31,14 @@ pub struct Cache {
     status: TimelineStatus,
     /// The logged-in user, if any.
     username: Option<String>,
+    /// The URL the user logged in with.
+    server: Option<String>,
     /// `None` until the core sends some: a `HashMap` can't be built in `new`.
     emoji: Option<CustomEmojis>,
     /// `None` until the core sends some, like `emoji`.
     avatars: Option<AvatarUrls>,
+    /// `None` until the core sends some, like `emoji`.
+    images: Option<ImageUrls>,
 }
 
 impl Default for Cache {
@@ -59,8 +64,10 @@ impl Cache {
                 error: None,
             },
             username: None,
+            server: None,
             emoji: None,
             avatars: None,
+            images: None,
         }
     }
 
@@ -69,9 +76,12 @@ impl Cache {
         match event {
             Event::Session(state) => {
                 self.state = Some(state.clone());
-                self.username = match state {
-                    SessionState::LoggedIn(account) => Some(account.user.username.clone()),
-                    _ => None,
+                (self.username, self.server) = match state {
+                    SessionState::LoggedIn(account) => (
+                        Some(account.user.username.clone()),
+                        Some(account.server.clone()),
+                    ),
+                    _ => (None, None),
                 };
                 // A session starts connected, and the core says nothing about it then.
                 self.connection = Connection::Connected;
@@ -80,6 +90,9 @@ impl Cache {
             Event::CustomEmoji(emoji) => self.emoji = Some(emoji.clone()),
             Event::Avatars(updates) => {
                 self.avatars.get_or_insert_default().apply(updates);
+            }
+            Event::Images(updates) => {
+                self.images.get_or_insert_default().apply(updates);
             }
             Event::Rooms(changes) => {
                 for change in changes {
@@ -125,6 +138,7 @@ impl Cache {
     pub fn viewer(&self) -> Viewer {
         Viewer {
             username: self.username.clone(),
+            server: self.server.clone(),
             emoji: self.emoji.clone().unwrap_or_default(),
         }
     }
@@ -142,6 +156,22 @@ impl Cache {
         updates
             .iter()
             .map(|update| (update.owner.clone(), urls.url(&update.owner).to_owned()))
+            .collect()
+    }
+
+    /// The attachment image files known now, as URLs.
+    #[must_use]
+    pub fn images(&self) -> ImageUrls {
+        self.images.clone().unwrap_or_default()
+    }
+
+    /// The URLs, as they are now, of the images of `updates` (empty for a file that is gone).
+    #[must_use]
+    pub fn image_changes(&self, updates: &[ImageUpdate]) -> Vec<(String, String)> {
+        let urls = self.images();
+        updates
+            .iter()
+            .map(|update| (update.path.clone(), urls.url(&update.path).to_owned()))
             .collect()
     }
 
@@ -239,6 +269,7 @@ mod tests {
             cache.viewer(),
             Viewer {
                 username: Some("alice".into()),
+                server: Some("http://h".into()),
                 emoji
             }
         );
@@ -463,6 +494,35 @@ mod tests {
             owner: AvatarOwner::User(username.to_owned()),
             path: path.map(std::path::PathBuf::from),
         }
+    }
+
+    fn image(path: &str, file: Option<&str>) -> ImageUpdate {
+        ImageUpdate {
+            path: path.to_owned(),
+            file: file.map(std::path::PathBuf::from),
+        }
+    }
+
+    // RICH-005
+    #[test]
+    fn a_model_created_late_gets_the_images_known_so_far() {
+        let mut cache = Cache::new();
+        assert_eq!(cache.images(), ImageUrls::default());
+        cache.apply(&Event::Images(vec![image("/a", Some("/c/a.png"))]));
+        cache.apply(&Event::Images(vec![
+            image("/b", Some("/c/b.png")),
+            image("/a", None),
+        ]));
+        let urls = cache.images();
+        assert_eq!(urls.url("/a"), "");
+        assert_eq!(urls.url("/b"), "file:///c/b.png?v=1");
+        assert_eq!(
+            cache.image_changes(&[image("/b", Some("/c/b.png")), image("/a", None)]),
+            [
+                ("/b".to_owned(), "file:///c/b.png?v=1".to_owned()),
+                ("/a".to_owned(), String::new())
+            ]
+        );
     }
 
     // RICH-004

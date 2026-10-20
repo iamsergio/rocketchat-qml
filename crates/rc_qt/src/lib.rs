@@ -31,6 +31,7 @@ pub mod room_vm;
 #[allow(unsafe_code, clippy::unnecessary_box_returns)]
 pub mod session_vm;
 
+mod attachment_view;
 mod avatar_view;
 mod cache;
 mod dev_login;
