@@ -68,7 +68,7 @@ Done when: messages from others appear live, unread badges update, you can send 
 - [x] `rc_core`: sync engine. Subscribe to `__my_messages__` and `stream-notify-user` (subscriptions/rooms changed), route events into state
 - [x] `rc_core`: reconnect with exponential backoff and jitter. Catch up on missed messages after reconnecting
 - [x] `rc_core`: send with an optimistic local echo (pending → sent / failed), retry
-- [ ] `rc_core`: mark a room read when it's opened. Room list ordered by last activity
+- [x] `rc_core`: mark a room read when it's opened. Room list ordered by last activity
 - [x] Tests: a small TCP proxy in front of the test server to drop connections on demand
 - [x] `rc_qt` / QML: composer, pending/failed indicators with retry
 - [x] `rc_qt` / QML: connection status banner

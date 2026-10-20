@@ -30,8 +30,8 @@ Every test carries a `// <ID>` comment. A feature can have tests at several leve
 | ROOM-001 | List subscribed rooms after login | unit: `crates/rc_api/src/wire.rs`, `crates/rc_core/src/domain.rs`, `crates/rc_core/src/rooms.rs`, `crates/rc_core/src/client/tests.rs`, `crates/rc_qt/src/cache.rs`, `crates/rc_qt/src/row_ops.rs`; api: `crates/rc_api/tests/rest.rs`; contract: `crates/rc_api/tests/contract.rs`, `crates/rc_core/tests/contract.rs`; GUI: `crates/rc_gui_tests/tests/rooms.rs` |
 | ROOM-002 | Room shows name and type (channel, private, DM) | unit: `crates/rc_api/src/wire.rs`, `crates/rc_core/src/domain.rs`, `crates/rc_core/src/rooms.rs`, `crates/rc_qt/src/room_view.rs`, `crates/rc_qt/src/row_ops.rs`; api: `crates/rc_api/tests/rest.rs`; contract: `crates/rc_api/tests/contract.rs`, `crates/rc_core/tests/contract.rs`; GUI: `crates/rc_gui_tests/tests/rooms.rs` |
 | ROOM-003 | Room shows unread and mention counts | unit: `crates/rc_api/src/wire.rs`, `crates/rc_core/src/domain.rs`, `crates/rc_core/src/rooms.rs`; api: `crates/rc_api/tests/rest.rs`; contract: `crates/rc_api/tests/contract.rs`, `crates/rc_core/tests/contract.rs`; GUI: `crates/rc_gui_tests/tests/rooms.rs`, `crates/rc_gui_tests/tests/realtime.rs` |
-| ROOM-004 | Opening a room marks it read | todo |
-| ROOM-005 | Rooms ordered by last activity | todo |
+| ROOM-004 | Opening a room marks it read, and it stays read while open | unit: `crates/rc_core/src/client/tests.rs`, `crates/rc_core/src/domain.rs`; api: `crates/rc_api/tests/rest.rs`; contract: `crates/rc_api/tests/contract.rs`, `crates/rc_core/tests/contract.rs`; GUI: `crates/rc_gui_tests/tests/rooms.rs`, `crates/rc_gui_tests/tests/realtime.rs` |
+| ROOM-005 | Rooms ordered by last activity | unit: `crates/rc_api/src/ddp.rs`, `crates/rc_api/src/wire.rs`, `crates/rc_core/src/adapters/rest.rs`, `crates/rc_core/src/client/tests.rs`, `crates/rc_core/src/domain.rs`, `crates/rc_core/src/rooms.rs`; api: `crates/rc_api/tests/rest.rs`; contract: `crates/rc_api/tests/contract.rs`, `crates/rc_core/tests/contract.rs`; GUI: `crates/rc_gui_tests/tests/rooms.rs`, `crates/rc_gui_tests/tests/realtime.rs` |
 
 ## Messages
 
