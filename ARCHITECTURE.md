@@ -28,8 +28,9 @@ Adapter crates (added when needed): `rc_store_sqlite` (persistence) and a keyrin
 
 Test-only crates:
 
-- **rc_fake_server**: a scriptable in-process fake Rocket.Chat (REST and DDP). Used by core integration tests and GUI tests, so neither needs a real server.
-- **rc_gui_tests**: GUI tests that drive the running app through Spix's XML-RPC interface. They identify elements by path only, so the same tests can run against the Slint frontend.
+- **rc_gui_tests**: GUI tests that drive the running app through Spix's XML-RPC interface. They identify elements by path only, so the same tests can run against the Slint frontend. They run against the local test server.
+
+There is no fake Rocket.Chat. Contract and GUI tests use the real local test server (`scripts/run_test_server.sh`), which CI shares. Failures it can't produce on demand are tested with port fakes in `rc_core` and wiremock in `rc_api`.
 
 ## Threading
 

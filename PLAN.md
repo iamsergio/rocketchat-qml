@@ -14,7 +14,7 @@ At the end of every phase the app builds, runs against the local test server (`s
 - No logic in QML. Every interactive QML element gets an `objectName` from the GUI test contract.
 - Models emit fine-grained row inserts, updates and removals. No `beginResetModel` for incremental changes.
 - Every feature has an ID in TRACEABILITY.md, and its tests carry a `// <ID>` comment.
-- Every feature gets a unit test, a core integration test against `rc_fake_server`, or both. Every user-visible flow also gets a GUI test.
+- Every feature gets a unit test, a contract test against the local test server, or both. Every user-visible flow also gets a GUI test.
 - Commit hygiene: `cargo fmt`, clippy, `cargo test` and the GUI tests all pass before each commit.
 
 ## Phase 0: Skeleton
@@ -22,7 +22,7 @@ At the end of every phase the app builds, runs against the local test server (`s
 Done when: the app opens a window showing the version string, which comes from Rust. One GUI smoke test passes locally and in CI.
 
 - [x] Cargo workspace at the repo root (`crates/`), `rust-toolchain.toml`, workspace lints, `rustfmt.toml`
-- [x] Empty crates: `rc_api`, `rc_core`, `rc_qt`, `rc_fake_server`, `rc_gui_tests`
+- [x] Empty crates: `rc_api`, `rc_core`, `rc_qt`, `rc_gui_tests`
 - [x] CMake: Corrosion + cxx-qt, `find_package(Qt6 6.12 ...)`. `rc_qt` builds as a static lib and is linked into the existing `src/gui` executable
 - [x] `AppInfo` QObject (version) exposed to QML and shown in `Main.qml`
 - [x] vcpkg as a submodule in `3rdparty/vcpkg` (the iamsergio fork, same commit Spix pins). Root `vcpkg.json` in manifest mode, with AnyRPC under a `spix` feature so builds without Spix pull nothing. The presets set the vcpkg toolchain
@@ -44,7 +44,7 @@ Done when: you can log in to the local test server with a username and password,
 - [x] `rc_core`: `Client` handle plus session actor. Session state machine: `LoggedOut → Connecting → LoggedIn`, with failure reasons
 - [x] `rc_core`: `SecretStore` port with keyring and in-memory adapters. Resume the session from the stored token at startup
 - [x] `rc_core`: room domain model (channel/group/DM, name, unread, mention count)
-- [ ] `rc_fake_server`: REST subset for the endpoints above, scriptable users and rooms
+- [x] CI runs the `rc_api` and `rc_core` contract tests against the local test server (the runner joins its network)
 - [ ] `rc_qt`: `SessionVm` (state, error, login/logout invokables), `RoomListModel`
 - [ ] QML: login page (server URL, user, password, error text, busy state), room list, logout
 - [ ] Features AUTH-001…AUTH-005, ROOM-001…ROOM-003 tested
@@ -53,10 +53,9 @@ Done when: you can log in to the local test server with a username and password,
 
 Done when: clicking a room shows its history with authors and times, and scrolling up loads older messages.
 
-- [ ] `rc_api`: room history (`channels/groups/im.history`, depending on room type)
+- [ ] `rc_api`: room history (`channels/groups/im.history`, depending on room type). Covered by contract tests that post their own messages
 - [ ] `rc_core`: message domain model (plain text body for now), `MessageStore` port with an in-memory adapter, pagination cursor per room
 - [ ] `rc_core`: system messages (join, leave, topic changed) as their own kind
-- [ ] `rc_fake_server`: history with pagination
 - [ ] `rc_qt`: `MessageListModel` (prepend for older messages, append for newer), `RoomVm` (current room)
 - [ ] QML: room view, message delegate, day separators, load older on reaching the top
 - [ ] Features MSG-001…MSG-005 tested
@@ -70,9 +69,9 @@ Done when: messages from others appear live, unread badges update, you can send 
 - [ ] `rc_core`: reconnect with exponential backoff and jitter. Catch up on missed messages after reconnecting
 - [ ] `rc_core`: send with an optimistic local echo (pending → sent / failed), retry
 - [ ] `rc_core`: mark a room read when it's opened. Room list ordered by last activity
-- [ ] `rc_fake_server`: DDP endpoint (scriptable pushes, drop connection on demand)
+- [ ] Tests: a small TCP proxy in front of the test server to drop connections on demand
 - [ ] `rc_qt` / QML: composer, pending/failed indicators with retry, connection status banner
-- [ ] Contract tests: core integration tests run against the local test server (opt-in with `RC_TEST_SERVER_URL`), so the fake server stays accurate. CI runs them in a separate job on a fresh runner that starts the server with `scripts/run_test_server.sh`
+- [ ] Contract tests for DDP and realtime. The REST contract tests already exist and run in CI (since Phase 1) on the shared server
 - [ ] Contract tests must pass on a dirty server, in any order and in parallel:
   - each test creates its own users and rooms with unique names (per-run random suffix) through the admin API
   - tests never change server settings. A setting tests need goes into the script's `OVERWRITE_SETTING_*` list, so it's part of the server definition
@@ -134,6 +133,7 @@ Done when: you can log in to servers that enforce 2FA or use SSO.
 
 - **One GUI test suite for both frontends.** It speaks the Spix XML-RPC protocol. The Qt app embeds C++ Spix and the Slint app embeds a Rust Spix server. See ARCHITECTURE.md, GUI testing contract.
 - **Qt ≥ 6.12.0.**
+- **No fake server.** Integration and GUI tests run against a real Rocket.Chat (`scripts/run_test_server.sh`), which CI shares. Failures that a real server can't produce on demand are tested with port fakes (`rc_core`) and wiremock (`rc_api`).
 - **Rocket.Chat server.** Target the version the company server runs (check it with `/api/info` in Phase 1). Support older versions only where it's cheap. No compatibility shims for old servers.
 
 # Issues
