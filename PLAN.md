@@ -72,12 +72,12 @@ Done when: messages from others appear live, unread badges update, you can send 
 - [x] Tests: a small TCP proxy in front of the test server to drop connections on demand
 - [x] `rc_qt` / QML: composer, pending/failed indicators with retry
 - [x] `rc_qt` / QML: connection status banner
-- [ ] Contract tests for DDP and realtime. The REST contract tests already exist and run in CI (since Phase 1) on the shared server
+- [x] Contract tests for DDP and realtime. The REST contract tests already exist and run in CI (since Phase 1) on the shared server
 - [x] Contract tests must pass on a dirty server, in any order and in parallel:
   - each test creates its own users and rooms with unique names (per-run random suffix) through the admin API
   - tests never change server settings. A setting tests need goes into the script's `OVERWRITE_SETTING_*` list, so it's part of the server definition
   - tests assert only on objects they created (no "the room list has exactly N rooms")
-- [ ] Features RT-001…RT-004, SEND-001, SEND-002, ROOM-004, ROOM-005 tested
+- [x] Features RT-001…RT-004, SEND-001, SEND-002, ROOM-004, ROOM-005 tested
 
 ## Phase 4: Rich content
 
