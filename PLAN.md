@@ -86,7 +86,8 @@ Done when: messages render formatting, mentions, emoji, avatars, images and reac
 - [x] `rc_core`: convert the server's parsed-markdown (`md`) AST into a GUI-agnostic rich-text block model. Each frontend renders that model. Fall back to `msg` text when there is no `md`
 - [x] `rc_qt`: render blocks to the subset of rich text that Qt supports (links, code, quotes, lists)
 - [x] Mentions (highlight @me), unicode emoji shortcodes, custom server emoji. Custom emoji images are public (`/emoji-custom/<name>.<ext>`), so the message shows them straight from the server; the file-cache item can take them over later. The emoji list is fetched per sync cycle, not kept live by `updateEmojiCustom`
-- [ ] `rc_core`: file cache port. Avatars and images are downloaded to the cache directory and exposed to the GUI as local file URLs
+- [x] `rc_core`: file cache port. Avatars are downloaded to the cache directory and exposed to the GUI as local file URLs. They are kept between sessions and refreshed once per session; the server pushes changes. Only avatars somebody uploaded are shown (`avatarETag`); the others show initials. The test server serves the drawn avatar whatever is uploaded, so the picture of a custom avatar isn't tested
+- [ ] `rc_core`: images through the file cache port, for the attachments below
 - [ ] Image attachments shown inline, other attachments as links
 - [ ] Realtime message edits and deletes, plus a reactions display
 - [ ] Features RICH-001…RICH-007 tested
@@ -110,6 +111,7 @@ Done when: the app starts instantly from cache (works offline read-only), shows 
 
 - [ ] `rc_store_sqlite`: `MessageStore` and room cache adapter, schema migrations
 - [ ] Startup from cache, then a delta sync
+- [ ] Bound the size of the file cache (avatars so far): evict the least recently used files, never one the GUI shows
 - [ ] Desktop notifications for DMs and mentions, unread count in the window title or tray
 - [ ] Settings page (notifications, theme)
 - [ ] Features PERS-001, PERS-002, DESK-001…DESK-003 tested
