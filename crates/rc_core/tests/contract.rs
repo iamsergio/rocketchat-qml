@@ -475,6 +475,61 @@ fn a_message_in_the_open_room_stays_read() {
     }
 }
 
+/// Where the rooms `ids` stand in the list `mirror`, in the order `mirror` has them.
+fn order_of<'a>(mirror: &[Room], ids: &[&'a str]) -> Vec<&'a str> {
+    mirror
+        .iter()
+        .filter_map(|room| ids.iter().find(|id| **id == room.id.as_str()).copied())
+        .collect()
+}
+
+// ROOM-005
+#[test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+fn rooms_are_listed_by_last_message_and_a_new_message_moves_its_room_up() {
+    let admin = Admin::login();
+    let user = admin.create_user();
+    let (first, _) = admin.create_channel(&[&user.username]);
+    let (second, _) = admin.create_channel(&[&user.username]);
+    admin.post_message(&first, "older");
+    admin.post_message(&second, "newer");
+    let (client, events) = start();
+    client.login(&server_url(), &user.username, password(&user));
+    assert!(matches!(outcome(&events), SessionState::LoggedIn(_)));
+    let mut mirror = Vec::new();
+    wait_for(&events, |event| {
+        let Event::Rooms(changes) = event else {
+            return None;
+        };
+        for change in changes {
+            change.apply(&mut mirror);
+        }
+        Some(())
+    });
+    let ids = [first.as_str(), second.as_str()];
+    assert_eq!(order_of(&mirror, &ids), [second.as_str(), first.as_str()]);
+
+    admin.post_message(&first, "newest");
+
+    let mut moved = false;
+    wait_for(&events, |event| {
+        let Event::Rooms(changes) = event else {
+            return None;
+        };
+        for change in changes {
+            moved |= matches!(change, RoomChange::Moved { room, .. } if room.id.as_str() == first);
+            assert!(
+                !matches!(change, RoomChange::Reset(_)),
+                "a move is not a reset"
+            );
+            change.apply(&mut mirror);
+        }
+        (order_of(&mirror, &ids) == [first.as_str(), second.as_str()]).then_some(())
+    });
+    assert!(moved);
+    drop(client);
+}
+
 // RT-003, RT-002, RT-001
 #[test]
 #[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]

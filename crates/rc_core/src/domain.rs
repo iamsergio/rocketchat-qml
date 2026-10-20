@@ -141,6 +141,9 @@ pub struct Room {
     pub group_mentions: u32,
     /// Something new that the counts don't cover (e.g. thread replies): show the room as unread.
     pub alert: bool,
+    /// When the room last had a message; when it joined it, for a room without messages. The room
+    /// list shows the most recent first.
+    pub last_activity: jiff::Timestamp,
 }
 
 impl Room {
@@ -195,6 +198,10 @@ pub(crate) fn room_from(sub: rc_api::Subscription) -> Option<Room> {
         user_mentions: sub.user_mentions,
         group_mentions: sub.group_mentions,
         alert: sub.alert,
+        last_activity: sub
+            .last_message
+            .or(sub.created)
+            .unwrap_or(jiff::Timestamp::UNIX_EPOCH),
     })
 }
 
@@ -324,6 +331,27 @@ mod tests {
             created: None,
             last_message: None,
         }
+    }
+
+    // ROOM-005
+    #[test]
+    fn the_last_activity_is_the_last_message_else_the_join_time_else_the_epoch() {
+        let at = |text: &str| text.parse::<jiff::Timestamp>().unwrap();
+        let mut subscription = sub("r", RoomType::Channel);
+        assert_eq!(
+            room_from(subscription.clone()).unwrap().last_activity,
+            jiff::Timestamp::UNIX_EPOCH
+        );
+        subscription.created = Some(at("2026-10-19T10:00:00Z"));
+        assert_eq!(
+            room_from(subscription.clone()).unwrap().last_activity,
+            at("2026-10-19T10:00:00Z")
+        );
+        subscription.last_message = Some(at("2026-10-20T10:00:00Z"));
+        assert_eq!(
+            room_from(subscription).unwrap().last_activity,
+            at("2026-10-20T10:00:00Z")
+        );
     }
 
     // ROOM-004

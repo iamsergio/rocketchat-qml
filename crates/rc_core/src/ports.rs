@@ -110,7 +110,7 @@ pub trait ServerApi: Clone + Send + Sync + 'static {
     ) -> impl Future<Output = Result<(), ApiError>> + Send;
 
     /// Opens the realtime connection for the session: connects, logs in with the credentials and
-    /// subscribes to the user's messages and subscription changes. What the server pushes from then
+    /// subscribes to the user's messages, subscription changes and room activity. What the server pushes from then
     /// on comes out of the receiver, which ends when the connection does. Dropping the receiver
     /// closes the connection. Reconnecting is up to the caller.
     ///
@@ -139,6 +139,9 @@ pub enum Pushed {
     Subscription(rc_api::Subscription),
     /// The user left a room or was removed from it.
     SubscriptionRemoved(RoomId),
+    /// One of the user's rooms has a message at that time. Comes with every new message, and with
+    /// other changes of the room too, then with a time the room has already.
+    Activity { room: RoomId, at: jiff::Timestamp },
 }
 
 /// What [`ServerApi::realtime`] returns: the pushed events in the order the server sent them.

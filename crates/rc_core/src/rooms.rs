@@ -63,12 +63,12 @@ pub struct RoomList {
     rooms: Vec<Room>,
 }
 
-/// The display order: by name, ignoring case, and by id between equal names. ROOM-005 (Phase 3)
-/// changes this to last activity.
+/// The display order: the most recently active room first, then by name, ignoring case, and by id
+/// between equal names.
 fn display_order(a: &Room, b: &Room) -> Ordering {
-    a.name
-        .to_lowercase()
-        .cmp(&b.name.to_lowercase())
+    b.last_activity
+        .cmp(&a.last_activity)
+        .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
         .then_with(|| a.id.cmp(&b.id))
 }
 
@@ -129,6 +129,16 @@ impl RoomList {
         Some(RoomChange::Removed { index })
     }
 
+    /// Moves the room up if it had a message after what is known of it. `None` if the room isn't
+    /// listed or already knew that time.
+    pub fn bump(&mut self, id: &RoomId, at: jiff::Timestamp) -> Option<RoomChange> {
+        let room = self.get(id).filter(|room| room.last_activity < at)?;
+        self.upsert(Room {
+            last_activity: at,
+            ..room.clone()
+        })
+    }
+
     #[must_use]
     pub fn get(&self, id: &RoomId) -> Option<&Room> {
         self.rooms.iter().find(|room| &room.id == id)
@@ -159,6 +169,18 @@ mod tests {
             user_mentions: 0,
             group_mentions: 0,
             alert: false,
+            last_activity: jiff::Timestamp::UNIX_EPOCH,
+        }
+    }
+
+    fn at(secs: i64) -> jiff::Timestamp {
+        jiff::Timestamp::from_second(secs).unwrap()
+    }
+
+    fn active(id: &str, name: &str, secs: i64) -> Room {
+        Room {
+            last_activity: at(secs),
+            ..room(id, name)
         }
     }
 
@@ -390,5 +412,102 @@ mod tests {
         });
         step(l, m, |l| l.remove(&id("x")));
         step(l, m, |l| Some(l.reset(Vec::new())));
+    }
+
+    // ROOM-005
+    #[test]
+    fn the_most_recently_active_room_comes_first_then_name_then_id() {
+        let mut list = RoomList::default();
+        list.reset(vec![
+            active("1", "old", 10),
+            active("2", "beta", 20),
+            active("3", "alpha", 20),
+            active("0", "alpha", 20),
+            active("4", "new", 30),
+        ]);
+        assert_eq!(names(&list), ["new", "alpha", "alpha", "beta", "old"]);
+        let ids: Vec<_> = list.rooms().iter().map(|r| r.id.as_str()).collect();
+        assert_eq!(ids, ["4", "0", "3", "2", "1"]);
+    }
+
+    // ROOM-005
+    #[test]
+    fn bump_moves_the_room_to_the_front() {
+        let mut list = list_of(vec![
+            active("a", "a", 30),
+            active("b", "b", 20),
+            active("c", "c", 10),
+        ]);
+        let change = list.bump(&"c".to_owned().into(), at(40));
+        assert_eq!(
+            change,
+            Some(RoomChange::Moved {
+                from: 2,
+                to: 0,
+                room: active("c", "c", 40)
+            })
+        );
+        assert_eq!(names(&list), ["c", "a", "b"]);
+    }
+
+    // ROOM-005
+    #[test]
+    fn bump_within_the_same_place_updates_in_place() {
+        let mut list = list_of(vec![active("a", "a", 30), active("b", "b", 20)]);
+        assert_eq!(
+            list.bump(&"a".to_owned().into(), at(35)),
+            Some(RoomChange::Updated {
+                index: 0,
+                room: active("a", "a", 35)
+            })
+        );
+    }
+
+    // ROOM-005
+    #[test]
+    fn bump_ignores_old_times_and_unknown_rooms() {
+        let mut list = list_of(vec![active("a", "a", 30), active("b", "b", 20)]);
+        assert_eq!(list.bump(&"b".to_owned().into(), at(20)), None);
+        assert_eq!(list.bump(&"b".to_owned().into(), at(5)), None);
+        assert_eq!(list.bump(&"zzz".to_owned().into(), at(99)), None);
+        assert_eq!(names(&list), ["a", "b"]);
+    }
+
+    // ROOM-005
+    #[test]
+    fn sync_moves_rooms_whose_activity_changed() {
+        let mut list = list_of(vec![active("a", "a", 30), active("b", "b", 20)]);
+        let changes = list.sync(vec![active("a", "a", 30), active("b", "b", 40)]);
+        assert_eq!(
+            changes,
+            [RoomChange::Moved {
+                from: 1,
+                to: 0,
+                room: active("b", "b", 40)
+            }]
+        );
+    }
+
+    // ROOM-005
+    #[test]
+    fn a_mirror_following_the_bumps_equals_the_list() {
+        let (mut list, mut mirror) = (RoomList::default(), Vec::new());
+        let id = |id: &str| -> RoomId { id.to_owned().into() };
+        let l = &mut list;
+        let m = &mut mirror;
+        step(l, m, |l| {
+            Some(l.reset(vec![
+                active("a", "a", 10),
+                active("b", "b", 20),
+                active("c", "c", 30),
+            ]))
+        });
+        step(l, m, |l| l.bump(&id("a"), at(40)));
+        step(l, m, |l| l.bump(&id("c"), at(50)));
+        step(l, m, |l| l.bump(&id("c"), at(50)));
+        step(l, m, |l| l.bump(&id("b"), at(45)));
+        step(l, m, |l| l.upsert(active("d", "d", 47)));
+        step(l, m, |l| l.remove(&id("c")));
+        assert_eq!(names(&list), ["d", "b", "a"]);
     }
 }
