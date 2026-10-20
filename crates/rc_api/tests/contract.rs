@@ -533,6 +533,58 @@ async fn history_has_system_messages_with_their_kind() {
     assert_eq!(topic.author.username, fixture.admin.username);
 }
 
+// RICH-001, RICH-002, RICH-003
+#[tokio::test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+async fn history_has_the_parsed_markdown_of_a_message() {
+    use rc_api::md::{Block, Inline};
+    let fixture = Fixture::new();
+    let (room_id, _) = fixture.create_channel();
+    fixture.admin.post_message(
+        &room_id,
+        "**bold** `code` @all #general :smile: [x](https://example.com)",
+    );
+    fixture
+        .admin
+        .post_message(&room_id, "```rust\nfn main() {}\n```");
+    let session = fixture.client.session(fixture.login().await.credentials);
+
+    let page = session
+        .history(&room_id, &RoomType::Channel, None, 50)
+        .await
+        .unwrap();
+
+    let messages = ordinary(&page.messages);
+    assert_eq!(
+        messages[0].md,
+        Some(vec![Block::Code {
+            language: Some("rust".into()),
+            lines: vec!["fn main() {}".into()]
+        }])
+    );
+    let Some([Block::Paragraph(inlines)]) = messages[1].md.as_deref() else {
+        panic!("{:?}", messages[1].md);
+    };
+    assert_eq!(inlines[0], Inline::Bold(vec![Inline::Text("bold".into())]));
+    assert_eq!(inlines[2], Inline::Code("code".into()));
+    assert_eq!(inlines[4], Inline::MentionUser("all".into()));
+    assert_eq!(inlines[6], Inline::MentionChannel("general".into()));
+    assert_eq!(
+        inlines[8],
+        Inline::Emoji {
+            short_code: Some("smile".into()),
+            unicode: None
+        }
+    );
+    assert_eq!(
+        inlines[10],
+        Inline::Link {
+            url: "https://example.com".into(),
+            label: vec![Inline::Text("x".into())]
+        }
+    );
+}
+
 // MSG-001
 #[tokio::test]
 #[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]

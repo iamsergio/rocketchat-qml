@@ -229,6 +229,7 @@ mod tests {
             kind: None,
             thread_id: thread_id.map(str::to_owned),
             thread_shown: false,
+            md: None,
         }
     }
 
