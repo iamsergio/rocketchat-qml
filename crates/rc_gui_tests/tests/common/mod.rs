@@ -1,8 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Sergio Martins
 // SPDX-License-Identifier: MIT
 
-//! Steps shared by the GUI test files. Each test creates its own user and rooms through
-//! `rc_test_server`, so the tests hold on a dirty server and in parallel.
+//! Steps shared by the GUI test files. Each test creates its own user and rooms with unique names
+//! through `rc_test_server` and only looks at those, so the tests hold on a dirty server, in any
+//! order and in parallel. Server settings are never changed.
 
 // Not every test file uses every item, and a failed step should just fail the test.
 #![allow(dead_code, clippy::unwrap_used)]
