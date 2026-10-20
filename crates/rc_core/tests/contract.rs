@@ -603,6 +603,36 @@ fn a_client_catches_up_after_the_connection_was_cut() {
     drop(client);
 }
 
+// RT-003, RT-002
+#[test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+fn a_room_that_is_not_open_gets_its_unread_count_after_the_connection_was_cut() {
+    let admin = Admin::login();
+    let user = admin.create_user();
+    let dm = admin.create_dm(&user.username);
+    let proxy = Proxy::start();
+    let (client, events) = logged_in_at(&proxy.url(), &user);
+
+    proxy.set_accepting(false);
+    proxy.drop_connections();
+    admin.post_message(&dm, "one while away");
+    admin.post_message(&dm, "two while away");
+    proxy.set_accepting(true);
+
+    wait_for(&events, |event| {
+        room_changed(event, |room| room.id.as_str() == dm && room.unread == 2)
+    });
+    let later = admin.post_message(&dm, "three, live");
+    wait_for(&events, |event| {
+        room_changed(event, |room| {
+            room.id.as_str() == dm
+                && room.unread == 3
+                && room.last_activity == later.ts.parse().unwrap()
+        })
+    });
+    drop(client);
+}
+
 /// Follows the timeline like a frontend until `done` accepts the mirror.
 fn follow_until(
     events: &Receiver<Event>,
