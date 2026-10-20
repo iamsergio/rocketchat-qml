@@ -157,8 +157,10 @@ use rc_core::timeline::TimelineChange;
 
 use crate::hub;
 use crate::message_view::{
-    author_name, body, day_label, delivery_name, first_of_day, system_text, time_text,
+    author_name, body, day_label, delivery_name, first_of_day, html, mentions_me, system_text,
+    time_text,
 };
+use crate::rich_html::{Clock, Viewer};
 use crate::row_ops::{MessageOp, apply_newest_first, message_ops};
 
 use qobject::MessageListModel;
@@ -177,6 +179,8 @@ const SYSTEM_TEXT_ROLE: i32 = 262;
 const FIRST_OF_DAY_ROLE: i32 = 263;
 const DAY_LABEL_ROLE: i32 = 264;
 const DELIVERY_ROLE: i32 = 265;
+const HTML_ROLE: i32 = 266;
+const MENTIONS_ME_ROLE: i32 = 267;
 
 /// Backing data of [`qobject::MessageListModel`]: the messages, mirrored from the core's changes
 /// and held newest first.
@@ -184,6 +188,8 @@ pub struct MessageListModelRust {
     messages: Vec<Message>,
     /// Where times and days are read: the user's.
     zone: TimeZone,
+    /// Who the messages are shown to: it decides the mentions that stand out.
+    viewer: Viewer,
 }
 
 impl Default for MessageListModelRust {
@@ -191,6 +197,7 @@ impl Default for MessageListModelRust {
         Self {
             messages: Vec::new(),
             zone: TimeZone::system(),
+            viewer: Viewer::default(),
         }
     }
 }
@@ -202,7 +209,8 @@ fn row(index: usize) -> i32 {
 
 impl cxx_qt::Initialize for MessageListModel {
     fn initialize(mut self: Pin<&mut Self>) {
-        let snapshot = hub::register_messages(self.qt_thread());
+        let (snapshot, viewer) = hub::register_messages(self.qt_thread());
+        self.as_mut().rust_mut().viewer = viewer;
         self.as_mut().apply(&[snapshot]);
     }
 }
@@ -258,6 +266,17 @@ impl MessageListModel {
         }
     }
 
+    /// Shows the messages to someone else, or with other custom emoji: their formatting changes.
+    pub fn set_viewer(mut self: Pin<&mut Self>, viewer: Viewer) {
+        if self.viewer == viewer {
+            return;
+        }
+        self.as_mut().rust_mut().viewer = viewer;
+        if let Some(last) = self.messages.len().checked_sub(1) {
+            self.rows_changed(0, last);
+        }
+    }
+
     /// Announces new content in every role of the rows `first..=last`.
     fn rows_changed(mut self: Pin<&mut Self>, first: usize, last: usize) {
         let no_parent = QModelIndex::default();
@@ -296,6 +315,15 @@ impl MessageListModel {
             )),
             DAY_LABEL_ROLE => text(&day_label(message.ts, &self.zone, Timestamp::now())),
             DELIVERY_ROLE => text(delivery_name(message.delivery)),
+            HTML_ROLE => text(&html(
+                message,
+                &self.viewer,
+                Clock {
+                    zone: &self.zone,
+                    now: Timestamp::now(),
+                },
+            )),
+            MENTIONS_ME_ROLE => QVariant::from(&mentions_me(message, &self.viewer)),
             _ => QVariant::default(),
         }
     }
@@ -315,6 +343,8 @@ impl MessageListModel {
             (FIRST_OF_DAY_ROLE, "firstOfDay"),
             (DAY_LABEL_ROLE, "dayLabel"),
             (DELIVERY_ROLE, "delivery"),
+            (HTML_ROLE, "html"),
+            (MENTIONS_ME_ROLE, "mentionsMe"),
         ] {
             names.insert(role, QByteArray::from(name));
         }

@@ -27,6 +27,7 @@ use secrecy::SecretString;
 
 use crate::cache::Cache;
 use crate::message_list_model::qobject::MessageListModel;
+use crate::rich_html::Viewer;
 use crate::room_list_model::qobject::RoomListModel;
 use crate::room_view::RoomState;
 use crate::room_vm::qobject::RoomVm;
@@ -206,12 +207,13 @@ pub fn register_room(thread: CxxQtThread<RoomVm>) -> RoomState {
     hub.cache.room_state()
 }
 
-/// Registers the `MessageList` model and returns the change that brings it up to date. Call on
+/// Registers the `MessageList` model and returns the change that brings it up to date, and who it
+/// shows the messages to. Call on
 /// the GUI thread; the events that follow are queued to `thread`.
-pub fn register_messages(thread: CxxQtThread<MessageListModel>) -> TimelineChange {
+pub fn register_messages(thread: CxxQtThread<MessageListModel>) -> (TimelineChange, Viewer) {
     let mut hub = lock();
     hub.messages = Some(thread);
-    hub.cache.timeline_snapshot()
+    (hub.cache.timeline_snapshot(), hub.cache.viewer())
 }
 
 /// The core's event callback, on a runtime thread.
@@ -220,7 +222,8 @@ fn dispatch(event: Event) {
     let hub = &mut *guard;
     hub.cache.apply(&event);
     match event {
-        Event::Session(_) | Event::Connection(_) => {
+        Event::Session(_) | Event::Connection(_) | Event::CustomEmoji(_) => {
+            show_viewer(hub);
             let view = hub.cache.session_view();
             let gone = hub
                 .session
@@ -255,6 +258,19 @@ fn dispatch(event: Event) {
         }
         Event::TimelineStatus(_) => show_room(hub),
         _ => {}
+    }
+}
+
+/// Tells the `MessageList` model who it shows the messages to now.
+fn show_viewer(hub: &mut Hub) {
+    let viewer = hub.cache.viewer();
+    let gone = hub
+        .messages
+        .as_ref()
+        .is_some_and(|thread| thread.queue(move |model| model.set_viewer(viewer)).is_err());
+    if gone {
+        tracing::debug!("the MessageList object is gone, unregistered");
+        hub.messages = None;
     }
 }
 

@@ -17,6 +17,8 @@ Item {
     required property string author
     required property string time
     required property string body
+    required property string html
+    required property bool mentionsMe
     required property bool isSystem
     required property string systemText
     required property bool firstOfDay
@@ -26,6 +28,15 @@ Item {
     objectName: "msg_" + messageId
     width: ListView.view.width
     implicitHeight: column.implicitHeight + 8
+
+    // Marks a message that mentions the user.
+    Rectangle {
+        objectName: "msgMentionsMe"
+        anchors.fill: parent
+        visible: root.mentionsMe
+        color: root.palette.highlight
+        opacity: 0.18
+    }
 
     ColumnLayout {
         id: column
@@ -116,15 +127,32 @@ Item {
             }
         }
 
-        Label {
+        // `text` is the message as written, which the tests read; `msgBodyHtml` is what is shown.
+        Item {
+            id: bodyItem
+
             objectName: "msgBody"
             Layout.fillWidth: true
+            implicitHeight: bodyText.implicitHeight
             visible: !root.isSystem
             opacity: root.delivery === "sent" ? 1 : 0.6
-            text: root.body
-            // Messages are plain text for now; never let Qt guess that one is HTML.
-            textFormat: Text.PlainText
-            wrapMode: Text.Wrap
+            property string text: root.body
+
+            Label {
+                id: bodyText
+
+                objectName: "msgBodyHtml"
+                width: parent.width
+                text: root.html
+                textFormat: Text.RichText
+                wrapMode: Text.Wrap
+                linkColor: root.palette.link
+                onLinkActivated: link => Qt.openUrlExternally(link)
+
+                HoverHandler {
+                    cursorShape: bodyText.hoveredLink ? Qt.PointingHandCursor : Qt.ArrowCursor
+                }
+            }
         }
 
         RowLayout {

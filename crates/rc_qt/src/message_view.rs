@@ -9,6 +9,8 @@ use jiff::tz::TimeZone;
 use jiff::{Timestamp, Zoned};
 use rc_core::domain::{Author, Delivery, Message, MessageKind, SystemEvent};
 
+use crate::rich_html::{Clock, Viewer, render};
+
 /// Who to show as the author: the display name, else the username.
 #[must_use]
 pub fn author_name(author: &Author) -> &str {
@@ -26,6 +28,25 @@ pub fn body(message: &Message) -> &str {
         MessageKind::Text(text) => &text.text,
         MessageKind::System(_) => "",
     }
+}
+
+/// The formatted body of an ordinary message, as HTML for rich text; nothing for a system message.
+#[must_use]
+pub fn html(message: &Message, viewer: &Viewer, clock: Clock) -> String {
+    match &message.kind {
+        MessageKind::Text(text) => render(text, viewer, clock),
+        MessageKind::System(_) => String::new(),
+    }
+}
+
+/// Whether the message calls the viewer, by name or with `@all` or `@here`. Not one the viewer
+/// wrote themselves.
+#[must_use]
+pub fn mentions_me(message: &Message, viewer: &Viewer) -> bool {
+    viewer
+        .username
+        .as_deref()
+        .is_some_and(|me| !message.author.username.eq_ignore_ascii_case(me) && message.mentions(me))
 }
 
 /// How QML sees the delivery state of a message: a string, as for the kind of a room.
@@ -101,6 +122,7 @@ fn long_date(day: &Zoned) -> String {
 #[cfg(test)]
 mod tests {
     use rc_core::domain::{Delivery, MessageKind};
+    use rc_core::rich::{Block, Inline, Mention, RichText};
 
     use super::*;
 
@@ -153,6 +175,62 @@ mod tests {
         assert_eq!(body(&text("2026-10-20T10:00:00Z")), "hi");
         assert_eq!(body(&system(SystemEvent::Joined)), "");
         assert_eq!(system_text(&text("2026-10-20T10:00:00Z")), "");
+    }
+
+    fn viewer(username: &str) -> Viewer {
+        Viewer {
+            username: Some(username.to_owned()),
+            ..Viewer::default()
+        }
+    }
+
+    fn mentioning(who: &str, mention: Mention) -> Message {
+        let mut message = text("2026-10-20T10:00:00Z");
+        message.author = author(who, None);
+        message.kind = MessageKind::Text(RichText {
+            text: String::new(),
+            blocks: vec![Block::Paragraph(vec![Inline::Mention(mention)])],
+        });
+        message
+    }
+
+    // RICH-001
+    #[test]
+    fn the_html_is_the_formatted_body_and_empty_for_system_messages() {
+        let zone = zone("UTC");
+        let clock = Clock {
+            zone: &zone,
+            now: at("2026-10-20T10:00:00Z"),
+        };
+        assert_eq!(
+            html(&text("2026-10-20T10:00:00Z"), &Viewer::default(), clock),
+            "<p style=\"margin-top:0px; margin-bottom:0px\">hi</p>"
+        );
+        assert_eq!(
+            html(&system(SystemEvent::Joined), &Viewer::default(), clock),
+            ""
+        );
+    }
+
+    // RICH-002
+    #[test]
+    fn a_message_mentions_the_viewer_by_name_or_to_everybody() {
+        let bob = mentioning("alice", Mention::User("bob".into()));
+        assert!(mentions_me(&bob, &viewer("bob")));
+        assert!(!mentions_me(&bob, &viewer("carol")));
+        assert!(!mentions_me(&bob, &Viewer::default()));
+        for everybody in [Mention::All, Mention::Here] {
+            assert!(mentions_me(&mentioning("alice", everybody), &viewer("bob")));
+        }
+    }
+
+    // RICH-002
+    #[test]
+    fn what_the_viewer_wrote_does_not_mention_them() {
+        let own = mentioning("bob", Mention::All);
+        assert!(!mentions_me(&own, &viewer("Bob")));
+        assert!(!mentions_me(&text("2026-10-20T10:00:00Z"), &viewer("bob")));
+        assert!(!mentions_me(&system(SystemEvent::Joined), &viewer("bob")));
     }
 
     // SEND-001, SEND-002
