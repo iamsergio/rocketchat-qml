@@ -23,6 +23,10 @@ qt_add_qml_module(
   RoomDelegate.qml
   RoomPage.qml
   StartupPage.qml
+  RESOURCES
+  icons/channel.svg
+  icons/direct.svg
+  icons/private.svg
   IMPORT_PATH
   ${rc_qt_export_dir}/qml_modules)
 
