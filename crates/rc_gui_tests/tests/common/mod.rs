@@ -11,7 +11,7 @@
 use std::thread;
 use std::time::{Duration, Instant};
 
-use rc_gui_tests::paths::{main_window, room, room_row};
+use rc_gui_tests::paths::{main_window, message, message_row, room, room_row};
 use rc_gui_tests::{App, Gui, Key, Modifiers};
 use rc_test_server::{Admin, Posted, TestUser, server_url};
 
@@ -98,4 +98,14 @@ pub fn log_in_at_and_wait_for_room(gui: &Gui, server: &str, user: &TestUser, roo
     log_in(gui, server, &user.username, &user.password);
     gui.wait_until_visible(&room(room_id, room_row::NAME), TIMEOUT)
         .unwrap();
+}
+
+/// The rich text (`msgBodyHtml`) of the message once it holds `part`.
+pub fn html_containing(gui: &Gui, id: &str, part: &str) -> String {
+    let path = message(id, message_row::BODY_HTML);
+    gui.wait_until(&format!("{part:?} in the body of {id}"), TIMEOUT, || {
+        Ok(gui.text(&path)?.contains(part))
+    })
+    .unwrap();
+    gui.text(&path).unwrap()
 }
