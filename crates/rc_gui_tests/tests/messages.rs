@@ -130,15 +130,15 @@ fn scrolling_to_the_top_loads_older_messages() {
     );
     assert!(!gui.exists_and_visible(main_window::HISTORY_START).unwrap());
 
-    // Home goes to the top, which loads the rest. The list then keeps the message that was first
-    // in view, so Home again goes to the very top.
-    gui.wait_until("every message loaded after Home", TIMEOUT, || {
-        press_home(gui);
+    // Home goes to the top, which loads the rest.
+    press_home(gui);
+    gui.wait_until("every message loaded", TIMEOUT, || {
         Ok(gui.count(main_window::MESSAGE_LIST)? == total)
     })
     .unwrap();
+    // The list keeps what was in view, so the oldest messages are above it: Home again.
+    press_home(gui);
     gui.wait_until("the oldest message and the start in view", TIMEOUT, || {
-        press_home(gui);
         Ok(gui.exists_and_visible(&message(oldest, message_row::BODY))?
             && gui.exists_and_visible(main_window::HISTORY_START)?)
     })
