@@ -1588,7 +1588,6 @@ dependencies = [
 name = "rc_gui_tests"
 version = "0.0.0"
 dependencies = [
- "rc_core",
  "rc_test_server",
  "roxmltree",
  "thiserror 2.0.21",

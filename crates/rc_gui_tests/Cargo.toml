@@ -15,7 +15,6 @@ thiserror.workspace = true
 ureq.workspace = true
 
 [dev-dependencies]
-rc_core.workspace = true
 rc_test_server.workspace = true
 
 [lints]
