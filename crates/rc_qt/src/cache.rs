@@ -241,6 +241,17 @@ mod tests {
                 .into_iter()
                 .collect(),
         ));
+        // A message is sent, someone else's comes in front of it, and the server confirms it with
+        // a time that puts it before that one.
+        let unsent = Message {
+            delivery: Delivery::Pending,
+            ..message("p", 60)
+        };
+        events.push(Event::Timeline(vec![timeline.add_unsent(unsent)]));
+        events.push(Event::Timeline(timeline.merge_live(message("f", 70))));
+        events.push(Event::Timeline(
+            timeline.settle(message("p", 65)).into_iter().collect(),
+        ));
         events.push(Event::Timeline(vec![TimelineChange::Reset {
             room: None,
             messages: Vec::new(),
@@ -249,7 +260,7 @@ mod tests {
         events
     }
 
-    // MSG-001, MSG-002
+    // MSG-001, MSG-002, SEND-001
     #[test]
     fn a_timeline_snapshot_taken_at_any_point_followed_by_the_rest_equals_the_replay() {
         let events = timeline_script();

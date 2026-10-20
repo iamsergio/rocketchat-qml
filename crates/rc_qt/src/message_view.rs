@@ -7,7 +7,7 @@
 
 use jiff::tz::TimeZone;
 use jiff::{Timestamp, Zoned};
-use rc_core::domain::{Author, Message, MessageKind, SystemEvent};
+use rc_core::domain::{Author, Delivery, Message, MessageKind, SystemEvent};
 
 /// Who to show as the author: the display name, else the username.
 #[must_use]
@@ -25,6 +25,16 @@ pub fn body(message: &Message) -> &str {
     match &message.kind {
         MessageKind::Text(text) => text,
         MessageKind::System(_) => "",
+    }
+}
+
+/// How QML sees the delivery state of a message: a string, as for the kind of a room.
+#[must_use]
+pub fn delivery_name(delivery: Delivery) -> &'static str {
+    match delivery {
+        Delivery::Sent => "sent",
+        Delivery::Pending => "pending",
+        Delivery::Failed => "failed",
     }
 }
 
@@ -143,6 +153,13 @@ mod tests {
         assert_eq!(body(&text("2026-10-20T10:00:00Z")), "hi");
         assert_eq!(body(&system(SystemEvent::Joined)), "");
         assert_eq!(system_text(&text("2026-10-20T10:00:00Z")), "");
+    }
+
+    // SEND-001, SEND-002
+    #[test]
+    fn each_delivery_state_has_its_own_name() {
+        let states = [Delivery::Sent, Delivery::Pending, Delivery::Failed];
+        assert_eq!(states.map(delivery_name), ["sent", "pending", "failed"]);
     }
 
     // MSG-005
