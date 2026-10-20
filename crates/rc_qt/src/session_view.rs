@@ -4,6 +4,7 @@
 //! What the `Session` view model shows for a session state. Plain Rust, so it can be unit-tested
 //! without Qt; the `QObject` only copies the values into its properties.
 
+use rc_core::Connection;
 use rc_core::session::SessionState;
 
 /// The session as QML sees it. Mirrors the `SessionStatus` Qt enum.
@@ -31,11 +32,15 @@ pub struct SessionView {
     /// The logged-in account; empty otherwise.
     pub username: String,
     pub server: String,
+    /// What to tell the user while the realtime connection is down. Empty while it is up, and
+    /// outside a session.
+    pub connection_text: String,
 }
 
-/// The view of `state`, where `None` is the state before the first event.
+/// The view of `state`, where `None` is the state before the first event, with the connection as
+/// it was then.
 #[must_use]
-pub fn session_view(state: Option<&SessionState>) -> SessionView {
+pub fn session_view(state: Option<&SessionState>, connection: Connection) -> SessionView {
     match state {
         None => SessionView {
             status: Status::Unknown,
@@ -63,8 +68,20 @@ pub fn session_view(state: Option<&SessionState>) -> SessionView {
             status: Status::LoggedIn,
             username: account.user.username.clone(),
             server: account.server.clone(),
+            connection_text: connection_text(connection),
             ..SessionView::default()
         },
+    }
+}
+
+fn connection_text(connection: Connection) -> String {
+    match connection {
+        Connection::Connected => String::new(),
+        Connection::Waiting { retry_in } => {
+            let seconds = retry_in.as_secs() + u64::from(retry_in.subsec_nanos() > 0);
+            format!("Connection lost, reconnecting in {}s…", seconds.max(1))
+        }
+        Connection::Reconnecting => "Reconnecting…".to_owned(),
     }
 }
 
@@ -89,7 +106,7 @@ mod tests {
     // AUTH-001
     #[test]
     fn is_busy_until_the_first_event() {
-        let view = session_view(None);
+        let view = session_view(None, Connection::Connected);
         assert_eq!(view.status, Status::Unknown);
         assert!(view.busy);
         assert_eq!(view.error_text, "");
@@ -98,7 +115,7 @@ mod tests {
     // AUTH-001
     #[test]
     fn is_busy_while_connecting() {
-        let view = session_view(Some(&SessionState::Connecting));
+        let view = session_view(Some(&SessionState::Connecting), Connection::Connected);
         assert_eq!(view.status, Status::Connecting);
         assert!(view.busy);
     }
@@ -106,7 +123,7 @@ mod tests {
     // AUTH-004
     #[test]
     fn is_busy_while_resuming() {
-        let view = session_view(Some(&SessionState::Resuming));
+        let view = session_view(Some(&SessionState::Resuming), Connection::Connected);
         assert_eq!(view.status, Status::Resuming);
         assert!(view.busy);
     }
@@ -114,7 +131,7 @@ mod tests {
     // AUTH-001
     #[test]
     fn logged_in_shows_the_account() {
-        let view = session_view(Some(&logged_in()));
+        let view = session_view(Some(&logged_in()), Connection::Connected);
         assert_eq!(view.status, Status::LoggedIn);
         assert!(!view.busy);
         assert_eq!(view.username, "admin");
@@ -128,7 +145,7 @@ mod tests {
         let state = SessionState::LoggedOut {
             failure: Some(LoginFailure::InvalidCredentials),
         };
-        let view = session_view(Some(&state));
+        let view = session_view(Some(&state), Connection::Connected);
         assert_eq!(view.status, Status::LoggedOut);
         assert!(!view.busy);
         assert_eq!(view.error_text, "Wrong username or password");
@@ -155,18 +172,54 @@ mod tests {
             let state = SessionState::LoggedOut {
                 failure: Some(failure),
             };
-            assert_eq!(session_view(Some(&state)).error_text, text);
+            assert_eq!(
+                session_view(Some(&state), Connection::Connected).error_text,
+                text
+            );
         }
     }
 
     // AUTH-005
     #[test]
     fn logged_out_without_a_failure_has_no_error() {
-        let view = session_view(Some(&SessionState::LoggedOut { failure: None }));
+        let view = session_view(
+            Some(&SessionState::LoggedOut { failure: None }),
+            Connection::Connected,
+        );
         assert_eq!(view.status, Status::LoggedOut);
         assert!(!view.busy);
         assert_eq!(view.error_text, "");
         assert_eq!(view.username, "");
         assert_eq!(view.server, "");
+    }
+
+    // RT-004
+    #[test]
+    fn the_connection_text_follows_the_connection() {
+        use std::time::Duration;
+
+        let text = |connection| session_view(Some(&logged_in()), connection).connection_text;
+        assert_eq!(text(Connection::Connected), "");
+        assert_eq!(text(Connection::Reconnecting), "Reconnecting…");
+        assert_eq!(
+            text(Connection::Waiting {
+                retry_in: Duration::from_millis(1200)
+            }),
+            "Connection lost, reconnecting in 2s…"
+        );
+        assert_eq!(
+            text(Connection::Waiting {
+                retry_in: Duration::from_millis(10)
+            }),
+            "Connection lost, reconnecting in 1s…"
+        );
+    }
+
+    // RT-004
+    #[test]
+    fn there_is_no_connection_text_outside_a_session() {
+        let state = SessionState::LoggedOut { failure: None };
+        let view = session_view(Some(&state), Connection::Reconnecting);
+        assert_eq!(view.connection_text, "");
     }
 }
