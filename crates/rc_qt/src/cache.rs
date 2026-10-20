@@ -99,7 +99,7 @@ impl Cache {
 
 #[cfg(test)]
 mod tests {
-    use rc_core::domain::{Author, MessageKind, RoomKind};
+    use rc_core::domain::{Author, Delivery, MessageKind, RoomKind};
     use rc_core::ports::RoomHistory;
     use rc_core::rooms::RoomList;
     use rc_core::timeline::Timeline;
@@ -198,6 +198,7 @@ mod tests {
             },
             ts: jiff::Timestamp::from_second(secs).unwrap(),
             kind: MessageKind::Text(id.to_owned()),
+            delivery: Delivery::Sent,
         }
     }
 

@@ -7,6 +7,8 @@ use std::fmt;
 
 use secrecy::SecretString;
 
+use crate::random;
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct UserId(String);
 
@@ -58,6 +60,19 @@ impl MessageId {
     #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
+    }
+
+    /// An id for a message the user is about to send, shaped like the ones the server makes.
+    #[must_use]
+    pub(crate) fn generate() -> Self {
+        const ALPHABET: &[u8] = b"23456789ABCDEFGHJKLMNPQRSTWXYZabcdefghijkmnopqrstuvwxyz";
+        let id = (0..17)
+            .map(|_| {
+                let at = usize::try_from(random::bits() % ALPHABET.len() as u64).unwrap_or(0);
+                char::from(ALPHABET[at])
+            })
+            .collect();
+        Self(id)
     }
 }
 
@@ -199,13 +214,35 @@ pub enum MessageKind {
     System(SystemEvent),
 }
 
+/// Where a message stands on its way to the server. Everything the server gave us is `Sent`;
+/// the others are messages the user wrote that it hasn't confirmed.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Delivery {
+    #[default]
+    Sent,
+    /// Being sent, or waiting for the connection.
+    Pending,
+    /// The server refused it or couldn't be reached. Sending it again is up to the user.
+    Failed,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Message {
     pub id: MessageId,
     pub room_id: RoomId,
     pub author: Author,
+    /// The server's time; for an unsent message, when the user wrote it.
     pub ts: jiff::Timestamp,
     pub kind: MessageKind,
+    pub delivery: Delivery,
+}
+
+impl Message {
+    /// Not confirmed by the server yet: `Pending` or `Failed`.
+    #[must_use]
+    pub fn is_unsent(&self) -> bool {
+        self.delivery != Delivery::Sent
+    }
 }
 
 /// The message a history entry stands for, or `None` if the timeline doesn't show it: replies in a
@@ -243,6 +280,7 @@ pub(crate) fn message_from(message: rc_api::Message) -> Option<Message> {
         },
         ts: message.ts,
         kind,
+        delivery: Delivery::Sent,
     })
 }
 
@@ -403,6 +441,40 @@ mod tests {
         assert_eq!(
             message.kind,
             MessageKind::System(SystemEvent::Other("room_changed_description".into()))
+        );
+    }
+
+    // SEND-001
+    #[test]
+    fn generated_message_ids_are_17_alphanumeric_characters_and_differ() {
+        let ids: Vec<_> = (0..100).map(|_| MessageId::generate()).collect();
+        assert!(
+            ids.iter()
+                .all(|id| id.as_str().len() == 17 && id.as_str().chars().all(char::is_alphanumeric))
+        );
+        let distinct: std::collections::HashSet<_> = ids.iter().collect();
+        assert_eq!(distinct.len(), ids.len());
+    }
+
+    // SEND-001
+    #[test]
+    fn server_messages_are_sent() {
+        let message = message_from(entry(None, "hello")).unwrap();
+        assert_eq!(message.delivery, Delivery::Sent);
+        assert!(!message.is_unsent());
+        assert!(
+            Message {
+                delivery: Delivery::Pending,
+                ..message.clone()
+            }
+            .is_unsent()
+        );
+        assert!(
+            Message {
+                delivery: Delivery::Failed,
+                ..message
+            }
+            .is_unsent()
         );
     }
 

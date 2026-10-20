@@ -123,7 +123,7 @@ pub fn apply_newest_first(change: &TimelineChange, messages: &mut Vec<Message>) 
 
 #[cfg(test)]
 mod tests {
-    use rc_core::domain::{Author, Message, MessageKind, Room, RoomKind};
+    use rc_core::domain::{Author, Delivery, Message, MessageKind, Room, RoomKind};
 
     use super::*;
 
@@ -225,6 +225,7 @@ mod tests {
             },
             ts: jiff::Timestamp::UNIX_EPOCH,
             kind: MessageKind::Text(id.to_owned()),
+            delivery: Delivery::Sent,
         }
     }
 

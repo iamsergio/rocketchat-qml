@@ -90,7 +90,7 @@ fn long_date(day: &Zoned) -> String {
 
 #[cfg(test)]
 mod tests {
-    use rc_core::domain::MessageKind;
+    use rc_core::domain::{Delivery, MessageKind};
 
     use super::*;
 
@@ -113,6 +113,7 @@ mod tests {
             author: author("alice", Some("Alice A")),
             ts: at(ts),
             kind,
+            delivery: Delivery::Sent,
         }
     }
 

@@ -8,7 +8,7 @@ use rc_api::ServerVersion;
 use secrecy::SecretString;
 use tokio::sync::mpsc::UnboundedReceiver;
 
-use crate::domain::{Credentials, Message, RoomId, RoomKind, StoredSession, User};
+use crate::domain::{Credentials, Message, MessageId, RoomId, RoomKind, StoredSession, User};
 
 /// Why a server call failed. Owned strings only, so that fakes can build and compare them.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
@@ -78,6 +78,23 @@ pub trait ServerApi: Clone + Send + Sync + 'static {
         before: Option<jiff::Timestamp>,
         count: usize,
     ) -> impl Future<Output = Result<Page, ApiError>> + Send;
+
+    /// Posts a text message under the id the caller picked and returns it as the server stored it,
+    /// with the server's time. The server stores a message once per id, and sending an id it holds
+    /// already (a retry whose first attempt got through) succeeds with the stored message, so a
+    /// caller that doesn't know whether an attempt arrived may always send again.
+    ///
+    /// # Errors
+    ///
+    /// [`ApiError::Unauthorized`] if the credentials have expired or were revoked,
+    /// [`ApiError::Server`] if the server refuses the message.
+    fn send_message(
+        &self,
+        credentials: &Credentials,
+        room: &RoomId,
+        id: &MessageId,
+        text: &str,
+    ) -> impl Future<Output = Result<Message, ApiError>> + Send;
 
     /// Opens the realtime connection for the session: connects, logs in with the credentials and
     /// subscribes to the user's messages and subscription changes. What the server pushes from then
