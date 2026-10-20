@@ -8,6 +8,7 @@ use std::fmt;
 use secrecy::SecretString;
 
 use crate::random;
+use crate::rich::RichText;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct UserId(String);
@@ -236,8 +237,8 @@ pub enum SystemEvent {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum MessageKind {
-    /// The plain text of the message.
-    Text(String),
+    /// What the author wrote, as text and as formatted blocks.
+    Text(RichText),
     System(SystemEvent),
 }
 
@@ -280,7 +281,7 @@ pub(crate) fn message_from(message: rc_api::Message) -> Option<Message> {
         return None;
     }
     let kind = match message.kind.as_deref() {
-        None => MessageKind::Text(message.text),
+        None => MessageKind::Text(RichText::from_markdown(message.text, message.md.as_deref())),
         Some("uj") => MessageKind::System(SystemEvent::Joined),
         Some("ul") => MessageKind::System(SystemEvent::Left),
         Some("au") => MessageKind::System(SystemEvent::Added {
@@ -470,6 +471,33 @@ mod tests {
         assert_eq!(message.author.username, "alice");
         assert_eq!(message.author.display_name.as_deref(), Some("Alice A"));
         assert_eq!(message.kind, MessageKind::Text("hello".into()));
+    }
+
+    // RICH-001
+    #[test]
+    fn a_text_message_carries_its_markdown_as_blocks() {
+        use crate::rich::{Block, Inline};
+        let mut message = entry(None, "**hi**");
+        message.md = Some(vec![rc_api::md::Block::Paragraph(vec![
+            rc_api::md::Inline::Bold(vec![rc_api::md::Inline::Text("hi".into())]),
+        ])]);
+        let MessageKind::Text(body) = message_from(message).unwrap().kind else {
+            panic!()
+        };
+        assert_eq!(body.text, "**hi**");
+        assert_eq!(
+            body.blocks,
+            [Block::Paragraph(vec![Inline::Bold(vec![Inline::Text(
+                "hi".into()
+            )])])]
+        );
+    }
+
+    // RICH-001
+    #[test]
+    fn a_text_message_without_markdown_is_its_plain_text() {
+        let message = message_from(entry(None, "*hi*")).unwrap();
+        assert_eq!(message.kind, MessageKind::Text(RichText::plain("*hi*")));
     }
 
     // MSG-005

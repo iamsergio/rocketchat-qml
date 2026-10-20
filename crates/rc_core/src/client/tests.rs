@@ -1221,7 +1221,7 @@ fn message(id: &str, secs: i64) -> Message {
             display_name: None,
         },
         ts: jiff::Timestamp::from_second(secs).unwrap(),
-        kind: MessageKind::Text(id.to_owned()),
+        kind: MessageKind::Text(id.into()),
         delivery: Delivery::Sent,
     }
 }
@@ -1230,7 +1230,7 @@ fn message(id: &str, secs: i64) -> Message {
 fn server_copy(room: &str, id: &str, text: &str, secs: i64) -> Message {
     Message {
         room_id: room.to_owned().into(),
-        kind: MessageKind::Text(text.to_owned()),
+        kind: MessageKind::Text(text.into()),
         ..message(id, secs)
     }
 }

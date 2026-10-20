@@ -294,7 +294,7 @@ mod tests {
                 display_name: None,
             },
             ts: jiff::Timestamp::UNIX_EPOCH,
-            kind: MessageKind::Text(id.to_owned()),
+            kind: MessageKind::Text(id.into()),
             delivery: Delivery::Sent,
         }
     }
