@@ -17,6 +17,9 @@ pub const APP_ENV: &str = "RC_GUI_TEST_APP";
 
 /// How long the app may take to start answering Spix calls.
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(30);
+/// How long the app may take to exit by itself after it was asked to quit: it first waits for a
+/// pending logout or store write to finish.
+const QUIT_TIMEOUT: Duration = Duration::from_secs(15);
 const POLL_INTERVAL: Duration = Duration::from_millis(50);
 
 #[derive(Debug, thiserror::Error)]
@@ -39,6 +42,19 @@ pub enum LaunchError {
     Timeout(#[source] GuiError),
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum QuitError {
+    #[error("can't check whether the app is still running")]
+    Wait(#[source] io::Error),
+    /// The app was killed. If Spix refused the `quit` call, that is the likely reason.
+    #[error("the app didn't exit within {timeout:?} of being asked to quit")]
+    Timeout {
+        timeout: Duration,
+        #[source]
+        quit: Option<GuiError>,
+    },
+}
+
 /// The running app, killed on drop.
 pub struct App {
     child: Child,
@@ -53,21 +69,23 @@ impl App {
     ///
     /// If [`APP_ENV`] is unset, the app can't be started, or it exits or doesn't answer in time.
     pub fn launch() -> Result<Self, LaunchError> {
-        let path = env::var_os(APP_ENV).ok_or(LaunchError::NoAppBinary)?;
-        Self::launch_binary(&path)
+        Self::launch_with(&[])
     }
 
-    fn launch_binary(path: &OsStr) -> Result<Self, LaunchError> {
+    /// Like [`App::launch`], with `env` added to the app's environment. It overrides the defaults,
+    /// so a test can set `RC_SECRET_STORE=file:<path>` to keep the session between two runs.
+    ///
+    /// # Errors
+    ///
+    /// As [`App::launch`].
+    pub fn launch_with(env: &[(&str, &str)]) -> Result<Self, LaunchError> {
+        let path = env::var_os(APP_ENV).ok_or(LaunchError::NoAppBinary)?;
+        Self::launch_binary(&path, env)
+    }
+
+    fn launch_binary(path: &OsStr, env: &[(&str, &str)]) -> Result<Self, LaunchError> {
         let port = free_port().map_err(LaunchError::NoPort)?;
-        let child = Command::new(path)
-            .arg("--spix-port")
-            .arg(port.to_string())
-            .env("QT_QPA_PLATFORM", "offscreen")
-            // The app starts the core at launch, and its default secret store is the OS keyring:
-            // on a developer machine that is the user's real wallet, which may even ask them to
-            // unlock it. Tests keep the session in memory.
-            .env("RC_SECRET_STORE", "memory")
-            .stdin(Stdio::null())
+        let child = app_command(path, port, env)
             .spawn()
             .map_err(|source| LaunchError::Spawn {
                 path: path.into(),
@@ -84,6 +102,34 @@ impl App {
 
     pub fn gui(&self) -> &Gui {
         &self.gui
+    }
+
+    /// Asks the app to quit and waits for it to exit by itself, so that it stops its core first: a
+    /// pending logout or store write finishes. Returns how it exited.
+    ///
+    /// # Errors
+    ///
+    /// [`QuitError::Timeout`] if it is still running after a while; it is then killed.
+    pub fn quit_and_wait(self) -> Result<ExitStatus, QuitError> {
+        self.quit_and_wait_for(QUIT_TIMEOUT)
+    }
+
+    fn quit_and_wait_for(mut self, timeout: Duration) -> Result<ExitStatus, QuitError> {
+        // The app may go away before it answers, so a failed call only matters if it stays up.
+        let quit = self.gui.quit();
+        let deadline = Instant::now() + timeout;
+        loop {
+            if let Some(status) = self.child.try_wait().map_err(QuitError::Wait)? {
+                return Ok(status);
+            }
+            if Instant::now() >= deadline {
+                return Err(QuitError::Timeout {
+                    timeout,
+                    quit: quit.err(),
+                });
+            }
+            thread::sleep(POLL_INTERVAL);
+        }
     }
 
     fn wait_for_spix(&mut self) -> Result<(), LaunchError> {
@@ -111,6 +157,22 @@ impl Drop for App {
     }
 }
 
+/// The command that starts the app: offscreen, with Spix on `port`, and `env` over the defaults.
+fn app_command(path: &OsStr, port: u16, env: &[(&str, &str)]) -> Command {
+    let mut command = Command::new(path);
+    command
+        .arg("--spix-port")
+        .arg(port.to_string())
+        .env("QT_QPA_PLATFORM", "offscreen")
+        // The app starts the core at launch, and its default secret store is the OS keyring:
+        // on a developer machine that is the user's real wallet, which may even ask them to
+        // unlock it. Tests keep the session in memory unless they ask for a file.
+        .env("RC_SECRET_STORE", "memory")
+        .envs(env.iter().copied())
+        .stdin(Stdio::null());
+    command
+}
+
 /// A port nothing listens on right now. The app binds it shortly after, so another process could
 /// take it in between; with the kernel handing out ephemeral ports in turn, that's unlikely.
 fn free_port() -> io::Result<u16> {
@@ -124,7 +186,7 @@ mod tests {
     // INFRA-002
     #[test]
     fn reports_a_missing_binary() {
-        let result = App::launch_binary(OsStr::new("./no-such-app"));
+        let result = App::launch_binary(OsStr::new("./no-such-app"), &[]);
         assert!(
             matches!(result, Err(LaunchError::Spawn { .. })),
             "{:?}",
@@ -137,11 +199,80 @@ mod tests {
     fn reports_an_app_that_exits_before_spix_answers() {
         // This test binary: it rejects --spix-port and exits without opening the port.
         let this = env::current_exe().unwrap();
-        let result = App::launch_binary(this.as_os_str());
+        let result = App::launch_binary(this.as_os_str(), &[]);
         assert!(
             matches!(result, Err(LaunchError::Exited(_))),
             "{:?}",
             result.err()
+        );
+    }
+
+    /// The value the command sets for `name`.
+    fn env_of(command: &Command, name: &str) -> Option<String> {
+        command
+            .get_envs()
+            .find(|(key, _)| *key == OsStr::new(name))
+            .and_then(|(_, value)| value)
+            .map(|value| value.to_string_lossy().into_owned())
+    }
+
+    // INFRA-002
+    #[test]
+    fn keeps_the_session_in_memory_by_default() {
+        let command = app_command(OsStr::new("app"), 1234, &[]);
+        assert_eq!(
+            env_of(&command, "RC_SECRET_STORE").as_deref(),
+            Some("memory")
+        );
+        assert_eq!(
+            env_of(&command, "QT_QPA_PLATFORM").as_deref(),
+            Some("offscreen")
+        );
+    }
+
+    // INFRA-002
+    #[test]
+    fn extra_environment_overrides_the_defaults() {
+        let command = app_command(
+            OsStr::new("app"),
+            1234,
+            &[("RC_SECRET_STORE", "file:/x"), ("EXTRA", "1")],
+        );
+        assert_eq!(
+            env_of(&command, "RC_SECRET_STORE").as_deref(),
+            Some("file:/x")
+        );
+        assert_eq!(env_of(&command, "EXTRA").as_deref(), Some("1"));
+    }
+
+    /// An `App` around any process; nothing listens on its Spix port.
+    fn app_around(command: &mut Command) -> App {
+        App {
+            child: command.stdin(Stdio::null()).spawn().unwrap(),
+            gui: Gui::new(free_port().unwrap()),
+        }
+    }
+
+    // INFRA-002
+    #[cfg(unix)]
+    #[test]
+    fn quitting_returns_how_the_app_exited() {
+        // Exits by itself with a status of its own; the quit call fails, as the app is gone.
+        let app = app_around(Command::new("/bin/sh").args(["-c", "exit 3"]));
+        let status = app.quit_and_wait_for(Duration::from_secs(10)).unwrap();
+        assert_eq!(status.code(), Some(3));
+    }
+
+    // INFRA-002
+    #[cfg(unix)]
+    #[test]
+    fn quitting_reports_an_app_that_stays_up() {
+        let app = app_around(Command::new("/bin/sh").args(["-c", "sleep 60"]));
+        let result = app.quit_and_wait_for(Duration::from_millis(200));
+        // The failed quit call is reported with the timeout, as the likely reason.
+        assert!(
+            matches!(result, Err(QuitError::Timeout { quit: Some(_), .. })),
+            "{result:?}"
         );
     }
 }

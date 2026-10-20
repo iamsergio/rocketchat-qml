@@ -19,6 +19,10 @@ qt_add_qml_module(
   1.0
   QML_FILES
   Main.qml
+  LoginPage.qml
+  RoomDelegate.qml
+  RoomPage.qml
+  StartupPage.qml
   IMPORT_PATH
   ${rc_qt_export_dir}/qml_modules)
 
