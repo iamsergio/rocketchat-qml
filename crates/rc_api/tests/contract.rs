@@ -275,6 +275,64 @@ async fn subscriptions_have_unread_and_mention_counts() {
     assert!(dm.unread >= 1, "{dm:?}");
 }
 
+// ROOM-004
+#[tokio::test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+async fn mark_read_zeroes_the_counts_of_the_room() {
+    let fixture = Fixture::new();
+    let (channel_id, _) = fixture.create_channel();
+    let dm_id = fixture.create_dm();
+    fixture
+        .admin
+        .post_message(&channel_id, &format!("hello @{}", fixture.user.username));
+    fixture.admin.post_message(&dm_id, "hi there");
+    let session = fixture.client.session(fixture.login().await.credentials);
+    subscriptions_when(&session, |rooms| {
+        let counted = |rid: &str| rooms.iter().any(|r| r.room_id == rid && r.unread >= 1);
+        counted(&channel_id) && counted(&dm_id)
+    })
+    .await;
+
+    session.mark_read(&channel_id).await.unwrap();
+
+    let rooms = subscriptions_when(&session, |rooms| find(rooms, &channel_id).unread == 0).await;
+    let channel = find(&rooms, &channel_id);
+    assert_eq!(channel.unread, 0, "{channel:?}");
+    assert_eq!(channel.user_mentions, 0, "{channel:?}");
+    assert!(!channel.alert, "{channel:?}");
+    assert!(find(&rooms, &dm_id).unread >= 1, "other rooms stay unread");
+}
+
+// ROOM-004
+#[tokio::test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+async fn mark_read_of_a_room_without_subscription_is_a_server_error() {
+    let fixture = Fixture::new();
+    let (channel_id, _) = fixture.admin.create_channel(&[]);
+    let session = fixture.client.session(fixture.login().await.credentials);
+
+    let result = session.mark_read(&channel_id).await;
+
+    assert!(
+        matches!(result, Err(Error::Server { status: 400, .. })),
+        "{result:?}"
+    );
+}
+
+// ROOM-004
+#[tokio::test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+async fn mark_read_with_a_revoked_token_is_unauthorized() {
+    let fixture = Fixture::new();
+    let (channel_id, _) = fixture.create_channel();
+    let session = fixture.client.session(fixture.login().await.credentials);
+    session.logout().await.unwrap();
+
+    let result = session.mark_read(&channel_id).await;
+
+    assert!(matches!(result, Err(Error::Unauthorized)), "{result:?}");
+}
+
 // AUTH-005
 #[tokio::test]
 #[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]

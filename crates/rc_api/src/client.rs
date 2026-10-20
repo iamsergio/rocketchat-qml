@@ -253,6 +253,20 @@ impl RestSession {
         wire::parse_message(&body).ok()
     }
 
+    /// Marks the room read for the user (`POST /api/v1/subscriptions.read`): the server zeroes the
+    /// unread and mention counts of the subscription, and pushes the change like any other.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Unauthorized`] if the token is expired or revoked, [`Error::Server`] if the user
+    /// has no subscription to the room, or any of the other errors.
+    pub async fn mark_read(&self, room_id: &str) -> Result<(), Error> {
+        let payload = json!({ "rid": room_id });
+        self.call_json(Method::POST, "api/v1/subscriptions.read", &payload)
+            .await?;
+        Ok(())
+    }
+
     /// Ends the session on the server (`POST /api/v1/logout`), which revokes the token. Servers
     /// answer with an empty body or with a JSON one; both are fine.
     ///
