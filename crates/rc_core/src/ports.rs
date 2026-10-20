@@ -4,11 +4,15 @@
 //! What the core needs from the outside world. Use cases depend on these traits only; adapters
 //! implement them for real I/O and tests implement them with fakes.
 
+use std::path::PathBuf;
+
 use rc_api::ServerVersion;
 use secrecy::SecretString;
 use tokio::sync::mpsc::UnboundedReceiver;
 
-use crate::domain::{Credentials, Message, MessageId, RoomId, RoomKind, StoredSession, User};
+use crate::domain::{
+    AvatarOwner, Credentials, Message, MessageId, RoomId, RoomKind, StoredSession, User,
+};
 
 /// Why a server call failed. Owned strings only, so that fakes can build and compare them.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
@@ -232,5 +236,147 @@ impl SecretStore for Box<dyn SecretStore> {
 
     fn clear(&self) -> Result<(), StoreError> {
         (**self).clear()
+    }
+}
+
+/// What a cached file is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum CacheKind {
+    UserAvatar,
+    RoomAvatar,
+}
+
+/// Names a cached file: the server it came from, what kind of file it is, and its name there (a
+/// username or a room id). Adapters turn it into a file name, so any text is fine in `name`.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct CacheKey {
+    /// The host and port of the server, plus its path prefix if it has one.
+    pub server: String,
+    pub kind: CacheKind,
+    pub name: String,
+}
+
+impl CacheKey {
+    /// The key of an avatar from `server`, the normalized URL the session logged in with.
+    #[must_use]
+    pub fn avatar(server: &str, owner: &AvatarOwner) -> Self {
+        let (kind, name) = match owner {
+            AvatarOwner::User(username) => (CacheKind::UserAvatar, username.as_str()),
+            AvatarOwner::Room(room) => (CacheKind::RoomAvatar, room.as_str()),
+        };
+        let rest = server.split_once("://").map_or(server, |(_, rest)| rest);
+        Self {
+            server: rest.trim_end_matches('/').to_ascii_lowercase(),
+            kind,
+            name: name.to_owned(),
+        }
+    }
+}
+
+/// Why a file couldn't be cached.
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum CacheError {
+    #[error("not a kind of image the cache keeps: {0:?}")]
+    UnsupportedType(Option<String>),
+    #[error("the cache can't be written: {0}")]
+    Io(String),
+}
+
+/// A file just stored.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Stored {
+    pub path: PathBuf,
+    /// The key held other bytes before, or none.
+    pub changed: bool,
+}
+
+/// Downloaded files, kept where the frontend can open them. The calls block: the core runs them off
+/// the async threads, except [`get`](Self::get), which only looks.
+pub trait FileCache: Send + Sync + 'static {
+    /// The file stored under the key, if any.
+    fn get(&self, key: &CacheKey) -> Option<PathBuf>;
+
+    /// Stores `bytes` under the key, in the file type `content_type` says, and drops what the key
+    /// held in another type. A reader never sees a half-written file: the file is complete when it
+    /// shows up at its path, and the path stays valid while a new copy replaces it.
+    ///
+    /// # Errors
+    ///
+    /// [`CacheError::UnsupportedType`] for a type the cache doesn't keep, [`CacheError::Io`] if
+    /// the file can't be written.
+    fn put(
+        &self,
+        key: &CacheKey,
+        content_type: Option<&str>,
+        bytes: &[u8],
+    ) -> Result<Stored, CacheError>;
+
+    /// Deletes the file stored under the key. Returns whether there was one.
+    ///
+    /// # Errors
+    ///
+    /// [`CacheError::Io`] if the file exists and can't be deleted.
+    fn remove(&self, key: &CacheKey) -> Result<bool, CacheError>;
+}
+
+/// The file extension for a media type, if the cache keeps files of that type.
+#[must_use]
+pub fn image_extension(content_type: &str) -> Option<&'static str> {
+    let media = content_type.split(';').next().unwrap_or_default();
+    match media.trim().to_ascii_lowercase().as_str() {
+        "image/svg+xml" => Some("svg"),
+        "image/png" => Some("png"),
+        "image/jpeg" | "image/jpg" => Some("jpg"),
+        "image/gif" => Some("gif"),
+        "image/webp" => Some("webp"),
+        _ => None,
+    }
+}
+
+/// Every extension [`image_extension`] can return.
+pub const IMAGE_EXTENSIONS: [&str; 5] = ["svg", "png", "jpg", "gif", "webp"];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // RICH-004
+    #[test]
+    fn the_extension_follows_the_media_type() {
+        for (content_type, extension) in [
+            ("image/svg+xml", "svg"),
+            ("image/png", "png"),
+            ("image/jpeg", "jpg"),
+            ("image/jpg", "jpg"),
+            ("image/gif", "gif"),
+            ("image/webp", "webp"),
+            ("Image/PNG; charset=binary", "png"),
+        ] {
+            assert_eq!(
+                image_extension(content_type),
+                Some(extension),
+                "{content_type}"
+            );
+        }
+        for content_type in ["text/html", "application/json", "image/bmp", "", "png"] {
+            assert_eq!(image_extension(content_type), None, "{content_type}");
+        }
+    }
+
+    // RICH-004
+    #[test]
+    fn a_key_names_the_server_by_host_and_port() {
+        let owner = AvatarOwner::User("alice".into());
+        let key = CacheKey::avatar("http://127.0.0.1:3000/", &owner);
+        assert_eq!(key.server, "127.0.0.1:3000");
+        assert_eq!(key.kind, CacheKind::UserAvatar);
+        assert_eq!(key.name, "alice");
+        let prefixed = CacheKey::avatar("https://Chat.Example.com/team/", &owner);
+        assert_eq!(prefixed.server, "chat.example.com/team");
+        let room = CacheKey::avatar("http://h", &AvatarOwner::Room("r1".to_owned().into()));
+        assert_eq!(
+            (room.kind, room.name.as_str()),
+            (CacheKind::RoomAvatar, "r1")
+        );
     }
 }

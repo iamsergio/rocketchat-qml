@@ -4,6 +4,7 @@
 //! Implementations of the ports for real I/O.
 
 mod blob;
+mod disk_cache;
 // The test store writes the token in clear text: it only exists with its feature, and in unit tests.
 #[cfg(any(test, feature = "test-file-store"))]
 mod file;
@@ -12,6 +13,7 @@ mod memory;
 mod message_store;
 mod rest;
 
+pub use disk_cache::DiskFileCache;
 #[cfg(any(test, feature = "test-file-store"))]
 pub use file::FileStore;
 pub use keyring::KeyringStore;
