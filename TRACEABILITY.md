@@ -29,7 +29,7 @@ Every test carries a `// <ID>` comment. A feature can have tests at several leve
 |---|---|---|
 | ROOM-001 | List subscribed rooms after login | unit: `crates/rc_api/src/wire.rs`, `crates/rc_core/src/domain.rs`, `crates/rc_core/src/rooms.rs`, `crates/rc_core/src/client/tests.rs`, `crates/rc_qt/src/cache.rs`, `crates/rc_qt/src/row_ops.rs`; api: `crates/rc_api/tests/rest.rs`; contract: `crates/rc_api/tests/contract.rs`, `crates/rc_core/tests/contract.rs`; GUI: `crates/rc_gui_tests/tests/rooms.rs` |
 | ROOM-002 | Room shows name and type (channel, private, DM) | unit: `crates/rc_api/src/wire.rs`, `crates/rc_core/src/domain.rs`, `crates/rc_core/src/rooms.rs`, `crates/rc_qt/src/room_view.rs`, `crates/rc_qt/src/row_ops.rs`; api: `crates/rc_api/tests/rest.rs`; contract: `crates/rc_api/tests/contract.rs`, `crates/rc_core/tests/contract.rs`; GUI: `crates/rc_gui_tests/tests/rooms.rs` |
-| ROOM-003 | Room shows unread and mention counts | unit: `crates/rc_api/src/wire.rs`, `crates/rc_core/src/domain.rs`, `crates/rc_core/src/rooms.rs`; api: `crates/rc_api/tests/rest.rs`; contract: `crates/rc_api/tests/contract.rs`; GUI: `crates/rc_gui_tests/tests/rooms.rs` |
+| ROOM-003 | Room shows unread and mention counts | unit: `crates/rc_api/src/wire.rs`, `crates/rc_core/src/domain.rs`, `crates/rc_core/src/rooms.rs`; api: `crates/rc_api/tests/rest.rs`; contract: `crates/rc_api/tests/contract.rs`, `crates/rc_core/tests/contract.rs`; GUI: `crates/rc_gui_tests/tests/rooms.rs`, `crates/rc_gui_tests/tests/realtime.rs` |
 | ROOM-004 | Opening a room marks it read | todo |
 | ROOM-005 | Rooms ordered by last activity | todo |
 
@@ -47,9 +47,9 @@ Every test carries a `// <ID>` comment. A feature can have tests at several leve
 
 | ID | Feature | Tests |
 |---|---|---|
-| RT-001 | New message in the open room appears live | unit: `crates/rc_api/src/ddp.rs`, `crates/rc_api/src/wire.rs`; contract: `crates/rc_api/tests/contract.rs` (rc_api only: not shown in the GUI yet) |
-| RT-002 | Unread counts of other rooms update live | unit: `crates/rc_api/src/ddp.rs`, `crates/rc_api/src/wire.rs`; contract: `crates/rc_api/tests/contract.rs` (rc_api only: not shown in the GUI yet) |
-| RT-003 | Reconnect after connection loss, catch up on missed messages | unit: `crates/rc_api/src/ddp.rs` (rc_api only: detecting the loss; reconnecting is not done yet) |
+| RT-001 | New message in the open room appears live | unit: `crates/rc_api/src/ddp.rs`, `crates/rc_api/src/wire.rs`, `crates/rc_core/src/adapters/rest.rs`, `crates/rc_core/src/client/tests.rs`, `crates/rc_core/src/timeline.rs`; contract: `crates/rc_api/tests/contract.rs`, `crates/rc_core/tests/contract.rs`; GUI: `crates/rc_gui_tests/tests/realtime.rs` |
+| RT-002 | Unread counts of other rooms update live, and rooms joined or left show up | unit: `crates/rc_api/src/ddp.rs`, `crates/rc_api/src/wire.rs`, `crates/rc_core/src/adapters/rest.rs`, `crates/rc_core/src/client/tests.rs`; contract: `crates/rc_api/tests/contract.rs`, `crates/rc_core/tests/contract.rs`; GUI: `crates/rc_gui_tests/tests/realtime.rs` |
+| RT-003 | Reconnect after connection loss, catch up on missed messages | unit: `crates/rc_api/src/ddp.rs`, `crates/rc_core/src/client/tests.rs` (partial: detecting the loss, and the session carrying on without the connection; reconnecting is not done yet) |
 | RT-004 | Connection status indicator | todo |
 
 ## Sending

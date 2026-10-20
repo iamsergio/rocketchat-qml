@@ -65,7 +65,7 @@ Done when: clicking a room shows its history with authors and times, and scrolli
 Done when: messages from others appear live, unread badges update, you can send messages, and the client recovers after the network drops.
 
 - [x] `rc_api`: DDP client (connect, ping/pong, method calls, subscriptions, resume-token login)
-- [ ] `rc_core`: sync engine. Subscribe to `__my_messages__` and `stream-notify-user` (subscriptions/rooms changed), route events into state
+- [x] `rc_core`: sync engine. Subscribe to `__my_messages__` and `stream-notify-user` (subscriptions/rooms changed), route events into state
 - [ ] `rc_core`: reconnect with exponential backoff and jitter. Catch up on missed messages after reconnecting
 - [ ] `rc_core`: send with an optimistic local echo (pending → sent / failed), retry
 - [ ] `rc_core`: mark a room read when it's opened. Room list ordered by last activity

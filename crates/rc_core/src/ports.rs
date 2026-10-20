@@ -6,6 +6,7 @@
 
 use rc_api::ServerVersion;
 use secrecy::SecretString;
+use tokio::sync::mpsc::UnboundedReceiver;
 
 use crate::domain::{Credentials, Message, RoomId, RoomKind, StoredSession, User};
 
@@ -78,12 +79,40 @@ pub trait ServerApi: Clone + Send + Sync + 'static {
         count: usize,
     ) -> impl Future<Output = Result<Page, ApiError>> + Send;
 
+    /// Opens the realtime connection for the session: connects, logs in with the credentials and
+    /// subscribes to the user's messages and subscription changes. What the server pushes from then
+    /// on comes out of the receiver, which ends when the connection does. Dropping the receiver
+    /// closes the connection. Reconnecting is up to the caller.
+    ///
+    /// # Errors
+    ///
+    /// [`ApiError::Unauthorized`] if the credentials have expired or were revoked.
+    fn realtime(
+        &self,
+        credentials: &Credentials,
+    ) -> impl Future<Output = Result<PushedEvents, ApiError>> + Send;
+
     /// Revokes the token on the server.
     fn logout(
         &self,
         credentials: &Credentials,
     ) -> impl Future<Output = Result<(), ApiError>> + Send;
 }
+
+/// What the server pushes over the realtime connection, as the core understands it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Pushed {
+    /// A new or edited message. Not only of the user's rooms: the server also pushes the messages
+    /// of public channels the user isn't in, so check the room.
+    Message(Message),
+    /// The user joined a room, or one of their rooms changed: its unread count, its name...
+    Subscription(rc_api::Subscription),
+    /// The user left a room or was removed from it.
+    SubscriptionRemoved(RoomId),
+}
+
+/// What [`ServerApi::realtime`] returns: the pushed events in the order the server sent them.
+pub type PushedEvents = UnboundedReceiver<Pushed>;
 
 /// What [`ServerApi::history`] returns.
 #[derive(Clone, Debug, PartialEq, Eq)]

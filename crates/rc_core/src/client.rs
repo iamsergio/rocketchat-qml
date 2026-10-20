@@ -14,9 +14,11 @@ use tokio::sync::{mpsc, oneshot};
 use tokio::task::{JoinHandle, JoinSet};
 
 use crate::adapters::{MemoryMessageStore, RestConnector};
-use crate::domain::{Credentials, RoomId, RoomKind, StoredSession, room_from};
+use crate::domain::{Credentials, Message, RoomId, RoomKind, StoredSession, room_from};
 use crate::error::Error;
-use crate::ports::{ApiError, Connector, MessageStore, Page, SecretStore, ServerApi, StoreError};
+use crate::ports::{
+    ApiError, Connector, MessageStore, Page, Pushed, SecretStore, ServerApi, StoreError,
+};
 use crate::rooms::{RoomChange, RoomList};
 use crate::session::{Established, LoginFailure, SessionState, log_in, resume};
 use crate::timeline::{PAGE_SIZE, Timeline, TimelineChange, TimelineError, TimelineStatus};
@@ -120,6 +122,8 @@ impl Client {
             attempt: 0,
             login_task: None,
             rooms_task: None,
+            realtime_task: None,
+            backlog: None,
             rooms: RoomList::default(),
             messages: Box::new(MemoryMessageStore::default()),
             open: None,
@@ -268,6 +272,21 @@ struct RoomsDone {
     outcome: Result<Vec<rc_api::Subscription>, ApiError>,
 }
 
+/// What the realtime task tells the actor, in this order: the connection opens or fails, events
+/// follow, the connection ends.
+enum RealtimeDone {
+    Opened(Result<(), ApiError>),
+    Pushed(Pushed),
+    Ended,
+}
+
+/// The realtime task's report, tagged with the login or resume it belongs to: stale if another has
+/// begun since.
+struct RealtimeReport {
+    attempt: u64,
+    done: RealtimeDone,
+}
+
 /// A history fetch's answer.
 struct HistoryDone {
     /// Identifies the fetch: the answer is stale if the room was closed or another fetch began.
@@ -280,6 +299,7 @@ struct HistoryDone {
 enum Done<A> {
     Login(LoginDone<A>),
     Rooms(RoomsDone),
+    Realtime(RealtimeReport),
     History(HistoryDone),
 }
 
@@ -297,6 +317,9 @@ struct OpenRoom {
     fetch: Option<Fetch>,
     /// Why the last fetch failed.
     error: Option<TimelineError>,
+    /// Messages pushed while the newest messages were still to come: the page may predate them,
+    /// and merging one first could make the page drop it. They join the page when it arrives.
+    live: Vec<Message>,
 }
 
 /// What the actor keeps while logged in; the next features need both.
@@ -318,6 +341,12 @@ struct Actor<C: Connector> {
     login_task: Option<JoinHandle<()>>,
     /// The room fetch of the current session, while it runs.
     rooms_task: Option<JoinHandle<()>>,
+    /// The realtime connection of the current session, while it is open or opening. The task owns
+    /// the receiver of the pushed events: ending it closes the connection.
+    realtime_task: Option<JoinHandle<()>>,
+    /// What the server pushed since the realtime connection opened, until the rooms are listed:
+    /// they are replayed on top of the list then. `None` once they are, and outside a session.
+    backlog: Option<Vec<Pushed>>,
     /// The rooms in display order, as the frontend has them.
     rooms: RoomList,
     /// The messages of the rooms opened so far. Cleared on logout.
@@ -353,6 +382,7 @@ impl<C: Connector> Actor<C> {
                 Some(done) = done.recv() => match done {
                     Done::Login(done) => self.handle_login_done(done),
                     Done::Rooms(done) => self.handle_rooms_done(done),
+                    Done::Realtime(report) => self.handle_realtime_done(report),
                     Done::History(done) => self.handle_history_done(done),
                 },
             }
@@ -385,6 +415,7 @@ impl<C: Connector> Actor<C> {
         if let Some(task) = self.rooms_task.take() {
             task.abort();
         }
+        self.abort_realtime_task();
         if let Some(task) = self.history_task.take() {
             task.abort();
         }
@@ -477,7 +508,7 @@ impl<C: Connector> Actor<C> {
                     credentials: established.credentials,
                 });
                 self.set_state(SessionState::LoggedIn(established.account));
-                self.fetch_rooms(done.attempt);
+                self.open_realtime(done.attempt);
             }
             Err(failure) => {
                 // The server refused the stored token for good; other failures may pass.
@@ -510,6 +541,7 @@ impl<C: Connector> Actor<C> {
         }
         if matches!(self.state, SessionState::LoggedIn(_)) {
             self.abort_rooms_task();
+            self.abort_realtime_task();
             self.set_state(SessionState::LoggedOut { failure: None });
             self.clear_rooms();
             self.clear_timeline();
@@ -519,6 +551,121 @@ impl<C: Connector> Actor<C> {
             }
         } else {
             tracing::debug!("logout ignored: not logged in");
+        }
+    }
+
+    /// Opens the realtime connection of the session that the attempt `attempt` established, before
+    /// the rooms are fetched: what happens between the fetch and the subscription would be lost
+    /// otherwise. What the server pushes meanwhile waits in the backlog. No reconnecting yet: when
+    /// the connection ends, the session goes on without it.
+    fn open_realtime(&mut self, attempt: u64) {
+        let Some(session) = &self.session else {
+            return;
+        };
+        self.backlog = Some(Vec::new());
+        let api = session.api.clone();
+        let credentials = session.credentials.clone();
+        let done = self.done_tx.clone();
+        self.realtime_task = Some(tokio::spawn(async move {
+            let report = |done| Done::Realtime(RealtimeReport { attempt, done });
+            let mut events = match api.realtime(&credentials).await {
+                Ok(events) => events,
+                Err(error) => {
+                    // Fails only if the actor is gone.
+                    let _ = done.send(report(RealtimeDone::Opened(Err(error))));
+                    return;
+                }
+            };
+            if done.send(report(RealtimeDone::Opened(Ok(())))).is_err() {
+                return;
+            }
+            while let Some(event) = events.recv().await {
+                if done.send(report(RealtimeDone::Pushed(event))).is_err() {
+                    return;
+                }
+            }
+            let _ = done.send(report(RealtimeDone::Ended));
+        }));
+    }
+
+    fn handle_realtime_done(&mut self, report: RealtimeReport) {
+        if report.attempt != self.attempt || !matches!(self.state, SessionState::LoggedIn(_)) {
+            tracing::debug!("report of a stale realtime connection dropped");
+            return;
+        }
+        match report.done {
+            RealtimeDone::Opened(Ok(())) => self.fetch_rooms(report.attempt),
+            RealtimeDone::Opened(Err(ApiError::Unauthorized)) => self.expire_session(),
+            // The rooms are worth having without live updates.
+            RealtimeDone::Opened(Err(error)) => {
+                tracing::warn!(%error, "can't open the realtime connection, going on without it");
+                self.realtime_task = None;
+                self.fetch_rooms(report.attempt);
+            }
+            RealtimeDone::Pushed(event) => match &mut self.backlog {
+                Some(backlog) => backlog.push(event),
+                None => self.handle_pushed(event),
+            },
+            RealtimeDone::Ended => {
+                tracing::warn!("the realtime connection ended, live updates stop");
+                self.realtime_task = None;
+            }
+        }
+    }
+
+    /// Puts what the server pushed into the state and tells the frontend.
+    fn handle_pushed(&mut self, event: Pushed) {
+        match event {
+            Pushed::Subscription(subscription) => {
+                let id = RoomId::from(subscription.room_id.clone());
+                match room_from(subscription) {
+                    Some(room) => {
+                        if let Some(change) = self.rooms.upsert(room) {
+                            (self.on_event)(Event::Rooms(vec![change]));
+                        }
+                    }
+                    // Hidden now, or not a kind we list.
+                    None => self.remove_room(&id),
+                }
+            }
+            Pushed::SubscriptionRemoved(id) => self.remove_room(&id),
+            Pushed::Message(message) => self.add_live_message(message),
+        }
+    }
+
+    /// Drops the room from the list, and closes it if it was open.
+    fn remove_room(&mut self, id: &RoomId) {
+        if let Some(change) = self.rooms.remove(id) {
+            (self.on_event)(Event::Rooms(vec![change]));
+        }
+        if self
+            .open
+            .as_ref()
+            .is_some_and(|open| open.timeline.room() == id)
+        {
+            self.close_room();
+        }
+    }
+
+    /// Adds a pushed message to the open room. Other rooms aren't held: they load their history
+    /// when opened, and their unread counts arrive as subscription changes.
+    fn add_live_message(&mut self, message: Message) {
+        let Some(open) = &mut self.open else {
+            return;
+        };
+        if open.timeline.room() != &message.room_id {
+            return;
+        }
+        let newest_to_come = open.fetch.as_ref().is_some_and(|fetch| !fetch.older)
+            || (open.timeline.messages().is_empty() && !open.timeline.reached_start());
+        if newest_to_come {
+            open.live.push(message);
+            return;
+        }
+        let room = message.room_id.clone();
+        if let Some(change) = open.timeline.merge_live(message) {
+            self.messages.save(&room, open.timeline.history());
+            (self.on_event)(Event::Timeline(vec![change]));
         }
     }
 
@@ -553,14 +700,22 @@ impl<C: Connector> Actor<C> {
             }
             // The token died between the login and the fetch: same as an expired resume. It's
             // dead already, so there's nothing to revoke.
-            Err(ApiError::Unauthorized) => self.expire_session(),
+            Err(ApiError::Unauthorized) => {
+                self.expire_session();
+                return;
+            }
+            // What was pushed still applies, on an empty list.
             Err(error) => tracing::warn!(%error, "can't list the rooms"),
+        }
+        for event in self.backlog.take().unwrap_or_default() {
+            self.handle_pushed(event);
         }
     }
 
     /// The server refused the token of a logged-in session: forget it, and everything it showed.
     /// It's dead already, so there's nothing to revoke.
     fn expire_session(&mut self) {
+        self.abort_realtime_task();
         self.session = None;
         self.clear_store();
         self.set_state(SessionState::LoggedOut {
@@ -602,6 +757,7 @@ impl<C: Connector> Actor<C> {
             kind,
             fetch: None,
             error: None,
+            live: Vec::new(),
         });
         self.fetch_history(false);
     }
@@ -664,8 +820,9 @@ impl<C: Connector> Actor<C> {
                 let change = if older {
                     open.timeline.merge_older(page.messages, page.reached_start)
                 } else {
-                    open.timeline
-                        .merge_latest(page.messages, page.reached_start)
+                    let mut messages = page.messages;
+                    messages.append(&mut open.live);
+                    open.timeline.merge_latest(messages, page.reached_start)
                 };
                 self.messages.save(&done.room, open.timeline.history());
                 if let Some(change) = change {
@@ -707,8 +864,14 @@ impl<C: Connector> Actor<C> {
     /// Closes the open room and forgets every held message, and tells the frontend, unless no room
     /// was open.
     fn clear_timeline(&mut self) {
-        self.abort_history_task();
         self.messages.clear();
+        self.close_room();
+    }
+
+    /// Closes the open room, keeping what is held of it, and tells the frontend, unless no room was
+    /// open.
+    fn close_room(&mut self) {
+        self.abort_history_task();
         if self.open.take().is_some() {
             (self.on_event)(Event::Timeline(vec![TimelineChange::Reset {
                 room: None,
@@ -720,6 +883,14 @@ impl<C: Connector> Actor<C> {
 
     fn abort_rooms_task(&mut self) {
         if let Some(task) = self.rooms_task.take() {
+            task.abort();
+        }
+    }
+
+    /// Ends the realtime connection, if any, and forgets what it pushed that wasn't applied yet.
+    fn abort_realtime_task(&mut self) {
+        self.backlog = None;
+        if let Some(task) = self.realtime_task.take() {
             task.abort();
         }
     }

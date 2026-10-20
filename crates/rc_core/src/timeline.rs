@@ -151,6 +151,24 @@ impl Timeline {
         self.merge(page, reached_start)
     }
 
+    /// Takes in a message the server pushed. It is appended when it is the newest, which is almost
+    /// always; one that isn't takes the same way in as a page would. `None` if it is held already.
+    pub fn merge_live(&mut self, message: Message) -> Option<TimelineChange> {
+        if self.history.messages.iter().any(|m| m.id == message.id) {
+            return None;
+        }
+        let newest = self
+            .history
+            .messages
+            .last()
+            .is_none_or(|last| display_order(&message, last).is_gt());
+        if !newest {
+            return self.merge(vec![message], false);
+        }
+        self.history.messages.push(message.clone());
+        Some(TimelineChange::Appended(vec![message]))
+    }
+
     /// Adds the messages not held yet, in order. The change is a prepend or an append when they all
     /// fall on one side of what is held, else (never in practice) a reset.
     fn merge(&mut self, page: Vec<Message>, reached_start: bool) -> Option<TimelineChange> {
@@ -332,6 +350,50 @@ mod tests {
         assert!(timeline.reached_start());
     }
 
+    // RT-001
+    #[test]
+    fn a_live_message_is_appended_even_to_an_empty_timeline() {
+        let mut timeline = empty();
+        assert_eq!(
+            timeline.merge_live(msg("a", 1)),
+            Some(TimelineChange::Appended(vec![msg("a", 1)]))
+        );
+        assert_eq!(
+            timeline.merge_live(msg("b", 2)),
+            Some(TimelineChange::Appended(vec![msg("b", 2)]))
+        );
+        assert_eq!(ids(timeline.messages()), ["a", "b"]);
+    }
+
+    // RT-001
+    #[test]
+    fn a_live_message_already_held_is_ignored() {
+        let mut timeline = timeline_of(vec![msg("a", 1), msg("b", 2)]);
+        assert_eq!(timeline.merge_live(msg("a", 1)), None);
+        assert_eq!(timeline.merge_live(msg("b", 2)), None);
+        assert_eq!(ids(timeline.messages()), ["a", "b"]);
+    }
+
+    // RT-001
+    #[test]
+    fn a_live_message_out_of_order_goes_where_it_belongs() {
+        let mut timeline = timeline_of(vec![msg("a", 1), msg("c", 3)]);
+        // Between two held messages: a reset, as a page would give.
+        let change = timeline.merge_live(msg("b", 2));
+        assert!(matches!(change, Some(TimelineChange::Reset { .. })));
+        assert_eq!(ids(timeline.messages()), ["a", "b", "c"]);
+        // Same instant as the newest one: ordered by id.
+        assert_eq!(
+            timeline.merge_live(msg("d", 3)),
+            Some(TimelineChange::Appended(vec![msg("d", 3)]))
+        );
+        assert!(matches!(
+            timeline.merge_live(msg("cc", 3)),
+            Some(TimelineChange::Reset { .. })
+        ));
+        assert_eq!(ids(timeline.messages()), ["a", "b", "c", "cc", "d"]);
+    }
+
     /// Applies each page's change to the mirror, which must then equal the timeline.
     fn step(
         timeline: &mut Timeline,
@@ -370,6 +432,10 @@ mod tests {
             t.merge_latest(vec![msg("x", 80), msg("y", 90), msg("z", 91)], true)
         });
         assert_eq!(ids(m), ["x", "y", "z"]);
+        step(t, m, |t| t.merge_live(msg("zz", 95)));
+        step(t, m, |t| t.merge_live(msg("w", 85)));
+        step(t, m, |t| t.merge_live(msg("zz", 95)));
+        assert_eq!(ids(m), ["x", "w", "y", "z", "zz"]);
     }
 
     // MSG-001
