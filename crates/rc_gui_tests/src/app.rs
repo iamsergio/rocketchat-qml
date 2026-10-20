@@ -5,7 +5,7 @@
 
 use std::ffi::OsStr;
 use std::net::TcpListener;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::time::{Duration, Instant};
 use std::{env, io, thread};
@@ -59,11 +59,30 @@ pub enum QuitError {
 pub struct App {
     child: Child,
     gui: Gui,
+    cache: CacheDir,
+}
+
+/// The directory the app keeps downloaded files in, empty at launch and removed with the app.
+struct CacheDir(PathBuf);
+
+impl CacheDir {
+    fn new(port: u16) -> Self {
+        let name = format!("rc_gui_tests-cache-{}-{port}", std::process::id());
+        Self(env::temp_dir().join(name))
+    }
+}
+
+impl Drop for CacheDir {
+    fn drop(&mut self) {
+        // Nothing to do if it was never made.
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
 }
 
 impl App {
-    /// Starts the binary named by [`APP_ENV`] with `QT_QPA_PLATFORM=offscreen` and
-    /// `RC_SECRET_STORE=memory`, and waits until its Spix server answers.
+    /// Starts the binary named by [`APP_ENV`] with `QT_QPA_PLATFORM=offscreen`,
+    /// `RC_SECRET_STORE=memory` and `XDG_CACHE_HOME` set to a directory of its own, and waits until
+    /// its Spix server answers.
     ///
     /// # Errors
     ///
@@ -85,7 +104,8 @@ impl App {
 
     fn launch_binary(path: &OsStr, env: &[(&str, &str)]) -> Result<Self, LaunchError> {
         let port = free_port().map_err(LaunchError::NoPort)?;
-        let child = app_command(path, port, env)
+        let cache = CacheDir::new(port);
+        let child = app_command(path, port, &cache.0, env)
             .spawn()
             .map_err(|source| LaunchError::Spawn {
                 path: path.into(),
@@ -95,6 +115,7 @@ impl App {
         let mut app = Self {
             child,
             gui: Gui::new(port),
+            cache,
         };
         app.wait_for_spix()?;
         Ok(app)
@@ -102,6 +123,12 @@ impl App {
 
     pub fn gui(&self) -> &Gui {
         &self.gui
+    }
+
+    /// Where the app keeps the files it downloads (its `XDG_CACHE_HOME`, on Linux).
+    #[must_use]
+    pub fn cache_dir(&self) -> &Path {
+        &self.cache.0
     }
 
     /// Asks the app to quit and waits for it to exit by itself, so that it stops its core first: a
@@ -157,8 +184,9 @@ impl Drop for App {
     }
 }
 
-/// The command that starts the app: offscreen, with Spix on `port`, and `env` over the defaults.
-fn app_command(path: &OsStr, port: u16, env: &[(&str, &str)]) -> Command {
+/// The command that starts the app: offscreen, with Spix on `port` and its cache in `cache`, and
+/// `env` over the defaults.
+fn app_command(path: &OsStr, port: u16, cache: &Path, env: &[(&str, &str)]) -> Command {
     let mut command = Command::new(path);
     command
         .arg("--spix-port")
@@ -168,6 +196,8 @@ fn app_command(path: &OsStr, port: u16, env: &[(&str, &str)]) -> Command {
         // on a developer machine that is the user's real wallet, which may even ask them to
         // unlock it. Tests keep the session in memory unless they ask for a file.
         .env("RC_SECRET_STORE", "memory")
+        // Where Qt puts the cache location on Linux: not the user's own.
+        .env("XDG_CACHE_HOME", cache)
         .envs(env.iter().copied())
         .stdin(Stdio::null());
     command
@@ -219,7 +249,7 @@ mod tests {
     // INFRA-002
     #[test]
     fn keeps_the_session_in_memory_by_default() {
-        let command = app_command(OsStr::new("app"), 1234, &[]);
+        let command = app_command(OsStr::new("app"), 1234, Path::new("/c"), &[]);
         assert_eq!(
             env_of(&command, "RC_SECRET_STORE").as_deref(),
             Some("memory")
@@ -236,6 +266,7 @@ mod tests {
         let command = app_command(
             OsStr::new("app"),
             1234,
+            Path::new("/c"),
             &[("RC_SECRET_STORE", "file:/x"), ("EXTRA", "1")],
         );
         assert_eq!(
@@ -245,11 +276,24 @@ mod tests {
         assert_eq!(env_of(&command, "EXTRA").as_deref(), Some("1"));
     }
 
+    // RICH-004
+    #[test]
+    fn the_app_gets_a_cache_of_its_own() {
+        let command = app_command(OsStr::new("app"), 1234, Path::new("/c/1234"), &[]);
+        assert_eq!(
+            env_of(&command, "XDG_CACHE_HOME").as_deref(),
+            Some("/c/1234")
+        );
+        assert_ne!(CacheDir::new(1234).0, CacheDir::new(1235).0);
+    }
+
     /// An `App` around any process; nothing listens on its Spix port.
     fn app_around(command: &mut Command) -> App {
+        let port = free_port().unwrap();
         App {
             child: command.stdin(Stdio::null()).spawn().unwrap(),
-            gui: Gui::new(free_port().unwrap()),
+            gui: Gui::new(port),
+            cache: CacheDir::new(port),
         }
     }
 

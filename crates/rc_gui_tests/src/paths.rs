@@ -62,6 +62,13 @@ pub mod room_row {
     pub const KIND_DIRECT: &str = "roomKind_direct";
     pub const UNREAD: &str = "roomUnread";
     pub const MENTIONS: &str = "roomMentions";
+    /// The avatar, visible once its file has loaded: its `text` is the file URL.
+    pub const AVATAR: &str = "roomAvatar";
+    /// The initials on a colour, visible until the avatar has loaded, and always for a room
+    /// without an avatar of its own.
+    pub const AVATAR_PLACEHOLDER: &str = "roomAvatarPlaceholder";
+    /// The letters of the placeholder, as its `text`.
+    pub const AVATAR_INITIALS: &str = "roomAvatarInitials";
 }
 
 /// A part of the row of the room with this id (see [`room_row`]). Rows are addressed by room id
@@ -76,6 +83,12 @@ pub mod message_row {
     /// The heading of the day, on the first message of each day.
     pub const DAY_SEPARATOR: &str = "msgDaySeparator";
     pub const AUTHOR: &str = "msgAuthor";
+    /// The author's avatar, visible once its file has loaded: its `text` is the file URL.
+    pub const AVATAR: &str = "msgAvatar";
+    /// The initials on a colour, visible until the avatar has loaded.
+    pub const AVATAR_PLACEHOLDER: &str = "msgAvatarPlaceholder";
+    /// The letters of the placeholder, as its `text`.
+    pub const AVATAR_INITIALS: &str = "msgAvatarInitials";
     pub const TIME: &str = "msgTime";
     /// The message as written: its `text` is the markdown source.
     pub const BODY: &str = "msgBody";
