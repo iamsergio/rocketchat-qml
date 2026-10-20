@@ -110,7 +110,8 @@ start_nats() {
 
 start_rocketchat() {
     # OVERWRITE_SETTING_* are reapplied on every start. They skip the setup wizard and turn off
-    # features that get in the way of automated tests (email 2FA, rate limiters).
+    # features that get in the way of automated tests (email 2FA, rate limiters). Tests log in with
+    # wrong passwords on purpose, and Rocket.Chat would otherwise block the user and the IP.
     # ADMIN_* only take effect while no admin exists, i.e. on an empty database.
     ensure $RC \
         -p 127.0.0.1:"$RC_PORT":3000 \
@@ -130,6 +131,7 @@ start_rocketchat() {
         -e OVERWRITE_SETTING_DDP_Rate_Limit_Connection_Enabled=false \
         -e OVERWRITE_SETTING_DDP_Rate_Limit_User_By_Method_Enabled=false \
         -e OVERWRITE_SETTING_DDP_Rate_Limit_Connection_By_Method_Enabled=false \
+        -e OVERWRITE_SETTING_Block_Multiple_Failed_Logins_Enabled=false \
         registry.rocket.chat/rocketchat/rocket.chat:"$RC_RELEASE"
 }
 
