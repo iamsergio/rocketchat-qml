@@ -32,6 +32,19 @@ ColumnLayout {
         }
     }
 
+    Label {
+        objectName: "connectionBanner"
+        Layout.fillWidth: true
+        visible: Session.connectionText !== ""
+        text: Session.connectionText
+        padding: 6
+        horizontalAlignment: Text.AlignHCenter
+        color: palette.toolTipText
+        background: Rectangle {
+            color: palette.toolTipBase
+        }
+    }
+
     RowLayout {
         Layout.fillWidth: true
         Layout.fillHeight: true
