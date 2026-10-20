@@ -6,6 +6,7 @@
 #![forbid(unsafe_code)]
 
 pub mod adapters;
+mod avatars;
 mod backoff;
 mod client;
 pub mod domain;
@@ -19,6 +20,7 @@ pub mod rooms;
 pub mod session;
 pub mod timeline;
 
+pub use avatars::AvatarUpdate;
 pub use client::{Client, Connection, Event};
 pub use error::Error;
 

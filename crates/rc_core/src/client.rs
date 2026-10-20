@@ -15,15 +15,17 @@ use tokio::task::{JoinHandle, JoinSet};
 use tokio::time::Instant;
 
 use crate::adapters::{MemoryMessageStore, RestConnector};
+use crate::avatars::{AvatarUpdate, Avatars, Fetched, authors_of};
 use crate::backoff::Backoff;
 use crate::domain::{
-    Author, Credentials, Delivery, Message, MessageId, MessageKind, Room, RoomId, RoomKind,
-    StoredSession, User, room_from,
+    Author, AvatarOwner, Credentials, Delivery, Message, MessageId, MessageKind, Room, RoomId,
+    RoomKind, StoredSession, User, room_from,
 };
 use crate::emoji::CustomEmojis;
 use crate::error::Error;
 use crate::ports::{
-    ApiError, Connector, MessageStore, Page, Pushed, SecretStore, ServerApi, StoreError,
+    ApiError, CacheError, CacheKey, Connector, FileCache, MessageStore, Page, Pushed, SecretStore,
+    ServerApi, StoreError,
 };
 use crate::rooms::{RoomChange, RoomList};
 use crate::session::{Established, LoginFailure, SessionState, log_in, resume};
@@ -62,6 +64,9 @@ pub enum Event {
     /// The custom emoji of the server, whenever the list changes. Logging out empties it, if it
     /// held any.
     CustomEmoji(CustomEmojis),
+    /// The files to show as avatars, for the users and rooms that changed: the first one a user or
+    /// room gets, or a new one when the server's differs. After a logout, the ones that go.
+    Avatars(Vec<AvatarUpdate>),
 }
 
 /// Whether the session is live. The held rooms and messages stay on show while it is not.
@@ -114,13 +119,15 @@ impl Client {
     /// If the async runtime can't be started.
     pub fn start(
         store: impl SecretStore,
+        cache: impl FileCache,
         on_event: impl Fn(Event) + Send + Sync + 'static,
     ) -> Result<Self, Error> {
-        Self::with_ports(RestConnector, store, on_event)
+        Self::with_ports(RestConnector, store, cache, on_event)
     }
 
-    /// A client that reaches servers through `connector` and remembers the session in `store`;
-    /// tests pass fakes. If the store holds a session, the client tries to resume it.
+    /// A client that reaches servers through `connector`, remembers the session in `store` and
+    /// keeps downloaded files in `cache`; tests pass fakes. If the store holds a session, the
+    /// client tries to resume it.
     ///
     /// `on_event` is called once per state change, in order, from a runtime thread. The first event
     /// always comes: `Resuming` if a stored session is being resumed, `LoggedOut` otherwise.
@@ -133,9 +140,10 @@ impl Client {
     pub fn with_ports<C: Connector, S: SecretStore>(
         connector: C,
         store: S,
+        cache: impl FileCache,
         on_event: impl Fn(Event) + Send + Sync + 'static,
     ) -> Result<Self, Error> {
-        Self::with_backoff(connector, store, on_event, Backoff::default())
+        Self::with_backoff(connector, store, cache, on_event, Backoff::default())
     }
 
     /// [`with_ports`](Self::with_ports) with the waits between reconnects set, so that tests don't
@@ -143,6 +151,7 @@ impl Client {
     fn with_backoff<C: Connector, S: SecretStore>(
         connector: C,
         store: S,
+        cache: impl FileCache,
         on_event: impl Fn(Event) + Send + Sync + 'static,
         backoff: Backoff,
     ) -> Result<Self, Error> {
@@ -176,6 +185,9 @@ impl Client {
             rooms: RoomList::default(),
             emoji: CustomEmojis::default(),
             emoji_task: None,
+            cache: Arc::new(cache),
+            avatars: Avatars::default(),
+            avatar_tasks: JoinSet::new(),
             messages: Box::new(MemoryMessageStore::default()),
             open: None,
             history_attempt: 0,
@@ -327,6 +339,62 @@ async fn run_store_worker<S: SecretStore>(store: Arc<S>, mut ops: UnboundedRecei
     }
 }
 
+/// Downloads an avatar and stores it. Without one of its own, a cached file goes.
+async fn fetch_avatar<A: ServerApi>(
+    api: &A,
+    credentials: &Credentials,
+    owner: &AvatarOwner,
+    key: CacheKey,
+    cache: Arc<dyn FileCache>,
+) -> Fetched {
+    let image = match api.avatar(credentials, owner).await {
+        Ok(Some(image)) => image,
+        Ok(None) => return forget_avatar(owner, key, cache).await,
+        Err(error @ ApiError::Unreachable(_)) => {
+            tracing::debug!(%error, ?owner, "can't download the avatar");
+            return Fetched::Unreachable;
+        }
+        // Not the end of the session: the rooms and messages meet the same refusal if the token
+        // is dead, and the avatar route may refuse for other reasons.
+        Err(error) => {
+            tracing::debug!(%error, ?owner, "no avatar");
+            return Fetched::Nothing;
+        }
+    };
+    let stored = tokio::task::spawn_blocking(move || {
+        cache.put(&key, image.content_type.as_deref(), &image.bytes)
+    })
+    .await;
+    match stored {
+        Ok(Ok(stored)) => Fetched::Stored {
+            path: stored.path,
+            changed: stored.changed,
+        },
+        Ok(Err(error @ CacheError::UnsupportedType(_))) => {
+            tracing::debug!(%error, ?owner, "avatar not kept");
+            Fetched::Nothing
+        }
+        Ok(Err(error)) => {
+            tracing::warn!(%error, ?owner, "can't keep the avatar");
+            Fetched::Nothing
+        }
+        Err(error) => {
+            tracing::error!(%error, "storing an avatar panicked");
+            Fetched::Nothing
+        }
+    }
+}
+
+/// Removes the cached file of an avatar the server doesn't have.
+async fn forget_avatar(owner: &AvatarOwner, key: CacheKey, cache: Arc<dyn FileCache>) -> Fetched {
+    match tokio::task::spawn_blocking(move || cache.remove(&key)).await {
+        Ok(Ok(_)) => {}
+        Ok(Err(error)) => tracing::warn!(%error, ?owner, "can't remove the avatar"),
+        Err(error) => tracing::error!(%error, "removing an avatar panicked"),
+    }
+    Fetched::Missing
+}
+
 /// A login or resume task's answer.
 struct LoginDone<A> {
     attempt: u64,
@@ -364,6 +432,14 @@ struct RealtimeReport {
     done: RealtimeDone,
 }
 
+/// An avatar download's answer.
+struct AvatarDone {
+    /// The login attempt the download belongs to: the answer is stale if another has begun since.
+    attempt: u64,
+    owner: AvatarOwner,
+    outcome: Fetched,
+}
+
 /// A history fetch's answer.
 struct HistoryDone {
     /// Identifies the fetch: the answer is stale if the room was closed or another fetch began.
@@ -394,6 +470,7 @@ enum Done<A> {
     Login(LoginDone<A>),
     Rooms(RoomsDone),
     Emoji(EmojiDone),
+    Avatar(AvatarDone),
     Realtime(RealtimeReport),
     /// The wait after a lost connection is over; the cycle is the one that was lost.
     Reconnect {
@@ -471,6 +548,11 @@ struct Actor<C: Connector> {
     emoji: CustomEmojis,
     /// The custom emoji fetch of the current cycle, while it runs.
     emoji_task: Option<JoinHandle<()>>,
+    cache: Arc<dyn FileCache>,
+    /// Which avatars are wanted, queued and shown.
+    avatars: Avatars,
+    /// The avatar downloads in flight.
+    avatar_tasks: JoinSet<()>,
     /// The messages of the rooms opened so far. Cleared on logout.
     messages: Box<dyn MessageStore>,
     open: Option<OpenRoom>,
@@ -505,6 +587,7 @@ impl<C: Connector> Actor<C> {
                     Done::Login(done) => self.handle_login_done(done),
                     Done::Rooms(done) => self.handle_rooms_done(done),
                     Done::Emoji(done) => self.handle_emoji_done(done),
+                    Done::Avatar(done) => self.handle_avatar_done(done),
                     Done::Realtime(report) => self.handle_realtime_done(report),
                     Done::Reconnect { cycle } => self.handle_reconnect(cycle),
                     Done::History(done) => self.handle_history_done(done),
@@ -545,6 +628,7 @@ impl<C: Connector> Actor<C> {
             task.abort();
         }
         self.abort_realtime_task();
+        self.avatar_tasks.abort_all();
         if let Some(task) = self.history_task.take() {
             task.abort();
         }
@@ -677,6 +761,7 @@ impl<C: Connector> Actor<C> {
             self.set_state(SessionState::LoggedOut { failure: None });
             self.clear_rooms();
             self.clear_emoji();
+            self.clear_avatars();
             self.clear_timeline();
             self.clear_store();
             if let Some(session) = self.session.take() {
@@ -811,14 +896,20 @@ impl<C: Connector> Actor<C> {
             Pushed::Subscription(subscription) => {
                 let id = RoomId::from(subscription.room_id.clone());
                 // The server doesn't push the time of the last message with the subscription.
-                let known_activity = self.rooms.get(&id).map(|room| room.last_activity);
+                let known = self.rooms.get(&id).cloned();
                 match room_from(subscription) {
                     Some(mut room) => {
-                        room.last_activity = known_activity.unwrap_or(room.last_activity);
+                        // Nor does it push the avatar of the room.
+                        if let Some(known) = known {
+                            room.last_activity = known.last_activity;
+                            room.avatar_etag = known.avatar_etag;
+                        }
                         let room = self.seen_if_open(room);
+                        let owner = room.avatar_to_fetch();
                         if let Some(change) = self.rooms.upsert(room) {
                             (self.on_event)(Event::Rooms(vec![change]));
                         }
+                        self.want_avatars(owner);
                     }
                     // Hidden now, or not a kind we list.
                     None => self.remove_room(&id),
@@ -831,6 +922,16 @@ impl<C: Connector> Actor<C> {
                 }
             }
             Pushed::Message(message) => self.add_live_message(message),
+            // The server announces everybody's: only what was looked at is looked at again, and
+            // the rooms of the list, as a room that had no avatar may have one now.
+            Pushed::AvatarChanged(owner) => {
+                let seen = self.avatars.invalidate(&owner);
+                let listed =
+                    matches!(&owner, AvatarOwner::Room(id) if self.rooms.get(id).is_some());
+                if seen || listed {
+                    self.want_avatars([owner]);
+                }
+            }
         }
     }
 
@@ -985,6 +1086,13 @@ impl<C: Connector> Actor<C> {
         if !changes.is_empty() {
             (self.on_event)(Event::Rooms(changes));
         }
+        self.want_avatars(
+            self.rooms
+                .rooms()
+                .iter()
+                .filter_map(Room::avatar_to_fetch)
+                .collect::<Vec<_>>(),
+        );
         self.fetch_emoji();
         if self.realtime_open {
             self.succeeded_at = Some(Instant::now());
@@ -1039,6 +1147,74 @@ impl<C: Connector> Actor<C> {
         }
     }
 
+    /// Wants the avatars of `owners`: what the cache holds goes to the frontend at once, and each
+    /// avatar is downloaded again, once per session, in the background.
+    fn want_avatars(&mut self, owners: impl IntoIterator<Item = AvatarOwner>) {
+        let SessionState::LoggedIn(account) = &self.state else {
+            return;
+        };
+        let server = account.server.clone();
+        let cache = &self.cache;
+        let updates: Vec<_> = owners
+            .into_iter()
+            .filter_map(|owner| {
+                self.avatars
+                    .want(owner, |owner| cache.get(&CacheKey::avatar(&server, owner)))
+            })
+            .collect();
+        if !updates.is_empty() {
+            (self.on_event)(Event::Avatars(updates));
+        }
+        self.start_avatar_downloads(&server);
+    }
+
+    fn start_avatar_downloads(&mut self, server: &str) {
+        let Some(session) = &self.session else {
+            return;
+        };
+        while let Some(owner) = self.avatars.next_download() {
+            let api = session.api.clone();
+            let credentials = session.credentials.clone();
+            let key = CacheKey::avatar(server, &owner);
+            let cache = Arc::clone(&self.cache);
+            let attempt = self.attempt;
+            let done = self.done_tx.clone();
+            self.avatar_tasks.spawn(async move {
+                let outcome = fetch_avatar(&api, &credentials, &owner, key, cache).await;
+                // Fails only if the actor is gone.
+                let _ = done.send(Done::Avatar(AvatarDone {
+                    attempt,
+                    owner,
+                    outcome,
+                }));
+            });
+        }
+    }
+
+    fn handle_avatar_done(&mut self, done: AvatarDone) {
+        let SessionState::LoggedIn(account) = &self.state else {
+            return;
+        };
+        if done.attempt != self.attempt {
+            tracing::debug!("answer of a stale avatar download dropped");
+            return;
+        }
+        let server = account.server.clone();
+        if let Some(update) = self.avatars.finished(done.owner, done.outcome) {
+            (self.on_event)(Event::Avatars(vec![update]));
+        }
+        self.start_avatar_downloads(&server);
+    }
+
+    /// Forgets the avatars and tells the frontend, unless it had none. The cache keeps its files.
+    fn clear_avatars(&mut self) {
+        self.avatar_tasks.abort_all();
+        let forgotten = self.avatars.reset();
+        if !forgotten.is_empty() {
+            (self.on_event)(Event::Avatars(forgotten));
+        }
+    }
+
     /// Forgets the custom emoji and tells the frontend, unless there were none.
     fn clear_emoji(&mut self) {
         if let Some(task) = self.emoji_task.take() {
@@ -1079,6 +1255,7 @@ impl<C: Connector> Actor<C> {
         });
         self.clear_rooms();
         self.clear_emoji();
+        self.clear_avatars();
         self.clear_timeline();
     }
 
@@ -1108,7 +1285,10 @@ impl<C: Connector> Actor<C> {
         self.abort_history_task();
         let history = self.messages.load(&id);
         let timeline = Timeline::new(id, history);
-        (self.on_event)(Event::Timeline(vec![timeline.reset()]));
+        let reset = timeline.reset();
+        let authors = authors_of(std::slice::from_ref(&reset));
+        (self.on_event)(Event::Timeline(vec![reset]));
+        self.want_avatars(authors);
         self.open = Some(OpenRoom {
             timeline,
             kind,
@@ -1189,6 +1369,7 @@ impl<C: Connector> Actor<C> {
         };
         let older = fetch.older;
         self.history_task = None;
+        let mut authors = Vec::new();
         match done.outcome {
             Ok(page) => {
                 let changes = if older {
@@ -1200,6 +1381,7 @@ impl<C: Connector> Actor<C> {
                 };
                 self.messages.save(&done.room, open.timeline.history());
                 if !changes.is_empty() {
+                    authors = authors_of(&changes);
                     (self.on_event)(Event::Timeline(changes));
                 }
             }
@@ -1212,6 +1394,7 @@ impl<C: Connector> Actor<C> {
                 open.error = Some(TimelineError::from(&error));
             }
         }
+        self.want_avatars(authors);
         self.emit_timeline_status();
     }
 
@@ -1239,7 +1422,9 @@ impl<C: Connector> Actor<C> {
             let changes = change(&mut open.timeline);
             if !changes.is_empty() {
                 self.messages.save(room, open.timeline.history());
+                let authors = authors_of(&changes);
                 (self.on_event)(Event::Timeline(changes));
+                self.want_avatars(authors);
             }
             return;
         }

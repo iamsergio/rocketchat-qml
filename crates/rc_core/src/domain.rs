@@ -172,6 +172,14 @@ impl Room {
         }
     }
 
+    /// The avatar worth fetching for the room, if any: the other user's for a direct message (the
+    /// server says whether they have one when asked), the room's own if it has one. A room
+    /// without gets the initials of its name instead.
+    #[must_use]
+    pub fn avatar_to_fetch(&self) -> Option<AvatarOwner> {
+        (self.peer.is_some() || self.avatar_etag.is_some()).then(|| self.avatar_owner())
+    }
+
     /// Whether the room shows as unread.
     #[must_use]
     pub fn has_unread(&self) -> bool {

@@ -173,6 +173,16 @@ pub enum DdpEvent {
         room_id: String,
         last_message: jiff::Timestamp,
     },
+    /// A user's or a room's avatar changed: fetch it again. The server announces every user's and
+    /// every room's, not only those the client knows.
+    AvatarChanged(AvatarOwner),
+}
+
+/// Whose avatar changed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum AvatarOwner {
+    User { username: String },
+    Room { room_id: String },
 }
 
 #[cfg(test)]

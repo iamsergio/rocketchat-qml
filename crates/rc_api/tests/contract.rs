@@ -828,7 +828,7 @@ async fn all_streams_deliver_on_one_connection() {
                 subscription |= s.room_id == room_id && s.unread >= 1;
             }
             DdpEvent::RoomActivity { room_id: r, .. } => activity |= *r == room_id,
-            DdpEvent::SubscriptionRemoved { .. } => {}
+            DdpEvent::SubscriptionRemoved { .. } | DdpEvent::AvatarChanged(_) => {}
         }
         message && subscription && activity
     })
@@ -1048,4 +1048,47 @@ async fn users_and_rooms_with_the_generated_avatar_have_no_etag() {
     assert_eq!(session.room_avatar_etag(&room_id).await.unwrap(), None);
     let rooms = session.subscriptions().await.unwrap();
     assert_eq!(find(&rooms, &room_id).avatar_etag, None);
+}
+
+// RICH-004
+#[tokio::test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+async fn a_new_avatar_is_announced_by_username() {
+    let fixture = Fixture::new();
+    let login = fixture.login().await;
+    let (client, mut events) = connect_and_login(&login.credentials).await;
+    client.subscribe_avatar_changes().await.unwrap();
+
+    fixture.admin.set_avatar(&fixture.user.username);
+
+    let username = fixture.user.username.clone();
+    event_where(&mut events, |e| {
+        matches!(e, DdpEvent::AvatarChanged(rc_api::AvatarOwner::User { username: u }) if *u == username)
+    })
+    .await;
+}
+
+// RICH-004
+#[tokio::test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+async fn a_user_and_a_room_with_an_avatar_of_their_own_have_an_etag() {
+    let fixture = Fixture::new();
+    let (room_id, _) = fixture.create_channel();
+    fixture.admin.set_avatar(&fixture.user.username);
+    fixture.admin.set_room_avatar(&room_id);
+    let session = fixture.client.session(fixture.login().await.credentials);
+
+    let user = session
+        .user_avatar_etag(&fixture.user.username)
+        .await
+        .unwrap();
+    let room = session.room_avatar_etag(&room_id).await.unwrap();
+    let rooms = session.subscriptions().await.unwrap();
+
+    assert!(user.is_some_and(|etag| !etag.is_empty()));
+    assert!(room.is_some());
+    assert_eq!(find(&rooms, &room_id).avatar_etag, room);
+    // The download still answers, with what the server draws or serves.
+    let avatar = session.user_avatar(&fixture.user.username).await.unwrap();
+    assert!(avatar.content_type.is_some_and(|t| t.starts_with("image/")));
 }

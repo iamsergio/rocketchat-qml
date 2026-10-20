@@ -17,7 +17,7 @@ use std::path::PathBuf;
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use cxx_qt::CxxQtThread;
-use rc_core::adapters::{MemoryStore, default_store};
+use rc_core::adapters::{DiskFileCache, MemoryStore, default_store};
 use rc_core::domain::{MessageId, RoomId};
 use rc_core::ports::SecretStore;
 use rc_core::rooms::RoomChange;
@@ -104,8 +104,14 @@ fn file_store(_path: PathBuf) -> Box<dyn SecretStore> {
     Box::new(MemoryStore::default())
 }
 
-/// Starts the core, unless it is running already. Call on the GUI thread.
-pub fn start() {
+/// Where downloads go when the host gives no directory.
+fn fallback_cache_dir() -> PathBuf {
+    std::env::temp_dir().join("rocketchat-qml-cache")
+}
+
+/// Starts the core, unless it is running already. Downloaded files are kept in `cache_dir`. Call on
+/// the GUI thread.
+pub fn start(cache_dir: &str) {
     if lock().client.is_some() {
         tracing::info!("the core is already running");
         return;
@@ -122,7 +128,14 @@ pub fn start() {
             default_store()
         }
     };
-    match Client::start(store, dispatch) {
+    let cache_dir = if cache_dir.is_empty() {
+        tracing::warn!("no cache directory given, using the temporary directory");
+        fallback_cache_dir()
+    } else {
+        PathBuf::from(cache_dir)
+    };
+    tracing::info!(dir = %cache_dir.display(), "file cache");
+    match Client::start(store, DiskFileCache::new(cache_dir), dispatch) {
         Ok(client) => lock().client = Some(client),
         Err(error) => tracing::error!(%error, "can't start the core"),
     }

@@ -11,12 +11,15 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use std::net::TcpListener;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver};
 use std::time::{Duration, Instant};
 
-use rc_core::adapters::{MemoryStore, RestConnector};
-use rc_core::domain::{Delivery, Message, MessageId, MessageKind, Room, RoomId, RoomKind};
-use rc_core::ports::{Connector, SecretStore, ServerApi};
+use rc_core::adapters::{DiskFileCache, MemoryStore, RestConnector};
+use rc_core::domain::{
+    AvatarOwner, Delivery, Message, MessageId, MessageKind, Room, RoomId, RoomKind,
+};
+use rc_core::ports::{CacheError, CacheKey, Connector, FileCache, SecretStore, ServerApi, Stored};
 use rc_core::rich::{Block, Emoji, Inline, Mention, TaskItem};
 use rc_core::rooms::RoomChange;
 use rc_core::session::{LoginFailure, SessionState};
@@ -43,10 +46,36 @@ fn start() -> (Client, Receiver<Event>) {
     (client, events)
 }
 
+/// A cache that keeps nothing: avatars are for the tests that look at them.
+struct NoCache;
+
+impl FileCache for NoCache {
+    fn get(&self, _key: &CacheKey) -> Option<PathBuf> {
+        None
+    }
+
+    fn put(
+        &self,
+        _key: &CacheKey,
+        _type: Option<&str>,
+        _bytes: &[u8],
+    ) -> Result<Stored, CacheError> {
+        Err(CacheError::Io("no cache".to_owned()))
+    }
+
+    fn remove(&self, _key: &CacheKey) -> Result<bool, CacheError> {
+        Ok(false)
+    }
+}
+
 /// A client on `store`; the first event is left to the caller.
 fn start_with(store: MemoryStore) -> (Client, Receiver<Event>) {
+    start_with_cache(store, NoCache)
+}
+
+fn start_with_cache(store: MemoryStore, cache: impl FileCache) -> (Client, Receiver<Event>) {
     let (tx, rx) = mpsc::channel();
-    let client = Client::start(store, move |event| {
+    let client = Client::start(store, cache, move |event| {
         let _ = tx.send(event);
     })
     .unwrap();
@@ -454,6 +483,118 @@ fn logging_in_brings_the_custom_emoji_of_the_server() {
         Event::CustomEmoji(emoji) => emoji.url(&name).is_none().then_some(()),
         _ => None,
     });
+}
+
+/// A cache directory that goes away with the test.
+struct CacheDir(PathBuf);
+
+impl CacheDir {
+    fn new() -> Self {
+        Self(std::env::temp_dir().join(format!("rc_core-contract-{}", unique())))
+    }
+}
+
+impl Drop for CacheDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+/// The avatar files announced until all of `owners` have one, by owner.
+fn avatars_until(
+    events: &Receiver<Event>,
+    owners: &[AvatarOwner],
+) -> std::collections::HashMap<AvatarOwner, PathBuf> {
+    let mut found = std::collections::HashMap::new();
+    wait_for(events, |event| {
+        if let Event::Avatars(updates) = event {
+            for update in updates {
+                if let Some(path) = &update.path {
+                    found.insert(update.owner.clone(), path.clone());
+                }
+            }
+        }
+        owners
+            .iter()
+            .all(|owner| found.contains_key(owner))
+            .then_some(())
+    });
+    found
+}
+
+/// What the server sends for an avatar: it serves the generated one for any, whatever was uploaded.
+fn assert_cached_image(path: &Path, root: &Path) {
+    assert!(path.starts_with(root), "{}", path.display());
+    assert!(path.extension().is_some(), "{}", path.display());
+    assert!(
+        std::fs::metadata(path).unwrap().len() > 0,
+        "{}",
+        path.display()
+    );
+}
+
+// RICH-004
+#[test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+fn the_avatars_that_users_and_rooms_have_are_downloaded_and_kept_for_the_next_session() {
+    let admin = Admin::login();
+    let user = admin.create_user();
+    let (channel_id, _) = admin.create_channel(&[&user.username]);
+    admin.set_avatar(&user.username);
+    admin.set_room_avatar(&channel_id);
+    let me = AvatarOwner::User(user.username.clone());
+    let channel = AvatarOwner::Room(channel_id.clone().into());
+    let cache = CacheDir::new();
+    let (client, events) = start_with_cache(MemoryStore::default(), DiskFileCache::new(&cache.0));
+    client.login(&server_url(), &user.username, password(&user));
+
+    // The room's own avatar, from the etag of the room list.
+    let first = avatars_until(&events, std::slice::from_ref(&channel));
+    assert_cached_image(&first[&channel], &cache.0);
+    // The author of a message, once the room is open: the user's own message is one.
+    client.open_room(channel_id.clone().into());
+    client.send_message(channel_id.into(), "hello");
+    let mine = avatars_until(&events, std::slice::from_ref(&me));
+    assert_cached_image(&mine[&me], &cache.0);
+    drop(client);
+
+    // A new session starts from the files.
+    let (client, events) = start_with_cache(MemoryStore::default(), DiskFileCache::new(&cache.0));
+    client.login(&server_url(), &user.username, password(&user));
+    let second = avatars_until(&events, std::slice::from_ref(&channel));
+    assert_eq!(second[&channel], first[&channel]);
+}
+
+// RICH-004
+#[test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+fn rooms_and_users_with_the_generated_avatar_get_none() {
+    let admin = Admin::login();
+    let user = admin.create_user();
+    let (channel_id, _) = admin.create_channel(&[&user.username]);
+    let dm_id = admin.create_dm(&user.username);
+    admin.post_message(&dm_id, "hi");
+    let cache = CacheDir::new();
+    let (client, events) = start_with_cache(MemoryStore::default(), DiskFileCache::new(&cache.0));
+    client.login(&server_url(), &user.username, password(&user));
+    wait_for(&events, |event| {
+        matches!(event, Event::Rooms(_)).then_some(())
+    });
+    client.open_room(channel_id.clone().into());
+    client.send_message(channel_id.into(), "who am I");
+    wait_for(&events, |event| match event {
+        Event::Timeline(changes) => changes
+            .iter()
+            .any(|change| matches!(change, TimelineChange::Appended(_)))
+            .then_some(()),
+        _ => None,
+    });
+
+    // Give a download that would be made the time to come.
+    std::thread::sleep(Duration::from_secs(2));
+    while let Ok(event) = events.try_recv() {
+        assert!(!matches!(event, Event::Avatars(_)), "{event:?}");
+    }
 }
 
 // RT-002, ROOM-001

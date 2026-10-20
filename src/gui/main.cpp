@@ -4,6 +4,7 @@
 #include <QCommandLineParser>
 #include <QGuiApplication>
 #include <QQmlApplicationEngine>
+#include <QStandardPaths>
 #include <QUrl>
 
 #include <rc_qt/src/lifecycle.cxx.h>
@@ -53,7 +54,8 @@ int main(int argc, char *argv[])
 
     // After QGuiApplication, so the core's events can reach the GUI thread; before the QML is
     // loaded, which creates the view models that listen to it.
-    rc_qt::start_core();
+    const QByteArray cacheDir = QStandardPaths::writableLocation(QStandardPaths::CacheLocation).toUtf8();
+    rc_qt::start_core(rust::Str(cacheDir.constData(), static_cast<size_t>(cacheDir.size())));
 #ifdef ROCKETCHATQML_DEVELOPER_MODE
     if (parser.isSet(devOption)) {
         rc_qt::enable_dev_login();

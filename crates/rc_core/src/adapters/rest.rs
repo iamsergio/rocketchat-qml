@@ -7,8 +7,10 @@ use rc_api::{DdpClient, DdpEvent, DdpEvents, RestClient, ServerVersion};
 use secrecy::SecretString;
 use tokio::sync::mpsc;
 
-use crate::domain::{Credentials, Message, MessageId, RoomId, RoomKind, User, message_from};
-use crate::ports::{ApiError, Connector, Page, Pushed, PushedEvents, ServerApi};
+use crate::domain::{
+    AvatarOwner, Credentials, Message, MessageId, RoomId, RoomKind, User, message_from,
+};
+use crate::ports::{ApiError, Connector, Image, Page, Pushed, PushedEvents, ServerApi};
 
 pub struct RestConnector;
 
@@ -65,6 +67,32 @@ impl ServerApi for RestApi {
         Ok(session.custom_emoji().await?)
     }
 
+    async fn avatar(
+        &self,
+        credentials: &Credentials,
+        owner: &AvatarOwner,
+    ) -> Result<Option<Image>, ApiError> {
+        let session = self.client.session(api_credentials(credentials));
+        let download = match owner {
+            AvatarOwner::User(username) => {
+                if session.user_avatar_etag(username).await?.is_none() {
+                    return Ok(None);
+                }
+                session.user_avatar(username).await?
+            }
+            AvatarOwner::Room(room) => {
+                if session.room_avatar_etag(room.as_str()).await?.is_none() {
+                    return Ok(None);
+                }
+                session.room_avatar(room.as_str()).await?
+            }
+        };
+        Ok(Some(Image {
+            bytes: download.bytes,
+            content_type: download.content_type,
+        }))
+    }
+
     async fn history(
         &self,
         credentials: &Credentials,
@@ -116,6 +144,10 @@ impl ServerApi for RestApi {
             .await?;
         ddp.subscribe_room_activity(credentials.user_id.as_str())
             .await?;
+        // Avatars show without it, only later.
+        if let Err(error) = ddp.subscribe_avatar_changes().await {
+            tracing::warn!(%error, "avatar changes won't be pushed");
+        }
         let (pushed, receiver) = mpsc::unbounded_channel();
         tokio::spawn(forward(ddp, events, pushed));
         Ok(receiver)
@@ -162,6 +194,12 @@ fn pushed_from(event: DdpEvent) -> Option<Pushed> {
             room: room_id.into(),
             at: last_message,
         },
+        DdpEvent::AvatarChanged(rc_api::AvatarOwner::User { username }) => {
+            Pushed::AvatarChanged(AvatarOwner::User(username))
+        }
+        DdpEvent::AvatarChanged(rc_api::AvatarOwner::Room { room_id }) => {
+            Pushed::AvatarChanged(AvatarOwner::Room(room_id.into()))
+        }
     })
 }
 
@@ -263,6 +301,27 @@ mod tests {
                 room: "r1".to_owned().into(),
                 at
             })
+        );
+    }
+
+    // RICH-004
+    #[test]
+    fn an_avatar_change_is_pushed_by_username_or_room_id() {
+        let user = pushed_from(DdpEvent::AvatarChanged(rc_api::AvatarOwner::User {
+            username: "alice".into(),
+        }));
+        assert_eq!(
+            user,
+            Some(Pushed::AvatarChanged(AvatarOwner::User("alice".into())))
+        );
+        let room = pushed_from(DdpEvent::AvatarChanged(rc_api::AvatarOwner::Room {
+            room_id: "r1".into(),
+        }));
+        assert_eq!(
+            room,
+            Some(Pushed::AvatarChanged(AvatarOwner::Room(
+                "r1".to_owned().into()
+            )))
         );
     }
 

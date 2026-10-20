@@ -4,7 +4,8 @@
 //! The session actor driven through a fake server API and in-memory stores. Plain `#[test]`s: the
 //! client owns its runtime and can't be dropped inside one. Nothing here touches the OS keyring.
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
+use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
@@ -18,7 +19,9 @@ use super::*;
 use crate::adapters::MemoryStore;
 use crate::backoff::Backoff;
 use crate::domain::{Account, Author, Delivery, Message, MessageKind, Room, RoomKind, User};
-use crate::ports::{ApiError, Page, Pushed, PushedEvents};
+use crate::ports::{
+    ApiError, CacheError, Image, Page, Pushed, PushedEvents, Stored, image_extension,
+};
 use crate::rooms::RoomChange;
 use crate::timeline::{TimelineChange, TimelineError, TimelineStatus};
 
@@ -59,6 +62,13 @@ struct SendScript {
     result: Result<i64, ApiError>,
 }
 
+struct AvatarScript {
+    /// Holds the download until the test notifies it.
+    gate: Option<Arc<Notify>>,
+    /// `None`: the owner has no avatar of its own.
+    result: Result<Option<Image>, ApiError>,
+}
+
 /// What `send_message` was asked.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct SendCall {
@@ -96,6 +106,12 @@ struct FakeState {
     subscriptions_calls: Vec<(String, String)>,
     /// What `custom_emoji` answers: no emoji if unset.
     emoji: Option<Result<Vec<rc_api::CustomEmoji>, ApiError>>,
+    /// One per download of an owner's avatar; no avatar of its own once they run out.
+    avatars: HashMap<AvatarOwner, VecDeque<AvatarScript>>,
+    avatar_calls: Vec<AvatarOwner>,
+    avatar_running: usize,
+    /// The most downloads that ran at the same time.
+    avatar_max_running: usize,
     /// One per history fetch; an empty page at the start once they run out.
     histories: VecDeque<HistoryScript>,
     history_calls: Vec<HistoryCall>,
@@ -143,6 +159,27 @@ impl Fake {
         result: Result<Vec<rc_api::Subscription>, ApiError>,
     ) {
         self.state().fetches.push_back(FetchScript { gate, result });
+    }
+
+    fn script_avatar(
+        &self,
+        owner: AvatarOwner,
+        gate: Option<Arc<Notify>>,
+        result: Result<Option<Image>, ApiError>,
+    ) {
+        self.state()
+            .avatars
+            .entry(owner)
+            .or_default()
+            .push_back(AvatarScript { gate, result });
+    }
+
+    /// The download tasks have started and are inside `avatar`.
+    fn wait_for_avatar_calls(&self, count: usize) -> Vec<AvatarOwner> {
+        wait_until(|| {
+            let calls = self.state().avatar_calls.clone();
+            (calls.len() >= count).then_some(calls)
+        })
     }
 
     fn script_history(&self, gate: Option<Arc<Notify>>, result: Result<Page, ApiError>) {
@@ -351,6 +388,34 @@ impl ServerApi for Fake {
         std::future::ready(self.state().emoji.clone().unwrap_or(Ok(Vec::new())))
     }
 
+    async fn avatar(
+        &self,
+        _credentials: &Credentials,
+        owner: &AvatarOwner,
+    ) -> Result<Option<Image>, ApiError> {
+        struct Running(Fake);
+        impl Drop for Running {
+            fn drop(&mut self) {
+                self.0.state().avatar_running -= 1;
+            }
+        }
+        let script = {
+            let mut state = self.state();
+            state.avatar_calls.push(owner.clone());
+            state.avatar_running += 1;
+            state.avatar_max_running = state.avatar_max_running.max(state.avatar_running);
+            state.avatars.get_mut(owner).and_then(VecDeque::pop_front)
+        };
+        let _running = Running(self.clone());
+        let Some(script) = script else {
+            return Ok(None);
+        };
+        if let Some(gate) = script.gate {
+            gate.notified().await;
+        }
+        script.result
+    }
+
     async fn history(
         &self,
         _credentials: &Credentials,
@@ -453,6 +518,76 @@ impl ServerApi for Fake {
         let mut state = self.state();
         state.logouts_done += 1;
         state.logout_result.clone().unwrap_or(Ok(()))
+    }
+}
+
+/// Files in memory, at made-up paths: `/cache/<server>/<user or room>/<name>.<extension>`.
+#[derive(Clone, Default)]
+struct FakeCache(Arc<Mutex<FakeFiles>>);
+
+/// The extension and the bytes of each file.
+type FakeFiles = HashMap<CacheKey, (&'static str, Vec<u8>)>;
+
+impl FakeCache {
+    /// A file held before the session starts. `server` is the key's, `h` for `http://h`.
+    fn seed(&self, server: &str, owner: &AvatarOwner, extension: &'static str, bytes: &[u8]) {
+        let key = CacheKey::avatar(server, owner);
+        self.0
+            .lock()
+            .unwrap()
+            .insert(key, (extension, bytes.to_vec()));
+    }
+
+    fn bytes(&self, server: &str, owner: &AvatarOwner) -> Option<Vec<u8>> {
+        let key = CacheKey::avatar(server, owner);
+        self.0
+            .lock()
+            .unwrap()
+            .get(&key)
+            .map(|(_, bytes)| bytes.clone())
+    }
+
+    fn path(key: &CacheKey, extension: &str) -> PathBuf {
+        let kind = match key.kind {
+            crate::ports::CacheKind::UserAvatar => "user",
+            crate::ports::CacheKind::RoomAvatar => "room",
+        };
+        PathBuf::from(format!(
+            "/cache/{}/{kind}/{}.{extension}",
+            key.server, key.name
+        ))
+    }
+}
+
+impl FileCache for FakeCache {
+    fn get(&self, key: &CacheKey) -> Option<PathBuf> {
+        let files = self.0.lock().unwrap();
+        files
+            .get(key)
+            .map(|(extension, _)| Self::path(key, extension))
+    }
+
+    fn put(
+        &self,
+        key: &CacheKey,
+        content_type: Option<&str>,
+        bytes: &[u8],
+    ) -> Result<Stored, CacheError> {
+        let extension = content_type
+            .and_then(image_extension)
+            .ok_or_else(|| CacheError::UnsupportedType(content_type.map(str::to_owned)))?;
+        let mut files = self.0.lock().unwrap();
+        let new = (extension, bytes.to_vec());
+        let changed = files.get(key) != Some(&new);
+        files.insert(key.clone(), new);
+        Ok(Stored {
+            path: Self::path(key, extension),
+            changed,
+        })
+    }
+
+    fn remove(&self, key: &CacheKey) -> Result<bool, CacheError> {
+        Ok(self.0.lock().unwrap().remove(key).is_some())
     }
 }
 
@@ -582,10 +717,23 @@ impl Harness {
     }
 
     fn with_backoff(fake: &Fake, store: impl SecretStore, backoff: Backoff) -> Self {
+        Self::build(fake, store, FakeCache::default(), backoff)
+    }
+
+    fn with_cache(fake: &Fake, cache: FakeCache) -> Self {
+        Self::with_cache_and_backoff(fake, cache, Backoff::new(NEVER, NEVER, NEVER))
+    }
+
+    fn with_cache_and_backoff(fake: &Fake, cache: FakeCache, backoff: Backoff) -> Self {
+        Self::build(fake, MemoryStore::default(), cache, backoff)
+    }
+
+    fn build(fake: &Fake, store: impl SecretStore, cache: FakeCache, backoff: Backoff) -> Self {
         let (tx, events) = mpsc::channel();
         let client = Client::with_backoff(
             fake.clone(),
             store,
+            cache,
             move |event| {
                 let _ = tx.send(event);
             },
@@ -613,6 +761,39 @@ impl Harness {
             match self.events.recv_timeout(TIMEOUT).expect("no event") {
                 Event::Connection(_) => {}
                 event => return event,
+            }
+        }
+    }
+
+    /// The updates of the next `Avatars` event, skipping the other events.
+    fn next_avatars(&self) -> Vec<AvatarUpdate> {
+        loop {
+            if let Event::Avatars(updates) = self.events.recv_timeout(TIMEOUT).expect("no event") {
+                return updates;
+            }
+        }
+    }
+
+    /// Checks that no `Avatars` event comes for a little while, and drops the other events.
+    fn assert_no_avatars(&self) {
+        let deadline = Instant::now() + Duration::from_millis(200);
+        while let Some(left) = deadline.checked_duration_since(Instant::now()) {
+            if let Ok(Event::Avatars(updates)) = self.events.recv_timeout(left) {
+                panic!("unexpected avatars: {updates:?}");
+            }
+        }
+    }
+
+    /// Skips events until the open room's messages gain the one with this id.
+    fn wait_for_appended(&self, id: &str) {
+        loop {
+            if let Event::Timeline(changes) = self.events.recv_timeout(TIMEOUT).expect("no event")
+                && changes.iter().any(|change| {
+                    matches!(change, TimelineChange::Appended(messages)
+                        if messages.iter().any(|m| m.id.as_str() == id))
+                })
+            {
+                return;
             }
         }
     }
@@ -3430,4 +3611,545 @@ fn a_snapshot_after_reconnecting_moves_the_rooms_that_were_busy() {
         to: 0,
         room: active_room("1", "alpha", 50),
     }])]);
+}
+
+// Avatars
+
+/// A room's subscription as the server lists it when the room has an avatar of its own.
+fn avatar_subscription(id: &str, name: &str, room_type: rc_api::RoomType) -> rc_api::Subscription {
+    rc_api::Subscription {
+        avatar_etag: Some("etag".to_owned()),
+        ..subscription(id, name, room_type)
+    }
+}
+
+fn avatar_room(id: &str, name: &str, kind: RoomKind) -> Room {
+    Room {
+        avatar_etag: Some("etag".to_owned()),
+        ..room(id, name, kind)
+    }
+}
+
+// Scripts take the result of the call, which is what the other scripts pass.
+#[allow(clippy::unnecessary_wraps)]
+fn png(bytes: &[u8]) -> Result<Option<Image>, ApiError> {
+    Ok(Some(Image {
+        bytes: bytes.to_vec(),
+        content_type: Some("image/png".to_owned()),
+    }))
+}
+
+fn user_owner(name: &str) -> AvatarOwner {
+    AvatarOwner::User(name.to_owned())
+}
+
+fn room_owner(id: &str) -> AvatarOwner {
+    AvatarOwner::Room(id.to_owned().into())
+}
+
+/// A message of room `1` written by `author`.
+fn message_by(id: &str, secs: i64, author: &str) -> Message {
+    let mut message = message(id, secs);
+    message.author.username = author.to_owned();
+    message
+}
+
+fn update(owner: AvatarOwner, path: &str) -> AvatarUpdate {
+    AvatarUpdate {
+        owner,
+        path: Some(PathBuf::from(path)),
+    }
+}
+
+/// A harness with a cache, logged in with the rooms `1` and `2`, past their events.
+fn logged_in_with_cache(fake: &Fake, cache: &FakeCache) -> Harness {
+    fake.script_login(None, Ok(()));
+    fake.script_fetch(
+        None,
+        Ok(vec![
+            avatar_subscription("1", "general", rc_api::RoomType::Channel),
+            avatar_subscription("2", "secret", rc_api::RoomType::Private),
+        ]),
+    );
+    let harness = Harness::with_cache(fake, cache.clone());
+    harness.login("http://h", "alice");
+    harness.expect_events(vec![
+        session_event(SessionState::Connecting),
+        session_event(logged_in("http://h", "alice")),
+        rooms_event(vec![
+            avatar_room("1", "general", RoomKind::Channel),
+            avatar_room("2", "secret", RoomKind::Private),
+        ]),
+    ]);
+    harness
+}
+
+// RICH-004
+#[test]
+fn cached_avatars_of_the_rooms_are_sent_at_once() {
+    let fake = Fake::new();
+    let cache = FakeCache::default();
+    cache.seed("h", &room_owner("1"), "png", b"cached");
+    let harness = logged_in_with_cache_events(&fake, &cache);
+    assert_eq!(
+        harness.next_avatars(),
+        [update(room_owner("1"), "/cache/h/room/1.png")]
+    );
+    // Nothing for the room that has none.
+    assert_eq!(
+        fake.wait_for_avatar_calls(2),
+        [room_owner("1"), room_owner("2")]
+    );
+}
+
+/// Like [`logged_in_with_cache`], for a cache that makes `Avatars` events come in between.
+fn logged_in_with_cache_events(fake: &Fake, cache: &FakeCache) -> Harness {
+    fake.script_login(None, Ok(()));
+    fake.script_fetch(
+        None,
+        Ok(vec![
+            avatar_subscription("1", "general", rc_api::RoomType::Channel),
+            avatar_subscription("2", "secret", rc_api::RoomType::Private),
+        ]),
+    );
+    let harness = Harness::with_cache(fake, cache.clone());
+    harness.login("http://h", "alice");
+    harness
+}
+
+// RICH-004
+#[test]
+fn a_downloaded_avatar_is_sent_once_it_is_stored() {
+    let fake = Fake::new();
+    fake.script_avatar(room_owner("1"), None, png(b"one"));
+    let cache = FakeCache::default();
+    let harness = logged_in_with_cache_events(&fake, &cache);
+    assert_eq!(
+        harness.next_avatars(),
+        [update(room_owner("1"), "/cache/h/room/1.png")]
+    );
+    assert_eq!(cache.bytes("h", &room_owner("1")), Some(b"one".to_vec()));
+}
+
+// RICH-004
+#[test]
+fn a_direct_message_shows_the_avatar_of_the_other_user() {
+    let fake = Fake::new();
+    fake.script_login(None, Ok(()));
+    fake.script_fetch(
+        None,
+        Ok(vec![
+            avatar_subscription("d1", "bob", rc_api::RoomType::Direct),
+            avatar_subscription("d2", "bob,carol", rc_api::RoomType::Direct),
+        ]),
+    );
+    let harness = Harness::with_cache(&fake, FakeCache::default());
+    harness.login("http://h", "alice");
+    let calls = fake.wait_for_avatar_calls(2);
+    assert!(calls.contains(&user_owner("bob")), "{calls:?}");
+    assert!(!calls.contains(&room_owner("d1")), "{calls:?}");
+    // A group conversation has no other user to show.
+    assert!(calls.contains(&room_owner("d2")), "{calls:?}");
+    drop(harness);
+}
+
+// RICH-004
+#[test]
+fn the_authors_of_the_open_room_get_their_avatars() {
+    let fake = Fake::new();
+    let cache = FakeCache::default();
+    cache.seed("h", &user_owner("bob"), "png", b"cached");
+    fake.script_avatar(user_owner("bob"), None, png(b"cached"));
+    fake.script_avatar(user_owner("carol"), None, png(b"carol"));
+    let harness = logged_in_with_cache(&fake, &cache);
+    fake.script_history(
+        None,
+        page(
+            vec![message_by("b", 2, "carol"), message_by("a", 1, "bob")],
+            true,
+        ),
+    );
+    harness.client.open_room("1".to_owned().into());
+
+    let mut sent = harness.next_avatars();
+    sent.extend(harness.next_avatars());
+    assert!(sent.contains(&update(user_owner("bob"), "/cache/h/user/bob.png")));
+    assert!(sent.contains(&update(user_owner("carol"), "/cache/h/user/carol.png")));
+}
+
+// RICH-004
+#[test]
+fn the_author_of_a_live_message_gets_an_avatar_and_system_messages_none() {
+    let fake = Fake::new();
+    fake.script_avatar(user_owner("dave"), None, png(b"dave"));
+    let cache = FakeCache::default();
+    let harness = logged_in_with_cache(&fake, &cache);
+    open_first_room_of(&fake, &harness);
+    let mut joined = message_by("j", 9, "erin");
+    joined.kind = MessageKind::System(crate::domain::SystemEvent::Joined);
+    fake.push(0, Pushed::Message(joined));
+    fake.push(0, Pushed::Message(message_by("c", 3, "dave")));
+
+    assert_eq!(
+        harness.next_avatars(),
+        [update(user_owner("dave"), "/cache/h/user/dave.png")]
+    );
+    let calls = fake.state().avatar_calls.clone();
+    assert!(!calls.contains(&user_owner("erin")), "{calls:?}");
+}
+
+/// Opens room 1 with an empty page, which wants no avatar.
+fn open_first_room_of(fake: &Fake, harness: &Harness) {
+    fake.script_history(None, page(Vec::new(), true));
+    harness.client.open_room("1".to_owned().into());
+    harness.expect_events(vec![
+        reset_event(Some("1"), Vec::new()),
+        status("1", true, false, false, None),
+        status("1", false, false, true, None),
+    ]);
+}
+
+// RICH-004
+#[test]
+fn an_avatar_is_downloaded_once_per_session_however_often_it_is_wanted() {
+    let fake = Fake::new();
+    let gate = Arc::new(Notify::new());
+    fake.script_avatar(user_owner("bob"), Some(gate.clone()), png(b"bob"));
+    let harness = logged_in_with_cache(&fake, &FakeCache::default());
+    fake.script_history(
+        None,
+        page(
+            vec![message_by("b", 2, "bob"), message_by("a", 1, "bob")],
+            true,
+        ),
+    );
+    harness.client.open_room("1".to_owned().into());
+    fake.wait_for_avatar_calls(3);
+    // Held by the gate: a live message from the same author finds the download in flight.
+    fake.push(0, Pushed::Message(message_by("c", 3, "bob")));
+    gate.notify_one();
+    assert_eq!(
+        harness.next_avatars(),
+        [update(user_owner("bob"), "/cache/h/user/bob.png")]
+    );
+    fake.push(0, Pushed::Message(message_by("d", 4, "bob")));
+    harness.wait_for_appended("d");
+    let calls = fake.state().avatar_calls.clone();
+    assert_eq!(
+        calls
+            .iter()
+            .filter(|owner| **owner == user_owner("bob"))
+            .count(),
+        1,
+        "{calls:?}"
+    );
+}
+
+// RICH-004
+#[test]
+fn no_more_than_four_avatars_download_at_once() {
+    let fake = Fake::new();
+    let gate = Arc::new(Notify::new());
+    let names = ["1", "2", "3", "4", "5", "6"];
+    for name in names {
+        fake.script_avatar(room_owner(name), Some(gate.clone()), png(name.as_bytes()));
+    }
+    fake.script_login(None, Ok(()));
+    fake.script_fetch(
+        None,
+        Ok(names
+            .iter()
+            .map(|name| avatar_subscription(name, name, rc_api::RoomType::Channel))
+            .collect()),
+    );
+    let harness = Harness::with_cache(&fake, FakeCache::default());
+    harness.login("http://h", "alice");
+
+    fake.wait_for_avatar_calls(4);
+    std::thread::sleep(Duration::from_millis(100));
+    assert_eq!(fake.state().avatar_calls.len(), 4);
+    assert_eq!(fake.state().avatar_max_running, 4);
+
+    // One finishing lets the next start.
+    gate.notify_one();
+    fake.wait_for_avatar_calls(5);
+    gate.notify_waiters();
+    fake.wait_for_avatar_calls(6);
+    assert!(fake.state().avatar_max_running <= 4);
+    drop(harness);
+}
+
+// RICH-004
+#[test]
+fn an_avatar_that_is_the_same_as_the_cached_one_sends_nothing_more() {
+    let fake = Fake::new();
+    let cache = FakeCache::default();
+    cache.seed("h", &room_owner("1"), "png", b"same");
+    fake.script_avatar(room_owner("1"), None, png(b"same"));
+    let harness = logged_in_with_cache_events(&fake, &cache);
+    assert_eq!(
+        harness.next_avatars(),
+        [update(room_owner("1"), "/cache/h/room/1.png")]
+    );
+    fake.wait_for_avatar_calls(2);
+    harness.assert_no_avatars();
+}
+
+// RICH-004
+#[test]
+fn an_avatar_that_differs_from_the_cached_one_is_sent_again() {
+    let fake = Fake::new();
+    let cache = FakeCache::default();
+    cache.seed("h", &room_owner("1"), "png", b"old");
+    fake.script_avatar(room_owner("1"), None, png(b"new"));
+    let harness = logged_in_with_cache_events(&fake, &cache);
+    let path = "/cache/h/room/1.png";
+    assert_eq!(harness.next_avatars(), [update(room_owner("1"), path)]);
+    assert_eq!(harness.next_avatars(), [update(room_owner("1"), path)]);
+    assert_eq!(cache.bytes("h", &room_owner("1")), Some(b"new".to_vec()));
+}
+
+// RICH-004
+#[test]
+fn an_avatar_of_another_type_replaces_the_cached_one() {
+    let fake = Fake::new();
+    let cache = FakeCache::default();
+    cache.seed("h", &room_owner("1"), "svg", b"<svg/>");
+    fake.script_avatar(room_owner("1"), None, png(b"png"));
+    let harness = logged_in_with_cache_events(&fake, &cache);
+    assert_eq!(
+        harness.next_avatars(),
+        [update(room_owner("1"), "/cache/h/room/1.svg")]
+    );
+    assert_eq!(
+        harness.next_avatars(),
+        [update(room_owner("1"), "/cache/h/room/1.png")]
+    );
+}
+
+// RICH-004
+#[test]
+fn a_missing_or_refused_avatar_is_no_avatar_and_nothing_else_happens() {
+    for error in [
+        ApiError::Server {
+            status: 404,
+            message: String::new(),
+        },
+        ApiError::Unauthorized,
+        ApiError::Unexpected("odd".into()),
+    ] {
+        let fake = Fake::new();
+        fake.script_avatar(room_owner("1"), None, Err(error));
+        let harness = logged_in_with_cache(&fake, &FakeCache::default());
+        fake.wait_for_avatar_calls(2);
+        harness.assert_no_avatars();
+        // The session carries on: opening a room still works.
+        open_first_room_of(&fake, &harness);
+    }
+}
+
+// RICH-004
+#[test]
+fn an_avatar_of_a_type_the_cache_doesnt_keep_is_no_avatar() {
+    let fake = Fake::new();
+    fake.script_avatar(
+        room_owner("1"),
+        None,
+        Ok(Some(Image {
+            bytes: b"<html>".to_vec(),
+            content_type: Some("text/html".to_owned()),
+        })),
+    );
+    let cache = FakeCache::default();
+    let harness = logged_in_with_cache(&fake, &cache);
+    fake.wait_for_avatar_calls(2);
+    harness.assert_no_avatars();
+    assert_eq!(cache.bytes("h", &room_owner("1")), None);
+}
+
+// RICH-004
+#[test]
+fn an_avatar_that_couldnt_be_downloaded_is_tried_again_after_reconnecting() {
+    let fake = Fake::new();
+    fake.script_avatar(
+        room_owner("1"),
+        None,
+        Err(ApiError::Unreachable("down".into())),
+    );
+    fake.script_avatar(room_owner("1"), None, png(b"one"));
+    fake.script_avatar(room_owner("2"), None, png(b"two"));
+    fake.script_login(None, Ok(()));
+    let rooms = || {
+        Ok(vec![
+            avatar_subscription("1", "general", rc_api::RoomType::Channel),
+            avatar_subscription("2", "secret", rc_api::RoomType::Private),
+        ])
+    };
+    fake.script_fetch(None, rooms());
+    fake.script_fetch(None, rooms());
+    let harness = Harness::with_cache_and_backoff(&fake, FakeCache::default(), fast());
+    harness.login("http://h", "alice");
+    // Room 2's came; room 1's didn't.
+    assert_eq!(
+        harness.next_avatars(),
+        [update(room_owner("2"), "/cache/h/room/2.png")]
+    );
+
+    fake.end_connection(0);
+
+    assert_eq!(
+        harness.next_avatars(),
+        [update(room_owner("1"), "/cache/h/room/1.png")]
+    );
+    let calls = fake.state().avatar_calls.clone();
+    // Room 2 had its refresh already.
+    assert_eq!(
+        calls
+            .iter()
+            .filter(|owner| **owner == room_owner("2"))
+            .count(),
+        1,
+        "{calls:?}"
+    );
+}
+
+// RICH-004
+#[test]
+fn logging_out_forgets_the_avatars_and_drops_what_was_still_downloading() {
+    let fake = Fake::new();
+    let cache = FakeCache::default();
+    cache.seed("h", &room_owner("1"), "png", b"cached");
+    let gate = Arc::new(Notify::new());
+    fake.script_avatar(room_owner("1"), None, png(b"cached"));
+    fake.script_avatar(room_owner("2"), Some(gate.clone()), png(b"two"));
+    let harness = logged_in_with_cache_events(&fake, &cache);
+    assert_eq!(
+        harness.next_avatars(),
+        [update(room_owner("1"), "/cache/h/room/1.png")]
+    );
+    fake.wait_for_avatar_calls(2);
+
+    harness.client.logout();
+    gate.notify_waiters();
+
+    assert_eq!(
+        harness.next_avatars(),
+        [AvatarUpdate {
+            owner: room_owner("1"),
+            path: None
+        }]
+    );
+    harness.assert_no_avatars();
+    // The cache keeps the file for the next session.
+    assert_eq!(cache.bytes("h", &room_owner("1")), Some(b"cached".to_vec()));
+}
+
+// RICH-004
+#[test]
+fn the_cache_is_per_server() {
+    let fake = Fake::new();
+    let cache = FakeCache::default();
+    cache.seed("other:3000", &room_owner("1"), "png", b"another server's");
+    let harness = logged_in_with_cache_events(&fake, &cache);
+    fake.wait_for_avatar_calls(2);
+    harness.assert_no_avatars();
+}
+
+// RICH-004
+#[test]
+fn a_pushed_avatar_change_fetches_it_again_and_shows_the_new_file() {
+    let fake = Fake::new();
+    let cache = FakeCache::default();
+    cache.seed("h", &room_owner("1"), "png", b"old");
+    fake.script_avatar(room_owner("1"), None, png(b"old"));
+    fake.script_avatar(room_owner("1"), None, png(b"new"));
+    let harness = logged_in_with_cache_events(&fake, &cache);
+    assert_eq!(
+        harness.next_avatars(),
+        [update(room_owner("1"), "/cache/h/room/1.png")]
+    );
+    fake.wait_for_avatar_calls(2);
+
+    assert!(fake.push(0, Pushed::AvatarChanged(room_owner("1"))));
+
+    assert_eq!(
+        harness.next_avatars(),
+        [update(room_owner("1"), "/cache/h/room/1.png")]
+    );
+    assert_eq!(cache.bytes("h", &room_owner("1")), Some(b"new".to_vec()));
+}
+
+// RICH-004
+#[test]
+fn a_pushed_change_of_an_avatar_nobody_looked_at_is_ignored() {
+    let fake = Fake::new();
+    let harness = logged_in_with_cache(&fake, &FakeCache::default());
+    fake.wait_for_avatar_calls(2);
+
+    assert!(fake.push(0, Pushed::AvatarChanged(user_owner("stranger"))));
+
+    harness.assert_no_avatars();
+    assert_eq!(fake.state().avatar_calls.len(), 2);
+}
+
+// RICH-004
+#[test]
+fn a_room_without_an_avatar_of_its_own_is_not_asked_for_one_but_a_direct_message_is() {
+    let fake = Fake::new();
+    fake.script_login(None, Ok(()));
+    fake.script_fetch(
+        None,
+        Ok(vec![
+            subscription("1", "general", rc_api::RoomType::Channel),
+            subscription("2", "secret", rc_api::RoomType::Private),
+            subscription("d1", "bob", rc_api::RoomType::Direct),
+        ]),
+    );
+    let harness = Harness::with_cache(&fake, FakeCache::default());
+    harness.login("http://h", "alice");
+
+    // The other user may have one: the server says when asked.
+    assert_eq!(fake.wait_for_avatar_calls(1), [user_owner("bob")]);
+    harness.assert_no_avatars();
+    assert_eq!(fake.state().avatar_calls.len(), 1);
+}
+
+// RICH-004
+#[test]
+fn an_avatar_the_server_doesnt_have_goes_from_the_screen_and_the_cache() {
+    let fake = Fake::new();
+    let cache = FakeCache::default();
+    // Cached when the user had one, or when the server drew one.
+    cache.seed("h", &room_owner("1"), "png", b"stale");
+    fake.script_avatar(room_owner("1"), None, Ok(None));
+    let harness = logged_in_with_cache_events(&fake, &cache);
+
+    assert_eq!(
+        harness.next_avatars(),
+        [update(room_owner("1"), "/cache/h/room/1.png")]
+    );
+    assert_eq!(
+        harness.next_avatars(),
+        [AvatarUpdate {
+            owner: room_owner("1"),
+            path: None
+        }]
+    );
+    assert_eq!(cache.bytes("h", &room_owner("1")), None);
+}
+
+// RICH-004
+#[test]
+fn a_pushed_avatar_change_of_a_listed_room_looks_at_it_even_without_an_etag() {
+    let fake = Fake::new();
+    fake.script_avatar(room_owner("1"), None, png(b"new"));
+    let harness = logged_in_harness(&fake);
+    assert!(fake.state().avatar_calls.is_empty());
+
+    assert!(fake.push(0, Pushed::AvatarChanged(room_owner("1"))));
+
+    assert_eq!(
+        harness.next_avatars(),
+        [update(room_owner("1"), "/cache/h/room/1.png")]
+    );
 }

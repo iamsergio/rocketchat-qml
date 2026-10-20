@@ -114,6 +114,17 @@ impl DdpClient {
         self.subscribe("stream-notify-user", params).await
     }
 
+    /// When any user's or room's avatar changes, as [`DdpEvent::AvatarChanged`]
+    /// (`stream-notify-logged` with `updateAvatar`). Needs a login.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::ConnectionClosed`] if the connection ended, or [`Error::Refused`].
+    pub async fn subscribe_avatar_changes(&self) -> Result<(), Error> {
+        let params = json!(["updateAvatar", false]);
+        self.subscribe("stream-notify-logged", params).await
+    }
+
     async fn call(&self, method: &'static str, params: Value) -> Result<Value, Error> {
         let (reply, answer) = oneshot::channel();
         self.send(Command::Call {
@@ -826,6 +837,55 @@ mod tests {
             panic!("expected a message");
         };
         assert_eq!(second.id, "m2");
+    }
+
+    // RICH-004
+    #[tokio::test]
+    async fn avatar_changes_are_subscribed_on_the_logged_stream() {
+        let (client, _events, mut peer) = connected().await;
+        let subscribing = tokio::spawn(async move { client.subscribe_avatar_changes().await });
+
+        let frame = peer.recv().await;
+        assert_eq!(frame["name"], "stream-notify-logged");
+        assert_eq!(frame["params"], json!(["updateAvatar", false]));
+        peer.send(json!({ "msg": "ready", "subs": [frame["id"]] }))
+            .await;
+
+        subscribing.await.unwrap().unwrap();
+    }
+
+    // RICH-004
+    #[tokio::test]
+    async fn an_avatar_change_names_a_user_or_a_room() {
+        use crate::types::AvatarOwner;
+        let (_client, mut events, mut peer) = connected().await;
+        for args in [
+            json!({ "username": "alice", "etag": "e1" }),
+            json!({ "rid": "r1", "etag": "e2" }),
+            json!({ "etag": "e3" }),
+        ] {
+            peer.send(
+                json!({ "msg": "changed", "collection": "stream-notify-logged", "id": "id",
+                "fields": { "eventName": "updateAvatar", "args": [args] } }),
+            )
+            .await;
+        }
+        peer.send(message_frame("m1", "after")).await;
+
+        assert_eq!(
+            events.recv().await,
+            Some(DdpEvent::AvatarChanged(AvatarOwner::User {
+                username: "alice".into()
+            }))
+        );
+        assert_eq!(
+            events.recv().await,
+            Some(DdpEvent::AvatarChanged(AvatarOwner::Room {
+                room_id: "r1".into()
+            }))
+        );
+        // One that names nobody says nothing.
+        assert!(matches!(events.recv().await, Some(DdpEvent::Message(_))));
     }
 
     // RT-001
