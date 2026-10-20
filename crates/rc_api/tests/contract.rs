@@ -101,7 +101,10 @@ async fn connect_and_login(credentials: &Credentials) -> (DdpClient, DdpEvents) 
 
 /// The first event `matches` accepts, for up to [`EVENT_TIMEOUT`]. Events about anything else are
 /// skipped: the stream also carries the system messages of the room being set up.
-async fn event_where(events: &mut DdpEvents, matches: impl Fn(&DdpEvent) -> bool) -> DdpEvent {
+async fn event_where(
+    events: &mut DdpEvents,
+    mut matches: impl FnMut(&DdpEvent) -> bool,
+) -> DdpEvent {
     let wait = async {
         while let Some(event) = events.recv().await {
             if matches(&event) {
@@ -723,6 +726,108 @@ async fn a_message_raises_the_unread_count_of_its_room() {
     };
     assert_eq!(subscription.room_type, RoomType::Direct);
     assert!(subscription.alert);
+}
+
+// RT-001, RT-002
+#[tokio::test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+async fn all_streams_deliver_on_one_connection() {
+    let fixture = Fixture::new();
+    let room_id = fixture.create_dm();
+    let login = fixture.login().await;
+    let (client, mut events) = connect_and_login(&login.credentials).await;
+    client.subscribe_my_messages().await.unwrap();
+    client
+        .subscribe_subscription_changes(&fixture.user.id)
+        .await
+        .unwrap();
+    client
+        .subscribe_room_activity(&fixture.user.id)
+        .await
+        .unwrap();
+
+    let posted = fixture.admin.post_message(&room_id, "to every stream");
+
+    let (mut message, mut subscription, mut activity) = (false, false, false);
+    event_where(&mut events, |e| {
+        match e {
+            DdpEvent::Message(m) => message |= m.id == posted.id,
+            DdpEvent::SubscriptionChanged(s) => {
+                subscription |= s.room_id == room_id && s.unread >= 1;
+            }
+            DdpEvent::RoomActivity { room_id: r, .. } => activity |= *r == room_id,
+            DdpEvent::SubscriptionRemoved { .. } => {}
+        }
+        message && subscription && activity
+    })
+    .await;
+}
+
+// RT-002
+#[tokio::test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+async fn subscriptions_the_server_does_not_allow_are_refused() {
+    let fixture = Fixture::new();
+    let other = fixture.admin.create_user();
+    let login = fixture.login().await;
+    let (client, _events) = DdpClient::connect(&server_url()).await.unwrap();
+
+    // Not logged in yet.
+    let result = client
+        .subscribe_subscription_changes(&fixture.user.id)
+        .await;
+    assert!(matches!(result, Err(Error::Refused { .. })), "{result:?}");
+
+    client.login(&login.credentials).await.unwrap();
+    // Logged in, but the streams are per user.
+    let result = client.subscribe_subscription_changes(&other.id).await;
+    assert!(matches!(result, Err(Error::Refused { .. })), "{result:?}");
+    let result = client.subscribe_room_activity(&other.id).await;
+    assert!(matches!(result, Err(Error::Refused { .. })), "{result:?}");
+
+    // A refusal leaves the connection usable.
+    client
+        .subscribe_subscription_changes(&fixture.user.id)
+        .await
+        .unwrap();
+}
+
+// RT-003
+#[tokio::test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+async fn an_idle_connection_outlives_the_servers_heartbeat() {
+    let fixture = Fixture::new();
+    let (room_id, _) = fixture.create_channel();
+    let login = fixture.login().await;
+    let (client, mut events) = connect_and_login(&login.credentials).await;
+    client.subscribe_my_messages().await.unwrap();
+
+    // Meteor pings after 15 s of silence and drops the connection 15 s after an unanswered ping.
+    tokio::time::sleep(Duration::from_secs(35)).await;
+
+    let posted = fixture.admin.post_message(&room_id, "still here");
+    event_where(
+        &mut events,
+        |e| matches!(e, DdpEvent::Message(m) if m.id == posted.id),
+    )
+    .await;
+}
+
+// AUTH-003
+#[tokio::test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+async fn connecting_to_a_closed_port_is_a_websocket_error() {
+    let port = std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port();
+    let result = DdpClient::connect(&format!("http://127.0.0.1:{port}")).await;
+    assert!(
+        matches!(result, Err(Error::WebSocket(_))),
+        "{:?}",
+        result.err()
+    );
 }
 
 // SEND-001
