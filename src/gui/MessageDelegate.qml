@@ -30,6 +30,11 @@ Item {
     // A list of maps: title, description, size, link, isImage, image (a file URL, empty until it is
     // downloaded), width and height.
     required property var attachments
+    required property bool edited
+    // A list of maps, in the server's order: emoji (the shortcode), glyph (Unicode text, or empty),
+    // image (the URL of a custom emoji, or empty), count, mine (the user reacted) and users (who
+    // reacted, for a tooltip).
+    required property var reactions
 
     objectName: "msg_" + messageId
     width: ListView.view.width
@@ -116,9 +121,20 @@ Item {
                     }
 
                     Label {
+                        id: timeLabel
+
                         objectName: "msgTime"
                         color: root.palette.placeholderText
                         text: root.time
+                    }
+
+                    Label {
+                        objectName: "msgEdited"
+                        color: root.palette.placeholderText
+                        font.italic: true
+                        font.pointSize: timeLabel.font.pointSize * 0.85
+                        text: qsTr("(edited)")
+                        visible: root.edited
                     }
 
                     // These exist only while the message is in that state, so that a test can find the one
@@ -282,6 +298,85 @@ Item {
                             textFormat: Text.PlainText
                             visible: attachment.modelData.description !== ""
                             wrapMode: Text.Wrap
+                        }
+                    }
+                }
+
+                // What users reacted with: a chip for each emoji, with its count, marked when the
+                // user is one of them.
+                Flow {
+                    objectName: "msgReactions"
+                    Layout.fillWidth: true
+                    spacing: 6
+                    visible: root.reactions.length > 0
+
+                    Repeater {
+                        model: root.reactions
+
+                        delegate: Rectangle {
+                            id: chip
+
+                            required property int index
+                            required property var modelData
+                            // Whether the user reacted, which is what the tests read.
+                            property bool checked: modelData.mine
+
+                            objectName: "reaction" + index
+                            border.color: modelData.mine ? root.palette.highlight : root.palette.mid
+                            border.width: 1
+                            color: modelData.mine ? Qt.alpha(root.palette.highlight, 0.2) : "transparent"
+                            implicitHeight: 24
+                            implicitWidth: chipRow.implicitWidth + 14
+                            radius: height / 2
+
+                            Row {
+                                id: chipRow
+
+                                anchors.centerIn: parent
+                                spacing: 5
+
+                                Item {
+                                    // What is shown, which is what the tests read: the glyph, else the
+                                    // address of the custom emoji's image, else the shortcode.
+                                    property string text: chip.modelData.glyph !== "" ? chip.modelData.glyph : chip.modelData.image !== "" ? chip.modelData.image : chip.modelData.emoji
+
+                                    objectName: "reactionEmoji"
+                                    height: 18
+                                    width: chip.modelData.image !== "" ? 18 : shortcode.implicitWidth
+
+                                    Label {
+                                        id: shortcode
+
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        text: chip.modelData.glyph !== "" ? chip.modelData.glyph : chip.modelData.emoji
+                                        textFormat: Text.PlainText
+                                        visible: chip.modelData.image === ""
+                                    }
+
+                                    Image {
+                                        anchors.fill: parent
+                                        asynchronous: true
+                                        fillMode: Image.PreserveAspectFit
+                                        source: chip.modelData.image
+                                        sourceSize.height: 18
+                                        visible: chip.modelData.image !== ""
+                                    }
+                                }
+
+                                Label {
+                                    objectName: "reactionCount"
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    text: chip.modelData.count
+                                }
+                            }
+
+                            HoverHandler {
+                                id: hover
+                            }
+
+                            ToolTip.delay: 400
+                            ToolTip.text: chip.modelData.users
+                            ToolTip.visible: hover.hovered
                         }
                     }
                 }

@@ -90,6 +90,8 @@ pub mod message_row {
     /// The letters of the placeholder, as its `text`.
     pub const AVATAR_INITIALS: &str = "msgAvatarInitials";
     pub const TIME: &str = "msgTime";
+    /// The "(edited)" marker next to the time: visible only for a message that was edited.
+    pub const EDITED: &str = "msgEdited";
     /// The message as written: its `text` is the markdown source.
     pub const BODY: &str = "msgBody";
     /// The message as shown: its `text` is the rich text (HTML) of the body.
@@ -98,6 +100,9 @@ pub mod message_row {
     pub const MENTIONS_ME: &str = "msgMentionsMe";
     /// What a system message says. These have it instead of an author and a body.
     pub const SYSTEM: &str = "msgSystem";
+    /// The chips of the reactions, visible if there are any. Each is a
+    /// [`reaction`](super::reaction).
+    pub const REACTIONS: &str = "msgReactions";
     /// Exists while the message is being sent.
     pub const PENDING: &str = "msgPending";
     /// Exists when the message couldn't be sent.
@@ -140,6 +145,28 @@ pub fn attachment(message_id: &str, index: usize, part: &str) -> String {
     )
 }
 
+/// The parts of a reaction of a message, for [`reaction`].
+pub mod reaction_row {
+    /// The emoji: its `text` is the Unicode character, else the address of the custom emoji's
+    /// image, else the shortcode.
+    pub const EMOJI: &str = "reactionEmoji";
+    /// How many users reacted: its `text` is the number.
+    pub const COUNT: &str = "reactionCount";
+}
+
+/// A part of the reaction with this index (0 is the first, in the server's order) of the message
+/// with this id (see [`reaction_row`]), or the chip itself with an empty `part`, whose `checked`
+/// says whether the user is one of those who reacted.
+#[must_use]
+pub fn reaction(message_id: &str, index: usize, part: &str) -> String {
+    let chip = format!("{}/msg_{message_id}/reaction{index}", main_window::WINDOW);
+    if part.is_empty() {
+        chip
+    } else {
+        format!("{chip}/{part}")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -173,5 +200,15 @@ mod tests {
             attachment("m7", 1, attachment_row::LINK),
             "mainWindow/msg_m7/attachment1/attachmentLink"
         );
+    }
+
+    // INFRA-002
+    #[test]
+    fn a_reaction_part_is_addressed_by_the_message_id_and_the_index() {
+        assert_eq!(
+            reaction("m7", 2, reaction_row::COUNT),
+            "mainWindow/msg_m7/reaction2/reactionCount"
+        );
+        assert_eq!(reaction("m7", 0, ""), "mainWindow/msg_m7/reaction0");
     }
 }
