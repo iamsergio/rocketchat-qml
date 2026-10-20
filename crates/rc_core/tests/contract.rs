@@ -4,8 +4,9 @@
 //! The client against a real Rocket.Chat server, named by `RC_TEST_SERVER_URL`. Run with
 //! `--ignored` (see the README).
 //!
-//! Only admin logs in successfully, each test with its own token. A wrong password is never tried
-//! for a real account: repeated failures would lock it and break the other tests.
+//! Every test makes its own user and rooms with unique names and only looks at those, so the tests
+//! hold on a dirty server, in any order and in parallel. Server settings are never changed. Admin
+//! only sets things up: no test logs a shared account in or out through the client.
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
@@ -20,15 +21,18 @@ use rc_core::rooms::RoomChange;
 use rc_core::session::{LoginFailure, SessionState};
 use rc_core::timeline::{PAGE_SIZE, TimelineStatus};
 use rc_core::{Client, Event};
-use rc_test_server::{Admin, server_url, unique};
+use rc_test_server::{Admin, TestUser, server_url, unique};
 use secrecy::SecretString;
 
 const TIMEOUT: Duration = Duration::from_secs(15);
 
-fn admin() -> (String, SecretString) {
-    let user = std::env::var("RC_ADMIN_USER").unwrap_or_else(|_| "admin".into());
-    let pass = std::env::var("RC_ADMIN_PASS").unwrap_or_else(|_| "admin".into());
-    (user, SecretString::from(pass))
+/// A new user, who can log in at once.
+fn new_user() -> TestUser {
+    Admin::login().create_user()
+}
+
+fn password(user: &TestUser) -> SecretString {
+    SecretString::from(user.password.clone())
 }
 
 /// A client with nothing stored, past its first event.
@@ -75,14 +79,14 @@ fn assert_failure(state: &SessionState, expected: &LoginFailure) {
 // AUTH-001
 #[test]
 #[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
-fn admin_logs_in() {
+fn a_user_logs_in() {
+    let user = new_user();
     let (client, events) = start();
-    let (user, password) = admin();
-    client.login(&server_url(), &user, password);
+    client.login(&server_url(), &user.username, password(&user));
     let SessionState::LoggedIn(account) = outcome(&events) else {
         panic!("login failed");
     };
-    assert_eq!(account.user.username, user);
+    assert_eq!(account.user.username, user.username);
     assert_eq!(account.server, server_url());
 }
 
@@ -117,10 +121,10 @@ fn closed_port_is_unreachable() {
 // AUTH-005
 #[test]
 #[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
-fn admin_logs_out() {
+fn a_user_logs_out() {
+    let user = new_user();
     let (client, events) = start();
-    let (user, password) = admin();
-    client.login(&server_url(), &user, password);
+    client.login(&server_url(), &user.username, password(&user));
     assert!(matches!(outcome(&events), SessionState::LoggedIn(_)));
     client.logout();
     assert_eq!(next(&events), SessionState::LoggedOut { failure: None });
@@ -130,12 +134,12 @@ fn admin_logs_out() {
 #[test]
 #[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
 fn a_new_client_resumes_the_stored_session() {
-    let (user, password) = admin();
+    let user = new_user();
     let store = MemoryStore::default();
 
     let (first, events) = start_with(store.clone());
     assert_eq!(next(&events), SessionState::LoggedOut { failure: None });
-    first.login(&server_url(), &user, password);
+    first.login(&server_url(), &user.username, password(&user));
     assert!(matches!(outcome(&events), SessionState::LoggedIn(_)));
     // Dropping flushes the queued save, like quitting the app.
     drop(first);
@@ -147,7 +151,7 @@ fn a_new_client_resumes_the_stored_session() {
     let SessionState::LoggedIn(account) = next(&events) else {
         panic!("resume failed");
     };
-    assert_eq!(account.user.username, user);
+    assert_eq!(account.user.username, user.username);
 
     second.logout();
     assert_eq!(next(&events), SessionState::LoggedOut { failure: None });
@@ -159,13 +163,14 @@ fn a_new_client_resumes_the_stored_session() {
 // ROOM-001, ROOM-002
 #[test]
 #[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
-fn admin_gets_their_rooms_after_logging_in() {
-    // A channel of the test's own, which admin joins as its creator: the server may hold anything
-    // else, and `general` isn't joined by default.
-    let (id, name) = Admin::login().create_channel(&[]);
+fn a_user_gets_their_rooms_after_logging_in() {
+    // A channel of the test's own for the new user: the server may hold anything else, and the
+    // user may be in rooms the server adds by itself.
+    let admin = Admin::login();
+    let user = admin.create_user();
+    let (id, name) = admin.create_channel(&[&user.username]);
     let (client, events) = start();
-    let (user, password) = admin();
-    client.login(&server_url(), &user, password);
+    client.login(&server_url(), &user.username, password(&user));
     assert!(matches!(outcome(&events), SessionState::LoggedIn(_)));
     let Event::Rooms(changes) = events.recv_timeout(TIMEOUT).expect("no rooms event") else {
         panic!("expected the rooms right after logging in");
@@ -182,11 +187,10 @@ fn admin_gets_their_rooms_after_logging_in() {
     assert_eq!(room.name, name);
 }
 
-/// Logs admin in and waits for the room list. Everything the client reports meanwhile is dropped.
-fn logged_in_admin() -> (Client, Receiver<Event>) {
+/// Logs `user` in and waits for the room list. Everything the client reports meanwhile is dropped.
+fn logged_in(user: &TestUser) -> (Client, Receiver<Event>) {
     let (client, events) = start();
-    let (user, password) = admin();
-    client.login(&server_url(), &user, password);
+    client.login(&server_url(), &user.username, password(user));
     assert!(matches!(outcome(&events), SessionState::LoggedIn(_)));
     loop {
         if let Event::Rooms(_) = events.recv_timeout(TIMEOUT).expect("no rooms event") {
@@ -224,14 +228,15 @@ fn texts(messages: &[Message]) -> Vec<&str> {
 #[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
 fn the_whole_history_loads_page_by_page_in_order() {
     let admin_api = Admin::login();
-    let (id, _) = admin_api.create_channel(&[]);
+    let user = admin_api.create_user();
+    let (id, _) = admin_api.create_channel(&[&user.username]);
     let posted: Vec<String> = (0..PAGE_SIZE + 10)
         .map(|n| format!("message {n:03}"))
         .collect();
     for text in &posted {
         admin_api.post_message(&id, text);
     }
-    let (client, events) = logged_in_admin();
+    let (client, events) = logged_in(&user);
 
     client.open_room(id.clone().into());
     let mut mirror = Vec::new();
