@@ -19,6 +19,7 @@ qt_add_qml_module(
   1.0
   QML_FILES
   Main.qml
+  Composer.qml
   LoginPage.qml
   MessageDelegate.qml
   RoomDelegate.qml

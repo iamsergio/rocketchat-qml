@@ -4,7 +4,7 @@
 //! What the `RoomList` model and the `Room` view model show for a room. Plain Rust, so it can be
 //! unit-tested without Qt.
 
-use rc_core::domain::{Room, RoomKind};
+use rc_core::domain::{Room, RoomId, RoomKind};
 use rc_core::timeline::TimelineStatus;
 
 /// How QML sees the kind of a room. A string rather than another Qt enum, which keeps the role a
@@ -15,6 +15,16 @@ pub fn kind_name(kind: RoomKind) -> &'static str {
         RoomKind::Private => "private",
         RoomKind::Direct => "direct",
     }
+}
+
+/// What sending `text` from the composer hands to the core: the open room and the text, or `None`
+/// if there is nothing to send, because no room is open or the text is blank.
+#[must_use]
+pub fn outgoing(room_id: &str, text: &str) -> Option<(RoomId, String)> {
+    if room_id.is_empty() || text.trim().is_empty() {
+        return None;
+    }
+    Some((RoomId::from(room_id.to_owned()), text.to_owned()))
 }
 
 /// The values of the `Room` properties: the open room, and how loading its messages is going.
@@ -78,6 +88,16 @@ mod tests {
             group_mentions: 0,
             alert: false,
         }
+    }
+
+    // SEND-001
+    #[test]
+    fn only_text_with_something_in_it_is_sent_to_an_open_room() {
+        let (room, text) = outgoing("r1", "hello\n").unwrap();
+        assert_eq!((room.as_str(), text.as_str()), ("r1", "hello\n"));
+        assert!(outgoing("", "hello").is_none());
+        assert!(outgoing("r1", "").is_none());
+        assert!(outgoing("r1", " \n\t").is_none());
     }
 
     // MSG-001

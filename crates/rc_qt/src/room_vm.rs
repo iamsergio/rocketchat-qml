@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 //! The `Room` view model: the open room, how loading its messages is going, and the commands to
-//! open a room and to load older messages.
+//! open a room, to load older messages and to send.
 
 #[cxx_qt::bridge]
 pub mod qobject {
@@ -34,6 +34,15 @@ pub mod qobject {
         #[qinvokable]
         #[cxx_name = "loadOlder"]
         fn load_older(self: Pin<&mut RoomVm>);
+
+        /// Sends the text to the open room. It shows in `MessageList` at once as pending. Returns
+        /// whether there was anything to send, so that the composer knows to clear itself.
+        #[qinvokable]
+        fn send(self: Pin<&mut RoomVm>, text: &QString) -> bool;
+
+        /// Sends a message of the open room that failed again.
+        #[qinvokable]
+        fn retry(self: Pin<&mut RoomVm>, message_id: &QString);
     }
 
     impl cxx_qt::Threading for RoomVm {}
@@ -46,7 +55,7 @@ use cxx_qt::{CxxQtType, Threading};
 use cxx_qt_lib::QString;
 
 use crate::hub;
-use crate::room_view::RoomState;
+use crate::room_view::{RoomState, outgoing};
 
 /// Backing data of [`qobject::RoomVm`].
 pub struct RoomVmRust {
@@ -130,5 +139,18 @@ impl qobject::RoomVm {
     #[allow(clippy::unused_self)]
     fn load_older(self: Pin<&mut Self>) {
         hub::load_older();
+    }
+
+    fn send(self: Pin<&mut Self>, text: &QString) -> bool {
+        let Some((room, text)) = outgoing(&self.room_id.to_string(), &text.to_string()) else {
+            return false;
+        };
+        hub::send_message(room, &text);
+        true
+    }
+
+    #[allow(clippy::unused_self)]
+    fn retry(self: Pin<&mut Self>, message_id: &QString) {
+        hub::retry_message(message_id.to_string());
     }
 }

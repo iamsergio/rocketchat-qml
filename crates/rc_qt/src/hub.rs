@@ -18,7 +18,7 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use cxx_qt::CxxQtThread;
 use rc_core::adapters::{MemoryStore, default_store};
-use rc_core::domain::RoomId;
+use rc_core::domain::{MessageId, RoomId};
 use rc_core::ports::SecretStore;
 use rc_core::rooms::RoomChange;
 use rc_core::timeline::TimelineChange;
@@ -179,6 +179,22 @@ pub fn load_older() {
         client.load_older();
     } else {
         tracing::warn!("load_older ignored: the core isn't running");
+    }
+}
+
+pub fn send_message(room: RoomId, text: &str) {
+    if let Some(client) = &lock().client {
+        client.send_message(room, text);
+    } else {
+        tracing::warn!("send_message ignored: the core isn't running");
+    }
+}
+
+pub fn retry_message(message_id: String) {
+    if let Some(client) = &lock().client {
+        client.retry_message(MessageId::from(message_id));
+    } else {
+        tracing::warn!("retry_message ignored: the core isn't running");
     }
 }
 

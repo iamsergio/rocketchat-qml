@@ -6,7 +6,7 @@ import QtQuick.Controls
 import QtQuick.Layouts
 import RocketChat.Bridge
 
-// The open room: its name and its messages, oldest at the top.
+// The open room: its name, its messages, oldest at the top, and the box to write in.
 ColumnLayout {
     spacing: 0
 
@@ -130,5 +130,11 @@ ColumnLayout {
             visible: Room.loading
             running: visible
         }
+    }
+
+    Composer {
+        Layout.fillWidth: true
+        Layout.margins: 8
+        visible: Room.roomId !== ""
     }
 }
