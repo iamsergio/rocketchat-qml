@@ -83,7 +83,7 @@ Done when: messages from others appear live, unread badges update, you can send 
 
 Done when: messages render formatting, mentions, emoji, avatars, images and reactions, and live edits/deletes show up.
 
-- [ ] `rc_core`: convert the server's parsed-markdown (`md`) AST into a GUI-agnostic rich-text block model. Each frontend renders that model. Fall back to `msg` text when there is no `md`
+- [x] `rc_core`: convert the server's parsed-markdown (`md`) AST into a GUI-agnostic rich-text block model. Each frontend renders that model. Fall back to `msg` text when there is no `md`
 - [ ] `rc_qt`: render blocks to the subset of rich text that Qt supports (links, code, quotes, lists)
 - [ ] Mentions (highlight @me), unicode emoji shortcodes, custom server emoji
 - [ ] `rc_core`: file cache port. Avatars and images are downloaded to the cache directory and exposed to the GUI as local file URLs
