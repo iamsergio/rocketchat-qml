@@ -13,6 +13,9 @@ ItemDelegate {
     required property string roomId
     required property string name
     required property string kind
+    required property string avatar
+    required property string avatarInitials
+    required property string avatarColor
     required property int unread
     required property int userMentions
     required property bool alert
@@ -24,6 +27,17 @@ ItemDelegate {
 
     contentItem: RowLayout {
         spacing: 12
+
+        Avatar {
+            Layout.preferredWidth: 24
+            Layout.preferredHeight: 24
+            url: root.avatar
+            initials: root.avatarInitials
+            fillColor: root.avatarColor
+            imageName: "roomAvatar"
+            placeholderName: "roomAvatarPlaceholder"
+            initialsName: "roomAvatarInitials"
+        }
 
         // The icon is named after the room kind: icons/channel.svg, private.svg, direct.svg. Hidden
         // until it has loaded, so that a missing SVG plugin shows in the GUI tests.

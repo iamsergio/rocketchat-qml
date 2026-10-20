@@ -144,9 +144,10 @@ use cxx_qt::{CxxQtType, Threading};
 use cxx_qt_lib::{
     QByteArray, QHash, QHashPair_i32_QByteArray, QModelIndex, QString, QVariant, QVector,
 };
-use rc_core::domain::Room;
+use rc_core::domain::{AvatarOwner, Room};
 use rc_core::rooms::RoomChange;
 
+use crate::avatar_view::{AvatarUrls, owners, room_placeholder, rows_using};
 use crate::hub;
 use crate::room_view::kind_name;
 use crate::row_ops::{RowOp, row_ops};
@@ -165,11 +166,15 @@ const UNREAD_ROLE: i32 = 259;
 const USER_MENTIONS_ROLE: i32 = 260;
 const GROUP_MENTIONS_ROLE: i32 = 261;
 const ALERT_ROLE: i32 = 262;
+const AVATAR_ROLE: i32 = 263;
+const AVATAR_INITIALS_ROLE: i32 = 264;
+const AVATAR_COLOR_ROLE: i32 = 265;
 
 /// Backing data of [`qobject::RoomListModel`]: the rooms, mirrored from the core's changes.
 #[derive(Default)]
 pub struct RoomListModelRust {
     rooms: Vec<Room>,
+    avatars: AvatarUrls,
 }
 
 /// Counts are `u32`, Qt's are `int`: saturate.
@@ -184,7 +189,8 @@ fn row(index: usize) -> i32 {
 
 impl cxx_qt::Initialize for RoomListModel {
     fn initialize(mut self: Pin<&mut Self>) {
-        let snapshot = hub::register_rooms(self.qt_thread());
+        let (snapshot, avatars) = hub::register_rooms(self.qt_thread());
+        self.as_mut().rust_mut().avatars = avatars;
         self.as_mut().apply(&[snapshot]);
     }
 }
@@ -253,6 +259,23 @@ impl RoomListModel {
         }
     }
 
+    /// Takes new avatar files in and announces their role, and only that, for the rows that show
+    /// them.
+    pub fn set_avatars(mut self: Pin<&mut Self>, changes: &[(AvatarOwner, String)]) {
+        self.as_mut().rust_mut().avatars.set(changes);
+        let runs = rows_using(self.rooms.len(), &owners(changes), |at| {
+            self.rooms.get(at).map(Room::avatar_owner)
+        });
+        let no_parent = QModelIndex::default();
+        for (first, last) in runs {
+            let top_left = self.index(row(first), 0, &no_parent);
+            let bottom_right = self.index(row(last), 0, &no_parent);
+            let mut roles = QVector::<i32>::default();
+            roles.append(AVATAR_ROLE);
+            self.as_mut().data_changed(&top_left, &bottom_right, &roles);
+        }
+    }
+
     /// Announces new content in every role of the row.
     fn row_changed(mut self: Pin<&mut Self>, at: usize) {
         let index = self.index(row(at), 0, &QModelIndex::default());
@@ -280,6 +303,9 @@ impl RoomListModel {
             USER_MENTIONS_ROLE => QVariant::from(&count(room.user_mentions)),
             GROUP_MENTIONS_ROLE => QVariant::from(&count(room.group_mentions)),
             ALERT_ROLE => QVariant::from(&room.alert),
+            AVATAR_ROLE => QVariant::from(&QString::from(self.avatars.url(&room.avatar_owner()))),
+            AVATAR_INITIALS_ROLE => QVariant::from(&QString::from(&room_placeholder(room).0)),
+            AVATAR_COLOR_ROLE => QVariant::from(&QString::from(&room_placeholder(room).1)),
             _ => QVariant::default(),
         }
     }
@@ -295,6 +321,9 @@ impl RoomListModel {
             (USER_MENTIONS_ROLE, "userMentions"),
             (GROUP_MENTIONS_ROLE, "groupMentions"),
             (ALERT_ROLE, "alert"),
+            (AVATAR_ROLE, "avatar"),
+            (AVATAR_INITIALS_ROLE, "avatarInitials"),
+            (AVATAR_COLOR_ROLE, "avatarColor"),
         ] {
             names.insert(role, QByteArray::from(name));
         }

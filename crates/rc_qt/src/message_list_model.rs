@@ -152,9 +152,10 @@ use cxx_qt_lib::{
 };
 use jiff::Timestamp;
 use jiff::tz::TimeZone;
-use rc_core::domain::{Message, MessageKind};
+use rc_core::domain::{AvatarOwner, Message, MessageKind};
 use rc_core::timeline::TimelineChange;
 
+use crate::avatar_view::{AvatarUrls, color, initials, message_owner, owners, rows_using};
 use crate::hub;
 use crate::message_view::{
     author_name, body, day_label, delivery_name, first_of_day, html, mentions_me, system_text,
@@ -181,6 +182,9 @@ const DAY_LABEL_ROLE: i32 = 264;
 const DELIVERY_ROLE: i32 = 265;
 const HTML_ROLE: i32 = 266;
 const MENTIONS_ME_ROLE: i32 = 267;
+const AVATAR_ROLE: i32 = 268;
+const AVATAR_INITIALS_ROLE: i32 = 269;
+const AVATAR_COLOR_ROLE: i32 = 270;
 
 /// Backing data of [`qobject::MessageListModel`]: the messages, mirrored from the core's changes
 /// and held newest first.
@@ -190,6 +194,7 @@ pub struct MessageListModelRust {
     zone: TimeZone,
     /// Who the messages are shown to: it decides the mentions that stand out.
     viewer: Viewer,
+    avatars: AvatarUrls,
 }
 
 impl Default for MessageListModelRust {
@@ -198,6 +203,7 @@ impl Default for MessageListModelRust {
             messages: Vec::new(),
             zone: TimeZone::system(),
             viewer: Viewer::default(),
+            avatars: AvatarUrls::default(),
         }
     }
 }
@@ -209,8 +215,9 @@ fn row(index: usize) -> i32 {
 
 impl cxx_qt::Initialize for MessageListModel {
     fn initialize(mut self: Pin<&mut Self>) {
-        let (snapshot, viewer) = hub::register_messages(self.qt_thread());
+        let (snapshot, viewer, avatars) = hub::register_messages(self.qt_thread());
         self.as_mut().rust_mut().viewer = viewer;
+        self.as_mut().rust_mut().avatars = avatars;
         self.as_mut().apply(&[snapshot]);
     }
 }
@@ -277,6 +284,23 @@ impl MessageListModel {
         }
     }
 
+    /// Takes new avatar files in and announces their role, and only that, for the rows that show
+    /// them.
+    pub fn set_avatars(mut self: Pin<&mut Self>, changes: &[(AvatarOwner, String)]) {
+        self.as_mut().rust_mut().avatars.set(changes);
+        let runs = rows_using(self.messages.len(), &owners(changes), |at| {
+            self.messages.get(at).and_then(message_owner)
+        });
+        let no_parent = QModelIndex::default();
+        for (first, last) in runs {
+            let top_left = self.index(row(first), 0, &no_parent);
+            let bottom_right = self.index(row(last), 0, &no_parent);
+            let mut roles = QVector::<i32>::default();
+            roles.append(AVATAR_ROLE);
+            self.as_mut().data_changed(&top_left, &bottom_right, &roles);
+        }
+    }
+
     /// Announces new content in every role of the rows `first..=last`.
     fn rows_changed(mut self: Pin<&mut Self>, first: usize, last: usize) {
         let no_parent = QModelIndex::default();
@@ -324,6 +348,11 @@ impl MessageListModel {
                 },
             )),
             MENTIONS_ME_ROLE => QVariant::from(&mentions_me(message, &self.viewer)),
+            AVATAR_ROLE => {
+                text(message_owner(message).map_or("", |owner| self.avatars.url(&owner)))
+            }
+            AVATAR_INITIALS_ROLE => text(&initials(author_name(&message.author))),
+            AVATAR_COLOR_ROLE => text(&color(&message.author.username)),
             _ => QVariant::default(),
         }
     }
@@ -345,6 +374,9 @@ impl MessageListModel {
             (DELIVERY_ROLE, "delivery"),
             (HTML_ROLE, "html"),
             (MENTIONS_ME_ROLE, "mentionsMe"),
+            (AVATAR_ROLE, "avatar"),
+            (AVATAR_INITIALS_ROLE, "avatarInitials"),
+            (AVATAR_COLOR_ROLE, "avatarColor"),
         ] {
             names.insert(role, QByteArray::from(name));
         }
