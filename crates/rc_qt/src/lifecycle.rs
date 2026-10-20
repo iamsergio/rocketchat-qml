@@ -7,8 +7,8 @@
 pub mod ffi {
     extern "Rust" {
         /// Starts the core. Call on the GUI thread after `QGuiApplication` exists and before the
-        /// QML is loaded. `RC_SECRET_STORE=memory` keeps the session in memory instead of the OS
-        /// keyring.
+        /// QML is loaded. `RC_SECRET_STORE` picks where the session is kept: the OS keyring by
+        /// default, `memory`, or `file:<path>` (test builds only).
         fn start_core();
 
         /// Stops the core, waiting a moment for a pending logout to finish. Call on the GUI

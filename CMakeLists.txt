@@ -46,9 +46,18 @@ FetchContent_Declare(Corrosion SOURCE_DIR ${PROJECT_SOURCE_DIR}/3rdparty/corrosi
 FetchContent_Declare(CxxQt SOURCE_DIR ${PROJECT_SOURCE_DIR}/3rdparty/cxx-qt-cmake)
 FetchContent_MakeAvailable(CxxQt)
 
-set(rc_qt_features)
+# test-file-store keeps the session token in a plain file (RC_SECRET_STORE=file:<path>), for the GUI
+# tests that restart the app. Never in a build without Spix.
+set(rc_qt_feature_list)
 if(ROCKETCHATQML_DEVELOPER_MODE)
-  list(APPEND rc_qt_features FEATURES developer-mode)
+  list(APPEND rc_qt_feature_list developer-mode)
+endif()
+if(ROCKETCHATQML_SPIX)
+  list(APPEND rc_qt_feature_list test-file-store)
+endif()
+set(rc_qt_features)
+if(rc_qt_feature_list)
+  set(rc_qt_features FEATURES ${rc_qt_feature_list})
 endif()
 cxx_qt_import_crate(
   MANIFEST_PATH

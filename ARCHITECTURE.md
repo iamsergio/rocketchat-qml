@@ -22,7 +22,13 @@ Dependencies only point downwards. Nothing in `rc_core` or `rc_api` knows about 
 - **rc_core**: domain types (rooms, messages, users, with ID newtypes), the session state machine, the sync engine and the use cases (log in, open a room, send...). Frontends drive it through a `Client` handle that accepts commands and emits events. It keeps lists such as the rooms in display order and emits index-based changes (insert, update, move, remove), which view models apply one to one. It defines ports (traits) for what it needs from outside: the server API, secret storage, persistence and a cache directory. Adapters implement them, with in-memory versions for tests.
 - **rc_qt**: cxx-qt QObjects and `QAbstractListModel`s that turn core events into Qt properties, signals and incremental model updates. It is the only crate that uses `unsafe` (cxx-qt bridge code).
 - **QML**: presentation only. It binds to view models and calls their invokables. It has no business logic and makes no network calls.
-- **C++ host** (`src/gui/main.cpp`): sets up logging through `rc_qt` (`rc_core::logging`: stderr, plus `<executable>.log` in developer-mode builds, filtered by `RUST_LOG`), creates `QGuiApplication`, starts the core (`rc_qt::start_core()`; `RC_SECRET_STORE=memory` keeps the session in memory instead of the OS keyring), registers the Rust QML module, loads `Main.qml`, and, in builds with `ROCKETCHATQML_SPIX`, starts the Spix test server when given `--spix-port <port>`. After the event loop ends it stops the core (`rc_qt::stop_core()`). It does nothing else.
+- **C++ host** (`src/gui/main.cpp`): sets up logging through `rc_qt` (`rc_core::logging`: stderr, plus `<executable>.log` in developer-mode builds, filtered by `RUST_LOG`), creates `QGuiApplication`, starts the core (`rc_qt::start_core()`; `RC_SECRET_STORE` picks where the session is kept, see below), registers the Rust QML module, loads `Main.qml`, and, in builds with `ROCKETCHATQML_SPIX`, starts the Spix test server when given `--spix-port <port>`. After the event loop ends it stops the core (`rc_qt::stop_core()`). It does nothing else.
+
+`RC_SECRET_STORE` chooses the secret store at startup (`store_choice` in `crates/rc_qt/src/hub.rs`):
+
+- unset, or any other value: the OS keyring, with memory as the fallback if there is none;
+- `memory`: kept in memory only, forgotten at exit;
+- `file:<path>`: a plain JSON file (`rc_core::adapters::FileStore`), so a GUI test can restart the app and resume. It writes the token in clear text, so it only exists in builds with the `test-file-store` cargo feature, which CMake turns on with `ROCKETCHATQML_SPIX`. Without the feature the value logs a warning and uses memory, never the keyring.
 
 Adapter crates (added when needed): `rc_store_sqlite` (persistence) and a keyring-based secret store.
 
