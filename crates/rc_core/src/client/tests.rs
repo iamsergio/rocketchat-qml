@@ -15,9 +15,10 @@ use tokio::sync::Notify;
 
 use super::*;
 use crate::adapters::MemoryStore;
-use crate::domain::{Account, Room, RoomKind, User};
-use crate::ports::ApiError;
+use crate::domain::{Account, Author, Message, MessageKind, Room, RoomKind, User};
+use crate::ports::{ApiError, Page};
 use crate::rooms::RoomChange;
+use crate::timeline::{TimelineChange, TimelineError, TimelineStatus};
 
 const TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -31,6 +32,21 @@ struct FetchScript {
     /// Holds the fetch until the test notifies it.
     gate: Option<Arc<Notify>>,
     result: Result<Vec<rc_api::Subscription>, ApiError>,
+}
+
+struct HistoryScript {
+    /// Holds the fetch until the test notifies it.
+    gate: Option<Arc<Notify>>,
+    result: Result<Page, ApiError>,
+}
+
+/// What `history` was asked.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct HistoryCall {
+    room: String,
+    kind: RoomKind,
+    before: Option<jiff::Timestamp>,
+    count: usize,
 }
 
 #[derive(Default)]
@@ -51,6 +67,9 @@ struct FakeState {
     /// One per room fetch; an empty room list once they run out.
     fetches: VecDeque<FetchScript>,
     subscriptions_calls: Vec<(String, String)>,
+    /// One per history fetch; an empty page at the start once they run out.
+    histories: VecDeque<HistoryScript>,
+    history_calls: Vec<HistoryCall>,
 }
 
 /// Scripted results, plus a record of what it was asked.
@@ -79,6 +98,20 @@ impl Fake {
         result: Result<Vec<rc_api::Subscription>, ApiError>,
     ) {
         self.state().fetches.push_back(FetchScript { gate, result });
+    }
+
+    fn script_history(&self, gate: Option<Arc<Notify>>, result: Result<Page, ApiError>) {
+        self.state()
+            .histories
+            .push_back(HistoryScript { gate, result });
+    }
+
+    /// The history fetch task has started and is inside `history`.
+    fn wait_for_history_calls(&self, count: usize) -> Vec<HistoryCall> {
+        wait_until(|| {
+            let calls = self.state().history_calls.clone();
+            (calls.len() >= count).then_some(calls)
+        })
     }
 
     /// The fetch task has started and is inside `subscriptions`.
@@ -186,6 +219,36 @@ impl ServerApi for Fake {
         };
         let Some(script) = script else {
             return Ok(Vec::new());
+        };
+        if let Some(gate) = script.gate {
+            gate.notified().await;
+        }
+        script.result
+    }
+
+    async fn history(
+        &self,
+        _credentials: &Credentials,
+        room: &RoomId,
+        kind: RoomKind,
+        before: Option<jiff::Timestamp>,
+        count: usize,
+    ) -> Result<Page, ApiError> {
+        let script = {
+            let mut state = self.state();
+            state.history_calls.push(HistoryCall {
+                room: room.to_string(),
+                kind,
+                before,
+                count,
+            });
+            state.histories.pop_front()
+        };
+        let Some(script) = script else {
+            return Ok(Page {
+                messages: Vec::new(),
+                reached_start: true,
+            });
         };
         if let Some(gate) = script.gate {
             gate.notified().await;
@@ -940,5 +1003,400 @@ fn a_fetch_that_finishes_after_logout_is_dropped() {
         session_event(SessionState::Connecting),
         session_event(logged_in("http://h", "alice")),
         rooms_event(vec![room("new", "new", RoomKind::Channel)]),
+    ]);
+}
+
+fn message(id: &str, secs: i64) -> Message {
+    Message {
+        id: id.to_owned().into(),
+        room_id: "1".to_owned().into(),
+        author: Author {
+            id: "uid".to_owned().into(),
+            username: "alice".to_owned(),
+            display_name: None,
+        },
+        ts: jiff::Timestamp::from_second(secs).unwrap(),
+        kind: MessageKind::Text(id.to_owned()),
+    }
+}
+
+// Scripts take the result of the call, which is what the other scripts pass.
+#[allow(clippy::unnecessary_wraps)]
+fn page(messages: Vec<Message>, reached_start: bool) -> Result<Page, ApiError> {
+    Ok(Page {
+        messages,
+        reached_start,
+    })
+}
+
+fn reset_event(room: Option<&str>, messages: Vec<Message>) -> Event {
+    Event::Timeline(vec![TimelineChange::Reset {
+        room: room.map(|id| id.to_owned().into()),
+        messages,
+    }])
+}
+
+fn status(
+    room: &str,
+    loading: bool,
+    loading_older: bool,
+    reached_start: bool,
+    error: Option<TimelineError>,
+) -> Event {
+    Event::TimelineStatus(TimelineStatus {
+        room: Some(room.to_owned().into()),
+        loading,
+        loading_older,
+        reached_start,
+        error,
+    })
+}
+
+/// The event that closes the open room: no messages, no room.
+fn closed_events() -> Vec<Event> {
+    vec![
+        reset_event(None, Vec::new()),
+        Event::TimelineStatus(TimelineStatus::default()),
+    ]
+}
+
+/// A harness logged in with the rooms `1` (a channel) and `2` (a private group), past their events.
+fn logged_in_harness(fake: &Fake) -> Harness {
+    fake.script_login(None, Ok(()));
+    fake.script_fetch(
+        None,
+        Ok(vec![
+            subscription("1", "general", rc_api::RoomType::Channel),
+            subscription("2", "secret", rc_api::RoomType::Private),
+        ]),
+    );
+    let harness = Harness::new(fake);
+    harness.login("http://h", "alice");
+    harness.expect_events(vec![
+        session_event(SessionState::Connecting),
+        session_event(logged_in("http://h", "alice")),
+        rooms_event(vec![
+            room("1", "general", RoomKind::Channel),
+            room("2", "secret", RoomKind::Private),
+        ]),
+    ]);
+    harness
+}
+
+/// Opens room 1 and takes the events of its first page, which has `a` and `b`.
+fn open_first_room(fake: &Fake, harness: &Harness, reached_start: bool) {
+    fake.script_history(
+        None,
+        page(vec![message("b", 2), message("a", 1)], reached_start),
+    );
+    harness.client.open_room("1".to_owned().into());
+    harness.expect_events(vec![
+        reset_event(Some("1"), Vec::new()),
+        status("1", true, false, false, None),
+        reset_event(Some("1"), vec![message("a", 1), message("b", 2)]),
+        status("1", false, false, reached_start, None),
+    ]);
+}
+
+// MSG-001
+#[test]
+fn opening_a_room_shows_the_newest_messages_oldest_first() {
+    let fake = Fake::new();
+    let harness = logged_in_harness(&fake);
+    open_first_room(&fake, &harness, false);
+    assert_eq!(
+        fake.state().history_calls,
+        [HistoryCall {
+            room: "1".into(),
+            kind: RoomKind::Channel,
+            before: None,
+            count: crate::timeline::PAGE_SIZE,
+        }]
+    );
+}
+
+// MSG-001
+#[test]
+fn the_kind_of_the_room_is_passed_to_the_server() {
+    let fake = Fake::new();
+    let harness = logged_in_harness(&fake);
+    harness.client.open_room("2".to_owned().into());
+    harness.expect_events(vec![
+        reset_event(Some("2"), Vec::new()),
+        status("2", true, false, false, None),
+        status("2", false, false, true, None),
+    ]);
+    assert_eq!(fake.state().history_calls[0].kind, RoomKind::Private);
+}
+
+// MSG-001
+#[test]
+fn opening_an_unknown_room_or_when_logged_out_is_ignored() {
+    let fake = Fake::new();
+    fake.script_login(None, Ok(()));
+    let harness = Harness::new(&fake);
+    // Logged out.
+    harness.client.open_room("1".to_owned().into());
+    harness.login("http://h", "alice");
+    harness.expect_events(vec![
+        session_event(SessionState::Connecting),
+        session_event(logged_in("http://h", "alice")),
+        rooms_event(vec![]),
+    ]);
+    // Logged in, but not in the room list.
+    harness.client.open_room("nope".to_owned().into());
+    harness.client.logout();
+    harness.expect_events(vec![session_event(logged_out(None))]);
+    drop(harness);
+    assert!(fake.state().history_calls.is_empty());
+}
+
+// MSG-002
+#[test]
+fn loading_older_messages_prepends_them() {
+    let fake = Fake::new();
+    let harness = logged_in_harness(&fake);
+    open_first_room(&fake, &harness, false);
+
+    // The page starts at the oldest message held, which comes back as the duplicate.
+    fake.script_history(None, page(vec![message("a", 1), message("z", 0)], true));
+    harness.client.load_older();
+    harness.expect_events(vec![
+        status("1", false, true, false, None),
+        Event::Timeline(vec![TimelineChange::Prepended(vec![message("z", 0)])]),
+        status("1", false, false, true, None),
+    ]);
+    let calls = fake.state().history_calls.clone();
+    assert_eq!(calls[1].before, Some(message("a", 1).ts));
+}
+
+// MSG-002
+#[test]
+fn loading_older_is_ignored_while_a_fetch_is_in_flight() {
+    let fake = Fake::new();
+    let harness = logged_in_harness(&fake);
+    open_first_room(&fake, &harness, false);
+    let gate = Arc::new(Notify::new());
+    fake.script_history(Some(Arc::clone(&gate)), page(vec![message("z", 0)], false));
+    harness.client.load_older();
+    harness.expect_events(vec![status("1", false, true, false, None)]);
+    fake.wait_for_history_calls(2);
+
+    harness.client.load_older();
+    harness.client.load_older();
+    gate.notify_one();
+    harness.expect_events(vec![
+        Event::Timeline(vec![TimelineChange::Prepended(vec![message("z", 0)])]),
+        status("1", false, false, false, None),
+    ]);
+    // Dropping flushes the actor's work: a second fetch would have been made by now.
+    drop(harness);
+    assert_eq!(fake.state().history_calls.len(), 2);
+}
+
+// MSG-002
+#[test]
+fn loading_older_is_ignored_once_the_start_is_reached() {
+    let fake = Fake::new();
+    let harness = logged_in_harness(&fake);
+    open_first_room(&fake, &harness, true);
+    harness.client.load_older();
+    drop(harness);
+    assert_eq!(fake.state().history_calls.len(), 1);
+}
+
+// MSG-002
+#[test]
+fn loading_older_without_an_open_room_is_ignored() {
+    let fake = Fake::new();
+    let harness = logged_in_harness(&fake);
+    harness.client.load_older();
+    drop(harness);
+    assert!(fake.state().history_calls.is_empty());
+}
+
+// MSG-001
+#[test]
+fn opening_the_open_room_again_does_nothing() {
+    let fake = Fake::new();
+    let harness = logged_in_harness(&fake);
+    open_first_room(&fake, &harness, false);
+    harness.client.open_room("1".to_owned().into());
+    drop(harness);
+    assert_eq!(fake.state().history_calls.len(), 1);
+}
+
+// MSG-001
+#[test]
+fn switching_rooms_replaces_the_messages_and_drops_the_stale_answer() {
+    let fake = Fake::new();
+    let harness = logged_in_harness(&fake);
+    let gate = Arc::new(Notify::new());
+    fake.script_history(Some(Arc::clone(&gate)), page(vec![message("a", 1)], true));
+    harness.client.open_room("1".to_owned().into());
+    harness.expect_events(vec![
+        reset_event(Some("1"), Vec::new()),
+        status("1", true, false, false, None),
+    ]);
+    fake.wait_for_history_calls(1);
+
+    let mut other = message("x", 9);
+    other.room_id = "2".to_owned().into();
+    fake.script_history(None, page(vec![other.clone()], true));
+    harness.client.open_room("2".to_owned().into());
+    gate.notify_one();
+    harness.expect_events(vec![
+        reset_event(Some("2"), Vec::new()),
+        status("2", true, false, false, None),
+        reset_event(Some("2"), vec![other]),
+        status("2", false, false, true, None),
+    ]);
+    // Nothing of room 1 follows: closing the room is the next event.
+    harness.client.logout();
+    harness.expect_events(vec![session_event(logged_out(None)), rooms_event(vec![])]);
+    harness.expect_events(closed_events());
+}
+
+// MSG-001
+#[test]
+fn reopening_a_room_shows_what_was_loaded_first() {
+    let fake = Fake::new();
+    let harness = logged_in_harness(&fake);
+    open_first_room(&fake, &harness, false);
+    harness.client.open_room("2".to_owned().into());
+    harness.expect_events(vec![
+        reset_event(Some("2"), Vec::new()),
+        status("2", true, false, false, None),
+        status("2", false, false, true, None),
+    ]);
+
+    // A message arrived meanwhile.
+    fake.script_history(
+        None,
+        page(
+            vec![message("c", 3), message("b", 2), message("a", 1)],
+            false,
+        ),
+    );
+    harness.client.open_room("1".to_owned().into());
+    harness.expect_events(vec![
+        reset_event(Some("1"), vec![message("a", 1), message("b", 2)]),
+        status("1", true, false, false, None),
+        Event::Timeline(vec![TimelineChange::Appended(vec![message("c", 3)])]),
+        status("1", false, false, false, None),
+    ]);
+}
+
+// MSG-001
+#[test]
+fn logout_closes_the_room_and_forgets_the_messages() {
+    let fake = Fake::new();
+    let harness = logged_in_harness(&fake);
+    open_first_room(&fake, &harness, false);
+    harness.client.logout();
+    harness.expect_events(vec![session_event(logged_out(None)), rooms_event(vec![])]);
+    harness.expect_events(closed_events());
+
+    fake.script_login(None, Ok(()));
+    fake.script_fetch(
+        None,
+        Ok(vec![subscription(
+            "1",
+            "general",
+            rc_api::RoomType::Channel,
+        )]),
+    );
+    harness.login("http://h", "alice");
+    harness.expect_events(vec![
+        session_event(SessionState::Connecting),
+        session_event(logged_in("http://h", "alice")),
+        rooms_event(vec![room("1", "general", RoomKind::Channel)]),
+    ]);
+    // Nothing is held any more: the room opens empty.
+    harness.client.open_room("1".to_owned().into());
+    harness.expect_events(vec![
+        reset_event(Some("1"), Vec::new()),
+        status("1", true, false, false, None),
+    ]);
+}
+
+// MSG-001
+#[test]
+fn an_expired_token_ends_the_session_and_closes_the_room() {
+    let fake = Fake::new();
+    let harness = logged_in_harness(&fake);
+    fake.script_history(None, Err(ApiError::Unauthorized));
+    harness.client.open_room("1".to_owned().into());
+    harness.expect_events(vec![
+        reset_event(Some("1"), Vec::new()),
+        status("1", true, false, false, None),
+        session_event(logged_out(Some(LoginFailure::SessionExpired))),
+        rooms_event(vec![]),
+    ]);
+    harness.expect_events(closed_events());
+    // It's dead already, so there's nothing to revoke.
+    drop(harness);
+    assert!(fake.state().logout_calls.is_empty());
+}
+
+// MSG-001
+#[test]
+fn a_failed_fetch_shows_the_error_and_opening_again_retries() {
+    let fake = Fake::new();
+    let harness = logged_in_harness(&fake);
+    fake.script_history(None, Err(ApiError::Unreachable("refused".into())));
+    harness.client.open_room("1".to_owned().into());
+    harness.expect_events(vec![
+        reset_event(Some("1"), Vec::new()),
+        status("1", true, false, false, None),
+        status("1", false, false, false, Some(TimelineError::Unreachable)),
+    ]);
+    // Older messages can't be loaded when there are none.
+    harness.client.load_older();
+
+    fake.script_history(None, page(vec![message("a", 1)], true));
+    harness.client.open_room("1".to_owned().into());
+    harness.expect_events(vec![
+        reset_event(Some("1"), Vec::new()),
+        status("1", true, false, false, None),
+        reset_event(Some("1"), vec![message("a", 1)]),
+        status("1", false, false, true, None),
+    ]);
+    assert_eq!(fake.state().history_calls.len(), 2);
+}
+
+// MSG-002
+#[test]
+fn a_failed_older_fetch_keeps_the_messages() {
+    let fake = Fake::new();
+    let harness = logged_in_harness(&fake);
+    open_first_room(&fake, &harness, false);
+    fake.script_history(
+        None,
+        Err(ApiError::Server {
+            status: 500,
+            message: "boom".into(),
+        }),
+    );
+    harness.client.load_older();
+    harness.expect_events(vec![
+        status("1", false, true, false, None),
+        status(
+            "1",
+            false,
+            false,
+            false,
+            Some(TimelineError::Server(
+                "the server answered 500: boom".into(),
+            )),
+        ),
+    ]);
+    // Trying again clears the error.
+    fake.script_history(None, page(vec![message("z", 0)], true));
+    harness.client.load_older();
+    harness.expect_events(vec![
+        status("1", false, true, false, None),
+        Event::Timeline(vec![TimelineChange::Prepended(vec![message("z", 0)])]),
+        status("1", false, false, true, None),
     ]);
 }

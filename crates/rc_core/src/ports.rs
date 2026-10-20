@@ -7,7 +7,7 @@
 use rc_api::ServerVersion;
 use secrecy::SecretString;
 
-use crate::domain::{Credentials, StoredSession, User};
+use crate::domain::{Credentials, Message, RoomId, RoomKind, StoredSession, User};
 
 /// Why a server call failed. Owned strings only, so that fakes can build and compare them.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
@@ -62,11 +62,57 @@ pub trait ServerApi: Clone + Send + Sync + 'static {
         credentials: &Credentials,
     ) -> impl Future<Output = Result<Vec<rc_api::Subscription>, ApiError>> + Send;
 
+    /// A page of the room's history: the newest messages sent before `before`, or the newest of all
+    /// without it, at most `count`. `before` is inclusive, so the message sent at that instant
+    /// comes back too: the caller de-duplicates.
+    ///
+    /// # Errors
+    ///
+    /// [`ApiError::Unauthorized`] if the credentials have expired or were revoked.
+    fn history(
+        &self,
+        credentials: &Credentials,
+        room: &RoomId,
+        kind: RoomKind,
+        before: Option<jiff::Timestamp>,
+        count: usize,
+    ) -> impl Future<Output = Result<Page, ApiError>> + Send;
+
     /// Revokes the token on the server.
     fn logout(
         &self,
         credentials: &Credentials,
     ) -> impl Future<Output = Result<(), ApiError>> + Send;
+}
+
+/// What [`ServerApi::history`] returns.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Page {
+    /// The messages the timeline shows, in any order.
+    pub messages: Vec<Message>,
+    /// There is nothing before them.
+    pub reached_start: bool,
+}
+
+/// What is held of one room's messages.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct RoomHistory {
+    /// Oldest first, unique by id. The oldest one is where the next page starts.
+    pub messages: Vec<Message>,
+    /// Nothing exists before the first message.
+    pub reached_start: bool,
+}
+
+/// The messages loaded so far, per room. Owned by the session actor, which calls it one room at a
+/// time, so it needs no locking and may block briefly.
+pub trait MessageStore: Send + 'static {
+    /// What is held for the room: nothing, if it was never loaded.
+    fn load(&self, room: &RoomId) -> RoomHistory;
+
+    fn save(&mut self, room: &RoomId, history: &RoomHistory);
+
+    /// Forgets everything, for all rooms.
+    fn clear(&mut self);
 }
 
 /// Why the secret store failed.

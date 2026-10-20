@@ -9,12 +9,14 @@ mod blob;
 mod file;
 mod keyring;
 mod memory;
+mod message_store;
 mod rest;
 
 #[cfg(any(test, feature = "test-file-store"))]
 pub use file::FileStore;
 pub use keyring::KeyringStore;
 pub use memory::MemoryStore;
+pub use message_store::MemoryMessageStore;
 pub use rest::RestConnector;
 
 use crate::ports::SecretStore;

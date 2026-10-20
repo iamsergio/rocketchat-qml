@@ -51,6 +51,28 @@ impl fmt::Display for RoomId {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct MessageId(String);
+
+impl MessageId {
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl From<String> for MessageId {
+    fn from(id: String) -> Self {
+        Self(id)
+    }
+}
+
+impl fmt::Display for MessageId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct User {
     pub id: UserId,
@@ -141,6 +163,89 @@ pub(crate) fn room_from(sub: rc_api::Subscription) -> Option<Room> {
     })
 }
 
+/// Who wrote a message.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Author {
+    pub id: UserId,
+    pub username: String,
+    pub display_name: Option<String>,
+}
+
+/// What happened, for a message that reports an event instead of saying something. For
+/// `Joined`, `Left` and `TopicChanged` the author is who joined, left or changed the topic; for
+/// `Added` and `Removed` the author is who did it, and `username` is who it was done to.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SystemEvent {
+    Joined,
+    Left,
+    Added {
+        username: String,
+    },
+    Removed {
+        username: String,
+    },
+    TopicChanged {
+        topic: String,
+    },
+    /// An event this client has no wording for yet, with the server's type code (`r` for a rename,
+    /// `room_changed_description`...).
+    Other(String),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum MessageKind {
+    /// The plain text of the message.
+    Text(String),
+    System(SystemEvent),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Message {
+    pub id: MessageId,
+    pub room_id: RoomId,
+    pub author: Author,
+    pub ts: jiff::Timestamp,
+    pub kind: MessageKind,
+}
+
+/// The message a history entry stands for, or `None` if the timeline doesn't show it: replies in a
+/// thread that weren't also sent to the channel (Rocket.Chat's own view leaves them out too).
+#[must_use]
+pub(crate) fn message_from(message: rc_api::Message) -> Option<Message> {
+    if message.thread_id.is_some() && !message.thread_shown {
+        return None;
+    }
+    let kind = match message.kind.as_deref() {
+        None => MessageKind::Text(message.text),
+        Some("uj") => MessageKind::System(SystemEvent::Joined),
+        Some("ul") => MessageKind::System(SystemEvent::Left),
+        Some("au") => MessageKind::System(SystemEvent::Added {
+            username: message.text,
+        }),
+        Some("ru") => MessageKind::System(SystemEvent::Removed {
+            username: message.text,
+        }),
+        Some("room_changed_topic") => MessageKind::System(SystemEvent::TopicChanged {
+            topic: message.text,
+        }),
+        Some(code) => {
+            tracing::debug!(message = %message.id, code, "system message kind without wording");
+            MessageKind::System(SystemEvent::Other(code.to_owned()))
+        }
+    };
+    Some(Message {
+        id: message.id.into(),
+        room_id: message.room_id.into(),
+        author: Author {
+            id: message.author.id.into(),
+            username: message.author.username,
+            display_name: message.author.name,
+        },
+        ts: message.ts,
+        kind,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use rc_api::{RoomType, Subscription};
@@ -226,5 +331,88 @@ mod tests {
             ),
             (7, 2, 1, true)
         );
+    }
+
+    fn entry(kind: Option<&str>, text: &str) -> rc_api::Message {
+        rc_api::Message {
+            id: "m1".into(),
+            room_id: "r1".into(),
+            ts: "2026-10-20T14:12:48.587Z".parse().unwrap(),
+            author: rc_api::Author {
+                id: "u1".into(),
+                username: "alice".into(),
+                name: Some("Alice A".into()),
+            },
+            text: text.into(),
+            kind: kind.map(str::to_owned),
+            thread_id: None,
+            thread_shown: false,
+        }
+    }
+
+    // MSG-001, MSG-003
+    #[test]
+    fn maps_a_text_message() {
+        let message = message_from(entry(None, "hello")).unwrap();
+        assert_eq!(message.id.as_str(), "m1");
+        assert_eq!(message.room_id.as_str(), "r1");
+        assert_eq!(message.ts.to_string(), "2026-10-20T14:12:48.587Z");
+        assert_eq!(message.author.id.as_str(), "u1");
+        assert_eq!(message.author.username, "alice");
+        assert_eq!(message.author.display_name.as_deref(), Some("Alice A"));
+        assert_eq!(message.kind, MessageKind::Text("hello".into()));
+    }
+
+    // MSG-005
+    #[test]
+    fn maps_the_system_message_kinds() {
+        for (code, text, event) in [
+            ("uj", "alice", SystemEvent::Joined),
+            ("ul", "alice", SystemEvent::Left),
+            (
+                "au",
+                "bob",
+                SystemEvent::Added {
+                    username: "bob".into(),
+                },
+            ),
+            (
+                "ru",
+                "bob",
+                SystemEvent::Removed {
+                    username: "bob".into(),
+                },
+            ),
+            (
+                "room_changed_topic",
+                "New topic",
+                SystemEvent::TopicChanged {
+                    topic: "New topic".into(),
+                },
+            ),
+        ] {
+            let message = message_from(entry(Some(code), text)).unwrap();
+            assert_eq!(message.kind, MessageKind::System(event), "{code}");
+        }
+    }
+
+    // MSG-005
+    #[test]
+    fn an_unknown_system_message_keeps_its_code() {
+        let message = message_from(entry(Some("room_changed_description"), "d")).unwrap();
+        assert_eq!(
+            message.kind,
+            MessageKind::System(SystemEvent::Other("room_changed_description".into()))
+        );
+    }
+
+    // MSG-001
+    #[test]
+    fn thread_replies_are_only_shown_when_sent_to_the_channel() {
+        let mut reply = entry(None, "in the thread");
+        reply.thread_id = Some("parent".into());
+        assert!(message_from(reply.clone()).is_none());
+        reply.thread_shown = true;
+        assert!(message_from(reply).is_some());
     }
 }
