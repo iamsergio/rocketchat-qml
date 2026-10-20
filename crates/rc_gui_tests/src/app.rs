@@ -15,11 +15,17 @@ use crate::gui::{Gui, GuiError};
 /// Environment variable naming the app binary to test. It must accept `--spix-port <port>`.
 pub const APP_ENV: &str = "RC_GUI_TEST_APP";
 
+/// Set when the app is built for coverage: where it writes its profile on exit.
+const PROFILE_ENV: &str = "LLVM_PROFILE_FILE";
+
 /// How long the app may take to start answering Spix calls.
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(30);
 /// How long the app may take to exit by itself after it was asked to quit: it first waits for a
 /// pending logout or store write to finish.
 const QUIT_TIMEOUT: Duration = Duration::from_secs(15);
+/// How long a dropped app may take to exit after being asked to quit, before it is killed. Short:
+/// nobody waits for the outcome.
+const DROP_QUIT_TIMEOUT: Duration = Duration::from_secs(5);
 const POLL_INTERVAL: Duration = Duration::from_millis(50);
 
 #[derive(Debug, thiserror::Error)]
@@ -55,7 +61,9 @@ pub enum QuitError {
     },
 }
 
-/// The running app, killed on drop.
+/// The running app, killed on drop. When the app writes a coverage profile (`LLVM_PROFILE_FILE` is
+/// set), it is asked to quit first, as it only writes the profile when it exits by itself. That
+/// takes about half a second per test binary, so it is not done in a plain run.
 pub struct App {
     child: Child,
     gui: Gui,
@@ -142,6 +150,10 @@ impl App {
     }
 
     fn quit_and_wait_for(mut self, timeout: Duration) -> Result<ExitStatus, QuitError> {
+        self.ask_to_quit(timeout)
+    }
+
+    fn ask_to_quit(&mut self, timeout: Duration) -> Result<ExitStatus, QuitError> {
         // The app may go away before it answers, so a failed call only matters if it stays up.
         let quit = self.gui.quit();
         let deadline = Instant::now() + timeout;
@@ -178,6 +190,10 @@ impl App {
 
 impl Drop for App {
     fn drop(&mut self) {
+        // Not already gone, as after `quit_and_wait` or a crash.
+        if env::var_os(PROFILE_ENV).is_some() && !matches!(self.child.try_wait(), Ok(Some(_))) {
+            let _ = self.ask_to_quit(DROP_QUIT_TIMEOUT);
+        }
         // Errors mean it has already exited.
         let _ = self.child.kill();
         let _ = self.child.wait();

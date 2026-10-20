@@ -12,6 +12,8 @@ endif()
 
 project(rocketchat_qml LANGUAGES CXX)
 
+option(ROCKETCHATQML_COVERAGE "Instrument the app's Rust code for coverage (scripts/coverage.sh)" OFF)
+
 option(ROCKETCHATQML_DEVELOPER_MODE "Build with developer options" OFF)
 
 set(CMAKE_CXX_STANDARD 23)
@@ -70,6 +72,11 @@ cxx_qt_import_crate(
   Qt6::Core
   Qt6::Gui
   Qt6::Qml)
+if(ROCKETCHATQML_COVERAGE)
+  # For rc_qt and every crate it builds. The profiler runtime is linked in src/gui/CMakeLists.txt.
+  # The app writes its profile (LLVM_PROFILE_FILE) when it exits normally.
+  corrosion_add_target_rustflags(rc_qt -Cinstrument-coverage)
+endif()
 # Must match the QmlModule in crates/rc_qt/build.rs.
 set(RC_QT_QML_URI RocketChat.Bridge)
 cxx_qt_import_qml_module(rc_qt_qml_module URI ${RC_QT_QML_URI} SOURCE_CRATE rc_qt)

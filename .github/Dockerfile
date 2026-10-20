@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: MIT
 
-# Self-hosted GitHub Actions runner able to run .github/workflows/build.yml.
+# Self-hosted GitHub Actions runner able to run .github/workflows/build.yml and coverage.yml.
 # Build and launch it with scripts/run_ci_runner.sh. The build context is the .github directory.
 #
 # Everything third-party is pinned to a release at least two weeks old. Bump them deliberately.
@@ -26,6 +26,9 @@ ARG REUSE_VERSION=6.2.0
 # cargo-deny 0.20.2, released 2026-07-09. The checksum is the one published next to the tarball.
 ARG CARGO_DENY_VERSION=0.20.2
 ARG CARGO_DENY_SHA256=9f12ed4c49936e09b48bf862b595cde2fe64fcbd9d74dfacac6131ca824c8d5f
+# cargo-llvm-cov 0.9.1, released 2026-09-06. The checksum is the digest GitHub shows for the tarball.
+ARG CARGO_LLVM_COV_VERSION=0.9.1
+ARG CARGO_LLVM_COV_SHA256=3fca950394a3c49457657c158b1619cec8dfd2647ae5b48746734c0ab969a522
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -67,6 +70,15 @@ RUN curl -fsSL -o /tmp/cargo-deny.tar.gz \
         cargo-deny-${CARGO_DENY_VERSION}-x86_64-unknown-linux-musl/cargo-deny \
     && rm /tmp/cargo-deny.tar.gz \
     && cargo-deny --version
+
+# cargo-llvm-cov, the static musl build. Found by cargo as 'cargo llvm-cov' through PATH. The LLVM
+# tools it drives come from rustup's llvm-tools-preview component, which coverage.yml adds.
+RUN curl -fsSL -o /tmp/cargo-llvm-cov.tar.gz \
+        https://github.com/taiki-e/cargo-llvm-cov/releases/download/v${CARGO_LLVM_COV_VERSION}/cargo-llvm-cov-x86_64-unknown-linux-musl.tar.gz \
+    && echo "${CARGO_LLVM_COV_SHA256}  /tmp/cargo-llvm-cov.tar.gz" | sha256sum -c - \
+    && tar xzf /tmp/cargo-llvm-cov.tar.gz -C /usr/local/bin --no-same-owner cargo-llvm-cov \
+    && rm /tmp/cargo-llvm-cov.tar.gz \
+    && cargo-llvm-cov llvm-cov --version
 
 ENV PATH=/opt/Qt/${QT_VERSION}/gcc_64/bin:/opt/venv/bin:$PATH
 ENV CC=gcc-14 CXX=g++-14

@@ -36,3 +36,10 @@ Each list model's bridge declares its Qt base class as `extern "C++Qt"` with `#[
 
 - **Workaround:** `MessageListModel` reuses the first declaration with `type QAbstractListModel = crate::room_list_model::qobject::QAbstractListModel;` and no `#[qobject]` (cxx rejects the attribute on an alias). Keep the original in `RoomListModel`'s bridge.
 - **Possible patch:** make the generated symbols unique per bridge, or provide `QAbstractListModel` once in cxx-qt-lib (which would also be the place for the safe `begin*`/`end*` helpers mentioned above).
+
+## An instrumented staticlib has no profiler runtime
+
+With `-Cinstrument-coverage`, rustc links the LLVM profiler runtime (`profiler_builtins`) into executables and dylibs, but not into a staticlib, and nothing in the staticlib refers to it. The C++ executable links, but never writes a profile.
+
+- **Workaround:** with `ROCKETCHATQML_COVERAGE` (the `coverage` preset), `src/gui/CMakeLists.txt` links the toolchain's `libprofiler_builtins-*.rlib` (a plain archive) after the staticlib, with `-Wl,-u,__llvm_profile_runtime` to pull in the member that registers the write at exit. The flag itself reaches cargo through Corrosion's `corrosion_add_target_rustflags`.
+- **Possible patch (Corrosion or rustc):** link `profiler_builtins` into staticlibs built with coverage instrumentation, or let Corrosion add it to the imported target.

@@ -45,6 +45,22 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
   target_link_libraries(rocketchat_qml PRIVATE PkgConfig::DBus1)
 endif()
 
+if(ROCKETCHATQML_COVERAGE)
+  # rustc links the profiler runtime (what writes the profile at exit) into executables and
+  # dylibs, but not into a staticlib, so the instrumented rc_qt leaves its symbols undefined.
+  # Link the toolchain's runtime, a plain archive inside an rlib, after the staticlib.
+  get_target_property(rustc Rust::Rustc IMPORTED_LOCATION)
+  execute_process(COMMAND ${rustc} --print sysroot OUTPUT_VARIABLE rust_sysroot OUTPUT_STRIP_TRAILING_WHITESPACE COMMAND_ERROR_IS_FATAL ANY)
+  file(GLOB rust_profiler_runtime ${rust_sysroot}/lib/rustlib/*/lib/libprofiler_builtins-*.rlib)
+  list(LENGTH rust_profiler_runtime rust_profiler_runtime_count)
+  if(NOT rust_profiler_runtime_count EQUAL 1)
+    message(FATAL_ERROR "Expected one profiler_builtins rlib in ${rust_sysroot}, found: ${rust_profiler_runtime}")
+  endif()
+  # Nothing in the staticlib refers to the runtime, so ask for the member that registers the
+  # write at exit.
+  target_link_libraries(rocketchat_qml PRIVATE -Wl,-u,__llvm_profile_runtime ${rust_profiler_runtime})
+endif()
+
 if(ROCKETCHATQML_SPIX)
   target_link_libraries(rocketchat_qml PRIVATE Spix::QtQuick)
   target_compile_definitions(rocketchat_qml PRIVATE ROCKETCHATQML_SPIX)

@@ -15,7 +15,7 @@ jobs:
     # Also what the runner logs ("Running job: ..."). Changes per branch, so it can't be a required check.
     name: Build (${{ matrix.preset }}, ${{ github.head_ref || github.ref_name }})
     # Self-hosted: see .github/Dockerfile and scripts/run_ci_runner.sh. The image has Qt, Ninja, the
-    # system libraries, rustup, reuse and cargo-deny baked in.
+    # system libraries, rustup, reuse, cargo-deny and cargo-llvm-cov baked in.
     runs-on: [self-hosted, linux, x64, rocketchat-qml]
 
     env:
