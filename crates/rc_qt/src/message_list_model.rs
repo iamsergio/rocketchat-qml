@@ -1,8 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Sergio Martins
 // SPDX-License-Identifier: MIT
 
-//! The `MessageList` model: the open room's messages, oldest first. Older messages are inserted at
-//! the top and newer ones at the bottom; only a change of room resets it.
+//! The `MessageList` model: the open room's messages, newest first (row 0 is the newest), for a
+//! view that runs bottom to top. Older messages are inserted after the last row and newer ones at
+//! row 0; only a change of room resets it.
 
 #[cxx_qt::bridge]
 pub mod qobject {
@@ -134,7 +135,7 @@ use rc_core::timeline::TimelineChange;
 
 use crate::hub;
 use crate::message_view::{author_name, body, day_label, first_of_day, system_text, time_text};
-use crate::row_ops::{MessageOp, message_ops};
+use crate::row_ops::{MessageOp, apply_newest_first, message_ops};
 
 use qobject::MessageListModel;
 
@@ -152,7 +153,8 @@ const SYSTEM_TEXT_ROLE: i32 = 262;
 const FIRST_OF_DAY_ROLE: i32 = 263;
 const DAY_LABEL_ROLE: i32 = 264;
 
-/// Backing data of [`qobject::MessageListModel`]: the messages, mirrored from the core's changes.
+/// Backing data of [`qobject::MessageListModel`]: the messages, mirrored from the core's changes
+/// and held newest first.
 pub struct MessageListModelRust {
     messages: Vec<Message>,
     /// Where times and days are read: the user's.
@@ -190,7 +192,7 @@ impl MessageListModel {
                     MessageOp::Reset => {
                         // SAFETY: balanced by `end_reset_model` below.
                         unsafe { self.as_mut().begin_reset_model() };
-                        change.apply(&mut self.as_mut().rust_mut().messages);
+                        apply_newest_first(change, &mut self.as_mut().rust_mut().messages);
                         // SAFETY: after `begin_reset_model`.
                         unsafe { self.as_mut().end_reset_model() };
                     }
@@ -200,7 +202,7 @@ impl MessageListModel {
                             self.as_mut()
                                 .begin_insert_rows(&no_parent, row(first), row(last));
                         }
-                        change.apply(&mut self.as_mut().rust_mut().messages);
+                        apply_newest_first(change, &mut self.as_mut().rust_mut().messages);
                         // SAFETY: after `begin_insert_rows`.
                         unsafe { self.as_mut().end_insert_rows() };
                     }
@@ -240,8 +242,8 @@ impl MessageListModel {
             IS_SYSTEM_ROLE => QVariant::from(&matches!(message.kind, MessageKind::System(_))),
             SYSTEM_TEXT_ROLE => text(&system_text(message)),
             FIRST_OF_DAY_ROLE => QVariant::from(&first_of_day(
-                at.checked_sub(1)
-                    .and_then(|before| self.messages.get(before)),
+                // The message before this one is the next row: rows run from newest to oldest.
+                self.messages.get(at + 1),
                 message,
                 &self.zone,
             )),

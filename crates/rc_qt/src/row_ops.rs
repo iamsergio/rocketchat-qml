@@ -4,6 +4,7 @@
 //! How a [`RoomChange`] maps to the calls a `QAbstractListModel` makes around it. Plain Rust, so it
 //! can be unit-tested without Qt.
 
+use rc_core::domain::Message;
 use rc_core::rooms::RoomChange;
 use rc_core::timeline::TimelineChange;
 
@@ -57,8 +58,12 @@ pub fn qt_move_destination(from: usize, to: usize) -> usize {
 }
 
 /// The notifications for one [`TimelineChange`] of the message list, in the order to make them.
-/// `Insert` and `Reset` are where the change is applied to the model's list; `Update` comes after
-/// it.
+/// `Insert` and `Reset` are where the change is applied to the model's list (see
+/// [`apply_newest_first`]); `Update` comes after it.
+///
+/// The model holds the messages newest first, so that the view can run bottom to top and keep its
+/// place when older messages arrive: they go in after the last row, which is above everything on
+/// screen. Rows are therefore counted from the newest message.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MessageOp {
     /// `beginResetModel` / `endResetModel` around the change.
@@ -69,30 +74,50 @@ pub enum MessageOp {
     Update { first: usize, last: usize },
 }
 
-/// The notifications to make for `change`, applied to a list of `held` messages. A prepend also
-/// updates the message that was first: its day separator shows only if it starts a day, which the
-/// new message before it decides.
+/// The notifications to make for `change`, applied to a list of `held` messages. A prepend of
+/// older messages also updates the oldest message held (the last row): its day separator shows
+/// only if it starts a day, which the new message before it decides.
 #[must_use]
 pub fn message_ops(change: &TimelineChange, held: usize) -> Vec<MessageOp> {
     match change {
         TimelineChange::Prepended(older) if !older.is_empty() => {
-            let last = older.len() - 1;
-            let mut ops = vec![MessageOp::Insert { first: 0, last }];
+            let mut ops = vec![MessageOp::Insert {
+                first: held,
+                last: held + older.len() - 1,
+            }];
             if held > 0 {
                 ops.push(MessageOp::Update {
-                    first: older.len(),
-                    last: older.len(),
+                    first: held - 1,
+                    last: held - 1,
                 });
             }
             ops
         }
         TimelineChange::Appended(newer) if !newer.is_empty() => vec![MessageOp::Insert {
-            first: held,
-            last: held + newer.len() - 1,
+            first: 0,
+            last: newer.len() - 1,
         }],
         TimelineChange::Prepended(_) | TimelineChange::Appended(_) => Vec::new(),
         // `Reset`, and whatever the core adds later.
         _ => vec![MessageOp::Reset],
+    }
+}
+
+/// Applies `change` to a newest-first copy of the message list, which is how the model holds it.
+/// The core's changes are oldest first, so each one is reversed on the way in.
+pub fn apply_newest_first(change: &TimelineChange, messages: &mut Vec<Message>) {
+    match change {
+        TimelineChange::Reset { messages: all, .. } => {
+            messages.clear();
+            messages.extend(all.iter().rev().cloned());
+        }
+        TimelineChange::Prepended(older) => messages.extend(older.iter().rev().cloned()),
+        TimelineChange::Appended(newer) => {
+            messages.splice(0..0, newer.iter().rev().cloned());
+        }
+        // A change the core adds later: `message_ops` resets the model for it, but there is
+        // nothing to rebuild the list from.
+        _ => {}
     }
 }
 
@@ -215,13 +240,13 @@ mod tests {
 
     // MSG-002
     #[test]
-    fn a_prepend_inserts_at_the_top_and_updates_the_old_first_row() {
+    fn a_prepend_inserts_after_the_last_row_and_updates_it() {
         let older = TimelineChange::Prepended(vec![message("a"), message("b")]);
         assert_eq!(
             message_ops(&older, 5),
             [
-                MessageOp::Insert { first: 0, last: 1 },
-                MessageOp::Update { first: 2, last: 2 }
+                MessageOp::Insert { first: 5, last: 6 },
+                MessageOp::Update { first: 4, last: 4 }
             ]
         );
         // Nothing was there before: no row to update.
@@ -233,14 +258,10 @@ mod tests {
 
     // MSG-001
     #[test]
-    fn an_append_inserts_after_the_last_row() {
+    fn an_append_inserts_at_row_zero() {
         let newer = TimelineChange::Appended(vec![message("a"), message("b"), message("c")]);
         assert_eq!(
             message_ops(&newer, 4),
-            [MessageOp::Insert { first: 4, last: 6 }]
-        );
-        assert_eq!(
-            message_ops(&newer, 0),
             [MessageOp::Insert { first: 0, last: 2 }]
         );
     }
@@ -252,19 +273,59 @@ mod tests {
         assert!(message_ops(&TimelineChange::Appended(Vec::new()), 3).is_empty());
     }
 
-    /// Follows the ops on a list the way the model does and checks the rows seen by the views.
+    fn ids(messages: &[Message]) -> Vec<&str> {
+        messages.iter().map(|m| m.id.as_str()).collect()
+    }
+
+    // MSG-002
     #[test]
-    fn the_ops_cover_exactly_the_rows_that_changed() {
-        let before = vec![message("c"), message("d")];
+    fn the_updated_row_is_the_old_oldest_message() {
+        let mut held = Vec::new();
+        let first = TimelineChange::Reset {
+            room: None,
+            messages: vec![message("c"), message("d")],
+        };
+        apply_newest_first(&first, &mut held);
         let change = TimelineChange::Prepended(vec![message("a"), message("b")]);
-        let mut after = before.clone();
-        change.apply(&mut after);
-        let ops = message_ops(&change, before.len());
-        let Some(MessageOp::Update { first, last }) = ops.last().copied() else {
+        let ops = message_ops(&change, held.len());
+        apply_newest_first(&change, &mut held);
+        let Some(MessageOp::Update { first, .. }) = ops.last().copied() else {
             panic!("no update");
         };
-        // The updated row is the old first message, now at its new index.
-        assert_eq!((first, last), (2, 2));
-        assert_eq!(after[first].id, before[0].id);
+        assert_eq!(ids(&held), ["d", "c", "b", "a"]);
+        // `c`, the oldest of the messages that were held, keeps its row.
+        assert_eq!(held[first].id.as_str(), "c");
+    }
+
+    // MSG-001, MSG-002
+    #[test]
+    fn a_reversed_mirror_equals_the_timeline_reversed() {
+        let mut timeline = Vec::new();
+        let mut mirror = Vec::new();
+        let changes = [
+            TimelineChange::Reset {
+                room: None,
+                messages: vec![message("e"), message("f")],
+            },
+            TimelineChange::Prepended(vec![message("c"), message("d")]),
+            TimelineChange::Appended(vec![message("g")]),
+            TimelineChange::Prepended(vec![message("a"), message("b")]),
+            TimelineChange::Appended(vec![message("h"), message("i")]),
+            TimelineChange::Reset {
+                room: None,
+                messages: vec![message("x")],
+            },
+            TimelineChange::Prepended(Vec::new()),
+            TimelineChange::Reset {
+                room: None,
+                messages: Vec::new(),
+            },
+        ];
+        for change in &changes {
+            change.apply(&mut timeline);
+            apply_newest_first(change, &mut mirror);
+            let reversed: Vec<_> = timeline.iter().rev().cloned().collect();
+            assert_eq!(mirror, reversed, "{change:?}");
+        }
     }
 }

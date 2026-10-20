@@ -48,6 +48,9 @@ ColumnLayout {
         wrapMode: Text.Wrap
     }
 
+    // The model is newest first and the list runs bottom to top: row 0, the newest message, is at
+    // the bottom, where a room opens. Older messages are added after the last row, above everything
+    // on screen, so the view keeps its place without any help.
     ListView {
         id: messages
 
@@ -59,30 +62,14 @@ ColumnLayout {
         focus: true
         model: MessageList
         delegate: MessageDelegate {}
+        verticalLayoutDirection: ListView.BottomToTop
         boundsBehavior: Flickable.StopAtBounds
-
-        // Where the first message was on screen before older ones were inserted above it.
-        property real anchorOffset: NaN
-        // The index that message has now, or -1 when there is nothing to put back.
-        property int anchorIndex: -1
-
-        function keepAnchor() {
-            if (anchorIndex < 0)
-                return;
-            forceLayout();
-            const item = itemAtIndex(anchorIndex);
-            if (item)
-                contentY = item.y - anchorOffset;
-            else
-                positionViewAtIndex(anchorIndex, ListView.Beginning);
-            anchorIndex = -1;
-        }
 
         ScrollBar.vertical: ScrollBar {}
 
-        // Above the first message: the start of the conversation, or a spinner while older
-        // messages load.
-        header: Item {
+        // Above the oldest message, which in this direction is the footer: the start of the
+        // conversation, or a spinner while older messages load.
+        footer: Item {
             width: ListView.view.width
             height: startLabel.visible || olderBusy.visible ? 40 : 0
 
@@ -108,7 +95,8 @@ ColumnLayout {
         }
 
         // Reaching the top asks for older messages; the core ignores the request when there is
-        // nothing to load or a load is in progress.
+        // nothing to load or a load is in progress. Whatever the layout direction, the beginning
+        // of the content is its top in y.
         onAtYBeginningChanged: {
             if (atYBeginning && count > 0)
                 Room.loadOlder();
@@ -117,10 +105,10 @@ ColumnLayout {
         Keys.onPressed: event => {
             switch (event.key) {
             case Qt.Key_Home:
-                positionViewAtBeginning();
+                positionViewAtEnd();
                 break;
             case Qt.Key_End:
-                positionViewAtEnd();
+                positionViewAtBeginning();
                 break;
             case Qt.Key_PageUp:
                 contentY = Math.max(contentY - height, originY);
@@ -132,32 +120,6 @@ ColumnLayout {
                 return;
             }
             event.accepted = true;
-        }
-
-        Connections {
-            target: MessageList
-
-            // A new room, or the first messages of one: show the newest.
-            function onModelReset() {
-                messages.positionViewAtEnd();
-                Qt.callLater(messages.positionViewAtEnd);
-            }
-
-            // Older messages go in above the first one. The view is at the top then, and would
-            // keep showing the top of the new ones: remember where the first message is on
-            // screen, and put it back there once the list has taken the new rows in.
-            function onRowsAboutToBeInserted(parent, first, last) {
-                const top = messages.itemAtIndex(0);
-                messages.anchorOffset = first === 0 && top ? top.y - messages.contentY : NaN;
-            }
-
-            function onRowsInserted(parent, first, last) {
-                if (first !== 0 || isNaN(messages.anchorOffset))
-                    return;
-                // The list handles the same signal after this one, so wait for it.
-                messages.anchorIndex = last + 1;
-                Qt.callLater(messages.keepAnchor);
-            }
         }
 
         BusyIndicator {
