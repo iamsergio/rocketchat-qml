@@ -70,7 +70,8 @@ Done when: messages from others appear live, unread badges update, you can send 
 - [x] `rc_core`: send with an optimistic local echo (pending → sent / failed), retry
 - [ ] `rc_core`: mark a room read when it's opened. Room list ordered by last activity
 - [x] Tests: a small TCP proxy in front of the test server to drop connections on demand
-- [ ] `rc_qt` / QML: composer, pending/failed indicators with retry, connection status banner
+- [x] `rc_qt` / QML: composer, pending/failed indicators with retry
+- [ ] `rc_qt` / QML: connection status banner
 - [ ] Contract tests for DDP and realtime. The REST contract tests already exist and run in CI (since Phase 1) on the shared server
 - [x] Contract tests must pass on a dirty server, in any order and in parallel:
   - each test creates its own users and rooms with unique names (per-run random suffix) through the admin API
