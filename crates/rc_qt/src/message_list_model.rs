@@ -163,6 +163,7 @@ use crate::message_view::{
     author_name, body, day_label, delivery_name, first_of_day, html, mentions_me, system_text,
     time_text,
 };
+use crate::reaction_view::{ReactionView, reactions};
 use crate::rich_html::{Clock, Viewer};
 use crate::row_ops::{MessageOp, apply_newest_first, message_ops};
 
@@ -188,6 +189,8 @@ const AVATAR_ROLE: i32 = 268;
 const AVATAR_INITIALS_ROLE: i32 = 269;
 const AVATAR_COLOR_ROLE: i32 = 270;
 const ATTACHMENTS_ROLE: i32 = 271;
+const EDITED_ROLE: i32 = 272;
+const REACTIONS_ROLE: i32 = 273;
 
 /// Backing data of [`qobject::MessageListModel`]: the messages, mirrored from the core's changes
 /// and held newest first.
@@ -241,6 +244,27 @@ fn attachments_variant(views: &[AttachmentView]) -> QVariant {
     QVariant::from(&list)
 }
 
+/// The reactions as a `QVariantList` of `QVariantMap`s, with the keys QML reads.
+fn reactions_variant(views: &[ReactionView]) -> QVariant {
+    let text = |value: &str| QVariant::from(&QString::from(value));
+    let mut list = QList::<QVariant>::default();
+    for view in views {
+        let mut map = QMap::<QMapPair_QString_QVariant>::default();
+        for (key, value) in [
+            ("emoji", text(&view.emoji)),
+            ("glyph", text(&view.glyph)),
+            ("image", text(&view.image)),
+            ("count", QVariant::from(&view.count)),
+            ("mine", QVariant::from(&view.mine)),
+            ("users", text(&view.users)),
+        ] {
+            map.insert(QString::from(key), value);
+        }
+        list.append(QVariant::from(&map));
+    }
+    QVariant::from(&list)
+}
+
 impl cxx_qt::Initialize for MessageListModel {
     fn initialize(mut self: Pin<&mut Self>) {
         let (snapshot, viewer, avatars, images) = hub::register_messages(self.qt_thread());
@@ -274,6 +298,16 @@ impl MessageListModel {
                         apply_newest_first(change, &mut self.as_mut().rust_mut().messages);
                         // SAFETY: after `begin_insert_rows`.
                         unsafe { self.as_mut().end_insert_rows() };
+                    }
+                    MessageOp::Remove { row: at } => {
+                        // SAFETY: balanced by `end_remove_rows` below.
+                        unsafe {
+                            self.as_mut()
+                                .begin_remove_rows(&no_parent, row(at), row(at));
+                        }
+                        apply_newest_first(change, &mut self.as_mut().rust_mut().messages);
+                        // SAFETY: after `begin_remove_rows`.
+                        unsafe { self.as_mut().end_remove_rows() };
                     }
                     MessageOp::Update { first, last } => self.as_mut().rows_changed(first, last),
                     MessageOp::Replace { first, last } => {
@@ -407,6 +441,8 @@ impl MessageListModel {
                 self.viewer.server.as_deref(),
                 &self.images,
             )),
+            EDITED_ROLE => QVariant::from(&message.edited),
+            REACTIONS_ROLE => reactions_variant(&reactions(message, &self.viewer)),
             _ => QVariant::default(),
         }
     }
@@ -432,6 +468,8 @@ impl MessageListModel {
             (AVATAR_INITIALS_ROLE, "avatarInitials"),
             (AVATAR_COLOR_ROLE, "avatarColor"),
             (ATTACHMENTS_ROLE, "attachments"),
+            (EDITED_ROLE, "edited"),
+            (REACTIONS_ROLE, "reactions"),
         ] {
             names.insert(role, QByteArray::from(name));
         }

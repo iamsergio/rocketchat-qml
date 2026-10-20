@@ -828,7 +828,9 @@ async fn all_streams_deliver_on_one_connection() {
                 subscription |= s.room_id == room_id && s.unread >= 1;
             }
             DdpEvent::RoomActivity { room_id: r, .. } => activity |= *r == room_id,
-            DdpEvent::SubscriptionRemoved { .. } | DdpEvent::AvatarChanged(_) => {}
+            DdpEvent::SubscriptionRemoved { .. }
+            | DdpEvent::AvatarChanged(_)
+            | DdpEvent::MessageDeleted { .. } => {}
         }
         message && subscription && activity
     })
@@ -1215,4 +1217,178 @@ async fn a_live_message_carries_its_attachments() {
     assert_eq!(file.attachments.len(), 1);
     assert_eq!(file.attachments[0].title, "notes.txt");
     assert_eq!(file.attachments[0].image, None);
+}
+
+/// The next live version of the message with this id that `matches` accepts.
+async fn message_event_where(
+    events: &mut DdpEvents,
+    id: &str,
+    mut matches: impl FnMut(&Message) -> bool,
+) -> Message {
+    let event = event_where(
+        events,
+        |e| matches!(e, DdpEvent::Message(m) if m.id == id && matches(m)),
+    )
+    .await;
+    let DdpEvent::Message(message) = event else {
+        panic!("not the event that was waited for")
+    };
+    message
+}
+
+// RICH-006
+#[tokio::test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+async fn a_live_edit_arrives_as_the_whole_message_marked_edited() {
+    let fixture = Fixture::new();
+    let (room_id, _) = fixture.create_channel();
+    let login = fixture.login().await;
+    let (client, mut events) = connect_and_login(&login.credentials).await;
+    client.subscribe_my_messages().await.unwrap();
+    let posted = fixture.admin.post_message(&room_id, "before");
+    let original = message_event(&mut events, &posted.id).await;
+    assert!(!original.edited);
+
+    fixture
+        .admin
+        .edit_message(&room_id, &posted.id, "after the edit");
+
+    let edited = message_event_where(&mut events, &posted.id, |m| m.edited).await;
+    assert_eq!(edited.text, "after the edit");
+    assert_eq!(edited.room_id, room_id);
+    assert_eq!(edited.ts, original.ts);
+    assert!(edited.md.is_some());
+}
+
+// RICH-007
+#[tokio::test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+async fn a_live_reaction_arrives_and_taking_it_back_leaves_none() {
+    let fixture = Fixture::new();
+    let (room_id, _) = fixture.create_channel();
+    let login = fixture.login().await;
+    let (client, mut events) = connect_and_login(&login.credentials).await;
+    client.subscribe_my_messages().await.unwrap();
+    let posted = fixture.admin.post_message(&room_id, "react to me");
+    message_event(&mut events, &posted.id).await;
+
+    fixture.admin.react(&posted.id, ":thumbsup:", true);
+    let reacted = message_event_where(&mut events, &posted.id, |m| !m.reactions.is_empty()).await;
+    assert_eq!(reacted.reactions.len(), 1);
+    assert_eq!(reacted.reactions[0].emoji, ":thumbsup:");
+    assert_eq!(
+        reacted.reactions[0].usernames,
+        std::slice::from_ref(&fixture.admin.username)
+    );
+    assert!(!reacted.edited, "a reaction is not an edit");
+
+    fixture.admin.react(&posted.id, ":thumbsup:", false);
+    let cleared = message_event_where(&mut events, &posted.id, |m| m.reactions.is_empty()).await;
+    assert_eq!(cleared.text, "react to me");
+}
+
+// RICH-006
+#[tokio::test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+async fn a_deletion_arrives_on_the_rooms_deletion_subscription() {
+    let fixture = Fixture::new();
+    let (room_id, _) = fixture.create_channel();
+    let login = fixture.login().await;
+    let (client, mut events) = connect_and_login(&login.credentials).await;
+    client.subscribe_my_messages().await.unwrap();
+    client.subscribe_room_deletions(&room_id).await.unwrap();
+    let posted = fixture.admin.post_message(&room_id, "to delete");
+
+    fixture.admin.delete_message(&room_id, &posted.id);
+
+    let expected = DdpEvent::MessageDeleted {
+        room_id: room_id.clone(),
+        message_id: posted.id.clone(),
+    };
+    assert_eq!(event_where(&mut events, |e| *e == expected).await, expected);
+}
+
+// RICH-006
+#[tokio::test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+async fn a_room_that_was_unsubscribed_from_reports_no_deletions() {
+    let fixture = Fixture::new();
+    let (ended_room, _) = fixture.create_channel();
+    let (watched_room, _) = fixture.create_channel();
+    let login = fixture.login().await;
+    let (client, mut events) = connect_and_login(&login.credentials).await;
+    let subscription = client.subscribe_room_deletions(&ended_room).await.unwrap();
+    client.unsubscribe(&subscription);
+    // The server takes the frames of a connection in order, so once this one is ready the
+    // unsubscription has been done.
+    client
+        .subscribe_room_deletions(&watched_room)
+        .await
+        .unwrap();
+    let ended = fixture.admin.post_message(&ended_room, "deleted unseen");
+    let watched = fixture.admin.post_message(&watched_room, "deleted seen");
+
+    fixture.admin.delete_message(&ended_room, &ended.id);
+    fixture.admin.delete_message(&watched_room, &watched.id);
+
+    // The deletions happened in this order, so the first event is the first one the connection
+    // was told about.
+    let event = event_where(&mut events, |e| {
+        matches!(e, DdpEvent::MessageDeleted { .. })
+    })
+    .await;
+    assert_eq!(
+        event,
+        DdpEvent::MessageDeleted {
+            room_id: watched_room,
+            message_id: watched.id,
+        }
+    );
+}
+
+// RICH-006
+#[tokio::test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+async fn sync_messages_reports_an_edited_message_and_a_deleted_one() {
+    let fixture = Fixture::new();
+    let (room_id, _) = fixture.create_channel();
+    let session = fixture.client.session(fixture.login().await.credentials);
+    let untouched = fixture.admin.post_message(&room_id, "untouched");
+    let edited = fixture.admin.post_message(&room_id, "before");
+    let deleted = fixture.admin.post_message(&room_id, "to delete");
+    let since = jiff::Timestamp::now() - Duration::from_secs(60);
+    fixture
+        .admin
+        .edit_message(&room_id, &edited.id, "after the edit");
+    fixture.admin.delete_message(&room_id, &deleted.id);
+
+    let changes = session.sync_messages(&room_id, since).await.unwrap();
+
+    let edit = changes
+        .updated
+        .iter()
+        .find(|m| m.id == edited.id)
+        .expect("the edited message is in `updated`");
+    assert_eq!(edit.text, "after the edit");
+    assert!(edit.edited);
+    assert_eq!(changes.deleted, std::slice::from_ref(&deleted.id));
+    // Messages sent in the window are `updated` too, which is why the caller only applies the
+    // ones it holds.
+    assert!(changes.updated.iter().any(|m| m.id == untouched.id));
+    assert!(changes.updated.iter().all(|m| m.id != deleted.id));
+}
+
+// RICH-006
+#[tokio::test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+async fn sync_messages_of_a_room_the_user_cannot_see_is_a_server_error() {
+    let fixture = Fixture::new();
+    let outsiders_room = fixture.admin.create_group(&[]).0;
+    let session = fixture.client.session(fixture.login().await.credentials);
+
+    let result = session
+        .sync_messages(&outsiders_room, jiff::Timestamp::now())
+        .await;
+
+    assert!(matches!(result, Err(Error::Server { .. })), "{result:?}");
 }

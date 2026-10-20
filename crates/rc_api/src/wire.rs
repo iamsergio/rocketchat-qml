@@ -13,7 +13,8 @@ use serde::{Deserialize, Deserializer};
 use crate::md;
 use crate::types::{
     Attachment, AttachmentImage, Author, AvatarOwner, Credentials, CustomEmoji, DdpEvent,
-    HistoryPage, LoginResult, Message, RoomType, ServerInfo, ServerVersion, Subscription, User,
+    HistoryPage, LoginResult, Message, MessageChanges, Reaction, RoomType, ServerInfo,
+    ServerVersion, Subscription, User,
 };
 
 #[derive(Deserialize)]
@@ -137,6 +138,25 @@ struct HistoryBody {
 }
 
 #[derive(Deserialize)]
+struct SyncBody {
+    result: SyncResult,
+}
+
+#[derive(Deserialize)]
+struct SyncResult {
+    #[serde(default)]
+    updated: Vec<MessageBody>,
+    #[serde(default)]
+    deleted: Vec<DeletedBody>,
+}
+
+#[derive(Deserialize)]
+struct DeletedBody {
+    #[serde(rename = "_id")]
+    id: String,
+}
+
+#[derive(Deserialize)]
 struct SentBody {
     message: MessageBody,
 }
@@ -162,6 +182,70 @@ struct MessageBody {
     /// Read entry by entry (see [`parse_attachments`]), so one odd entry doesn't fail the message.
     #[serde(default)]
     attachments: Option<serde_json::Value>,
+    #[serde(default, rename = "editedAt", deserialize_with = "optional_timestamp")]
+    edited_at: Option<jiff::Timestamp>,
+    #[serde(default)]
+    reactions: Option<ReactionsBody>,
+}
+
+/// The `reactions` of a message: an object from shortcode to who reacted. Anything else means no
+/// reactions. It must keep the server's order, which going through `serde_json::Value` would
+/// lose, so the map is read by a visitor. Untagged, so that the visitor works on buffered input
+/// and the odd entry can be skipped without upsetting the parser.
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum ReactionsBody {
+    Map(ReactionList),
+    Other(serde::de::IgnoredAny),
+}
+
+struct ReactionList(Vec<Reaction>);
+
+impl<'de> Deserialize<'de> for ReactionList {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct Visitor;
+
+        impl<'de> serde::de::Visitor<'de> for Visitor {
+            type Value = ReactionList;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("a map of reactions")
+            }
+
+            fn visit_map<A: serde::de::MapAccess<'de>>(
+                self,
+                mut map: A,
+            ) -> Result<Self::Value, A::Error> {
+                let mut reactions = Vec::new();
+                while let Some((emoji, who)) = map.next_entry::<String, Lenient<ReactionBody>>()? {
+                    // A reaction nobody made is no reaction.
+                    if let Some(ReactionBody { usernames }) = who.0
+                        && !usernames.is_empty()
+                    {
+                        reactions.push(Reaction { emoji, usernames });
+                    }
+                }
+                Ok(ReactionList(reactions))
+            }
+        }
+
+        deserializer.deserialize_map(Visitor)
+    }
+}
+
+#[derive(Deserialize)]
+struct ReactionBody {
+    #[serde(default)]
+    usernames: Vec<String>,
+}
+
+/// `None` instead of an error when the value isn't a `T`. Only for input that is buffered.
+struct Lenient<T>(Option<T>);
+
+impl<'de, T: Deserialize<'de>> Deserialize<'de> for Lenient<T> {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Ok(Self(T::deserialize(deserializer).ok()))
+    }
 }
 
 /// A file attachment (`type` is `file`). The fields of images are `image_*`.
@@ -311,6 +395,11 @@ impl From<MessageBody> for Message {
             thread_shown: body.tshow,
             md: body.md.as_ref().and_then(md::parse),
             attachments: parse_attachments(body.attachments.as_ref()),
+            edited: body.edited_at.is_some(),
+            reactions: match body.reactions {
+                Some(ReactionsBody::Map(list)) => list.0,
+                _ => Vec::new(),
+            },
         }
     }
 }
@@ -429,6 +518,15 @@ pub(crate) fn parse_history(bytes: &[u8], count: usize) -> Result<HistoryPage, s
     })
 }
 
+/// The answer of `chat.syncMessages`.
+pub(crate) fn parse_changes(bytes: &[u8]) -> Result<MessageChanges, serde_json::Error> {
+    let body: SyncBody = serde_json::from_slice(bytes)?;
+    Ok(MessageChanges {
+        updated: body.result.updated.into_iter().map(Message::from).collect(),
+        deleted: body.result.deleted.into_iter().map(|d| d.id).collect(),
+    })
+}
+
 /// The answer of `chat.sendMessage` and `chat.getMessage`: the message as the server stored it.
 pub(crate) fn parse_message(bytes: &[u8]) -> Result<Message, serde_json::Error> {
     Ok(serde_json::from_slice::<SentBody>(bytes)?.message.into())
@@ -479,6 +577,17 @@ pub(crate) fn parse_stream_event(
                 (None, None) => None,
             }
             .map(DdpEvent::AvatarChanged))
+        }
+        // The id of the deleted message. The room is in the event name.
+        "stream-notify-room" => {
+            let Some(room_id) = fields.event_name.strip_suffix("/deleteMessage") else {
+                return Ok(None);
+            };
+            let deleted: DeletedBody = serde_json::from_value(next_arg()?)?;
+            Ok(Some(DdpEvent::MessageDeleted {
+                room_id: room_id.to_owned(),
+                message_id: deleted.id,
+            }))
         }
         _ => Ok(None),
     }
@@ -1324,5 +1433,166 @@ mod tests {
             stream_event("stream-notify-user", unknown_action).unwrap(),
             None
         );
+    }
+
+    fn history_message(extra: &str) -> Message {
+        let json = format!(
+            r#"{{"messages":[{{"_id":"m","rid":"r","ts":"2026-10-20T14:00:00.000Z","u":{{"_id":"u"}}{extra}}}]}}"#
+        );
+        parse_history(json.as_bytes(), 50)
+            .unwrap()
+            .messages
+            .remove(0)
+    }
+
+    fn reaction(emoji: &str, usernames: &[&str]) -> Reaction {
+        Reaction {
+            emoji: emoji.into(),
+            usernames: usernames.iter().map(|&name| name.into()).collect(),
+        }
+    }
+
+    // RICH-006
+    #[test]
+    fn an_edited_message_says_so() {
+        assert!(!history_message("").edited);
+        let edited = history_message(
+            r#","editedAt":"2026-10-20T14:05:00.000Z","editedBy":{"_id":"u","username":"bob"}"#,
+        );
+        assert!(edited.edited);
+    }
+
+    // RICH-006
+    #[test]
+    fn a_live_edit_is_the_whole_message_with_an_ejson_edit_time() {
+        let fixture = serde_json::json!({
+            "eventName": "r",
+            "args": [{
+                "_id": "m",
+                "rid": "r",
+                "msg": "new text",
+                "ts": { "$date": 1_792_511_428_626_i64 },
+                "u": { "_id": "u", "username": "bob" },
+                "editedAt": { "$date": 1_792_511_528_626_i64 },
+                "editedBy": { "_id": "u", "username": "bob" }
+            }]
+        });
+        let event = parse_stream_event("stream-room-messages", fixture).unwrap();
+        let Some(DdpEvent::Message(message)) = event else {
+            panic!("expected a message, got {event:?}");
+        };
+        assert_eq!(message.text, "new text");
+        assert!(message.edited);
+    }
+
+    // RICH-007
+    #[test]
+    fn reactions_keep_the_servers_order() {
+        let message = history_message(
+            r#","reactions":{":zebra:":{"usernames":["a"]},":apple:":{"usernames":["b","c"],"names":["B","C"]},":+1:":{"usernames":["d"]}}"#,
+        );
+        assert_eq!(
+            message.reactions,
+            [
+                reaction(":zebra:", &["a"]),
+                reaction(":apple:", &["b", "c"]),
+                reaction(":+1:", &["d"]),
+            ]
+        );
+    }
+
+    // RICH-007
+    #[test]
+    fn a_message_without_reactions_has_none() {
+        assert_eq!(history_message("").reactions, []);
+        assert_eq!(history_message(r#","reactions":{}"#).reactions, []);
+    }
+
+    // RICH-007
+    #[test]
+    fn malformed_reactions_mean_none_and_the_message_stays() {
+        for reactions in ["null", "[]", "[1,{\"a\":2}]", "\"x\"", "3", "true"] {
+            let message = history_message(&format!(r#","reactions":{reactions}"#));
+            assert_eq!(message.reactions, [], "{reactions}");
+            assert_eq!(message.id, "m");
+        }
+    }
+
+    // RICH-007
+    #[test]
+    fn a_malformed_reaction_is_skipped_and_the_others_stay() {
+        let message = history_message(
+            r#","reactions":{":a:":5,":b:":{"usernames":["x"]},":c:":{"usernames":"y"},":d:":{"usernames":[]},":e:":{"usernames":["z"]}},"msg":"after""#,
+        );
+        assert_eq!(
+            message.reactions,
+            [reaction(":b:", &["x"]), reaction(":e:", &["z"])]
+        );
+        assert_eq!(message.text, "after");
+    }
+
+    // RICH-007
+    #[test]
+    fn a_live_reaction_arrives_with_the_whole_message() {
+        let fixture = serde_json::json!({
+            "eventName": "r",
+            "args": [{
+                "_id": "m",
+                "rid": "r",
+                "msg": "hi",
+                "ts": { "$date": 1_792_511_428_626_i64 },
+                "u": { "_id": "u", "username": "bob" },
+                "reactions": { ":thumbsup:": { "usernames": ["admin"] } }
+            }]
+        });
+        let event = parse_stream_event("stream-room-messages", fixture).unwrap();
+        let Some(DdpEvent::Message(message)) = event else {
+            panic!("expected a message, got {event:?}");
+        };
+        assert_eq!(message.reactions, [reaction(":thumbsup:", &["admin"])]);
+    }
+
+    // RICH-006
+    #[test]
+    fn a_deletion_names_the_room_and_the_message() {
+        let fixture = r#"{"eventName":"room1/deleteMessage","args":[{"_id":"msg1"}]}"#;
+        assert_eq!(
+            stream_event("stream-notify-room", fixture).unwrap(),
+            Some(DdpEvent::MessageDeleted {
+                room_id: "room1".into(),
+                message_id: "msg1".into(),
+            })
+        );
+    }
+
+    // RICH-006
+    #[test]
+    fn other_room_notifications_are_not_deletions() {
+        let typing = r#"{"eventName":"room1/typing","args":["bob",true]}"#;
+        assert_eq!(stream_event("stream-notify-room", typing).unwrap(), None);
+        let no_id = r#"{"eventName":"room1/deleteMessage","args":[]}"#;
+        assert!(stream_event("stream-notify-room", no_id).is_err());
+    }
+
+    // RICH-006
+    #[test]
+    fn parses_the_changes_since_a_time() {
+        let body = r#"{"result":{
+            "updated":[{"_id":"m1","rid":"r","msg":"edited","ts":"2026-10-20T14:00:00.000Z",
+                "u":{"_id":"u"},"editedAt":"2026-10-20T14:05:00.000Z"}],
+            "deleted":[{"_id":"m2","_deletedAt":"2026-10-20T23:36:21.795Z"}]},"success":true}"#;
+        let changes = parse_changes(body.as_bytes()).unwrap();
+        assert_eq!(changes.updated.len(), 1);
+        assert_eq!(changes.updated[0].text, "edited");
+        assert!(changes.updated[0].edited);
+        assert_eq!(changes.deleted, ["m2"]);
+    }
+
+    // RICH-006
+    #[test]
+    fn no_changes_is_empty() {
+        let changes = parse_changes(br#"{"result":{},"success":true}"#).unwrap();
+        assert_eq!(changes.updated, []);
+        assert_eq!(changes.deleted, Vec::<String>::new());
     }
 }

@@ -494,6 +494,69 @@ async fn history_without_latest_sends_no_latest() {
     );
 }
 
+// RICH-006
+#[tokio::test]
+async fn sync_messages_asks_for_a_room_since_a_time_and_reads_both_lists() {
+    let server = MockServer::start().await;
+    let body = r#"{"result":{
+        "updated":[{"_id":"m1","rid":"rid","msg":"edited","ts":"2026-10-20T14:00:00.000Z",
+            "u":{"_id":"u","username":"bob"},"editedAt":"2026-10-20T14:05:00.000Z"}],
+        "deleted":[{"_id":"m2","_deletedAt":"2026-10-20T23:36:21.795Z"}]},"success":true}"#;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/chat.syncMessages"))
+        .and(header("X-User-Id", USER_ID))
+        .and(header("X-Auth-Token", TOKEN))
+        .and(query_param("roomId", "rid"))
+        .and(query_param("lastUpdate", "2026-10-20T14:03:00Z"))
+        .respond_with(json_response(200, body))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let since = "2026-10-20T14:03:00Z".parse().unwrap();
+    let changes = session(&RestClient::new(&server.uri()).unwrap())
+        .sync_messages("rid", since)
+        .await
+        .unwrap();
+    assert_eq!(changes.updated.len(), 1);
+    assert_eq!(changes.updated[0].text, "edited");
+    assert!(changes.updated[0].edited);
+    assert_eq!(changes.deleted, ["m2"]);
+}
+
+// RICH-006
+#[tokio::test]
+async fn sync_messages_with_an_expired_token_is_unauthorized() {
+    let server = MockServer::start().await;
+    mount(
+        &server,
+        "GET",
+        "/api/v1/chat.syncMessages",
+        json_response(401, NOT_LOGGED_IN),
+    )
+    .await;
+    let result = session(&RestClient::new(&server.uri()).unwrap())
+        .sync_messages("rid", "2026-10-20T14:03:00Z".parse().unwrap())
+        .await;
+    assert!(matches!(result, Err(Error::Unauthorized)), "{result:?}");
+}
+
+// RICH-006
+#[tokio::test]
+async fn sync_messages_with_a_body_that_is_not_the_expected_one_is_a_decode_error() {
+    let server = MockServer::start().await;
+    mount(
+        &server,
+        "GET",
+        "/api/v1/chat.syncMessages",
+        json_response(200, r#"{"success":true}"#),
+    )
+    .await;
+    let result = session(&RestClient::new(&server.uri()).unwrap())
+        .sync_messages("rid", "2026-10-20T14:03:00Z".parse().unwrap())
+        .await;
+    assert!(matches!(result, Err(Error::Decode(_))), "{result:?}");
+}
+
 // MSG-001
 #[tokio::test]
 async fn history_of_an_unlisted_room_type_is_an_error_not_a_guess() {

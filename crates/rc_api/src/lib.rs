@@ -18,9 +18,10 @@ mod types;
 mod wire;
 
 pub use client::{RestClient, RestSession};
-pub use ddp::{DdpClient, DdpEvents};
+pub use ddp::{DdpClient, DdpEvents, SubscriptionId};
 pub use error::Error;
 pub use types::{
     Attachment, AttachmentImage, Author, AvatarOwner, Credentials, CustomEmoji, DdpEvent, Download,
-    HistoryPage, LoginResult, Message, RoomType, ServerInfo, ServerVersion, Subscription, User,
+    HistoryPage, LoginResult, Message, MessageChanges, Reaction, RoomType, ServerInfo,
+    ServerVersion, Subscription, User,
 };

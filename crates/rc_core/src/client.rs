@@ -3,6 +3,7 @@
 
 //! The handle frontends drive the core through, and the session actor behind it.
 
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::mpsc as std_mpsc;
 use std::time::Duration;
@@ -25,8 +26,8 @@ use crate::emoji::CustomEmojis;
 use crate::error::Error;
 use crate::images::{self, ImageUpdate, Images, images_of};
 use crate::ports::{
-    ApiError, CacheError, CacheKey, Connector, FileCache, MessageStore, Page, Pushed, SecretStore,
-    ServerApi, StoreError,
+    ApiError, CacheError, CacheKey, Changes, Connector, FileCache, MessageStore, Page, Pushed,
+    Realtime, SecretStore, ServerApi, StoreError,
 };
 use crate::rooms::{RoomChange, RoomList};
 use crate::session::{Established, LoginFailure, SessionState, log_in, resume};
@@ -43,6 +44,9 @@ const DRAIN_TIMEOUT: Duration = Duration::from_secs(2);
 const SHUTDOWN_WAIT: Duration = Duration::from_secs(3);
 /// How long dropping a [`Client`] waits for the runtime's threads after that.
 const RUNTIME_WAIT: Duration = Duration::from_secs(1);
+/// How much earlier than the time a room was last up to date its changes are asked for: the
+/// server's clock may differ from ours.
+const CATCH_UP_MARGIN: Duration = Duration::from_secs(60);
 
 /// What the core tells the frontend.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -179,6 +183,7 @@ impl Client {
             rooms_task: None,
             realtime_task: None,
             realtime_open: false,
+            realtime_watch: None,
             cycle: 0,
             reconnect_task: None,
             backoff,
@@ -198,6 +203,7 @@ impl Client {
             open: None,
             history_attempt: 0,
             history_task: None,
+            changes_task: None,
             revokes: JoinSet::new(),
             store: Some(StoreHandle(store_tx)),
             store_worker,
@@ -468,8 +474,9 @@ struct EmojiDone {
 /// What the realtime task tells the actor, in this order: the connection opens or fails, events
 /// follow, the connection ends.
 enum RealtimeDone {
-    Opened(Result<(), ApiError>),
-    Pushed(Pushed),
+    /// Opened, with the way to tell the connection which room is open.
+    Opened(Result<UnboundedSender<Option<RoomId>>, ApiError>),
+    Pushed(Box<Pushed>),
     Ended,
 }
 
@@ -478,6 +485,16 @@ enum RealtimeDone {
 struct RealtimeReport {
     cycle: u64,
     done: RealtimeDone,
+}
+
+/// A catch-up's answer.
+struct ChangesDone {
+    /// Identifies the request: the answer is stale if the room was closed or another began.
+    attempt: u64,
+    room: RoomId,
+    /// The client's clock when the request was sent.
+    started: jiff::Timestamp,
+    outcome: Result<Changes, ApiError>,
 }
 
 /// An avatar download's answer.
@@ -534,6 +551,7 @@ enum Done<A> {
         cycle: u64,
     },
     History(HistoryDone),
+    Changes(ChangesDone),
     Send(SendDone),
     MarkRead(MarkReadDone),
 }
@@ -543,6 +561,11 @@ struct Fetch {
     attempt: u64,
     /// Older messages, not the newest.
     older: bool,
+    /// The client's clock when the request was sent.
+    started: jiff::Timestamp,
+    /// A catch-up goes with it (see [`Actor::fetch_changes`]), which is what brings the held
+    /// messages up to date, not the page.
+    with_changes: bool,
 }
 
 /// The room whose messages the frontend shows.
@@ -555,6 +578,11 @@ struct OpenRoom {
     /// Messages pushed while the newest messages were still to come: the page may predate them,
     /// and merging one first could make the page drop it. They join the page when it arrives.
     live: Vec<Message>,
+    /// The attempt id of the catch-up in flight.
+    changes: Option<u64>,
+    /// The messages deleted while the room was open. An answer to a request sent before the
+    /// deletion may still hold them.
+    deleted: HashSet<MessageId>,
 }
 
 /// What the actor keeps while logged in; the next features need both.
@@ -581,6 +609,9 @@ struct Actor<C: Connector> {
     realtime_task: Option<JoinHandle<()>>,
     /// The connection of the current cycle is open.
     realtime_open: bool,
+    /// Tells the open connection which room is open, so that it follows its deletions. `None`
+    /// while there is no connection.
+    realtime_watch: Option<UnboundedSender<Option<RoomId>>>,
     /// Counts sync cycles (see [`open_realtime`](Self::open_realtime)), to tell the reports of the
     /// current one from stale ones.
     cycle: u64,
@@ -621,6 +652,8 @@ struct Actor<C: Connector> {
     history_attempt: u64,
     /// The history fetch of the open room, while it runs.
     history_task: Option<JoinHandle<()>>,
+    /// The catch-up of the open room (changes since it was last up to date), while it runs.
+    changes_task: Option<JoinHandle<()>>,
     /// Token revocations in flight, so that stopping can wait for them.
     revokes: JoinSet<()>,
     /// `None` once stopping.
@@ -653,6 +686,7 @@ impl<C: Connector> Actor<C> {
                     Done::Realtime(report) => self.handle_realtime_done(report),
                     Done::Reconnect { cycle } => self.handle_reconnect(cycle),
                     Done::History(done) => self.handle_history_done(done),
+                    Done::Changes(done) => self.handle_changes_done(done),
                     Done::Send(done) => self.handle_send_done(done),
                     Done::MarkRead(done) => self.handle_mark_read_done(done),
                 },
@@ -692,9 +726,7 @@ impl<C: Connector> Actor<C> {
         self.abort_realtime_task();
         self.avatar_tasks.abort_all();
         self.image_tasks.abort_all();
-        if let Some(task) = self.history_task.take() {
-            task.abort();
-        }
+        self.abort_history_task();
         drop(self.store.take());
         let revokes = &mut self.revokes;
         let worker = &mut self.store_worker;
@@ -851,6 +883,7 @@ impl<C: Connector> Actor<C> {
         self.cycle += 1;
         let cycle = self.cycle;
         self.realtime_open = false;
+        self.realtime_watch = None;
         self.succeeded_at = None;
         self.backlog = Some(Vec::new());
         let api = session.api.clone();
@@ -858,19 +891,22 @@ impl<C: Connector> Actor<C> {
         let done = self.done_tx.clone();
         self.realtime_task = Some(tokio::spawn(async move {
             let report = |done| Done::Realtime(RealtimeReport { cycle, done });
-            let mut events = match api.realtime(&credentials).await {
-                Ok(events) => events,
+            let Realtime { mut events, watch } = match api.realtime(&credentials).await {
+                Ok(realtime) => realtime,
                 Err(error) => {
                     // Fails only if the actor is gone.
                     let _ = done.send(report(RealtimeDone::Opened(Err(error))));
                     return;
                 }
             };
-            if done.send(report(RealtimeDone::Opened(Ok(())))).is_err() {
+            if done.send(report(RealtimeDone::Opened(Ok(watch)))).is_err() {
                 return;
             }
             while let Some(event) = events.recv().await {
-                if done.send(report(RealtimeDone::Pushed(event))).is_err() {
+                if done
+                    .send(report(RealtimeDone::Pushed(Box::new(event))))
+                    .is_err()
+                {
                     return;
                 }
             }
@@ -888,8 +924,12 @@ impl<C: Connector> Actor<C> {
             return;
         }
         match report.done {
-            RealtimeDone::Opened(Ok(())) => {
+            RealtimeDone::Opened(Ok(watch)) => {
                 self.realtime_open = true;
+                self.realtime_watch = Some(watch);
+                if let Some(open) = &self.open {
+                    self.watch_room(Some(open.timeline.room().clone()));
+                }
                 self.fetch_rooms();
             }
             RealtimeDone::Opened(Err(ApiError::Unauthorized)) => self.expire_session(),
@@ -902,8 +942,8 @@ impl<C: Connector> Actor<C> {
                 }
             }
             RealtimeDone::Pushed(event) => match &mut self.backlog {
-                Some(backlog) => backlog.push(event),
-                None => self.handle_pushed(event),
+                Some(backlog) => backlog.push(*event),
+                None => self.handle_pushed(*event),
             },
             RealtimeDone::Ended => {
                 tracing::warn!("the realtime connection ended");
@@ -986,6 +1026,7 @@ impl<C: Connector> Actor<C> {
                 }
             }
             Pushed::Message(message) => self.add_live_message(message),
+            Pushed::MessageDeleted { room, id } => self.delete_message(&room, &id),
             // The server announces everybody's: only what was looked at is looked at again, and
             // the rooms of the list, as a room that had no avatar may have one now.
             Pushed::AvatarChanged(owner) => {
@@ -1061,6 +1102,27 @@ impl<C: Connector> Actor<C> {
         }
     }
 
+    /// Tells the realtime connection, if there is one, which room is open.
+    fn watch_room(&self, room: Option<RoomId>) {
+        if let Some(watch) = &self.realtime_watch {
+            // Fails only if the connection is gone, which the actor hears of separately.
+            let _ = watch.send(room);
+        }
+    }
+
+    /// Takes a deleted message out of the room's messages, open or not.
+    fn delete_message(&mut self, room: &RoomId, id: &MessageId) {
+        if let Some(open) = self
+            .open
+            .as_mut()
+            .filter(|open| open.timeline.room() == room)
+        {
+            open.live.retain(|m| &m.id != id);
+            open.deleted.insert(id.clone());
+        }
+        self.change_timeline(room, |timeline| timeline.remove(id).into_iter().collect());
+    }
+
     /// Adds a pushed message to the open room. Other rooms aren't held: they load their history
     /// when opened, and their unread counts arrive as subscription changes.
     fn add_live_message(&mut self, message: Message) {
@@ -1086,6 +1148,8 @@ impl<C: Connector> Actor<C> {
         let newest_to_come = open.fetch.as_ref().is_some_and(|fetch| !fetch.older)
             || (!open.timeline.has_sent() && !open.timeline.reached_start());
         if newest_to_come {
+            // A later copy of a message replaces the one waiting.
+            open.live.retain(|m| m.id != message.id);
             open.live.push(message.clone());
             if !confirms {
                 return;
@@ -1361,8 +1425,9 @@ impl<C: Connector> Actor<C> {
 
     /// Fetches the newest messages of the open room again, after the connection was lost: what was
     /// said meanwhile was not pushed. The page joins what is held (see
-    /// [`Timeline::merge_latest`]), and the messages pushed from now on wait for it. A room that
-    /// has left the list is closed instead.
+    /// [`Timeline::merge_latest`]), and the messages pushed from now on wait for it. The edits and
+    /// deletions of the messages held are fetched too (see [`fetch_changes`](Self::fetch_changes)).
+    /// A room that has left the list is closed instead.
     fn catch_up_open_room(&mut self) {
         let Some(open) = &self.open else {
             return;
@@ -1418,7 +1483,7 @@ impl<C: Connector> Actor<C> {
         };
         self.abort_history_task();
         let history = self.messages.load(&id);
-        let timeline = Timeline::new(id, history);
+        let timeline = Timeline::new(id.clone(), history);
         let reset = timeline.reset();
         let authors = authors_of(std::slice::from_ref(&reset));
         let images = images_of(std::slice::from_ref(&reset));
@@ -1431,7 +1496,10 @@ impl<C: Connector> Actor<C> {
             fetch: None,
             error: None,
             live: Vec::new(),
+            changes: None,
+            deleted: HashSet::new(),
         });
+        self.watch_room(Some(id));
         self.mark_open_room_read();
         self.fetch_history(false);
     }
@@ -1472,7 +1540,15 @@ impl<C: Connector> Actor<C> {
         };
         self.history_attempt += 1;
         let attempt = self.history_attempt;
-        open.fetch = Some(Fetch { attempt, older });
+        let started = jiff::Timestamp::now();
+        // Only the newest page of a room that was up to date once needs the catch-up.
+        let with_changes = !older && open.timeline.history().synced_at.is_some();
+        open.fetch = Some(Fetch {
+            attempt,
+            older,
+            started,
+            with_changes,
+        });
         open.error = None;
         let before = if older { open.timeline.oldest() } else { None };
         let room = open.timeline.room().clone();
@@ -1491,7 +1567,92 @@ impl<C: Connector> Actor<C> {
                 outcome,
             }));
         }));
+        if with_changes {
+            self.fetch_changes();
+        }
         self.emit_timeline_status();
+    }
+
+    /// Asks for what happened to the open room's messages since it was last up to date: the
+    /// newest page can't tell of an edit or a deletion further back, and the connection didn't
+    /// push those that happened while it was closed or lost. The request starts a minute earlier
+    /// than that, as the server's clock may differ from ours; applying a change twice does
+    /// nothing.
+    fn fetch_changes(&mut self) {
+        let (Some(session), Some(open)) = (&self.session, &mut self.open) else {
+            return;
+        };
+        let Some(synced_at) = open.timeline.history().synced_at else {
+            return;
+        };
+        if let Some(task) = self.changes_task.take() {
+            task.abort();
+        }
+        self.history_attempt += 1;
+        let attempt = self.history_attempt;
+        open.changes = Some(attempt);
+        let started = jiff::Timestamp::now();
+        let since = synced_at.checked_sub(CATCH_UP_MARGIN).unwrap_or(synced_at);
+        let room = open.timeline.room().clone();
+        let api = session.api.clone();
+        let credentials = session.credentials.clone();
+        let done = self.done_tx.clone();
+        self.changes_task = Some(tokio::spawn(async move {
+            let outcome = api.changes_since(&credentials, &room, since).await;
+            // Fails only if the actor is gone.
+            let _ = done.send(Done::Changes(ChangesDone {
+                attempt,
+                room,
+                started,
+                outcome,
+            }));
+        }));
+    }
+
+    fn handle_changes_done(&mut self, done: ChangesDone) {
+        let Some(open) = &mut self.open else {
+            tracing::debug!("answer of a catch-up for a closed room dropped");
+            return;
+        };
+        if open.timeline.room() != &done.room
+            || open.changes.take_if(|a| *a == done.attempt).is_none()
+        {
+            tracing::debug!("answer of a stale catch-up dropped");
+            return;
+        }
+        self.changes_task = None;
+        let changes = match done.outcome {
+            Ok(changes) => changes,
+            Err(ApiError::Unauthorized) => {
+                self.expire_session();
+                return;
+            }
+            Err(error) => {
+                tracing::warn!(%error, room = %done.room, "can't catch up with the room's changes");
+                return;
+            }
+        };
+        open.deleted.extend(changes.deleted.iter().cloned());
+        let timeline = &mut open.timeline;
+        let mut applied = Vec::new();
+        // Messages that aren't held come with the newest page.
+        for message in changes.updated {
+            if !open.deleted.contains(&message.id) {
+                applied.extend(timeline.replace(message));
+            }
+        }
+        for id in &changes.deleted {
+            applied.extend(timeline.remove(id));
+        }
+        timeline.set_synced_at(done.started);
+        self.messages.save(&done.room, timeline.history());
+        if !applied.is_empty() {
+            let authors = authors_of(&applied);
+            let images = images_of(&applied);
+            (self.on_event)(Event::Timeline(applied));
+            self.want_avatars(authors);
+            self.want_images(images);
+        }
     }
 
     fn handle_history_done(&mut self, done: HistoryDone) {
@@ -1509,12 +1670,20 @@ impl<C: Connector> Actor<C> {
         let mut images = Vec::new();
         match done.outcome {
             Ok(page) => {
+                let mut messages = page.messages;
+                messages.retain(|m| !open.deleted.contains(&m.id));
                 let changes = if older {
-                    open.timeline.merge_older(page.messages, page.reached_start)
+                    open.timeline.merge_older(messages, page.reached_start)
                 } else {
-                    let mut messages = page.messages;
+                    // What was pushed meanwhile is newer than the page's copy of a message.
+                    messages.retain(|m| open.live.iter().all(|live| live.id != m.id));
                     messages.append(&mut open.live);
-                    open.timeline.merge_latest(messages, page.reached_start)
+                    let changes = open.timeline.merge_latest(messages, page.reached_start);
+                    // Without a catch-up, the page is what brought the room up to date.
+                    if !fetch.with_changes {
+                        open.timeline.set_synced_at(fetch.started);
+                    }
+                    changes
                 };
                 self.messages.save(&done.room, open.timeline.history());
                 if !changes.is_empty() {
@@ -1600,6 +1769,8 @@ impl<C: Connector> Actor<C> {
             kind: MessageKind::Text(text.into()),
             delivery: Delivery::Pending,
             attachments: Vec::new(),
+            edited: false,
+            reactions: Vec::new(),
         };
         let id = message.id.clone();
         self.change_timeline(&room, |timeline| vec![timeline.add_unsent(message)]);
@@ -1687,6 +1858,12 @@ impl<C: Connector> Actor<C> {
         if let Some(task) = self.history_task.take() {
             task.abort();
         }
+        if let Some(task) = self.changes_task.take() {
+            task.abort();
+        }
+        if let Some(open) = &mut self.open {
+            open.changes = None;
+        }
     }
 
     fn emit_timeline_status(&self) {
@@ -1715,6 +1892,7 @@ impl<C: Connector> Actor<C> {
     fn close_room(&mut self) {
         self.abort_history_task();
         if self.open.take().is_some() {
+            self.watch_room(None);
             (self.on_event)(Event::Timeline(vec![TimelineChange::Reset {
                 room: None,
                 messages: Vec::new(),
@@ -1734,6 +1912,7 @@ impl<C: Connector> Actor<C> {
     fn abort_realtime_task(&mut self) {
         self.backlog = None;
         self.realtime_open = false;
+        self.realtime_watch = None;
         if let Some(task) = self.realtime_task.take() {
             task.abort();
         }

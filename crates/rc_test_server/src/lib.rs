@@ -162,6 +162,17 @@ impl Admin {
     pub fn login() -> Self {
         let username = std::env::var("RC_ADMIN_USER").unwrap_or_else(|_| "admin".into());
         let password = std::env::var("RC_ADMIN_PASS").unwrap_or_else(|_| "admin".into());
+        Self::login_as(&username, &password)
+    }
+
+    /// Logs in as any user, to act as them: the calls work as far as the user's roles allow, so
+    /// for a test user that is reacting to a message in a room they are in, for one.
+    ///
+    /// # Panics
+    ///
+    /// If the server is unset, unreachable or refuses the login.
+    #[must_use]
+    pub fn login_as(username: &str, password: &str) -> Self {
         let mut admin = Self {
             // Error statuses are answered like any other, so that `post` can show the body.
             agent: ureq::Agent::config_builder()
@@ -172,7 +183,7 @@ impl Admin {
             base: format!("{}/api/v1", server_url().trim_end_matches('/')),
             user_id: String::new(),
             token: String::new(),
-            username,
+            username: username.to_owned(),
             name: None,
         };
         let json = admin.send(
@@ -280,6 +291,45 @@ impl Admin {
             id: json["message"]["_id"].as_str().unwrap().to_owned(),
             ts: json["message"]["ts"].as_str().unwrap().to_owned(),
         }
+    }
+
+    /// Edits the text of a message (`chat.update`). The server pushes the whole message again,
+    /// with `editedAt`.
+    ///
+    /// # Panics
+    ///
+    /// If the server refuses.
+    pub fn edit_message(&self, room_id: &str, message_id: &str, text: &str) {
+        self.post(
+            "chat.update",
+            &json!({ "roomId": room_id, "msgId": message_id, "text": text }),
+        );
+    }
+
+    /// Deletes a message (`chat.delete`). The server announces it on the room's `deleteMessage`
+    /// stream only.
+    ///
+    /// # Panics
+    ///
+    /// If the server refuses.
+    pub fn delete_message(&self, room_id: &str, message_id: &str) {
+        self.post(
+            "chat.delete",
+            &json!({ "roomId": room_id, "msgId": message_id }),
+        );
+    }
+
+    /// Adds this user's reaction to a message, or takes it back (`chat.react`). `emoji` is the
+    /// shortcode, with or without its colons.
+    ///
+    /// # Panics
+    ///
+    /// If the server refuses.
+    pub fn react(&self, message_id: &str, emoji: &str, should_react: bool) {
+        self.post(
+            "chat.react",
+            &json!({ "messageId": message_id, "emoji": emoji, "shouldReact": should_react }),
+        );
     }
 
     /// Uploads a file to the room as admin and posts it as a message with the text `msg` (which

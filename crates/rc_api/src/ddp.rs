@@ -9,7 +9,7 @@
 //! still waiting fail with [`Error::ConnectionClosed`] and the events end. Reconnecting is up to
 //! the caller: a new connection, a new login and new subscriptions.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io;
 use std::sync::Arc;
 use std::time::Duration;
@@ -37,6 +37,10 @@ const PONG_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// What the server pushes, in the order it sends it. Ends when the connection does.
 pub type DdpEvents = mpsc::UnboundedReceiver<DdpEvent>;
+
+/// A subscription made with a `subscribe_*` method that can be ended again.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SubscriptionId(String);
 
 /// One realtime connection to a server. Cheap to clone; the connection closes when the last clone
 /// is dropped.
@@ -87,7 +91,8 @@ impl DdpClient {
     /// [`Error::ConnectionClosed`] if the connection ended, or [`Error::Refused`].
     pub async fn subscribe_my_messages(&self) -> Result<(), Error> {
         let params = json!(["__my_messages__", false]);
-        self.subscribe("stream-room-messages", params).await
+        self.subscribe("stream-room-messages", params).await?;
+        Ok(())
     }
 
     /// The user's subscriptions as they are added, changed or removed, as
@@ -100,7 +105,8 @@ impl DdpClient {
     /// [`Error::ConnectionClosed`] if the connection ended, or [`Error::Refused`].
     pub async fn subscribe_subscription_changes(&self, user_id: &str) -> Result<(), Error> {
         let params = json!([format!("{user_id}/subscriptions-changed"), false]);
-        self.subscribe("stream-notify-user", params).await
+        self.subscribe("stream-notify-user", params).await?;
+        Ok(())
     }
 
     /// When the user's rooms have new messages, as [`DdpEvent::RoomActivity`]
@@ -111,7 +117,8 @@ impl DdpClient {
     /// [`Error::ConnectionClosed`] if the connection ended, or [`Error::Refused`].
     pub async fn subscribe_room_activity(&self, user_id: &str) -> Result<(), Error> {
         let params = json!([format!("{user_id}/rooms-changed"), false]);
-        self.subscribe("stream-notify-user", params).await
+        self.subscribe("stream-notify-user", params).await?;
+        Ok(())
     }
 
     /// When any user's or room's avatar changes, as [`DdpEvent::AvatarChanged`]
@@ -122,7 +129,29 @@ impl DdpClient {
     /// [`Error::ConnectionClosed`] if the connection ended, or [`Error::Refused`].
     pub async fn subscribe_avatar_changes(&self) -> Result<(), Error> {
         let params = json!(["updateAvatar", false]);
-        self.subscribe("stream-notify-logged", params).await
+        self.subscribe("stream-notify-logged", params).await?;
+        Ok(())
+    }
+
+    /// The messages deleted in one room, as [`DdpEvent::MessageDeleted`] (`stream-notify-room`
+    /// with `<room id>/deleteMessage`). The server doesn't push a deletion on the stream of the
+    /// user's messages. Needs a login first. End it with [`unsubscribe`](Self::unsubscribe).
+    ///
+    /// # Errors
+    ///
+    /// [`Error::ConnectionClosed`] if the connection ended, or [`Error::Refused`].
+    pub async fn subscribe_room_deletions(&self, room_id: &str) -> Result<SubscriptionId, Error> {
+        let params = json!([format!("{room_id}/deleteMessage"), false]);
+        self.subscribe("stream-notify-room", params).await
+    }
+
+    /// Ends a subscription: the server sends no more of its events. It doesn't wait for the
+    /// server's answer, and an event already on its way may still arrive. Does nothing if the
+    /// connection has ended, since its subscriptions have ended with it.
+    pub fn unsubscribe(&self, subscription: &SubscriptionId) {
+        let _ = self.send(Command::Unsubscribe {
+            id: subscription.0.clone(),
+        });
     }
 
     async fn call(&self, method: &'static str, params: Value) -> Result<Value, Error> {
@@ -135,7 +164,7 @@ impl DdpClient {
         answer.await.map_err(|_| Error::ConnectionClosed)?
     }
 
-    async fn subscribe(&self, name: &'static str, params: Value) -> Result<(), Error> {
+    async fn subscribe(&self, name: &'static str, params: Value) -> Result<SubscriptionId, Error> {
         let (reply, answer) = oneshot::channel();
         self.send(Command::Subscribe {
             name,
@@ -201,6 +230,7 @@ where
         ws,
         events,
         pending: HashMap::new(),
+        unsubscribed: HashSet::new(),
         next_id: 0,
     };
     tokio::spawn(connection.run(receiver));
@@ -248,7 +278,10 @@ enum Command {
     Subscribe {
         name: &'static str,
         params: Value,
-        reply: oneshot::Sender<Result<(), Error>>,
+        reply: oneshot::Sender<Result<SubscriptionId, Error>>,
+    },
+    Unsubscribe {
+        id: String,
     },
 }
 
@@ -256,7 +289,7 @@ enum Command {
 /// [`Error::ConnectionClosed`].
 enum Pending {
     Call(oneshot::Sender<Result<Value, Error>>),
-    Subscribe(oneshot::Sender<Result<(), Error>>),
+    Subscribe(oneshot::Sender<Result<SubscriptionId, Error>>),
 }
 
 /// The task's state. It lives as long as the WebSocket.
@@ -264,6 +297,8 @@ struct Connection<S> {
     ws: WebSocketStream<S>,
     events: mpsc::UnboundedSender<DdpEvent>,
     pending: HashMap<String, Pending>,
+    /// The subscriptions ended by the client, whose `nosub` is still to come.
+    unsubscribed: HashSet<String>,
     next_id: u64,
 }
 
@@ -341,6 +376,11 @@ where
                 let frame = json!({ "msg": "sub", "id": id, "name": name, "params": params });
                 (frame, Pending::Subscribe(reply))
             }
+            Command::Unsubscribe { id } => {
+                tracing::debug!(id, "DDP unsubscription");
+                self.unsubscribed.insert(id.clone());
+                return send(&mut self.ws, &json!({ "msg": "unsub", "id": id })).await;
+            }
         };
         self.pending.insert(id, pending);
         send(&mut self.ws, &frame).await
@@ -379,7 +419,7 @@ where
             Incoming::Ready { subs } => {
                 for id in subs {
                     if let Some(Pending::Subscribe(reply)) = self.pending.remove(&id) {
-                        let _ = reply.send(Ok(()));
+                        let _ = reply.send(Ok(SubscriptionId(id)));
                     }
                 }
             }
@@ -387,6 +427,8 @@ where
                 if let Some(Pending::Subscribe(reply)) = self.pending.remove(&id) {
                     let error = error.map_or(Error::ConnectionClosed, Error::from);
                     let _ = reply.send(Err(error));
+                } else if self.unsubscribed.remove(&id) {
+                    tracing::debug!(id, "DDP subscription ended");
                 } else {
                     // A subscription that was ready: no more events will come for it.
                     tracing::warn!(id, "the server ended a subscription");
@@ -837,6 +879,80 @@ mod tests {
             panic!("expected a message");
         };
         assert_eq!(second.id, "m2");
+    }
+
+    // RICH-006
+    #[tokio::test]
+    async fn room_deletions_are_subscribed_for_the_room() {
+        let (client, _events, mut peer) = connected().await;
+        let subscribing = tokio::spawn(async move { client.subscribe_room_deletions("r1").await });
+
+        let frame = peer.recv().await;
+        assert_eq!(frame["msg"], "sub");
+        assert_eq!(frame["name"], "stream-notify-room");
+        assert_eq!(frame["params"], json!(["r1/deleteMessage", false]));
+        peer.send(json!({ "msg": "ready", "subs": [frame["id"]] }))
+            .await;
+
+        let subscription = subscribing.await.unwrap().unwrap();
+        assert_eq!(subscription.0, frame["id"].as_str().unwrap());
+    }
+
+    // RICH-006
+    #[tokio::test]
+    async fn a_deletion_arrives_as_an_event() {
+        let (_client, mut events, mut peer) = connected().await;
+        peer.send(
+            json!({ "msg": "changed", "collection": "stream-notify-room", "id": "id",
+            "fields": { "eventName": "r1/deleteMessage", "args": [{ "_id": "m1" }] } }),
+        )
+        .await;
+        assert_eq!(
+            events.recv().await,
+            Some(DdpEvent::MessageDeleted {
+                room_id: "r1".to_owned(),
+                message_id: "m1".to_owned(),
+            })
+        );
+    }
+
+    // RICH-006
+    #[tokio::test]
+    async fn unsubscribing_sends_unsub_and_the_connection_goes_on() {
+        let (client, mut events, mut peer) = connected().await;
+        let subscriber = client.clone();
+        let subscribing =
+            tokio::spawn(async move { subscriber.subscribe_room_deletions("r1").await });
+        let id = peer.recv_id("sub").await;
+        peer.send(json!({ "msg": "ready", "subs": [id] })).await;
+        let subscription = subscribing.await.unwrap().unwrap();
+
+        client.unsubscribe(&subscription);
+        let frame = peer.recv().await;
+        assert_eq!(frame, json!({ "msg": "unsub", "id": id }));
+        // The server's `nosub` for it is expected, not an event, and nothing else is disturbed.
+        peer.send(json!({ "msg": "nosub", "id": id })).await;
+        peer.send(message_frame("m1", "after")).await;
+        let Some(DdpEvent::Message(message)) = events.recv().await else {
+            panic!("expected a message");
+        };
+        assert_eq!(message.id, "m1");
+    }
+
+    // RICH-006
+    #[tokio::test]
+    async fn unsubscribing_on_a_closed_connection_does_nothing() {
+        let (client, mut events, mut peer) = connected().await;
+        let subscriber = client.clone();
+        let subscribing =
+            tokio::spawn(async move { subscriber.subscribe_room_deletions("r1").await });
+        let id = peer.recv_id("sub").await;
+        peer.send(json!({ "msg": "ready", "subs": [id] })).await;
+        let subscription = subscribing.await.unwrap().unwrap();
+
+        peer.ws.close(None).await.unwrap();
+        assert_eq!(events.recv().await, None);
+        client.unsubscribe(&subscription);
     }
 
     // RICH-004

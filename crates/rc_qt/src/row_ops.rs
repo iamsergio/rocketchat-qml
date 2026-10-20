@@ -58,8 +58,8 @@ pub fn qt_move_destination(from: usize, to: usize) -> usize {
 }
 
 /// The notifications for one [`TimelineChange`] of the message list, in the order to make them.
-/// `Reset`, `Insert`, `Replace` and `Move` are where the change is applied to the model's list (see
-/// [`apply_newest_first`]), the first one in the list of ops; `Update` only notifies.
+/// `Reset`, `Insert`, `Remove`, `Replace` and `Move` are where the change is applied to the model's
+/// list (see [`apply_newest_first`]), the first one in the list of ops; `Update` only notifies.
 ///
 /// The model holds the messages newest first, so that the view can run bottom to top and keep its
 /// place when older messages arrive: they go in after the last row, which is above everything on
@@ -82,6 +82,8 @@ pub enum MessageOp {
         /// Qt's destination, see [`qt_move_destination`].
         destination: usize,
     },
+    /// `beginRemoveRows(row, row)` / `endRemoveRows` around the change.
+    Remove { row: usize },
 }
 
 /// The rows `first..=last` and their neighbours, within a list of `len` rows.
@@ -148,6 +150,18 @@ pub fn message_ops(change: &TimelineChange, held: usize) -> Vec<MessageOp> {
                 MessageOp::Update { first, last },
             ]
         }
+        // The message after the removed one in time shows a day separator that depended on it.
+        TimelineChange::Removed { index } => {
+            let row = held - 1 - index;
+            let mut ops = vec![MessageOp::Remove { row }];
+            if row > 0 {
+                ops.push(MessageOp::Update {
+                    first: row - 1,
+                    last: row - 1,
+                });
+            }
+            ops
+        }
         TimelineChange::Prepended(_)
         | TimelineChange::Appended(_)
         | TimelineChange::Inserted { .. } => Vec::new(),
@@ -183,6 +197,10 @@ pub fn apply_newest_first(change: &TimelineChange, messages: &mut Vec<Message>) 
             let len = messages.len();
             messages.remove(len - 1 - from);
             messages.insert(len - 1 - to, message.clone());
+        }
+        TimelineChange::Removed { index } => {
+            let row = messages.len() - 1 - index;
+            messages.remove(row);
         }
         // A change the core adds later: `message_ops` resets the model for it, but there is
         // nothing to rebuild the list from.
@@ -299,6 +317,8 @@ mod tests {
             kind: MessageKind::Text(id.into()),
             delivery: Delivery::Sent,
             attachments: Vec::new(),
+            edited: false,
+            reactions: Vec::new(),
         }
     }
 
@@ -548,5 +568,60 @@ mod tests {
         check(&timeline, &mut mirror, &changes);
         let ids: Vec<_> = mirror.iter().map(|m| m.id.as_str()).collect();
         assert_eq!(ids, ["p", "c", "q", "b", "a"]);
+    }
+
+    // RICH-006
+    #[test]
+    fn a_removal_removes_the_row_and_updates_the_next_newer_one() {
+        let gone = TimelineChange::Removed { index: 1 };
+        // Four held, oldest first: rows 3, 2, 1, 0. Index 1 is row 2.
+        assert_eq!(
+            message_ops(&gone, 4),
+            [
+                MessageOp::Remove { row: 2 },
+                MessageOp::Update { first: 1, last: 1 }
+            ]
+        );
+        // The newest message has no newer neighbour.
+        assert_eq!(
+            message_ops(&TimelineChange::Removed { index: 3 }, 4),
+            [MessageOp::Remove { row: 0 }]
+        );
+    }
+
+    // RICH-006
+    #[test]
+    fn a_reversed_mirror_follows_edits_and_removals() {
+        let mut timeline = Vec::new();
+        let mut mirror = Vec::new();
+        let mut edited = message("b");
+        edited.edited = true;
+        let changes = [
+            TimelineChange::Reset {
+                room: None,
+                messages: vec![message("a"), message("b"), message("c"), message("d")],
+            },
+            TimelineChange::Updated {
+                index: 1,
+                message: edited,
+            },
+            TimelineChange::Removed { index: 0 },
+            TimelineChange::Removed { index: 2 },
+            TimelineChange::Appended(vec![message("e")]),
+            TimelineChange::Removed { index: 0 },
+            TimelineChange::Removed { index: 0 },
+            TimelineChange::Removed { index: 0 },
+        ];
+        for change in &changes {
+            let ops = message_ops(change, timeline.len());
+            change.apply(&mut timeline);
+            apply_newest_first(change, &mut mirror);
+            let reversed: Vec<_> = timeline.iter().rev().cloned().collect();
+            assert_eq!(mirror, reversed, "{change:?}");
+            if matches!(change, TimelineChange::Removed { .. }) {
+                assert!(matches!(ops[0], MessageOp::Remove { .. }));
+            }
+        }
+        assert!(mirror.is_empty());
     }
 }

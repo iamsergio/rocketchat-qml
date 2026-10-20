@@ -206,6 +206,8 @@ mod tests {
             kind: MessageKind::Text("".into()),
             delivery: Delivery::Sent,
             attachments,
+            edited: false,
+            reactions: Vec::new(),
         }
     }
 

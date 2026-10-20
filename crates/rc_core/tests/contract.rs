@@ -1152,3 +1152,214 @@ fn a_message_that_fails_while_the_server_is_out_of_reach_is_retried_under_its_id
     assert_eq!(admin.last_message(&room).id, id);
     drop(client);
 }
+
+/// The text of the message with this id in the mirror.
+fn text_of<'a>(mirror: &'a [Message], id: &str) -> Option<&'a str> {
+    let message = mirror.iter().find(|m| m.id.as_str() == id)?;
+    match &message.kind {
+        MessageKind::Text(text) => Some(text.text.as_str()),
+        MessageKind::System(_) => None,
+    }
+}
+
+/// A channel with the user, the user logged in with the channel open and loaded, and the ids of
+/// the messages admin posted to it before that.
+fn open_channel_with(
+    texts: &[&str],
+) -> (
+    Admin,
+    String,
+    Vec<String>,
+    Client,
+    Receiver<Event>,
+    Vec<Message>,
+) {
+    let admin = Admin::login();
+    let user = admin.create_user();
+    let (room, _) = admin.create_channel(&[&user.username]);
+    let ids = texts
+        .iter()
+        .map(|text| admin.post_message(&room, text).id)
+        .collect();
+    let (client, events) = logged_in(&user);
+    client.open_room(room.clone().into());
+    let mut mirror = Vec::new();
+    settle(&events, &mut mirror);
+    (admin, room, ids, client, events, mirror)
+}
+
+// RICH-006
+#[test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+fn an_edit_in_the_open_room_updates_the_message_in_place() {
+    let (admin, room, ids, _client, events, mut mirror) = open_channel_with(&["one", "two"]);
+    assert!(mirror.iter().all(|m| !m.edited));
+
+    admin.edit_message(&room, &ids[0], "one, edited");
+
+    wait_for(&events, |event| {
+        if let Event::Timeline(changes) = event {
+            for change in changes {
+                assert!(
+                    matches!(change, TimelineChange::Updated { .. }),
+                    "expected an update, got {change:?}"
+                );
+                change.apply(&mut mirror);
+            }
+        }
+        (text_of(&mirror, &ids[0]) == Some("one, edited")).then_some(())
+    });
+    let edited: Vec<_> = mirror.iter().filter(|m| m.edited).collect();
+    assert_eq!(edited.len(), 1);
+    assert_eq!(edited[0].id.as_str(), ids[0]);
+    assert_eq!(texts(&mirror), ["one, edited", "two"]);
+}
+
+// RICH-007
+#[test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+fn a_reaction_in_the_open_room_shows_and_taking_it_back_removes_it() {
+    let (admin, _room, ids, _client, events, mut mirror) = open_channel_with(&["react to me"]);
+
+    admin.react(&ids[0], ":thumbsup:", true);
+    follow_until(&events, &mut mirror, |mirror| {
+        mirror.iter().any(|m| !m.reactions.is_empty())
+    });
+    let reactions = &mirror[0].reactions;
+    assert_eq!(reactions.len(), 1);
+    assert_eq!(reactions[0].emoji, ":thumbsup:");
+    assert_eq!(
+        reactions[0].usernames,
+        std::slice::from_ref(&admin.username)
+    );
+
+    admin.react(&ids[0], ":thumbsup:", false);
+    follow_until(&events, &mut mirror, |mirror| {
+        mirror.iter().all(|m| m.reactions.is_empty())
+    });
+    assert_eq!(texts(&mirror), ["react to me"]);
+}
+
+// RICH-006
+#[test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+fn a_deletion_in_the_open_room_removes_the_message() {
+    let (admin, room, ids, _client, events, mut mirror) = open_channel_with(&["stays", "goes"]);
+
+    admin.delete_message(&room, &ids[1]);
+
+    wait_for(&events, |event| {
+        if let Event::Timeline(changes) = event {
+            for change in changes {
+                if let TimelineChange::Removed { index } = change {
+                    assert_eq!(mirror[*index].id.as_str(), ids[1]);
+                }
+                change.apply(&mut mirror);
+            }
+        }
+        (text_of(&mirror, &ids[1]).is_none()).then_some(())
+    });
+    assert_eq!(texts(&mirror), ["stays"]);
+}
+
+// RICH-006
+#[test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+fn a_deletion_follows_the_room_that_is_open_now() {
+    let admin = Admin::login();
+    let user = admin.create_user();
+    let (first, _) = admin.create_channel(&[&user.username]);
+    let (second, _) = admin.create_channel(&[&user.username]);
+    let in_first = admin.post_message(&first, "first room");
+    let in_second = admin.post_message(&second, "second room");
+    let (client, events) = logged_in(&user);
+    let mut mirror = Vec::new();
+
+    // Open the first, then the second: only the second is followed now.
+    client.open_room(first.clone().into());
+    settle(&events, &mut mirror);
+    client.open_room(second.clone().into());
+    settle(&events, &mut mirror);
+    admin.delete_message(&second, &in_second.id);
+    follow_until(&events, &mut mirror, |mirror| {
+        text_of(mirror, &in_second.id).is_none()
+    });
+
+    // And back: the first is followed again.
+    client.open_room(first.clone().into());
+    settle(&events, &mut mirror);
+    admin.delete_message(&first, &in_first.id);
+    follow_until(&events, &mut mirror, |mirror| {
+        text_of(mirror, &in_first.id).is_none()
+    });
+    assert_eq!(texts(&mirror), Vec::<&str>::new());
+}
+
+// RICH-006
+#[test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+fn what_changed_while_a_room_was_closed_shows_when_it_opens_again() {
+    let admin = Admin::login();
+    let user = admin.create_user();
+    let (room, _) = admin.create_channel(&[&user.username]);
+    let (other, _) = admin.create_channel(&[&user.username]);
+    let kept = admin.post_message(&room, "kept");
+    let edited = admin.post_message(&room, "to edit");
+    let deleted = admin.post_message(&room, "to delete");
+    let (client, events) = logged_in(&user);
+    let mut mirror = Vec::new();
+    client.open_room(room.clone().into());
+    settle(&events, &mut mirror);
+    assert_eq!(texts(&mirror), ["kept", "to edit", "to delete"]);
+
+    client.open_room(other.into());
+    settle(&events, &mut mirror);
+    admin.edit_message(&room, &edited.id, "edited meanwhile");
+    admin.delete_message(&room, &deleted.id);
+    client.open_room(room.clone().into());
+
+    // It opens with what was held, and the changes arrive as updates.
+    follow_until(&events, &mut mirror, |mirror| {
+        text_of(mirror, &deleted.id).is_none()
+            && text_of(mirror, &edited.id) == Some("edited meanwhile")
+    });
+    assert_eq!(text_of(&mirror, &kept.id), Some("kept"));
+    assert!(
+        mirror
+            .iter()
+            .any(|m| m.id.as_str() == edited.id && m.edited)
+    );
+}
+
+// RICH-006, RICH-007, RT-003
+#[test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+fn a_client_catches_up_with_edits_reactions_and_deletions_after_the_connection_was_cut() {
+    let admin = Admin::login();
+    let user = admin.create_user();
+    let (room, _) = admin.create_channel(&[&user.username]);
+    let edited = admin.post_message(&room, "to edit");
+    let reacted = admin.post_message(&room, "to react to");
+    let deleted = admin.post_message(&room, "to delete");
+    let proxy = Proxy::start();
+    let (client, events) = logged_in_at(&proxy.url(), &user);
+    client.open_room(room.clone().into());
+    let mut mirror = Vec::new();
+    settle(&events, &mut mirror);
+
+    proxy.set_accepting(false);
+    proxy.drop_connections();
+    admin.edit_message(&room, &edited.id, "edited while away");
+    admin.react(&reacted.id, ":tada:", true);
+    admin.delete_message(&room, &deleted.id);
+    proxy.set_accepting(true);
+
+    follow_until(&events, &mut mirror, |mirror| {
+        text_of(mirror, &deleted.id).is_none()
+            && text_of(mirror, &edited.id) == Some("edited while away")
+            && mirror
+                .iter()
+                .any(|m| m.id.as_str() == reacted.id && !m.reactions.is_empty())
+    });
+    drop(client);
+}

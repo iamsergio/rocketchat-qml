@@ -33,7 +33,8 @@ pub enum TimelineChange {
         index: usize,
         messages: Vec<Message>,
     },
-    /// Same position, new content: a message the server confirmed or refused, later an edit.
+    /// Same position, new content: a message the server confirmed or refused, or one that was
+    /// edited or reacted to.
     Updated { index: usize, message: Message },
     /// The message moved; the content may have changed too. `to` is its index once the move is
     /// done (`Vec::remove(from)` then `Vec::insert(to, ..)`). Qt's `beginMoveRows` takes a
@@ -43,6 +44,8 @@ pub enum TimelineChange {
         to: usize,
         message: Message,
     },
+    /// The message at `index` is gone: it was deleted.
+    Removed { index: usize },
 }
 
 impl TimelineChange {
@@ -54,6 +57,7 @@ impl TimelineChange {
             | Self::Inserted { messages, .. }
             | Self::Prepended(messages)
             | Self::Appended(messages) => messages,
+            Self::Removed { .. } => &[],
             Self::Updated { message, .. } | Self::Moved { message, .. } => {
                 std::slice::from_ref(message)
             }
@@ -80,6 +84,9 @@ impl TimelineChange {
             Self::Moved { from, to, message } => {
                 messages.remove(*from);
                 messages.insert(*to, message.clone());
+            }
+            Self::Removed { index } => {
+                messages.remove(*index);
             }
         }
     }
@@ -168,6 +175,12 @@ impl Timeline {
         self.history.reached_start
     }
 
+    /// Notes when the messages were last known to be up to date (see
+    /// [`RoomHistory::synced_at`]).
+    pub fn set_synced_at(&mut self, at: jiff::Timestamp) {
+        self.history.synced_at = Some(at);
+    }
+
     /// What to keep, to open the room again later.
     #[must_use]
     pub fn history(&self) -> &RoomHistory {
@@ -243,6 +256,39 @@ impl Timeline {
         })
     }
 
+    /// Takes in the server's newer copy of a message that is held as confirmed (an edit, a
+    /// reaction...). Nothing if no confirmed message has that id or the copy is the same as the
+    /// one held. A copy is whole, so it replaces the held one outright.
+    pub fn replace(&mut self, message: Message) -> Option<TimelineChange> {
+        let sent = self.sent_len();
+        let from = self.history.messages[..sent]
+            .iter()
+            .position(|m| m.id == message.id)?;
+        if self.history.messages[from] == message {
+            return None;
+        }
+        self.history.messages.remove(from);
+        let to = self.history.messages[..sent - 1]
+            .partition_point(|other| display_order(other, &message).is_lt());
+        self.history.messages.insert(to, message.clone());
+        Some(if to == from {
+            TimelineChange::Updated {
+                index: from,
+                message,
+            }
+        } else {
+            TimelineChange::Moved { from, to, message }
+        })
+    }
+
+    /// Takes a deleted message out. Nothing if it isn't held. An unsent message goes too: the
+    /// server's answer for it, if it comes, finds nothing to settle.
+    pub fn remove(&mut self, id: &MessageId) -> Option<TimelineChange> {
+        let index = self.history.messages.iter().position(|m| &m.id == id)?;
+        self.history.messages.remove(index);
+        Some(TimelineChange::Removed { index })
+    }
+
     fn unsent_position(&self, id: &MessageId) -> Option<usize> {
         self.history
             .messages
@@ -250,13 +296,16 @@ impl Timeline {
             .position(|m| &m.id == id && m.is_unsent())
     }
 
-    /// Settles the messages of `page` that are held as unsent, and returns the others.
+    /// Settles the messages of `page` that are held as unsent and replaces those held as confirmed
+    /// whose copy differs (they were edited meanwhile), and returns the others.
     fn settle_page(&mut self, page: Vec<Message>) -> (Vec<TimelineChange>, Vec<Message>) {
         let mut changes = Vec::new();
         let mut rest = Vec::new();
         for message in page {
             if self.unsent_position(&message.id).is_some() {
                 changes.extend(self.settle(message));
+            } else if self.message(&message.id).is_some() {
+                changes.extend(self.replace(message));
             } else {
                 rest.push(message);
             }
@@ -296,20 +345,29 @@ impl Timeline {
 
     /// Takes in a message the server pushed. It is the server's copy of an unsent one if the ids
     /// match, else it is inserted after the confirmed messages, which is almost always where it
-    /// belongs; one that isn't the newest takes the same way in as a page would. Nothing if it is
-    /// held already.
+    /// belongs; one that isn't the newest takes the same way in as a page would, except that one
+    /// older than everything held is dropped while older messages exist: it is an edit of a
+    /// message far back, and showing it would leave a hole between it and the rest. A copy of a
+    /// confirmed message that is held replaces it (an edit, a reaction), or changes nothing if it
+    /// is the same.
     pub fn merge_live(&mut self, message: Message) -> Vec<TimelineChange> {
         if self.unsent_position(&message.id).is_some() {
             return self.settle(message).into_iter().collect();
         }
-        if self.history.messages.iter().any(|m| m.id == message.id) {
-            return Vec::new();
+        if self.message(&message.id).is_some() {
+            return self.replace(message).into_iter().collect();
         }
         let sent = self.sent_len();
         let newest = self.history.messages[..sent]
             .last()
             .is_none_or(|last| display_order(&message, last).is_gt());
         if !newest {
+            let before_all = self.history.messages[..sent]
+                .first()
+                .is_some_and(|first| display_order(&message, first).is_lt());
+            if before_all && !self.history.reached_start {
+                return Vec::new();
+            }
             return self.merge(vec![message], false);
         }
         self.history.messages.insert(sent, message.clone());
@@ -383,7 +441,7 @@ impl Timeline {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::{Author, MessageKind};
+    use crate::domain::{Author, MessageKind, Reaction};
 
     /// A message `secs` seconds after the epoch.
     fn msg(id: &str, secs: i64) -> Message {
@@ -399,6 +457,27 @@ mod tests {
             kind: MessageKind::Text(id.into()),
             delivery: Delivery::Sent,
             attachments: Vec::new(),
+            edited: false,
+            reactions: Vec::new(),
+        }
+    }
+
+    /// The message edited: same id and time, other text.
+    fn edited(id: &str, secs: i64) -> Message {
+        Message {
+            kind: MessageKind::Text(format!("{id} edited").as_str().into()),
+            edited: true,
+            ..msg(id, secs)
+        }
+    }
+
+    fn reacted(id: &str, secs: i64) -> Message {
+        Message {
+            reactions: vec![Reaction {
+                emoji: ":thumbsup:".into(),
+                usernames: vec!["u".into()],
+            }],
+            ..msg(id, secs)
         }
     }
 
@@ -525,6 +604,7 @@ mod tests {
             RoomHistory {
                 messages: vec![msg("a", 1)],
                 reached_start: true,
+                synced_at: None,
             },
         );
         timeline.merge_latest(vec![msg("a", 1), msg("b", 2)], false);
@@ -896,5 +976,205 @@ mod tests {
         });
         assert_eq!(ids(m), ["a", "b", "q", "c", "p", "r", "d"]);
         assert!(timeline.messages().iter().all(|m| !m.is_unsent()));
+    }
+
+    // RICH-006
+    #[test]
+    fn a_live_edit_replaces_the_held_message_in_place() {
+        let mut timeline = timeline_of(vec![msg("a", 1), msg("b", 2), msg("c", 3)]);
+        let changes = timeline.merge_live(edited("b", 2));
+        assert_eq!(
+            changes,
+            [TimelineChange::Updated {
+                index: 1,
+                message: edited("b", 2)
+            }]
+        );
+        assert_eq!(timeline.messages()[1], edited("b", 2));
+        assert_eq!(ids(timeline.messages()), ["a", "b", "c"]);
+    }
+
+    // RICH-007
+    #[test]
+    fn a_live_reaction_replaces_the_held_message_and_removing_it_replaces_it_back() {
+        let mut timeline = timeline_of(vec![msg("a", 1), msg("b", 2)]);
+        assert_eq!(
+            timeline.merge_live(reacted("b", 2)),
+            [TimelineChange::Updated {
+                index: 1,
+                message: reacted("b", 2)
+            }]
+        );
+        // The server's copy without reactions: they are gone, not merged.
+        assert_eq!(
+            timeline.merge_live(msg("b", 2)),
+            [TimelineChange::Updated {
+                index: 1,
+                message: msg("b", 2)
+            }]
+        );
+        assert_eq!(timeline.messages()[1].reactions, []);
+    }
+
+    // RICH-006
+    #[test]
+    fn a_live_copy_equal_to_the_held_message_changes_nothing() {
+        let mut timeline = timeline_of(vec![msg("a", 1), reacted("b", 2)]);
+        assert_eq!(timeline.merge_live(msg("a", 1)), []);
+        assert_eq!(timeline.merge_live(reacted("b", 2)), []);
+    }
+
+    // RICH-006
+    #[test]
+    fn a_page_with_an_edited_copy_of_a_held_message_replaces_it() {
+        let mut timeline = timeline_of(vec![msg("a", 1), msg("b", 2)]);
+        let changes = timeline.merge_latest(vec![msg("c", 3), edited("b", 2), msg("a", 1)], false);
+        assert_eq!(
+            changes,
+            [
+                TimelineChange::Updated {
+                    index: 1,
+                    message: edited("b", 2)
+                },
+                TimelineChange::Appended(vec![msg("c", 3)]),
+            ]
+        );
+        assert_eq!(timeline.messages()[1], edited("b", 2));
+        let changes = timeline.merge_older(vec![edited("a", 1)], true);
+        assert_eq!(
+            changes,
+            [TimelineChange::Updated {
+                index: 0,
+                message: edited("a", 1)
+            }]
+        );
+    }
+
+    // RICH-006
+    #[test]
+    fn a_page_with_identical_copies_changes_nothing() {
+        let mut timeline = timeline_of(vec![msg("a", 1), reacted("b", 2)]);
+        assert_eq!(
+            timeline.merge_latest(vec![reacted("b", 2), msg("a", 1)], false),
+            []
+        );
+    }
+
+    // RICH-006
+    #[test]
+    fn a_live_edit_of_a_message_older_than_what_is_held_is_dropped_unless_the_start_is_held() {
+        let mut timeline = timeline_of(vec![msg("c", 3), msg("d", 4)]);
+        // Older messages exist but aren't held: inserting it would leave a hole.
+        assert_eq!(timeline.merge_live(edited("a", 1)), []);
+        assert_eq!(ids(timeline.messages()), ["c", "d"]);
+        // Once the start is held, everything older is held too, so it is a message like any other.
+        timeline.merge_older(vec![msg("c", 3)], true);
+        assert_eq!(
+            timeline.merge_live(edited("a", 1)),
+            [TimelineChange::Prepended(vec![edited("a", 1)])]
+        );
+    }
+
+    // RICH-006
+    #[test]
+    fn a_live_edit_between_held_messages_that_is_not_held_goes_in_by_time() {
+        let mut timeline = timeline_of(vec![msg("a", 1), msg("c", 3)]);
+        let changes = timeline.merge_live(edited("b", 2));
+        assert!(matches!(changes.as_slice(), [TimelineChange::Reset { .. }]));
+        assert_eq!(ids(timeline.messages()), ["a", "b", "c"]);
+    }
+
+    // RICH-006
+    #[test]
+    fn an_edit_leaves_the_unsent_messages_alone() {
+        let mut timeline = timeline_of(vec![msg("a", 1), msg("b", 2)]);
+        timeline.add_unsent(unsent("p", 10));
+        let changes = timeline.merge_live(edited("a", 1));
+        assert_eq!(
+            changes,
+            [TimelineChange::Updated {
+                index: 0,
+                message: edited("a", 1)
+            }]
+        );
+        assert_eq!(ids(timeline.messages()), ["a", "b", "p"]);
+        assert!(timeline.messages()[2].is_unsent());
+    }
+
+    // RICH-006
+    #[test]
+    fn a_replacement_that_changes_the_time_moves_the_message() {
+        let mut timeline = timeline_of(vec![msg("a", 1), msg("b", 2), msg("c", 3)]);
+        let moved = Message {
+            ts: jiff::Timestamp::from_second(5).unwrap(),
+            ..edited("a", 1)
+        };
+        let changes = timeline.replace(moved.clone());
+        assert_eq!(
+            changes,
+            Some(TimelineChange::Moved {
+                from: 0,
+                to: 2,
+                message: moved
+            })
+        );
+        assert_eq!(ids(timeline.messages()), ["b", "c", "a"]);
+    }
+
+    // RICH-006
+    #[test]
+    fn a_deleted_message_is_removed() {
+        let mut timeline = timeline_of(vec![msg("a", 1), msg("b", 2), msg("c", 3)]);
+        assert_eq!(
+            timeline.remove(&id("b")),
+            Some(TimelineChange::Removed { index: 1 })
+        );
+        assert_eq!(ids(timeline.messages()), ["a", "c"]);
+        assert_eq!(timeline.remove(&id("b")), None);
+        assert_eq!(timeline.remove(&id("nope")), None);
+    }
+
+    // RICH-006
+    #[test]
+    fn deleting_the_oldest_message_moves_where_the_next_page_starts() {
+        let mut timeline = timeline_of(vec![msg("a", 1), msg("b", 2)]);
+        timeline.remove(&id("a"));
+        assert_eq!(timeline.oldest(), Some(msg("b", 2).ts));
+        timeline.remove(&id("b"));
+        assert_eq!(timeline.oldest(), None);
+    }
+
+    // RICH-006
+    #[test]
+    fn a_deleted_unsent_message_is_removed_and_its_answer_settles_nothing() {
+        let mut timeline = timeline_of(vec![msg("a", 1)]);
+        timeline.add_unsent(unsent("p", 10));
+        assert_eq!(
+            timeline.remove(&id("p")),
+            Some(TimelineChange::Removed { index: 1 })
+        );
+        assert_eq!(timeline.settle(msg("p", 11)), None);
+    }
+
+    // RICH-006, RICH-007
+    #[test]
+    fn a_mirror_following_edits_and_deletions_equals_the_timeline() {
+        let (mut timeline, mut mirror) = (empty(), Vec::new());
+        let (t, m) = (&mut timeline, &mut mirror);
+        step(t, m, |t| {
+            t.merge_latest(vec![msg("a", 1), msg("b", 2), msg("c", 3)], false)
+        });
+        step(t, m, |t| vec![t.add_unsent(unsent("p", 10))]);
+        step(t, m, |t| t.merge_live(edited("b", 2)));
+        step(t, m, |t| t.merge_live(reacted("c", 3)));
+        step(t, m, |t| t.remove(&id("a")).into_iter().collect());
+        step(t, m, |t| t.merge_live(msg("d", 4)));
+        step(t, m, |t| t.remove(&id("p")).into_iter().collect());
+        step(t, m, |t| t.remove(&id("d")).into_iter().collect());
+        step(t, m, |t| {
+            t.merge_latest(vec![edited("c", 3), edited("b", 2)], false)
+        });
+        assert_eq!(ids(m), ["b", "c"]);
+        assert!(m[0].edited && m[1].edited);
     }
 }

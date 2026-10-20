@@ -3,14 +3,14 @@
 
 //! The server port over the Rocket.Chat REST API.
 
-use rc_api::{DdpClient, DdpEvent, DdpEvents, RestClient, ServerVersion};
+use rc_api::{DdpClient, DdpEvent, DdpEvents, RestClient, ServerVersion, SubscriptionId};
 use secrecy::SecretString;
 use tokio::sync::mpsc;
 
 use crate::domain::{
     AvatarOwner, Credentials, Message, MessageId, RoomId, RoomKind, User, message_from,
 };
-use crate::ports::{ApiError, Connector, Image, Page, Pushed, PushedEvents, ServerApi};
+use crate::ports::{ApiError, Changes, Connector, Image, Page, Pushed, Realtime, ServerApi};
 
 pub struct RestConnector;
 
@@ -145,7 +145,25 @@ impl ServerApi for RestApi {
         Ok(session.mark_read(room.as_str()).await?)
     }
 
-    async fn realtime(&self, credentials: &Credentials) -> Result<PushedEvents, ApiError> {
+    async fn changes_since(
+        &self,
+        credentials: &Credentials,
+        room: &RoomId,
+        since: jiff::Timestamp,
+    ) -> Result<Changes, ApiError> {
+        let session = self.client.session(api_credentials(credentials));
+        let changes = session.sync_messages(room.as_str(), since).await?;
+        Ok(Changes {
+            updated: changes
+                .updated
+                .into_iter()
+                .filter_map(message_from)
+                .collect(),
+            deleted: changes.deleted.into_iter().map(Into::into).collect(),
+        })
+    }
+
+    async fn realtime(&self, credentials: &Credentials) -> Result<Realtime, ApiError> {
         let (ddp, events) = DdpClient::connect(&self.server).await?;
         ddp.login(&api_credentials(credentials)).await?;
         ddp.subscribe_my_messages().await?;
@@ -158,8 +176,12 @@ impl ServerApi for RestApi {
             tracing::warn!(%error, "avatar changes won't be pushed");
         }
         let (pushed, receiver) = mpsc::unbounded_channel();
-        tokio::spawn(forward(ddp, events, pushed));
-        Ok(receiver)
+        let (watch, watched) = mpsc::unbounded_channel();
+        tokio::spawn(forward(ddp, events, pushed, watched));
+        Ok(Realtime {
+            events: receiver,
+            watch,
+        })
     }
 
     async fn logout(&self, credentials: &Credentials) -> Result<(), ApiError> {
@@ -172,10 +194,33 @@ impl ServerApi for RestApi {
 }
 
 /// Maps the connection's events until it ends or nobody listens any more. The task owns the client,
-/// so ending it closes the connection.
-async fn forward(ddp: DdpClient, mut events: DdpEvents, pushed: mpsc::UnboundedSender<Pushed>) {
+/// so ending it closes the connection. It also follows the open room: when `watched` names a room,
+/// the previous room's deletions are unsubscribed from and the new one's subscribed to.
+async fn forward(
+    ddp: DdpClient,
+    mut events: DdpEvents,
+    pushed: mpsc::UnboundedSender<Pushed>,
+    mut watched: mpsc::UnboundedReceiver<Option<RoomId>>,
+) {
+    let mut deletions: Option<SubscriptionId> = None;
+    let mut watching = true;
     loop {
         tokio::select! {
+            room = watched.recv(), if watching => {
+                let Some(room) = room else {
+                    watching = false;
+                    continue;
+                };
+                if let Some(previous) = deletions.take() {
+                    ddp.unsubscribe(&previous);
+                }
+                if let Some(room) = room {
+                    match ddp.subscribe_room_deletions(room.as_str()).await {
+                        Ok(subscription) => deletions = Some(subscription),
+                        Err(error) => tracing::warn!(%error, %room, "deletions won't be pushed"),
+                    }
+                }
+            }
             event = events.recv() => {
                 let Some(event) = event else { break };
                 if let Some(event) = pushed_from(event)
@@ -209,6 +254,13 @@ fn pushed_from(event: DdpEvent) -> Option<Pushed> {
         DdpEvent::AvatarChanged(rc_api::AvatarOwner::Room { room_id }) => {
             Pushed::AvatarChanged(AvatarOwner::Room(room_id.into()))
         }
+        DdpEvent::MessageDeleted {
+            room_id,
+            message_id,
+        } => Pushed::MessageDeleted {
+            room: room_id.into(),
+            id: message_id.into(),
+        },
     })
 }
 
@@ -286,7 +338,25 @@ mod tests {
             thread_shown: false,
             md: None,
             attachments: Vec::new(),
+            edited: false,
+            reactions: Vec::new(),
         }
+    }
+
+    // RICH-006
+    #[test]
+    fn a_deletion_is_pushed_by_room_and_message_id() {
+        let deleted = pushed_from(DdpEvent::MessageDeleted {
+            room_id: "r1".into(),
+            message_id: "m1".into(),
+        });
+        assert_eq!(
+            deleted,
+            Some(Pushed::MessageDeleted {
+                room: "r1".to_owned().into(),
+                id: "m1".to_owned().into(),
+            })
+        );
     }
 
     // RT-001
