@@ -271,6 +271,15 @@ impl Message {
     pub fn is_unsent(&self) -> bool {
         self.delivery != Delivery::Sent
     }
+
+    /// Whether the message calls `username`, or everybody, with an `@`.
+    #[must_use]
+    pub fn mentions(&self, username: &str) -> bool {
+        match &self.kind {
+            MessageKind::Text(text) => text.mentions(username),
+            MessageKind::System(_) => false,
+        }
+    }
 }
 
 /// The message a history entry stands for, or `None` if the timeline doesn't show it: replies in a
@@ -575,6 +584,22 @@ mod tests {
             }
             .is_unsent()
         );
+    }
+
+    // RICH-002
+    #[test]
+    fn only_a_text_message_can_mention_the_user() {
+        let mut message = message_from(entry(None, "hello")).unwrap();
+        message.kind = MessageKind::Text(RichText {
+            text: "hi @me".into(),
+            blocks: vec![crate::rich::Block::Paragraph(vec![
+                crate::rich::Inline::Mention(crate::rich::Mention::User("me".into())),
+            ])],
+        });
+        assert!(message.mentions("me"));
+        assert!(!message.mentions("you"));
+        message.kind = MessageKind::System(SystemEvent::Joined);
+        assert!(!message.mentions("me"));
     }
 
     // MSG-001

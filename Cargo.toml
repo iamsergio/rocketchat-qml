@@ -25,6 +25,7 @@ cxx-qt-lib = "0.10.0"
 # Not the `keyring` crate: its features always pull in the zbus store, whose crates are flagged
 # unmaintained.
 dbus-secret-service-keyring-store = { version = "1.0.1", default-features = false, features = ["crypto-rust"] }
+emojis = "0.9.1"
 futures-util = { version = "0.3.34", default-features = false, features = ["sink", "std"] }
 jiff = "0.2.38"
 keyring-core = "1.0.0"

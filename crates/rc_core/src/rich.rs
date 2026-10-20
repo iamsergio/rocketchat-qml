@@ -131,6 +131,44 @@ impl RichText {
     }
 }
 
+impl RichText {
+    /// Whether the body calls `username` (`@username`, any case) or everybody (`@all`, `@here`).
+    #[must_use]
+    pub fn mentions(&self, username: &str) -> bool {
+        self.blocks.iter().any(|block| block.mentions(username))
+    }
+}
+
+impl Block {
+    fn mentions(&self, username: &str) -> bool {
+        match self {
+            Self::Paragraph(content) | Self::Heading { content, .. } => {
+                mentions_in(content, username)
+            }
+            Self::Quote(blocks) => blocks.iter().any(|block| block.mentions(username)),
+            Self::BulletList(items) | Self::NumberedList { items, .. } => {
+                items.iter().any(|item| mentions_in(item, username))
+            }
+            Self::TaskList(items) => items
+                .iter()
+                .any(|item| mentions_in(&item.content, username)),
+            Self::Code { .. } | Self::BigEmoji(_) | Self::Math(_) => false,
+        }
+    }
+}
+
+fn mentions_in(inlines: &[Inline], username: &str) -> bool {
+    inlines.iter().any(|inline| match inline {
+        Inline::Mention(Mention::All | Mention::Here) => true,
+        Inline::Mention(Mention::User(name)) => name.eq_ignore_ascii_case(username),
+        Inline::Bold(content) | Inline::Italic(content) | Inline::Strike(content) => {
+            mentions_in(content, username)
+        }
+        Inline::Link { label, .. } => mentions_in(label, username),
+        _ => false,
+    })
+}
+
 impl From<String> for RichText {
     fn from(text: String) -> Self {
         Self::plain(text)
@@ -315,6 +353,87 @@ mod tests {
 
     fn para(inlines: Vec<Inline>) -> Block {
         Block::Paragraph(inlines)
+    }
+
+    fn body(blocks: Vec<Block>) -> RichText {
+        RichText {
+            text: String::new(),
+            blocks,
+        }
+    }
+
+    fn user(name: &str) -> Inline {
+        Inline::Mention(Mention::User(name.to_owned()))
+    }
+
+    // RICH-002
+    #[test]
+    fn a_mention_of_the_user_is_found_in_any_case() {
+        let text = body(vec![para(vec![t("hi "), user("Alice")])]);
+        assert!(text.mentions("alice"));
+        assert!(!text.mentions("bob"));
+    }
+
+    // RICH-002
+    #[test]
+    fn all_and_here_mention_everybody() {
+        for mention in [Mention::All, Mention::Here] {
+            let text = body(vec![para(vec![Inline::Mention(mention)])]);
+            assert!(text.mentions("anybody"));
+        }
+    }
+
+    // RICH-002
+    #[test]
+    fn a_mention_is_found_inside_nested_blocks_and_formatting() {
+        let nested = [
+            Block::Quote(vec![para(vec![Inline::Bold(vec![user("me")])])]),
+            Block::BulletList(vec![vec![Inline::Italic(vec![user("me")])]]),
+            Block::NumberedList {
+                start: 1,
+                items: vec![vec![t("x")], vec![user("me")]],
+            },
+            Block::TaskList(vec![TaskItem {
+                done: false,
+                content: vec![user("me")],
+            }]),
+            Block::Heading {
+                level: 2,
+                content: vec![Inline::Strike(vec![user("me")])],
+            },
+            para(vec![Inline::Link {
+                url: "https://example.com".into(),
+                label: vec![user("me")],
+            }]),
+        ];
+        for block in nested {
+            assert!(body(vec![block.clone()]).mentions("me"), "{block:?}");
+        }
+    }
+
+    // RICH-002
+    #[test]
+    fn code_and_channels_mention_nobody() {
+        let text = body(vec![
+            Block::Code {
+                language: None,
+                text: "@me".into(),
+            },
+            para(vec![
+                Inline::Code("@me".into()),
+                Inline::ChannelMention("me".into()),
+                t("@me"),
+            ]),
+        ]);
+        assert!(!text.mentions("me"));
+    }
+
+    // RICH-002
+    #[test]
+    fn the_mentions_of_the_server_are_found() {
+        let text = rich("hello @admin and @all and @here");
+        assert!(text.mentions("admin"));
+        assert!(text.mentions("nobody"));
     }
 
     // RICH-001
