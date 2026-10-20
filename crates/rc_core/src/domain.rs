@@ -143,6 +143,26 @@ pub struct Room {
     pub alert: bool,
 }
 
+impl Room {
+    /// Whether the room shows as unread.
+    #[must_use]
+    pub fn has_unread(&self) -> bool {
+        self.unread > 0 || self.user_mentions > 0 || self.group_mentions > 0 || self.alert
+    }
+
+    /// The room with nothing unread.
+    #[must_use]
+    pub fn read(self) -> Self {
+        Self {
+            unread: 0,
+            user_mentions: 0,
+            group_mentions: 0,
+            alert: false,
+            ..self
+        }
+    }
+}
+
 /// The room a subscription stands for, or `None` if the room list doesn't show it: rooms the user
 /// hid (Rocket.Chat's own sidebar hides them too), and kinds an end-user client has no use for
 /// (livechat, voip...).
@@ -304,6 +324,26 @@ mod tests {
             created: None,
             last_message: None,
         }
+    }
+
+    // ROOM-004
+    #[test]
+    fn a_room_is_read_when_no_count_and_no_alert_is_left() {
+        let mut room = room_from(sub("r", RoomType::Channel)).unwrap();
+        assert!(!room.has_unread());
+        for change in [
+            |r: &mut Room| r.unread = 1,
+            |r: &mut Room| r.user_mentions = 1,
+            |r: &mut Room| r.group_mentions = 1,
+            |r: &mut Room| r.alert = true,
+        ] {
+            let mut unread = room.clone();
+            change(&mut unread);
+            assert!(unread.has_unread());
+            assert_eq!(unread.read(), room);
+        }
+        room.unread = 5;
+        assert_eq!(room.read().unread, 0);
     }
 
     // ROOM-002

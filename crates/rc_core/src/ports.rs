@@ -96,6 +96,19 @@ pub trait ServerApi: Clone + Send + Sync + 'static {
         text: &str,
     ) -> impl Future<Output = Result<Message, ApiError>> + Send;
 
+    /// Tells the server the user has seen everything in the room: it zeroes the room's unread and
+    /// mention counts and pushes the changed subscription.
+    ///
+    /// # Errors
+    ///
+    /// [`ApiError::Unauthorized`] if the credentials have expired or were revoked,
+    /// [`ApiError::Server`] if the user isn't in the room.
+    fn mark_read(
+        &self,
+        credentials: &Credentials,
+        room: &RoomId,
+    ) -> impl Future<Output = Result<(), ApiError>> + Send;
+
     /// Opens the realtime connection for the session: connects, logs in with the credentials and
     /// subscribes to the user's messages and subscription changes. What the server pushes from then
     /// on comes out of the receiver, which ends when the connection does. Dropping the receiver

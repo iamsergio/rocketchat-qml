@@ -388,6 +388,93 @@ fn a_direct_message_raises_the_unread_count() {
     drop(client);
 }
 
+/// The room `id` as a freshly logged-in client of `user` lists it.
+fn listed_room(user: &TestUser, id: &str) -> Room {
+    let (client, events) = start();
+    client.login(&server_url(), &user.username, password(user));
+    assert!(matches!(outcome(&events), SessionState::LoggedIn(_)));
+    wait_for(&events, |event| {
+        let Event::Rooms(changes) = event else {
+            return None;
+        };
+        changes.iter().find_map(|change| match change {
+            RoomChange::Reset(rooms) => rooms.iter().find(|room| room.id.as_str() == id).cloned(),
+            _ => None,
+        })
+    })
+}
+
+// ROOM-004
+#[test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+fn opening_a_room_marks_it_read_on_the_server() {
+    let admin = Admin::login();
+    let user = admin.create_user();
+    let dm = admin.create_dm(&user.username);
+    admin.post_message(&dm, "one");
+    admin.post_message(&dm, "two");
+    let (client, events) = logged_in(&user);
+    assert_eq!(listed_room(&user, &dm).unread, 2);
+
+    client.open_room(dm.clone().into());
+
+    let room = wait_for(&events, |event| {
+        room_changed(event, |room| room.id.as_str() == dm)
+    });
+    assert!(!room.has_unread(), "{room:?}");
+    // What the server remembers, as another client sees it.
+    let deadline = Instant::now() + TIMEOUT;
+    while listed_room(&user, &dm).has_unread() {
+        assert!(Instant::now() < deadline, "the server still counts unread");
+        std::thread::sleep(Duration::from_millis(200));
+    }
+}
+
+// ROOM-004
+#[test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+fn a_message_in_the_open_room_stays_read() {
+    let admin = Admin::login();
+    let user = admin.create_user();
+    let dm = admin.create_dm(&user.username);
+    // The user's side of a direct message is hidden until the first message.
+    admin.post_message(&dm, "before");
+    let (client, events) = logged_in(&user);
+    client.open_room(dm.clone().into());
+    let mut mirror = Vec::new();
+    settle(&events, &mut mirror);
+
+    let mut unread_seen = false;
+    for text in ["one", "two"] {
+        let posted = admin.post_message(&dm, text);
+        wait_for(&events, |event| {
+            unread_seen |=
+                room_changed(event, |room| room.id.as_str() == dm && room.has_unread()).is_some();
+            if let Event::Timeline(changes) = event {
+                for change in changes {
+                    change.apply(&mut mirror);
+                }
+            }
+            mirror
+                .iter()
+                .any(|m| m.id.as_str() == posted.id)
+                .then_some(())
+        });
+    }
+    // Rooms changes may follow the message: let them come.
+    while let Ok(event) = events.recv_timeout(Duration::from_millis(500)) {
+        unread_seen |=
+            room_changed(&event, |room| room.id.as_str() == dm && room.has_unread()).is_some();
+    }
+
+    assert!(!unread_seen, "the open room showed up as unread");
+    let deadline = Instant::now() + TIMEOUT;
+    while listed_room(&user, &dm).has_unread() {
+        assert!(Instant::now() < deadline, "the server still counts unread");
+        std::thread::sleep(Duration::from_millis(200));
+    }
+}
+
 // RT-003, RT-002, RT-001
 #[test]
 #[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
