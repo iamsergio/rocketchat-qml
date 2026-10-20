@@ -1,0 +1,59 @@
+# SPDX-FileCopyrightText: 2026 Sergio Martins
+# SPDX-License-Identifier: MIT
+
+name: Coverage
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+  # Only to try out changes to this workflow: running it on every pull request would double the CI.
+  pull_request:
+    branches: [ main ]
+    paths: [ .github/workflows/coverage.yml ]
+
+jobs:
+  coverage:
+    name: Coverage (${{ github.head_ref || github.ref_name }})
+    # The same runner image as build.yml (see .github/Dockerfile): it has cargo-llvm-cov baked in.
+    runs-on: [self-hosted, linux, x64, rocketchat-qml]
+    # A build with instrumentation, then every test suite. The build job takes a fraction of this.
+    timeout-minutes: 60
+
+    env:
+      # See build.yml.
+      RC_TEST_SERVER_URL: http://rc-test-rocketchat:3000
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v7
+
+    # See build.yml.
+    - name: Checkout submodules
+      run: git submodule update --init
+
+    # Not baked into the image: the component belongs to the toolchain rust-toolchain.toml selects.
+    - name: Add the LLVM tools to the Rust toolchain
+      run: rustup component add llvm-tools-preview
+
+    - name: Check the Rocket.Chat test server
+      run: |
+        curl -fsS --max-time 10 "$RC_TEST_SERVER_URL/api/info" ||
+          { echo "::error::The Rocket.Chat test server at $RC_TEST_SERVER_URL isn't reachable. Start it on the runner host with scripts/run_test_server.sh."; exit 1; }
+
+    # Builds the instrumented app (build-coverage), runs the unit, contract and GUI tests with
+    # profiling and writes the report to target/llvm-cov. See the script for the details.
+    - name: Run the tests and make the report
+      run: scripts/coverage.sh
+
+    # The same numbers as the report's index, where they can be read without downloading it.
+    - name: Write the summary
+      run: cat target/llvm-cov/summary.md >> "$GITHUB_STEP_SUMMARY"
+
+    # Private, unlike GitHub Pages: only people with access to the repository can download it.
+    - name: Upload the HTML report
+      uses: actions/upload-artifact@v7
+      with:
+        name: coverage-report
+        path: target/llvm-cov/html
+        if-no-files-found: error

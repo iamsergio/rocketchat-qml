@@ -23,6 +23,15 @@
       ]
     },
     {
+      "name": "coverage",
+      "cacheVariables": {
+        "ROCKETCHATQML_COVERAGE": "ON"
+      },
+      "inherits": [
+        "dev"
+      ]
+    },
+    {
       "name": "dev-clang",
       "cacheVariables": {
         "CMAKE_C_COMPILER": "clang",

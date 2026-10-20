@@ -18,3 +18,4 @@ compile_commands.json
 .qmlls.ini
 .DS_Store
 /target
+*.profraw
