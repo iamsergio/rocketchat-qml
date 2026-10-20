@@ -16,7 +16,10 @@ use tokio::time::Instant;
 
 use crate::adapters::{MemoryMessageStore, RestConnector};
 use crate::backoff::Backoff;
-use crate::domain::{Credentials, Message, RoomId, RoomKind, StoredSession, room_from};
+use crate::domain::{
+    Author, Credentials, Delivery, Message, MessageId, MessageKind, RoomId, RoomKind,
+    StoredSession, User, room_from,
+};
 use crate::error::Error;
 use crate::ports::{
     ApiError, Connector, MessageStore, Page, Pushed, SecretStore, ServerApi, StoreError,
@@ -62,6 +65,11 @@ enum Command {
     Logout,
     OpenRoom(RoomId),
     LoadOlder,
+    SendMessage {
+        room: RoomId,
+        text: String,
+    },
+    RetryMessage(MessageId),
 }
 
 /// The core, as seen from a frontend: commands go in, events come out through the callback given
@@ -197,6 +205,24 @@ impl Client {
         self.send(Command::LoadOlder);
     }
 
+    /// Sends a text message to the room. It shows in the room's messages at once, as pending (see
+    /// [`Delivery`]), and becomes sent when the server confirms it, or failed if it can't. It
+    /// goes out whichever room is open by then. Ignored unless logged in, if the room isn't in the
+    /// room list, or if the text is blank.
+    pub fn send_message(&self, room: RoomId, text: &str) {
+        self.send(Command::SendMessage {
+            room,
+            text: text.to_owned(),
+        });
+    }
+
+    /// Sends a message of the open room that failed again, under the same id, so that it can't
+    /// appear twice if the first attempt got through after all. Ignored unless it is a failed
+    /// message of the open room.
+    pub fn retry_message(&self, id: MessageId) {
+        self.send(Command::RetryMessage(id));
+    }
+
     fn send(&self, command: Command) {
         let sent = self
             .commands
@@ -315,6 +341,15 @@ struct HistoryDone {
     outcome: Result<Page, ApiError>,
 }
 
+/// A send's answer.
+struct SendDone {
+    /// The login attempt the send belongs to: the answer is stale if another has begun since.
+    attempt: u64,
+    room: RoomId,
+    id: MessageId,
+    outcome: Result<Message, ApiError>,
+}
+
 /// What the tasks tell the actor.
 enum Done<A> {
     Login(LoginDone<A>),
@@ -325,6 +360,7 @@ enum Done<A> {
         cycle: u64,
     },
     History(HistoryDone),
+    Send(SendDone),
 }
 
 /// A history fetch in flight.
@@ -424,6 +460,7 @@ impl<C: Connector> Actor<C> {
                     Done::Realtime(report) => self.handle_realtime_done(report),
                     Done::Reconnect { cycle } => self.handle_reconnect(cycle),
                     Done::History(done) => self.handle_history_done(done),
+                    Done::Send(done) => self.handle_send_done(done),
                 },
             }
         }
@@ -481,6 +518,8 @@ impl<C: Connector> Actor<C> {
             Command::Logout => self.logout(),
             Command::OpenRoom(room) => self.open_room(room),
             Command::LoadOlder => self.load_older(),
+            Command::SendMessage { room, text } => self.send_message(room, &text),
+            Command::RetryMessage(id) => self.retry_message(&id),
         }
     }
 
@@ -741,23 +780,34 @@ impl<C: Connector> Actor<C> {
     /// Adds a pushed message to the open room. Other rooms aren't held: they load their history
     /// when opened, and their unread counts arrive as subscription changes.
     fn add_live_message(&mut self, message: Message) {
-        let Some(open) = &mut self.open else {
+        let room = message.room_id.clone();
+        let echo = self.own_user().is_some_and(|me| me.id == message.author.id);
+        let Some(open) = self
+            .open
+            .as_mut()
+            .filter(|open| open.timeline.room() == &room)
+        else {
+            // The echo of a message sent from a room that isn't open any more.
+            if echo {
+                self.change_timeline(&room, |timeline| {
+                    timeline.settle(message).into_iter().collect()
+                });
+            }
             return;
         };
-        if open.timeline.room() != &message.room_id {
-            return;
-        }
+        let confirms = open
+            .timeline
+            .message(&message.id)
+            .is_some_and(Message::is_unsent);
         let newest_to_come = open.fetch.as_ref().is_some_and(|fetch| !fetch.older)
-            || (open.timeline.messages().is_empty() && !open.timeline.reached_start());
+            || (!open.timeline.has_sent() && !open.timeline.reached_start());
         if newest_to_come {
-            open.live.push(message);
-            return;
+            open.live.push(message.clone());
+            if !confirms {
+                return;
+            }
         }
-        let room = message.room_id.clone();
-        if let Some(change) = open.timeline.merge_live(message) {
-            self.messages.save(&room, open.timeline.history());
-            (self.on_event)(Event::Timeline(vec![change]));
-        }
+        self.change_timeline(&room, |timeline| timeline.merge_live(message));
     }
 
     /// Fetches the rooms of the current cycle.
@@ -944,7 +994,7 @@ impl<C: Connector> Actor<C> {
         self.history_task = None;
         match done.outcome {
             Ok(page) => {
-                let change = if older {
+                let changes = if older {
                     open.timeline.merge_older(page.messages, page.reached_start)
                 } else {
                     let mut messages = page.messages;
@@ -952,8 +1002,8 @@ impl<C: Connector> Actor<C> {
                     open.timeline.merge_latest(messages, page.reached_start)
                 };
                 self.messages.save(&done.room, open.timeline.history());
-                if let Some(change) = change {
-                    (self.on_event)(Event::Timeline(vec![change]));
+                if !changes.is_empty() {
+                    (self.on_event)(Event::Timeline(changes));
                 }
             }
             Err(ApiError::Unauthorized) => {
@@ -966,6 +1016,147 @@ impl<C: Connector> Actor<C> {
             }
         }
         self.emit_timeline_status();
+    }
+
+    /// The logged-in user.
+    fn own_user(&self) -> Option<&User> {
+        match &self.state {
+            SessionState::LoggedIn(account) => Some(&account.user),
+            _ => None,
+        }
+    }
+
+    /// Changes the messages of `room` and keeps the result: in the open timeline if it is the
+    /// room's, which the frontend hears about, else in what the store holds of the room, which
+    /// nobody shows.
+    fn change_timeline(
+        &mut self,
+        room: &RoomId,
+        change: impl FnOnce(&mut Timeline) -> Vec<TimelineChange>,
+    ) {
+        if let Some(open) = self
+            .open
+            .as_mut()
+            .filter(|open| open.timeline.room() == room)
+        {
+            let changes = change(&mut open.timeline);
+            if !changes.is_empty() {
+                self.messages.save(room, open.timeline.history());
+                (self.on_event)(Event::Timeline(changes));
+            }
+            return;
+        }
+        let mut timeline = Timeline::new(room.clone(), self.messages.load(room));
+        if !change(&mut timeline).is_empty() {
+            self.messages.save(room, timeline.history());
+        }
+    }
+
+    fn send_message(&mut self, room: RoomId, text: &str) {
+        let Some(me) = self.own_user() else {
+            tracing::debug!("send_message ignored: not logged in");
+            return;
+        };
+        let text = text.trim();
+        if text.is_empty() {
+            return;
+        }
+        if !self.rooms.rooms().iter().any(|known| known.id == room) {
+            tracing::debug!(%room, "send_message ignored: not in the room list");
+            return;
+        }
+        let message = Message {
+            id: MessageId::generate(),
+            room_id: room.clone(),
+            author: Author {
+                id: me.id.clone(),
+                username: me.username.clone(),
+                display_name: me.display_name.clone(),
+            },
+            ts: jiff::Timestamp::now(),
+            kind: MessageKind::Text(text.to_owned()),
+            delivery: Delivery::Pending,
+        };
+        let id = message.id.clone();
+        self.change_timeline(&room, |timeline| vec![timeline.add_unsent(message)]);
+        self.post(room, id, text.to_owned());
+    }
+
+    fn retry_message(&mut self, id: &MessageId) {
+        let Some(open) = &self.open else {
+            tracing::debug!("retry_message ignored: no room is open");
+            return;
+        };
+        let room = open.timeline.room().clone();
+        let Some(Message {
+            kind: MessageKind::Text(text),
+            delivery: Delivery::Failed,
+            ..
+        }) = open.timeline.message(id)
+        else {
+            tracing::debug!(message = %id, "retry_message ignored: not a failed message");
+            return;
+        };
+        let text = text.clone();
+        self.change_timeline(&room, |timeline| {
+            timeline
+                .set_delivery(id, Delivery::Pending)
+                .into_iter()
+                .collect()
+        });
+        self.post(room, id.clone(), text);
+    }
+
+    /// Sends the message in a task, which reports the outcome.
+    fn post(&mut self, room: RoomId, id: MessageId, text: String) {
+        let Some(session) = &self.session else {
+            return;
+        };
+        let api = session.api.clone();
+        let credentials = session.credentials.clone();
+        let attempt = self.attempt;
+        let done = self.done_tx.clone();
+        tokio::spawn(async move {
+            let outcome = api.send_message(&credentials, &room, &id, &text).await;
+            // Fails only if the actor is gone.
+            let _ = done.send(Done::Send(SendDone {
+                attempt,
+                room,
+                id,
+                outcome,
+            }));
+        });
+    }
+
+    fn handle_send_done(&mut self, done: SendDone) {
+        if done.attempt != self.attempt || !matches!(self.state, SessionState::LoggedIn(_)) {
+            tracing::debug!("answer of a stale send dropped");
+            return;
+        }
+        match done.outcome {
+            Ok(message) => {
+                // A page that is on its way may predate the message, and would drop it.
+                if let Some(open) = self.open.as_mut().filter(|open| {
+                    open.timeline.room() == &done.room
+                        && open.fetch.as_ref().is_some_and(|fetch| !fetch.older)
+                }) {
+                    open.live.push(message.clone());
+                }
+                self.change_timeline(&done.room, |timeline| {
+                    timeline.settle(message).into_iter().collect()
+                });
+            }
+            Err(ApiError::Unauthorized) => self.expire_session(),
+            Err(error) => {
+                tracing::warn!(%error, room = %done.room, "can't send the message");
+                self.change_timeline(&done.room, |timeline| {
+                    timeline
+                        .set_delivery(&done.id, Delivery::Failed)
+                        .into_iter()
+                        .collect()
+                });
+            }
+        }
     }
 
     fn abort_history_task(&mut self) {

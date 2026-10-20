@@ -7,7 +7,7 @@ use rc_api::{DdpClient, DdpEvent, DdpEvents, RestClient, ServerVersion};
 use secrecy::SecretString;
 use tokio::sync::mpsc;
 
-use crate::domain::{Credentials, RoomId, RoomKind, User, message_from};
+use crate::domain::{Credentials, Message, MessageId, RoomId, RoomKind, User, message_from};
 use crate::ports::{ApiError, Connector, Page, Pushed, PushedEvents, ServerApi};
 
 pub struct RestConnector;
@@ -78,6 +78,21 @@ impl ServerApi for RestApi {
             messages: page.messages.into_iter().filter_map(message_from).collect(),
             reached_start: page.reached_start,
         })
+    }
+
+    async fn send_message(
+        &self,
+        credentials: &Credentials,
+        room: &RoomId,
+        id: &MessageId,
+        text: &str,
+    ) -> Result<Message, ApiError> {
+        let session = self.client.session(api_credentials(credentials));
+        let stored = session
+            .send_message(room.as_str(), id.as_str(), text)
+            .await?;
+        message_from(stored)
+            .ok_or_else(|| ApiError::Unexpected("the server stored the message as a reply".into()))
     }
 
     async fn realtime(&self, credentials: &Credentials) -> Result<PushedEvents, ApiError> {

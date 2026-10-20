@@ -14,9 +14,9 @@ use std::net::TcpListener;
 use std::sync::mpsc::{self, Receiver};
 use std::time::{Duration, Instant};
 
-use rc_core::adapters::MemoryStore;
-use rc_core::domain::{Message, MessageKind, Room, RoomId, RoomKind};
-use rc_core::ports::SecretStore;
+use rc_core::adapters::{MemoryStore, RestConnector};
+use rc_core::domain::{Delivery, Message, MessageId, MessageKind, Room, RoomId, RoomKind};
+use rc_core::ports::{Connector, SecretStore, ServerApi};
 use rc_core::rooms::RoomChange;
 use rc_core::session::{LoginFailure, SessionState};
 use rc_core::timeline::{PAGE_SIZE, TimelineChange, TimelineStatus};
@@ -458,5 +458,161 @@ fn a_client_catches_up_after_the_connection_was_cut() {
             .any(|m| m.id.as_str() == later.id)
             .then_some(())
     });
+    drop(client);
+}
+
+/// Follows the timeline like a frontend until `done` accepts the mirror.
+fn follow_until(
+    events: &Receiver<Event>,
+    mirror: &mut Vec<Message>,
+    mut done: impl FnMut(&[Message]) -> bool,
+) {
+    wait_for(events, |event| {
+        if let Event::Timeline(changes) = event {
+            for change in changes {
+                change.apply(mirror);
+            }
+        }
+        done(mirror).then_some(())
+    });
+}
+
+/// The id of the unsent message in the mirror.
+fn unsent_id(mirror: &[Message]) -> Option<String> {
+    mirror
+        .iter()
+        .find(|m| m.is_unsent())
+        .map(|m| m.id.to_string())
+}
+
+fn is_sent(mirror: &[Message], id: &str) -> bool {
+    mirror
+        .iter()
+        .any(|m| m.id.as_str() == id && m.delivery == Delivery::Sent)
+}
+
+// SEND-001
+#[test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+fn a_sent_message_is_stored_under_the_id_it_was_shown_with() {
+    let admin = Admin::login();
+    let user = admin.create_user();
+    let (room, _) = admin.create_channel(&[&user.username]);
+    admin.post_message(&room, "said before");
+    let (client, events) = logged_in(&user);
+    client.open_room(room.clone().into());
+    let mut mirror = Vec::new();
+    settle(&events, &mut mirror);
+
+    client.send_message(room.clone().into(), "hello from the client");
+
+    // Shown at once, as pending, then confirmed, with nothing else in between.
+    let mut pending = None;
+    follow_until(&events, &mut mirror, |mirror| {
+        pending = pending.take().or_else(|| unsent_id(mirror));
+        pending.as_deref().is_some_and(|id| is_sent(mirror, id))
+    });
+    let id = pending.unwrap();
+    assert_eq!(texts(&mirror), ["said before", "hello from the client"]);
+    let shown = mirror.last().unwrap();
+    assert_eq!(shown.id.as_str(), id);
+    assert_eq!(shown.author.username, user.username);
+    assert_eq!(admin.last_message(&room).id, id);
+    drop(client);
+}
+
+// SEND-001
+#[test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+fn a_message_sent_to_a_room_that_is_not_open_any_more_is_sent_all_the_same() {
+    let admin = Admin::login();
+    let user = admin.create_user();
+    let (room, _) = admin.create_channel(&[&user.username]);
+    let (other, _) = admin.create_channel(&[&user.username]);
+    admin.post_message(&room, "said before");
+    let (client, events) = logged_in(&user);
+    client.open_room(room.clone().into());
+    let mut mirror = Vec::new();
+    settle(&events, &mut mirror);
+
+    let before = admin.last_message(&room).id;
+    client.send_message(room.clone().into(), "sent and left");
+    client.open_room(other.clone().into());
+    settle(&events, &mut mirror);
+    // Nothing is shown of it here; it arrives on the server all the same.
+    let deadline = Instant::now() + TIMEOUT;
+    while admin.last_message(&room).id == before {
+        assert!(Instant::now() < deadline, "the message never arrived");
+        std::thread::sleep(Duration::from_millis(100));
+    }
+
+    client.open_room(room.clone().into());
+    follow_until(&events, &mut mirror, |mirror| {
+        mirror.iter().any(|m| {
+            m.delivery == Delivery::Sent && texts(std::slice::from_ref(m)) == ["sent and left"]
+        })
+    });
+    assert!(mirror.iter().all(|m| !m.is_unsent()));
+    drop(client);
+}
+
+// SEND-002
+#[tokio::test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+async fn sending_an_id_the_server_stored_already_answers_with_the_stored_message() {
+    let admin = Admin::login();
+    let user = admin.create_user();
+    let (room, _) = admin.create_channel(&[&user.username]);
+    let api = RestConnector.connect(&server_url()).unwrap();
+    let (credentials, _) = api.login(&user.username, &password(&user)).await.unwrap();
+    let room_id = RoomId::from(room.clone());
+    let id = MessageId::from(unique().replace('-', ""));
+
+    let first = api
+        .send_message(&credentials, &room_id, &id, "once")
+        .await
+        .unwrap();
+    let second = api
+        .send_message(&credentials, &room_id, &id, "once")
+        .await
+        .unwrap();
+
+    assert_eq!(second, first);
+    assert_eq!(first.id, id);
+    let page = api
+        .history(&credentials, &room_id, RoomKind::Channel, None, PAGE_SIZE)
+        .await
+        .unwrap();
+    assert_eq!(page.messages.iter().filter(|m| m.id == id).count(), 1);
+}
+
+// SEND-002
+#[test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+fn a_message_that_fails_while_the_server_is_out_of_reach_is_retried_under_its_id() {
+    let admin = Admin::login();
+    let user = admin.create_user();
+    let (room, _) = admin.create_channel(&[&user.username]);
+    let proxy = Proxy::start();
+    let (client, events) = logged_in_at(&proxy.url(), &user);
+    client.open_room(room.clone().into());
+    let mut mirror = Vec::new();
+    settle(&events, &mut mirror);
+
+    proxy.set_accepting(false);
+    proxy.drop_connections();
+    client.send_message(room.clone().into(), "sent in the dark");
+    follow_until(&events, &mut mirror, |mirror| {
+        mirror.iter().any(|m| m.delivery == Delivery::Failed)
+    });
+    let id = unsent_id(&mirror).unwrap();
+    assert_eq!(texts(&mirror), ["sent in the dark"]);
+
+    proxy.set_accepting(true);
+    client.retry_message(id.clone().into());
+    follow_until(&events, &mut mirror, |mirror| is_sent(mirror, &id));
+
+    assert_eq!(texts(&mirror), ["sent in the dark"]);
+    assert_eq!(admin.last_message(&room).id, id);
     drop(client);
 }

@@ -28,7 +28,7 @@ impl MessageStore for MemoryMessageStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::{Author, Message, MessageKind};
+    use crate::domain::{Author, Delivery, Message, MessageKind};
 
     fn history(id: &str) -> RoomHistory {
         RoomHistory {
@@ -42,6 +42,7 @@ mod tests {
                 },
                 ts: jiff::Timestamp::UNIX_EPOCH,
                 kind: MessageKind::Text("hi".into()),
+                delivery: Delivery::Sent,
             }],
             reached_start: true,
         }
