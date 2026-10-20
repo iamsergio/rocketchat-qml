@@ -12,6 +12,7 @@ pub mod domain;
 mod error;
 pub mod logging;
 pub mod ports;
+mod random;
 pub mod rooms;
 pub mod session;
 pub mod timeline;
