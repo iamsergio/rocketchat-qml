@@ -5,16 +5,29 @@
 //! Plain Rust, so it can be unit-tested without Qt or a [`Client`](rc_core::Client).
 
 use rc_core::Event;
-use rc_core::domain::Room;
+use rc_core::domain::{Message, Room, RoomId};
 use rc_core::rooms::RoomChange;
 use rc_core::session::SessionState;
+use rc_core::timeline::{TimelineChange, TimelineStatus};
 
-/// The latest session state and a mirror of the room list.
-#[derive(Debug, Default)]
+use crate::room_view::{RoomState, room_state};
+
+/// The latest session state, a mirror of the room list and a mirror of the open room's messages.
+#[derive(Debug)]
 pub struct Cache {
     /// `None` before the first event.
     state: Option<SessionState>,
     rooms: Vec<Room>,
+    /// The room `messages` belong to.
+    room: Option<RoomId>,
+    messages: Vec<Message>,
+    status: TimelineStatus,
+}
+
+impl Default for Cache {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Cache {
@@ -23,6 +36,15 @@ impl Cache {
         Self {
             state: None,
             rooms: Vec::new(),
+            room: None,
+            messages: Vec::new(),
+            status: TimelineStatus {
+                room: None,
+                loading: false,
+                loading_older: false,
+                reached_start: false,
+                error: None,
+            },
         }
     }
 
@@ -35,6 +57,15 @@ impl Cache {
                     change.apply(&mut self.rooms);
                 }
             }
+            Event::Timeline(changes) => {
+                for change in changes {
+                    change.apply(&mut self.messages);
+                    if let TimelineChange::Reset { room, .. } = change {
+                        self.room.clone_from(room);
+                    }
+                }
+            }
+            Event::TimelineStatus(status) => self.status = status.clone(),
             _ => {}
         }
     }
@@ -49,12 +80,29 @@ impl Cache {
     pub fn rooms_snapshot(&self) -> RoomChange {
         RoomChange::Reset(self.rooms.clone())
     }
+
+    /// The change that brings an empty message model to the current messages.
+    #[must_use]
+    pub fn timeline_snapshot(&self) -> TimelineChange {
+        TimelineChange::Reset {
+            room: self.room.clone(),
+            messages: self.messages.clone(),
+        }
+    }
+
+    /// What the `Room` view model shows now.
+    #[must_use]
+    pub fn room_state(&self) -> RoomState {
+        room_state(&self.rooms, &self.status)
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use rc_core::domain::RoomKind;
+    use rc_core::domain::{Author, MessageKind, RoomKind};
+    use rc_core::ports::RoomHistory;
     use rc_core::rooms::RoomList;
+    use rc_core::timeline::Timeline;
 
     use super::*;
 
@@ -137,5 +185,137 @@ mod tests {
             assert_eq!(mirror, replay, "registered after {taken} events");
         }
         assert_eq!(full.rooms_snapshot(), RoomChange::Reset(replay));
+    }
+
+    fn message(id: &str, secs: i64) -> Message {
+        Message {
+            id: id.to_owned().into(),
+            room_id: "a".to_owned().into(),
+            author: Author {
+                id: "u".to_owned().into(),
+                username: "u".into(),
+                display_name: None,
+            },
+            ts: jiff::Timestamp::from_second(secs).unwrap(),
+            kind: MessageKind::Text(id.to_owned()),
+        }
+    }
+
+    /// Events as the core would emit them for opening a room, loading older messages, receiving
+    /// newer ones, switching rooms and logging out.
+    fn timeline_script() -> Vec<Event> {
+        let status = |room: &str, loading: bool, older: bool, start: bool| {
+            Event::TimelineStatus(TimelineStatus {
+                room: Some(room.to_owned().into()),
+                loading,
+                loading_older: older,
+                reached_start: start,
+                error: None,
+            })
+        };
+        let mut timeline = Timeline::new("a".to_owned().into(), RoomHistory::default());
+        let mut events = vec![
+            Event::Timeline(vec![timeline.reset()]),
+            status("a", true, false, false),
+        ];
+        let page = |ids: &[(&str, i64)]| ids.iter().map(|(id, s)| message(id, *s)).collect();
+        events.push(Event::Timeline(
+            timeline
+                .merge_latest(page(&[("d", 4), ("c", 3)]), false)
+                .into_iter()
+                .collect(),
+        ));
+        events.push(status("a", false, false, false));
+        events.push(status("a", false, true, false));
+        events.push(Event::Timeline(
+            timeline
+                .merge_older(page(&[("c", 3), ("b", 2), ("a", 1)]), true)
+                .into_iter()
+                .collect(),
+        ));
+        events.push(status("a", false, false, true));
+        events.push(Event::Timeline(
+            timeline
+                .merge_latest(page(&[("e", 5), ("d", 4)]), true)
+                .into_iter()
+                .collect(),
+        ));
+        events.push(Event::Timeline(vec![TimelineChange::Reset {
+            room: None,
+            messages: Vec::new(),
+        }]));
+        events.push(Event::TimelineStatus(TimelineStatus::default()));
+        events
+    }
+
+    // MSG-001, MSG-002
+    #[test]
+    fn a_timeline_snapshot_taken_at_any_point_followed_by_the_rest_equals_the_replay() {
+        let events = timeline_script();
+        let mut replay = Vec::new();
+        for event in &events {
+            if let Event::Timeline(changes) = event {
+                for change in changes {
+                    change.apply(&mut replay);
+                }
+            }
+        }
+        for taken in 0..=events.len() {
+            let mut cache = Cache::new();
+            events[..taken].iter().for_each(|event| cache.apply(event));
+            let mut mirror = Vec::new();
+            cache.timeline_snapshot().apply(&mut mirror);
+            for event in &events[taken..] {
+                if let Event::Timeline(changes) = event {
+                    for change in changes {
+                        change.apply(&mut mirror);
+                    }
+                }
+            }
+            assert_eq!(mirror, replay, "registered after {taken} events");
+        }
+    }
+
+    // MSG-001, MSG-002
+    #[test]
+    fn the_snapshot_holds_the_open_rooms_messages() {
+        let mut cache = Cache::new();
+        timeline_script()[..6]
+            .iter()
+            .for_each(|event| cache.apply(event));
+        let TimelineChange::Reset { room, messages } = cache.timeline_snapshot() else {
+            panic!("not a reset");
+        };
+        assert_eq!(room, Some("a".to_owned().into()));
+        let ids: Vec<_> = messages.iter().map(|m| m.id.as_str()).collect();
+        assert_eq!(ids, ["a", "b", "c", "d"]);
+    }
+
+    // MSG-001
+    #[test]
+    fn the_room_state_follows_the_status_and_the_room_list() {
+        let mut cache = Cache::new();
+        assert_eq!(cache.room_state(), RoomState::default());
+        cache.apply(&Event::Rooms(vec![RoomChange::Reset(vec![room(
+            "a", "alpha",
+        )])]));
+        cache.apply(&Event::TimelineStatus(TimelineStatus {
+            room: Some("a".to_owned().into()),
+            loading: true,
+            ..TimelineStatus::default()
+        }));
+        let state = cache.room_state();
+        assert_eq!(
+            (state.room_id.as_str(), state.name.as_str()),
+            ("a", "alpha")
+        );
+        assert!(state.loading);
+        // The room list changing the name changes the state too.
+        cache.apply(&Event::Rooms(vec![RoomChange::Reset(vec![room(
+            "a", "beta",
+        )])]));
+        assert_eq!(cache.room_state().name, "beta");
+        cache.apply(&Event::TimelineStatus(TimelineStatus::default()));
+        assert_eq!(cache.room_state(), RoomState::default());
     }
 }

@@ -1603,6 +1603,7 @@ dependencies = [
  "cxx-qt",
  "cxx-qt-build",
  "cxx-qt-lib",
+ "jiff",
  "rc_core",
  "secrecy",
  "tracing",

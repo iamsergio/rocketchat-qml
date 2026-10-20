@@ -10,7 +10,9 @@ fn main() {
             "src/app_info.rs",
             "src/lifecycle.rs",
             "src/logging.rs",
+            "src/message_list_model.rs",
             "src/room_list_model.rs",
+            "src/room_vm.rs",
             "src/session_vm.rs",
         ])
         .build();

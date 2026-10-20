@@ -3,7 +3,7 @@
 
 //! Connects the one `rc_core::Client` to the view models.
 //!
-//! Both `Session` and `RoomList` need the events of the same client, and QML creates them on its
+//! `Session`, `RoomList`, `Room` and `MessageList` need the events of the same client, and QML creates them on its
 //! own schedule. The hub owns the client, remembers what the events said (see [`Cache`]), and
 //! queues each event to the view models that registered. A view model registering later replays
 //! the cache, so it doesn't matter whether it is created before or after the first events.
@@ -17,13 +17,18 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use cxx_qt::CxxQtThread;
 use rc_core::adapters::{MemoryStore, default_store};
+use rc_core::domain::RoomId;
 use rc_core::ports::SecretStore;
 use rc_core::rooms::RoomChange;
+use rc_core::timeline::TimelineChange;
 use rc_core::{Client, Event};
 use secrecy::SecretString;
 
 use crate::cache::Cache;
+use crate::message_list_model::qobject::MessageListModel;
 use crate::room_list_model::qobject::RoomListModel;
+use crate::room_view::RoomState;
+use crate::room_vm::qobject::RoomVm;
 use crate::session_view::{SessionView, session_view};
 use crate::session_vm::qobject::SessionVm;
 
@@ -40,6 +45,8 @@ struct Hub {
     cache: Cache,
     session: Option<CxxQtThread<SessionVm>>,
     rooms: Option<CxxQtThread<RoomListModel>>,
+    room: Option<CxxQtThread<RoomVm>>,
+    messages: Option<CxxQtThread<MessageListModel>>,
 }
 
 impl Hub {
@@ -49,6 +56,8 @@ impl Hub {
             cache: Cache::new(),
             session: None,
             rooms: None,
+            room: None,
+            messages: None,
         }
     }
 }
@@ -156,6 +165,38 @@ pub fn register_rooms(thread: CxxQtThread<RoomListModel>) -> RoomChange {
     hub.cache.rooms_snapshot()
 }
 
+pub fn open_room(room_id: String) {
+    if let Some(client) = &lock().client {
+        client.open_room(RoomId::from(room_id));
+    } else {
+        tracing::warn!("open_room ignored: the core isn't running");
+    }
+}
+
+pub fn load_older() {
+    if let Some(client) = &lock().client {
+        client.load_older();
+    } else {
+        tracing::warn!("load_older ignored: the core isn't running");
+    }
+}
+
+/// Registers the `Room` view model and returns what it shows now. Call on the GUI thread; the
+/// events that follow the returned state are queued to `thread`.
+pub fn register_room(thread: CxxQtThread<RoomVm>) -> RoomState {
+    let mut hub = lock();
+    hub.room = Some(thread);
+    hub.cache.room_state()
+}
+
+/// Registers the `MessageList` model and returns the change that brings it up to date. Call on
+/// the GUI thread; the events that follow are queued to `thread`.
+pub fn register_messages(thread: CxxQtThread<MessageListModel>) -> TimelineChange {
+    let mut hub = lock();
+    hub.messages = Some(thread);
+    hub.cache.timeline_snapshot()
+}
+
 /// The core's event callback, on a runtime thread.
 fn dispatch(event: Event) {
     let mut guard = lock();
@@ -182,8 +223,34 @@ fn dispatch(event: Event) {
                 tracing::debug!("the RoomList object is gone, unregistered");
                 hub.rooms = None;
             }
+            // The open room's name may have changed.
+            show_room(hub);
         }
+        Event::Timeline(changes) => {
+            let gone = hub
+                .messages
+                .as_ref()
+                .is_some_and(|thread| thread.queue(move |model| model.apply(&changes)).is_err());
+            if gone {
+                tracing::debug!("the MessageList object is gone, unregistered");
+                hub.messages = None;
+            }
+        }
+        Event::TimelineStatus(_) => show_room(hub),
         _ => {}
+    }
+}
+
+/// Sends the `Room` view model what the cache says it shows now.
+fn show_room(hub: &mut Hub) {
+    let state = hub.cache.room_state();
+    let gone = hub
+        .room
+        .as_ref()
+        .is_some_and(|thread| thread.queue(move |vm| vm.show(&state)).is_err());
+    if gone {
+        tracing::debug!("the Room object is gone, unregistered");
+        hub.room = None;
     }
 }
 
