@@ -25,6 +25,7 @@ use rc_core::timeline::TimelineChange;
 use rc_core::{Client, Event};
 use secrecy::SecretString;
 
+use crate::attachment_view::ImageUrls;
 use crate::avatar_view::AvatarUrls;
 use crate::cache::Cache;
 use crate::message_list_model::qobject::MessageListModel;
@@ -222,17 +223,18 @@ pub fn register_room(thread: CxxQtThread<RoomVm>) -> RoomState {
 }
 
 /// Registers the `MessageList` model and returns the change that brings it up to date, who it
-/// shows the messages to, and the avatars it shows. Call on the GUI thread; the events that follow
-/// are queued to `thread`.
+/// shows the messages to, and the avatars and attachment images it shows. Call on the GUI thread;
+/// the events that follow are queued to `thread`.
 pub fn register_messages(
     thread: CxxQtThread<MessageListModel>,
-) -> (TimelineChange, Viewer, AvatarUrls) {
+) -> (TimelineChange, Viewer, AvatarUrls, ImageUrls) {
     let mut hub = lock();
     hub.messages = Some(thread);
     (
         hub.cache.timeline_snapshot(),
         hub.cache.viewer(),
         hub.cache.avatars(),
+        hub.cache.images(),
     )
 }
 
@@ -281,7 +283,25 @@ fn dispatch(event: Event) {
             let changes = hub.cache.avatar_changes(&updates);
             show_avatars(hub, &changes);
         }
+        Event::Images(updates) => {
+            let changes = hub.cache.image_changes(&updates);
+            show_images(hub, &changes);
+        }
         _ => {}
+    }
+}
+
+/// Tells the `MessageList` model which attachment images changed.
+fn show_images(hub: &mut Hub, changes: &[(String, String)]) {
+    let changes = changes.to_vec();
+    let gone = hub.messages.as_ref().is_some_and(|thread| {
+        thread
+            .queue(move |model| model.set_images(&changes))
+            .is_err()
+    });
+    if gone {
+        tracing::debug!("the MessageList object is gone, unregistered");
+        hub.messages = None;
     }
 }
 

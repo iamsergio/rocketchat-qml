@@ -148,14 +148,16 @@ use core::pin::Pin;
 
 use cxx_qt::{CxxQtType, Threading};
 use cxx_qt_lib::{
-    QByteArray, QHash, QHashPair_i32_QByteArray, QModelIndex, QString, QVariant, QVector,
+    QByteArray, QHash, QHashPair_i32_QByteArray, QList, QMap, QMapPair_QString_QVariant,
+    QModelIndex, QString, QVariant, QVector,
 };
 use jiff::Timestamp;
 use jiff::tz::TimeZone;
 use rc_core::domain::{AvatarOwner, Message, MessageKind};
 use rc_core::timeline::TimelineChange;
 
-use crate::avatar_view::{AvatarUrls, color, initials, message_owner, owners, rows_using};
+use crate::attachment_view::{AttachmentView, ImageUrls, attachments, paths, shows_image};
+use crate::avatar_view::{AvatarUrls, color, initials, message_owner, owners, rows_using, runs};
 use crate::hub;
 use crate::message_view::{
     author_name, body, day_label, delivery_name, first_of_day, html, mentions_me, system_text,
@@ -185,6 +187,7 @@ const MENTIONS_ME_ROLE: i32 = 267;
 const AVATAR_ROLE: i32 = 268;
 const AVATAR_INITIALS_ROLE: i32 = 269;
 const AVATAR_COLOR_ROLE: i32 = 270;
+const ATTACHMENTS_ROLE: i32 = 271;
 
 /// Backing data of [`qobject::MessageListModel`]: the messages, mirrored from the core's changes
 /// and held newest first.
@@ -195,6 +198,7 @@ pub struct MessageListModelRust {
     /// Who the messages are shown to: it decides the mentions that stand out.
     viewer: Viewer,
     avatars: AvatarUrls,
+    images: ImageUrls,
 }
 
 impl Default for MessageListModelRust {
@@ -204,6 +208,7 @@ impl Default for MessageListModelRust {
             zone: TimeZone::system(),
             viewer: Viewer::default(),
             avatars: AvatarUrls::default(),
+            images: ImageUrls::default(),
         }
     }
 }
@@ -213,11 +218,35 @@ fn row(index: usize) -> i32 {
     i32::try_from(index).unwrap_or(i32::MAX)
 }
 
+/// The attachments as a `QVariantList` of `QVariantMap`s, with the keys QML reads.
+fn attachments_variant(views: &[AttachmentView]) -> QVariant {
+    let text = |value: &str| QVariant::from(&QString::from(value));
+    let mut list = QList::<QVariant>::default();
+    for view in views {
+        let mut map = QMap::<QMapPair_QString_QVariant>::default();
+        for (key, value) in [
+            ("title", text(&view.title)),
+            ("description", text(&view.description)),
+            ("size", text(&view.size)),
+            ("link", text(&view.link)),
+            ("isImage", QVariant::from(&view.is_image)),
+            ("image", text(&view.image)),
+            ("width", QVariant::from(&view.width)),
+            ("height", QVariant::from(&view.height)),
+        ] {
+            map.insert(QString::from(key), value);
+        }
+        list.append(QVariant::from(&map));
+    }
+    QVariant::from(&list)
+}
+
 impl cxx_qt::Initialize for MessageListModel {
     fn initialize(mut self: Pin<&mut Self>) {
-        let (snapshot, viewer, avatars) = hub::register_messages(self.qt_thread());
+        let (snapshot, viewer, avatars, images) = hub::register_messages(self.qt_thread());
         self.as_mut().rust_mut().viewer = viewer;
         self.as_mut().rust_mut().avatars = avatars;
+        self.as_mut().rust_mut().images = images;
         self.as_mut().apply(&[snapshot]);
     }
 }
@@ -301,6 +330,26 @@ impl MessageListModel {
         }
     }
 
+    /// Takes new image files in and announces the attachments role, and only that, for the rows
+    /// whose message shows them.
+    pub fn set_images(mut self: Pin<&mut Self>, changes: &[(String, String)]) {
+        self.as_mut().rust_mut().images.set(changes);
+        let wanted = paths(changes);
+        let rows = runs(self.messages.len(), |at| {
+            self.messages
+                .get(at)
+                .is_some_and(|message| shows_image(message, &wanted))
+        });
+        let no_parent = QModelIndex::default();
+        for (first, last) in rows {
+            let top_left = self.index(row(first), 0, &no_parent);
+            let bottom_right = self.index(row(last), 0, &no_parent);
+            let mut roles = QVector::<i32>::default();
+            roles.append(ATTACHMENTS_ROLE);
+            self.as_mut().data_changed(&top_left, &bottom_right, &roles);
+        }
+    }
+
     /// Announces new content in every role of the rows `first..=last`.
     fn rows_changed(mut self: Pin<&mut Self>, first: usize, last: usize) {
         let no_parent = QModelIndex::default();
@@ -353,6 +402,11 @@ impl MessageListModel {
             }
             AVATAR_INITIALS_ROLE => text(&initials(author_name(&message.author))),
             AVATAR_COLOR_ROLE => text(&color(&message.author.username)),
+            ATTACHMENTS_ROLE => attachments_variant(&attachments(
+                message,
+                self.viewer.server.as_deref(),
+                &self.images,
+            )),
             _ => QVariant::default(),
         }
     }
@@ -377,6 +431,7 @@ impl MessageListModel {
             (AVATAR_ROLE, "avatar"),
             (AVATAR_INITIALS_ROLE, "avatarInitials"),
             (AVATAR_COLOR_ROLE, "avatarColor"),
+            (ATTACHMENTS_ROLE, "attachments"),
         ] {
             names.insert(role, QByteArray::from(name));
         }

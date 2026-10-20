@@ -30,11 +30,14 @@ const BIG_EMOJI_SIZE: u32 = 40;
 /// A message of nothing but emoji, in pixels.
 const BIG_EMOJI_FONT: u32 = 32;
 
-/// Whoever looks at the messages: it decides which mentions stand out and which emoji exist.
+/// Whoever looks at the messages: it decides which mentions stand out, which emoji exist and where
+/// the links of attachments lead.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Viewer {
     /// The logged-in user, if any.
     pub username: Option<String>,
+    /// The URL the user logged in with: attachment links are relative to it.
+    pub server: Option<String>,
     pub emoji: CustomEmojis,
 }
 
@@ -362,6 +365,7 @@ mod tests {
     fn viewer() -> Viewer {
         Viewer {
             username: Some("alice".into()),
+            server: None,
             emoji: CustomEmojis::new(
                 "https://chat.example.com",
                 &[rc_api::CustomEmoji {
@@ -807,6 +811,7 @@ mod tests {
     fn a_custom_emoji_that_is_not_on_the_web_stays_as_typed() {
         let viewer = Viewer {
             username: None,
+            server: None,
             emoji: CustomEmojis::new(
                 "file:///etc",
                 &[rc_api::CustomEmoji {
