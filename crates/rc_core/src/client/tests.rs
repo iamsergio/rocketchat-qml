@@ -12,11 +12,12 @@ use std::time::{Duration, Instant};
 use rc_api::ServerVersion;
 use secrecy::{ExposeSecret, SecretString};
 use tokio::sync::Notify;
+use tokio::sync::mpsc::{UnboundedSender, unbounded_channel};
 
 use super::*;
 use crate::adapters::MemoryStore;
 use crate::domain::{Account, Author, Message, MessageKind, Room, RoomKind, User};
-use crate::ports::{ApiError, Page};
+use crate::ports::{ApiError, Page, Pushed, PushedEvents};
 use crate::rooms::RoomChange;
 use crate::timeline::{TimelineChange, TimelineError, TimelineStatus};
 
@@ -32,6 +33,14 @@ struct FetchScript {
     /// Holds the fetch until the test notifies it.
     gate: Option<Arc<Notify>>,
     result: Result<Vec<rc_api::Subscription>, ApiError>,
+}
+
+struct RealtimeScript {
+    /// Holds the connection until the test notifies it.
+    gate: Option<Arc<Notify>>,
+    /// What is already waiting on the connection when it opens.
+    initial: Vec<Pushed>,
+    result: Result<(), ApiError>,
 }
 
 struct HistoryScript {
@@ -70,6 +79,11 @@ struct FakeState {
     /// One per history fetch; an empty page at the start once they run out.
     histories: VecDeque<HistoryScript>,
     history_calls: Vec<HistoryCall>,
+    /// One per realtime connection; an open one with nothing waiting once they run out.
+    realtimes: VecDeque<RealtimeScript>,
+    realtime_calls: Vec<(String, String)>,
+    /// The server's end of every connection opened, in order. `None` once the test ended it.
+    connections: Vec<Option<UnboundedSender<Pushed>>>,
 }
 
 /// Scripted results, plus a record of what it was asked.
@@ -104,6 +118,51 @@ impl Fake {
         self.state()
             .histories
             .push_back(HistoryScript { gate, result });
+    }
+
+    fn script_realtime(
+        &self,
+        gate: Option<Arc<Notify>>,
+        initial: Vec<Pushed>,
+        result: Result<(), ApiError>,
+    ) {
+        self.state().realtimes.push_back(RealtimeScript {
+            gate,
+            initial,
+            result,
+        });
+    }
+
+    /// The realtime task has started and is inside `realtime`.
+    fn wait_for_connections(&self, count: usize) {
+        wait_until(|| (self.state().connections.len() >= count).then_some(()));
+    }
+
+    /// Pushes an event on connection `index`. False if the client dropped its end.
+    fn push(&self, index: usize, event: Pushed) -> bool {
+        self.wait_for_connections(index + 1);
+        let state = self.state();
+        state.connections[index]
+            .as_ref()
+            .is_some_and(|server| server.send(event).is_ok())
+    }
+
+    /// The server ends connection `index`.
+    fn end_connection(&self, index: usize) {
+        self.wait_for_connections(index + 1);
+        self.state().connections[index] = None;
+    }
+
+    /// The client has dropped its end of connection `index`, which is what closes it.
+    fn wait_for_connection_closed(&self, index: usize) {
+        self.wait_for_connections(index + 1);
+        wait_until(|| {
+            let state = self.state();
+            state.connections[index]
+                .as_ref()
+                .is_some_and(UnboundedSender::is_closed)
+                .then_some(())
+        });
     }
 
     /// The history fetch task has started and is inside `history`.
@@ -254,6 +313,30 @@ impl ServerApi for Fake {
             gate.notified().await;
         }
         script.result
+    }
+
+    async fn realtime(&self, credentials: &Credentials) -> Result<PushedEvents, ApiError> {
+        let (server, client) = unbounded_channel();
+        let script = {
+            let mut state = self.state();
+            state.realtime_calls.push((
+                credentials.user_id.to_string(),
+                credentials.token.expose_secret().to_owned(),
+            ));
+            state.connections.push(Some(server.clone()));
+            state.realtimes.pop_front()
+        };
+        let Some(script) = script else {
+            return Ok(client);
+        };
+        if let Some(gate) = script.gate {
+            gate.notified().await;
+        }
+        script.result?;
+        for event in script.initial {
+            let _ = server.send(event);
+        }
+        Ok(client)
     }
 
     async fn logout(&self, credentials: &Credentials) -> Result<(), ApiError> {
@@ -1399,4 +1482,362 @@ fn a_failed_older_fetch_keeps_the_messages() {
         Event::Timeline(vec![TimelineChange::Prepended(vec![message("z", 0)])]),
         status("1", false, false, true, None),
     ]);
+}
+
+/// A message of room `room`, pushed by the server.
+fn pushed_message(room: &str, id: &str, secs: i64) -> Pushed {
+    let mut message = message(id, secs);
+    message.room_id = room.to_owned().into();
+    Pushed::Message(message)
+}
+
+fn pushed_subscription(id: &str, name: &str, room_type: rc_api::RoomType) -> Pushed {
+    Pushed::Subscription(subscription(id, name, room_type))
+}
+
+fn removed(id: &str) -> Pushed {
+    Pushed::SubscriptionRemoved(id.to_owned().into())
+}
+
+fn rooms_change(change: RoomChange) -> Event {
+    Event::Rooms(vec![change])
+}
+
+fn appended(id: &str, secs: i64) -> Event {
+    Event::Timeline(vec![TimelineChange::Appended(vec![message(id, secs)])])
+}
+
+// RT-002
+#[test]
+fn what_is_pushed_before_the_rooms_are_listed_is_replayed_on_the_list() {
+    let fake = Fake::new();
+    let gate = Arc::new(Notify::new());
+    fake.script_login(None, Ok(()));
+    fake.script_fetch(
+        Some(Arc::clone(&gate)),
+        Ok(vec![
+            subscription("1", "general", rc_api::RoomType::Channel),
+            subscription("2", "secret", rc_api::RoomType::Private),
+        ]),
+    );
+    let mut unread = subscription("2", "secret", rc_api::RoomType::Private);
+    unread.unread = 3;
+    fake.script_realtime(
+        None,
+        vec![
+            Pushed::Subscription(unread),
+            pushed_subscription("3", "alpha", rc_api::RoomType::Channel),
+        ],
+        Ok(()),
+    );
+    let harness = Harness::new(&fake);
+    harness.login("http://h", "alice");
+    harness.expect_events(vec![
+        session_event(SessionState::Connecting),
+        session_event(logged_in("http://h", "alice")),
+    ]);
+    // The connection was opened before the rooms were asked for.
+    fake.wait_for_subscriptions_calls(1);
+    assert_eq!(fake.state().realtime_calls.len(), 1);
+    gate.notify_one();
+
+    let mut secret = room("2", "secret", RoomKind::Private);
+    secret.unread = 3;
+    harness.expect_events(vec![
+        rooms_event(vec![
+            room("1", "general", RoomKind::Channel),
+            room("2", "secret", RoomKind::Private),
+        ]),
+        rooms_change(RoomChange::Updated {
+            index: 1,
+            room: secret,
+        }),
+        rooms_change(RoomChange::Inserted {
+            index: 0,
+            room: room("3", "alpha", RoomKind::Channel),
+        }),
+    ]);
+    assert_eq!(
+        fake.state().realtime_calls,
+        [("uid".to_owned(), "tok".to_owned())]
+    );
+}
+
+// RT-002
+#[test]
+fn a_subscription_change_inserts_updates_or_moves_the_room() {
+    let fake = Fake::new();
+    let harness = logged_in_harness(&fake);
+    // New.
+    assert!(fake.push(
+        0,
+        pushed_subscription("3", "zulu", rc_api::RoomType::Direct)
+    ));
+    harness.expect_events(vec![rooms_change(RoomChange::Inserted {
+        index: 2,
+        room: room("3", "zulu", RoomKind::Direct),
+    })]);
+    // Same place, new counts.
+    let mut mentioned = subscription("1", "general", rc_api::RoomType::Channel);
+    mentioned.unread = 2;
+    mentioned.user_mentions = 1;
+    mentioned.alert = true;
+    assert!(fake.push(0, Pushed::Subscription(mentioned)));
+    let mut general = room("1", "general", RoomKind::Channel);
+    general.unread = 2;
+    general.user_mentions = 1;
+    general.alert = true;
+    harness.expect_events(vec![rooms_change(RoomChange::Updated {
+        index: 0,
+        room: general,
+    })]);
+    // Renamed.
+    assert!(fake.push(
+        0,
+        pushed_subscription("2", "alpha", rc_api::RoomType::Private)
+    ));
+    harness.expect_events(vec![rooms_change(RoomChange::Moved {
+        from: 1,
+        to: 0,
+        room: room("2", "alpha", RoomKind::Private),
+    })]);
+}
+
+// RT-002
+#[test]
+fn a_removed_or_hidden_subscription_leaves_the_list() {
+    let fake = Fake::new();
+    let harness = logged_in_harness(&fake);
+    assert!(fake.push(0, removed("2")));
+    harness.expect_events(vec![rooms_change(RoomChange::Removed { index: 1 })]);
+    // The next push shows nothing was emitted for an unknown room, or one that's gone.
+    assert!(fake.push(0, removed("2")));
+    assert!(fake.push(0, removed("nope")));
+    let mut hidden = subscription("1", "general", rc_api::RoomType::Channel);
+    hidden.open = false;
+    assert!(fake.push(0, Pushed::Subscription(hidden)));
+    harness.expect_events(vec![rooms_change(RoomChange::Removed { index: 0 })]);
+}
+
+// RT-002
+#[test]
+fn removing_the_open_room_closes_it() {
+    let fake = Fake::new();
+    let harness = logged_in_harness(&fake);
+    open_first_room(&fake, &harness, false);
+    assert!(fake.push(0, removed("1")));
+    harness.expect_events(vec![rooms_change(RoomChange::Removed { index: 0 })]);
+    harness.expect_events(closed_events());
+    // The room is gone: it can't be opened.
+    harness.client.open_room("1".to_owned().into());
+    assert!(fake.push(0, removed("2")));
+    harness.expect_events(vec![rooms_change(RoomChange::Removed { index: 0 })]);
+}
+
+// RT-001
+#[test]
+fn a_live_message_is_appended_to_the_open_room_and_kept() {
+    let fake = Fake::new();
+    let harness = logged_in_harness(&fake);
+    open_first_room(&fake, &harness, false);
+    assert!(fake.push(0, pushed_message("1", "c", 3)));
+    harness.expect_events(vec![appended("c", 3)]);
+
+    // Kept: it's there when the room opens again.
+    harness.client.open_room("2".to_owned().into());
+    harness.expect_events(vec![
+        reset_event(Some("2"), Vec::new()),
+        status("2", true, false, false, None),
+        status("2", false, false, true, None),
+    ]);
+    harness.client.open_room("1".to_owned().into());
+    harness.expect_events(vec![
+        reset_event(
+            Some("1"),
+            vec![message("a", 1), message("b", 2), message("c", 3)],
+        ),
+        status("1", true, false, false, None),
+        status("1", false, false, true, None),
+    ]);
+}
+
+// RT-001
+#[test]
+fn a_live_message_already_held_or_of_another_room_is_ignored() {
+    let fake = Fake::new();
+    let harness = logged_in_harness(&fake);
+    open_first_room(&fake, &harness, false);
+    assert!(fake.push(0, pushed_message("1", "b", 2)));
+    assert!(fake.push(0, pushed_message("2", "x", 9)));
+    assert!(fake.push(0, pushed_message("nowhere", "y", 9)));
+    assert!(fake.push(0, pushed_message("1", "c", 3)));
+    // Nothing came out for the first three.
+    harness.expect_events(vec![appended("c", 3)]);
+}
+
+// RT-001
+#[test]
+fn a_message_pushed_while_the_room_loads_joins_the_page() {
+    let fake = Fake::new();
+    let harness = logged_in_harness(&fake);
+    let gate = Arc::new(Notify::new());
+    fake.script_history(
+        Some(Arc::clone(&gate)),
+        page(vec![message("b", 2), message("a", 1)], false),
+    );
+    harness.client.open_room("1".to_owned().into());
+    harness.expect_events(vec![
+        reset_event(Some("1"), Vec::new()),
+        status("1", true, false, false, None),
+    ]);
+    fake.wait_for_history_calls(1);
+    assert!(fake.push(0, pushed_message("1", "c", 3)));
+    // Pushes come out in order: once this one has, the message before it was taken in.
+    assert!(fake.push(
+        0,
+        pushed_subscription("3", "alpha", rc_api::RoomType::Channel)
+    ));
+    harness.expect_events(vec![rooms_change(RoomChange::Inserted {
+        index: 0,
+        room: room("3", "alpha", RoomKind::Channel),
+    })]);
+    gate.notify_one();
+    harness.expect_events(vec![
+        reset_event(
+            Some("1"),
+            vec![message("a", 1), message("b", 2), message("c", 3)],
+        ),
+        status("1", false, false, false, None),
+    ]);
+}
+
+// AUTH-004
+#[test]
+fn an_unauthorized_realtime_connection_expires_the_session() {
+    let fake = Fake::new();
+    fake.script_login(None, Ok(()));
+    fake.script_realtime(None, Vec::new(), Err(ApiError::Unauthorized));
+    let store = MemoryStore::default();
+    let harness = Harness::with_store(&fake, store.clone());
+    harness.login("http://h", "alice");
+    harness.expect_events(vec![
+        session_event(SessionState::Connecting),
+        session_event(logged_in("http://h", "alice")),
+        session_event(logged_out(Some(LoginFailure::SessionExpired))),
+    ]);
+    wait_for_empty(&store);
+    // Dropping flushes the actor's work: a fetch or a revoke would show by now.
+    drop(harness);
+    assert!(fake.state().subscriptions_calls.is_empty());
+    assert!(fake.state().logout_calls.is_empty());
+}
+
+// RT-003
+#[test]
+fn another_realtime_failure_still_lists_the_rooms() {
+    let fake = Fake::new();
+    fake.script_login(None, Ok(()));
+    fake.script_realtime(
+        None,
+        Vec::new(),
+        Err(ApiError::Unreachable("refused".into())),
+    );
+    fake.script_fetch(
+        None,
+        Ok(vec![subscription(
+            "1",
+            "general",
+            rc_api::RoomType::Channel,
+        )]),
+    );
+    let harness = Harness::new(&fake);
+    harness.login("http://h", "alice");
+    harness.expect_events(vec![
+        session_event(SessionState::Connecting),
+        session_event(logged_in("http://h", "alice")),
+        rooms_event(vec![room("1", "general", RoomKind::Channel)]),
+    ]);
+}
+
+// RT-003
+#[test]
+fn a_connection_that_ends_leaves_the_session_working() {
+    let fake = Fake::new();
+    let harness = logged_in_harness(&fake);
+    fake.end_connection(0);
+    open_first_room(&fake, &harness, false);
+}
+
+// RT-001
+#[test]
+fn logout_ends_the_connection_and_the_next_session_gets_its_own() {
+    let fake = Fake::new();
+    let harness = logged_in_harness(&fake);
+    harness.client.logout();
+    harness.expect_events(vec![session_event(logged_out(None)), rooms_event(vec![])]);
+    // The client dropped its end: the connection is closed.
+    fake.wait_for_connection_closed(0);
+    assert!(!fake.push(0, removed("1")));
+
+    fake.script_login(None, Ok(()));
+    harness.login("http://h", "alice");
+    harness.expect_events(vec![
+        session_event(SessionState::Connecting),
+        session_event(logged_in("http://h", "alice")),
+        rooms_event(vec![]),
+    ]);
+    assert!(fake.push(
+        1,
+        pushed_subscription("5", "new", rc_api::RoomType::Channel)
+    ));
+    harness.expect_events(vec![rooms_change(RoomChange::Inserted {
+        index: 0,
+        room: room("5", "new", RoomKind::Channel),
+    })]);
+}
+
+// RT-001
+#[test]
+fn a_connection_that_opens_after_logout_is_dropped() {
+    let fake = Fake::new();
+    let gate = Arc::new(Notify::new());
+    fake.script_login(None, Ok(()));
+    fake.script_login(None, Ok(()));
+    fake.script_realtime(
+        Some(Arc::clone(&gate)),
+        vec![pushed_subscription("old", "old", rc_api::RoomType::Channel)],
+        Ok(()),
+    );
+    let harness = Harness::new(&fake);
+    harness.login("http://h", "alice");
+    harness.expect_events(vec![
+        session_event(SessionState::Connecting),
+        session_event(logged_in("http://h", "alice")),
+    ]);
+    fake.wait_for_connections(1);
+
+    harness.client.logout();
+    harness.expect_events(vec![session_event(logged_out(None))]);
+    fake.wait_for_connection_closed(0);
+    gate.notify_one();
+
+    fake.script_fetch(
+        None,
+        Ok(vec![subscription("new", "new", rc_api::RoomType::Channel)]),
+    );
+    harness.login("http://h", "alice");
+    harness.expect_events(vec![
+        session_event(SessionState::Connecting),
+        session_event(logged_in("http://h", "alice")),
+        rooms_event(vec![room("new", "new", RoomKind::Channel)]),
+    ]);
+    // Only the new connection's pushes arrive.
+    assert!(fake.push(
+        1,
+        pushed_subscription("5", "other", rc_api::RoomType::Channel)
+    ));
+    harness.expect_events(vec![rooms_change(RoomChange::Inserted {
+        index: 1,
+        room: room("5", "other", RoomKind::Channel),
+    })]);
 }

@@ -3,11 +3,12 @@
 
 //! The server port over the Rocket.Chat REST API.
 
-use rc_api::{RestClient, ServerVersion};
+use rc_api::{DdpClient, DdpEvent, DdpEvents, RestClient, ServerVersion};
 use secrecy::SecretString;
+use tokio::sync::mpsc;
 
 use crate::domain::{Credentials, RoomId, RoomKind, User, message_from};
-use crate::ports::{ApiError, Connector, Page, ServerApi};
+use crate::ports::{ApiError, Connector, Page, Pushed, PushedEvents, ServerApi};
 
 pub struct RestConnector;
 
@@ -17,6 +18,7 @@ impl Connector for RestConnector {
     fn connect(&self, server: &str) -> Result<RestApi, ApiError> {
         Ok(RestApi {
             client: RestClient::new(server)?,
+            server: server.to_owned(),
         })
     }
 }
@@ -24,6 +26,8 @@ impl Connector for RestConnector {
 #[derive(Clone)]
 pub struct RestApi {
     client: RestClient,
+    /// What the realtime connection is opened from; REST needs only the client.
+    server: String,
 }
 
 impl ServerApi for RestApi {
@@ -76,6 +80,17 @@ impl ServerApi for RestApi {
         })
     }
 
+    async fn realtime(&self, credentials: &Credentials) -> Result<PushedEvents, ApiError> {
+        let (ddp, events) = DdpClient::connect(&self.server).await?;
+        ddp.login(&api_credentials(credentials)).await?;
+        ddp.subscribe_my_messages().await?;
+        ddp.subscribe_subscription_changes(credentials.user_id.as_str())
+            .await?;
+        let (pushed, receiver) = mpsc::unbounded_channel();
+        tokio::spawn(forward(ddp, events, pushed));
+        Ok(receiver)
+    }
+
     async fn logout(&self, credentials: &Credentials) -> Result<(), ApiError> {
         Ok(self
             .client
@@ -83,6 +98,34 @@ impl ServerApi for RestApi {
             .logout()
             .await?)
     }
+}
+
+/// Maps the connection's events until it ends or nobody listens any more. The task owns the client,
+/// so ending it closes the connection.
+async fn forward(ddp: DdpClient, mut events: DdpEvents, pushed: mpsc::UnboundedSender<Pushed>) {
+    loop {
+        tokio::select! {
+            event = events.recv() => {
+                let Some(event) = event else { break };
+                if let Some(event) = pushed_from(event)
+                    && pushed.send(event).is_err()
+                {
+                    break;
+                }
+            }
+            () = pushed.closed() => break,
+        }
+    }
+    drop(ddp);
+}
+
+/// `None` for a message the timeline doesn't show, as in the history.
+fn pushed_from(event: DdpEvent) -> Option<Pushed> {
+    Some(match event {
+        DdpEvent::Message(message) => Pushed::Message(message_from(message)?),
+        DdpEvent::SubscriptionChanged(subscription) => Pushed::Subscription(subscription),
+        DdpEvent::SubscriptionRemoved { room_id } => Pushed::SubscriptionRemoved(room_id.into()),
+    })
 }
 
 fn api_credentials(credentials: &Credentials) -> rc_api::Credentials {
@@ -137,4 +180,46 @@ fn chain(error: &dyn std::error::Error) -> String {
         source = cause.source();
     }
     text
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn entry(thread_id: Option<&str>) -> rc_api::Message {
+        rc_api::Message {
+            id: "m1".into(),
+            room_id: "r1".into(),
+            ts: "2026-10-20T14:12:48.587Z".parse().unwrap(),
+            author: rc_api::Author {
+                id: "u1".into(),
+                username: "alice".into(),
+                name: None,
+            },
+            text: "hello".into(),
+            kind: None,
+            thread_id: thread_id.map(str::to_owned),
+            thread_shown: false,
+        }
+    }
+
+    // RT-001
+    #[test]
+    fn pushed_messages_are_filtered_like_the_history() {
+        let shown = pushed_from(DdpEvent::Message(entry(None)));
+        assert!(matches!(shown, Some(Pushed::Message(m)) if m.id.as_str() == "m1"));
+        assert_eq!(pushed_from(DdpEvent::Message(entry(Some("t")))), None);
+    }
+
+    // RT-002
+    #[test]
+    fn a_removed_subscription_is_pushed_by_room_id() {
+        let removed = pushed_from(DdpEvent::SubscriptionRemoved {
+            room_id: "r1".into(),
+        });
+        assert_eq!(
+            removed,
+            Some(Pushed::SubscriptionRemoved("r1".to_owned().into()))
+        );
+    }
 }

@@ -12,14 +12,14 @@
 
 use std::net::TcpListener;
 use std::sync::mpsc::{self, Receiver};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use rc_core::adapters::MemoryStore;
 use rc_core::domain::{Message, MessageKind, Room, RoomId, RoomKind};
 use rc_core::ports::SecretStore;
 use rc_core::rooms::RoomChange;
 use rc_core::session::{LoginFailure, SessionState};
-use rc_core::timeline::{PAGE_SIZE, TimelineStatus};
+use rc_core::timeline::{PAGE_SIZE, TimelineChange, TimelineStatus};
 use rc_core::{Client, Event};
 use rc_test_server::{Admin, TestUser, server_url, unique};
 use secrecy::SecretString;
@@ -271,4 +271,114 @@ fn settle_after_load_older(
 ) -> TimelineStatus {
     client.load_older();
     settle(events, mirror)
+}
+
+/// Reads events like a frontend until `found` returns something. Fails if that takes too long.
+fn wait_for<T>(events: &Receiver<Event>, mut found: impl FnMut(&Event) -> Option<T>) -> T {
+    let deadline = Instant::now() + TIMEOUT;
+    loop {
+        let left = deadline.saturating_duration_since(Instant::now());
+        let event = events.recv_timeout(left).expect("the event never came");
+        if let Some(value) = found(&event) {
+            return value;
+        }
+    }
+}
+
+/// The room a change inserts, updates or moves, as it is afterwards.
+fn changed_room(change: &RoomChange) -> Option<&Room> {
+    match change {
+        RoomChange::Inserted { room, .. }
+        | RoomChange::Updated { room, .. }
+        | RoomChange::Moved { room, .. } => Some(room),
+        _ => None,
+    }
+}
+
+/// The first room that `event` changes and `wanted` accepts.
+fn room_changed(event: &Event, wanted: impl Fn(&Room) -> bool) -> Option<Room> {
+    let Event::Rooms(changes) = event else {
+        return None;
+    };
+    changes
+        .iter()
+        .filter_map(changed_room)
+        .find(|room| wanted(room))
+        .cloned()
+}
+
+// RT-001
+#[test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+fn a_message_posted_to_the_open_room_arrives() {
+    let admin = Admin::login();
+    let user = admin.create_user();
+    let (id, _) = admin.create_channel(&[&user.username]);
+    let (client, events) = logged_in(&user);
+    client.open_room(id.clone().into());
+    let mut mirror = Vec::new();
+    settle(&events, &mut mirror);
+
+    let posted = admin.post_message(&id, "hello from admin");
+    wait_for(&events, |event| {
+        if let Event::Timeline(changes) = event {
+            for change in changes {
+                assert!(
+                    matches!(change, TimelineChange::Appended(_)),
+                    "expected an append, got {change:?}"
+                );
+                change.apply(&mut mirror);
+            }
+        }
+        mirror
+            .iter()
+            .any(|m| m.id.as_str() == posted.id)
+            .then_some(())
+    });
+    assert_eq!(texts(&mirror), ["hello from admin"]);
+    assert!(mirror.iter().all(|m| m.room_id.as_str() == id));
+}
+
+// RT-002, ROOM-001
+#[test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+fn a_channel_created_with_the_user_appears_in_the_room_list() {
+    let admin = Admin::login();
+    let user = admin.create_user();
+    let (client, events) = logged_in(&user);
+
+    let (id, name) = admin.create_channel(&[&user.username]);
+    let room = wait_for(&events, |event| {
+        let Event::Rooms(changes) = event else {
+            return None;
+        };
+        changes.iter().find_map(|change| match change {
+            RoomChange::Inserted { room, .. } if room.id.as_str() == id => Some(room.clone()),
+            _ => None,
+        })
+    });
+    assert_eq!(room.kind, RoomKind::Channel);
+    assert_eq!(room.name, name);
+    drop(client);
+}
+
+// RT-002, ROOM-003
+#[test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+fn a_direct_message_raises_the_unread_count() {
+    let admin = Admin::login();
+    let user = admin.create_user();
+    let (client, events) = logged_in(&user);
+
+    let dm = admin.create_dm(&user.username);
+    admin.post_message(&dm, "one");
+    let room = wait_for(&events, |event| {
+        room_changed(event, |room| room.id.as_str() == dm && room.unread == 1)
+    });
+    assert_eq!(room.kind, RoomKind::Direct);
+    admin.post_message(&dm, "two");
+    wait_for(&events, |event| {
+        room_changed(event, |room| room.id.as_str() == dm && room.unread == 2)
+    });
+    drop(client);
 }
