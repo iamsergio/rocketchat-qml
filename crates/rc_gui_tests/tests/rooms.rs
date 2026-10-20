@@ -15,9 +15,6 @@ use rc_test_server::Admin;
 
 use common::{TIMEOUT, log_in_and_wait_for_room};
 
-/// The marker of a private group's rows.
-const LOCK: &str = "\u{1F512}";
-
 // ROOM-001, ROOM-002
 #[test]
 #[ignore = "needs the app and a Rocket.Chat server: run through ctest"]
@@ -40,15 +37,20 @@ fn the_rooms_are_listed_with_their_names_and_kinds() {
     }
 
     let name = |id: &str| gui.text(&room(id, room_row::NAME)).unwrap();
-    let kind = |id: &str| gui.text(&room(id, room_row::KIND)).unwrap();
     assert_eq!(name(&channel_id), channel_name);
-    assert_eq!(kind(&channel_id), "#");
     assert_eq!(name(&group_id), group_name);
-    assert_eq!(kind(&group_id), LOCK);
     // A direct message is named after the other person.
     let admin_name = admin.name.as_deref().unwrap_or(&admin.username);
     assert_eq!(name(&dm_id), admin_name);
-    assert_eq!(kind(&dm_id), "@");
+    // Each row has the icon of its kind. The icons only show once their SVG has loaded, so this
+    // also fails if the Qt SVG image plugin is missing.
+    for (id, kind) in [
+        (&channel_id, room_row::KIND_CHANNEL),
+        (&group_id, room_row::KIND_PRIVATE),
+        (&dm_id, room_row::KIND_DIRECT),
+    ] {
+        gui.wait_until_visible(&room(id, kind), TIMEOUT).unwrap();
+    }
 }
 
 // ROOM-003

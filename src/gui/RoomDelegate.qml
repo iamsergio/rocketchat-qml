@@ -11,7 +11,7 @@ ItemDelegate {
 
     required property string roomId
     required property string name
-    required property string kindMarker
+    required property string kind
     required property int unread
     required property int userMentions
     required property bool alert
@@ -22,11 +22,20 @@ ItemDelegate {
     contentItem: RowLayout {
         spacing: 12
 
-        Label {
-            objectName: "roomKind"
+        // The icon is named after the room kind: icons/channel.svg, private.svg, direct.svg. Hidden
+        // until it has loaded, so that a missing SVG plugin shows in the GUI tests.
+        Image {
+            objectName: "roomKind_" + root.kind
             Layout.preferredWidth: 24
-            horizontalAlignment: Text.AlignHCenter
-            text: root.kindMarker
+            fillMode: Image.Pad
+            source: "icons/" + root.kind + ".svg"
+            sourceSize: Qt.size(16, 16)
+            visible: status === Image.Ready
+
+            onStatusChanged: {
+                if (status === Image.Error)
+                    console.warn("Can't load the room icon", source, "(is the Qt SVG image plugin installed?)");
+            }
         }
 
         Label {

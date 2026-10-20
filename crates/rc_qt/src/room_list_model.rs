@@ -148,7 +148,7 @@ use rc_core::domain::Room;
 use rc_core::rooms::RoomChange;
 
 use crate::hub;
-use crate::room_view::{kind_marker, kind_name};
+use crate::room_view::kind_name;
 use crate::row_ops::{RowOp, row_ops};
 
 use qobject::RoomListModel;
@@ -165,7 +165,6 @@ const UNREAD_ROLE: i32 = 259;
 const USER_MENTIONS_ROLE: i32 = 260;
 const GROUP_MENTIONS_ROLE: i32 = 261;
 const ALERT_ROLE: i32 = 262;
-const KIND_MARKER_ROLE: i32 = 263;
 
 /// Backing data of [`qobject::RoomListModel`]: the rooms, mirrored from the core's changes.
 #[derive(Default)]
@@ -281,7 +280,6 @@ impl RoomListModel {
             USER_MENTIONS_ROLE => QVariant::from(&count(room.user_mentions)),
             GROUP_MENTIONS_ROLE => QVariant::from(&count(room.group_mentions)),
             ALERT_ROLE => QVariant::from(&room.alert),
-            KIND_MARKER_ROLE => QVariant::from(&QString::from(kind_marker(room.kind))),
             _ => QVariant::default(),
         }
     }
@@ -297,7 +295,6 @@ impl RoomListModel {
             (USER_MENTIONS_ROLE, "userMentions"),
             (GROUP_MENTIONS_ROLE, "groupMentions"),
             (ALERT_ROLE, "alert"),
-            (KIND_MARKER_ROLE, "kindMarker"),
         ] {
             names.insert(role, QByteArray::from(name));
         }

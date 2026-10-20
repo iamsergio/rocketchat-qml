@@ -26,8 +26,12 @@ pub mod main_window {
 /// The parts of a room row, for [`room`].
 pub mod room_row {
     pub const NAME: &str = "roomName";
-    /// The marker of the room's kind: `#` channel, a lock for private, `@` direct.
-    pub const KIND: &str = "roomKind";
+    /// The icon of a channel.
+    pub const KIND_CHANNEL: &str = "roomKind_channel";
+    /// The icon of a private group.
+    pub const KIND_PRIVATE: &str = "roomKind_private";
+    /// The icon of a direct message.
+    pub const KIND_DIRECT: &str = "roomKind_direct";
     pub const UNREAD: &str = "roomUnread";
     pub const MENTIONS: &str = "roomMentions";
 }
