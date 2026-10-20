@@ -1,0 +1,18 @@
+{
+  "emojis": {
+    "update": [
+      {
+        "_id": "6ad7b9a83a2871a71ede5ed2",
+        "name": "probe_emoji",
+        "aliases": [
+          "probe_alias"
+        ],
+        "extension": "png",
+        "_updatedAt": "2026-10-20T18:57:44.107Z",
+        "etag": "44f986"
+      }
+    ],
+    "remove": []
+  },
+  "success": true
+}

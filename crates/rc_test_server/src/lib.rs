@@ -43,6 +43,21 @@ pub fn server_url() -> String {
     })
 }
 
+/// The status of an unauthenticated GET of `url`: whether the server hands out a file to anyone.
+///
+/// # Panics
+///
+/// If the server is unreachable.
+#[must_use]
+pub fn status_without_login(url: &str) -> u16 {
+    let agent: ureq::Agent = ureq::Agent::config_builder()
+        .timeout_global(Some(TIMEOUT))
+        .http_status_as_error(false)
+        .build()
+        .into();
+    agent.get(url).call().unwrap().status().as_u16()
+}
+
 /// A string that is unique across processes, runs and parallel tests.
 #[must_use]
 pub fn unique() -> String {
@@ -56,6 +71,15 @@ pub fn unique() -> String {
         COUNTER.fetch_add(1, Ordering::Relaxed)
     )
 }
+
+/// The image of the custom emoji [`Admin::create_emoji`] makes: one pixel.
+const PIXEL_PNG: [u8; 70] = [
+    0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+    0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4,
+    0x89, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x44, 0x41, 0x54, 0x78, 0xda, 0x63, 0xfc, 0xcf, 0xc0, 0x50,
+    0x0f, 0x00, 0x04, 0x85, 0x01, 0x80, 0x84, 0xa9, 0x8c, 0x21, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45,
+    0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
+];
 
 /// A user made by [`Admin::create_user`].
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -267,6 +291,52 @@ impl Admin {
             id: message["_id"].as_str().unwrap().to_owned(),
             ts: message["ts"].as_str().unwrap().to_owned(),
         }
+    }
+
+    /// Adds a custom emoji called `name` (letters, digits and underscores), a one-pixel PNG, which
+    /// the server then lists and serves.
+    ///
+    /// # Panics
+    ///
+    /// If the server refuses, for example because the name is taken.
+    pub fn create_emoji(&self, name: &str) {
+        const BOUNDARY: &str = "----rc-test-server-emoji";
+        let mut body = Vec::new();
+        let field = |body: &mut Vec<u8>, key: &str, value: &str| {
+            body.extend(
+                format!(
+                    "--{BOUNDARY}\r\nContent-Disposition: form-data; name=\"{key}\"\r\n\r\n{value}\r\n"
+                )
+                .bytes(),
+            );
+        };
+        field(&mut body, "name", name);
+        body.extend(
+            format!(
+                "--{BOUNDARY}\r\nContent-Disposition: form-data; name=\"emoji\"; \
+                 filename=\"emoji.png\"\r\nContent-Type: image/png\r\n\r\n"
+            )
+            .bytes(),
+        );
+        body.extend(PIXEL_PNG);
+        body.extend(format!("\r\n--{BOUNDARY}--\r\n").bytes());
+        let mut response = self
+            .agent
+            .post(format!("{}/emoji-custom.create", self.base))
+            .header("X-User-Id", &self.user_id)
+            .header("X-Auth-Token", &self.token)
+            .header(
+                "Content-Type",
+                format!("multipart/form-data; boundary={BOUNDARY}"),
+            )
+            .send(&body)
+            .unwrap();
+        let status = response.status();
+        let text = response.body_mut().read_to_string().unwrap();
+        assert!(
+            status.is_success() && text.contains("\"success\":true"),
+            "emoji-custom.create: {status} {text}"
+        );
     }
 
     /// GETs an endpoint (with its query) and returns the JSON, which must say `success`.

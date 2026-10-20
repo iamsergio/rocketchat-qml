@@ -10,7 +10,8 @@ use serde_json::json;
 
 use crate::error::Error;
 use crate::types::{
-    Credentials, HistoryPage, LoginResult, Message, RoomType, ServerInfo, Subscription, User,
+    Credentials, CustomEmoji, HistoryPage, LoginResult, Message, RoomType, ServerInfo,
+    Subscription, User,
 };
 use crate::wire;
 
@@ -171,6 +172,16 @@ impl RestSession {
             subscription.last_message = activity.get(&subscription.room_id).copied();
         }
         Ok(subscriptions)
+    }
+
+    /// The server's custom emoji (`GET /api/v1/emoji-custom.list`).
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Unauthorized`] if the token is expired or revoked, or any of the other errors.
+    pub async fn custom_emoji(&self) -> Result<Vec<CustomEmoji>, Error> {
+        let body = self.call(Method::GET, "api/v1/emoji-custom.list").await?;
+        wire::parse_custom_emoji(&body).map_err(Error::Decode)
     }
 
     /// A page of a room's history, newest message first (`channels.history`, `groups.history` or

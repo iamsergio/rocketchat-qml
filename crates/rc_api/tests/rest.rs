@@ -11,6 +11,7 @@ use serde_json::json;
 use wiremock::matchers::{body_json, header, method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
+const EMOJI_CUSTOM: &str = include_str!("fixtures/emoji_custom.json");
 const HISTORY: &str = include_str!("fixtures/history.json");
 const INFO: &str = include_str!("fixtures/info.json");
 const LOGIN: &str = include_str!("fixtures/login.json");
@@ -311,6 +312,26 @@ async fn mark_read_of_a_room_without_subscription_is_a_server_error_with_the_mes
         matches!(result, Err(Error::Server { status: 400, ref message }) if message == "error-invalid-subscription"),
         "{result:?}"
     );
+}
+
+// RICH-003
+#[tokio::test]
+async fn custom_emoji_lists_the_emoji_of_the_server() {
+    let server = MockServer::start().await;
+    mount_authenticated(
+        &server,
+        "GET",
+        "/api/v1/emoji-custom.list",
+        json_response(200, EMOJI_CUSTOM),
+    )
+    .await;
+    let emoji = session(&RestClient::new(&server.uri()).unwrap())
+        .custom_emoji()
+        .await
+        .unwrap();
+    assert_eq!(emoji.len(), 1);
+    assert_eq!(emoji[0].name, "probe_emoji");
+    assert_eq!(emoji[0].extension, "png");
 }
 
 // ROOM-001

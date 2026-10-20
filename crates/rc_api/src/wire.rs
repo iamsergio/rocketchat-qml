@@ -12,8 +12,8 @@ use serde::{Deserialize, Deserializer};
 
 use crate::md;
 use crate::types::{
-    Author, Credentials, DdpEvent, HistoryPage, LoginResult, Message, RoomType, ServerInfo,
-    ServerVersion, Subscription, User,
+    Author, Credentials, CustomEmoji, DdpEvent, HistoryPage, LoginResult, Message, RoomType,
+    ServerInfo, ServerVersion, Subscription, User,
 };
 
 #[derive(Deserialize)]
@@ -42,6 +42,25 @@ struct UserBody {
     username: String,
     #[serde(default)]
     name: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct CustomEmojiBody {
+    emojis: CustomEmojiList,
+}
+
+#[derive(Deserialize)]
+struct CustomEmojiList {
+    #[serde(default)]
+    update: Vec<CustomEmojiEntry>,
+}
+
+#[derive(Deserialize)]
+struct CustomEmojiEntry {
+    name: String,
+    #[serde(default)]
+    aliases: Vec<String>,
+    extension: String,
 }
 
 #[derive(Deserialize)]
@@ -269,6 +288,20 @@ pub(crate) fn parse_subscriptions(bytes: &[u8]) -> Result<Vec<Subscription>, ser
     Ok(body.update.into_iter().map(Subscription::from).collect())
 }
 
+pub(crate) fn parse_custom_emoji(bytes: &[u8]) -> Result<Vec<CustomEmoji>, serde_json::Error> {
+    let body: CustomEmojiBody = serde_json::from_slice(bytes)?;
+    Ok(body
+        .emojis
+        .update
+        .into_iter()
+        .map(|entry| CustomEmoji {
+            name: entry.name,
+            aliases: entry.aliases,
+            extension: entry.extension,
+        })
+        .collect())
+}
+
 /// The time of each room's last message, by room id, for the rooms that have messages.
 pub(crate) fn parse_room_activity(
     bytes: &[u8],
@@ -349,6 +382,7 @@ mod tests {
     const HISTORY: &str = include_str!("../tests/fixtures/history.json");
 
     const HISTORY_RICH: &str = include_str!("../tests/fixtures/history_rich.json");
+    const EMOJI_CUSTOM: &str = include_str!("../tests/fixtures/emoji_custom.json");
 
     fn rich(text: &str) -> Message {
         parse_history(HISTORY_RICH.as_bytes(), 50)
@@ -357,6 +391,27 @@ mod tests {
             .into_iter()
             .find(|m| m.text == text)
             .unwrap_or_else(|| panic!("no message {text:?} in the fixture"))
+    }
+
+    // RICH-003
+    #[test]
+    fn reads_the_custom_emoji_of_the_server() {
+        let emoji = parse_custom_emoji(EMOJI_CUSTOM.as_bytes()).unwrap();
+        assert_eq!(
+            emoji,
+            [CustomEmoji {
+                name: "probe_emoji".into(),
+                aliases: vec!["probe_alias".into()],
+                extension: "png".into(),
+            }]
+        );
+    }
+
+    // RICH-003
+    #[test]
+    fn a_server_without_custom_emoji_lists_none() {
+        let body = br#"{"emojis":{"update":[],"remove":[]},"success":true}"#;
+        assert!(parse_custom_emoji(body).unwrap().is_empty());
     }
 
     // RICH-001
