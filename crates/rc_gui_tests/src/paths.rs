@@ -77,7 +77,12 @@ pub mod message_row {
     pub const DAY_SEPARATOR: &str = "msgDaySeparator";
     pub const AUTHOR: &str = "msgAuthor";
     pub const TIME: &str = "msgTime";
+    /// The message as written: its `text` is the markdown source.
     pub const BODY: &str = "msgBody";
+    /// The message as shown: its `text` is the rich text (HTML) of the body.
+    pub const BODY_HTML: &str = "msgBodyHtml";
+    /// Visible when the message mentions the user (by name, `@all` or `@here`).
+    pub const MENTIONS_ME: &str = "msgMentionsMe";
     /// What a system message says. These have it instead of an author and a body.
     pub const SYSTEM: &str = "msgSystem";
     /// Exists while the message is being sent.
