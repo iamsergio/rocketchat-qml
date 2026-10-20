@@ -55,3 +55,5 @@ if(ROCKETCHATQML_DEVELOPER_MODE)
 endif()
 
 rocketchatqml_set_compiler_flags(rocketchat_qml ${ROCKETCHATQML_DEVELOPER_MODE})
+
+install(TARGETS rocketchat_qml RUNTIME DESTINATION bin)
