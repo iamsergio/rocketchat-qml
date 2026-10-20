@@ -211,6 +211,7 @@ mod tests {
         Some(String::from_utf8(buffer).unwrap())
     }
 
+    // RT-003
     #[test]
     fn it_forwards_both_ways() {
         let proxy = Proxy::start_to(&echo_server());
@@ -219,6 +220,7 @@ mod tests {
         assert_eq!(round_trip(&mut stream, "again").as_deref(), Some("again"));
     }
 
+    // RT-003
     #[test]
     fn dropping_connections_closes_the_open_ones_and_accepts_new_ones() {
         let proxy = Proxy::start_to(&echo_server());
@@ -233,6 +235,7 @@ mod tests {
         assert_eq!(round_trip(&mut third, "e").as_deref(), Some("e"));
     }
 
+    // RT-003
     #[test]
     fn while_not_accepting_new_connections_are_closed_at_once() {
         let proxy = Proxy::start_to(&echo_server());
@@ -248,6 +251,7 @@ mod tests {
         assert_eq!(round_trip(&mut again, "d").as_deref(), Some("d"));
     }
 
+    // RT-003
     #[test]
     fn dropping_the_proxy_closes_everything() {
         let proxy = Proxy::start_to(&echo_server());
