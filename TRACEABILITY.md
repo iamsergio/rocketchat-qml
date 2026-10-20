@@ -56,8 +56,8 @@ Every test carries a `// <ID>` comment. A feature can have tests at several leve
 
 | ID | Feature | Tests |
 |---|---|---|
-| SEND-001 | Send a text message | todo |
-| SEND-002 | Pending/failed state with retry | todo |
+| SEND-001 | Send a text message | unit: `crates/rc_api/src/wire.rs`, `crates/rc_core/src/client/tests.rs`, `crates/rc_core/src/domain.rs`, `crates/rc_core/src/timeline.rs`, `crates/rc_qt/src/cache.rs`, `crates/rc_qt/src/message_view.rs`, `crates/rc_qt/src/room_view.rs`, `crates/rc_qt/src/row_ops.rs`; api: `crates/rc_api/tests/rest.rs`; contract: `crates/rc_api/tests/contract.rs`, `crates/rc_core/tests/contract.rs`; GUI: `crates/rc_gui_tests/tests/send.rs` |
+| SEND-002 | Pending/failed state with retry | unit: `crates/rc_core/src/client/tests.rs`, `crates/rc_core/src/timeline.rs`, `crates/rc_qt/src/message_view.rs`, `crates/rc_qt/src/row_ops.rs`; api: `crates/rc_api/tests/rest.rs`; contract: `crates/rc_api/tests/contract.rs`, `crates/rc_core/tests/contract.rs`; GUI: `crates/rc_gui_tests/tests/send.rs` |
 
 ## Rich content
 
