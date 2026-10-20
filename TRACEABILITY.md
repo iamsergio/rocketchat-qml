@@ -28,7 +28,7 @@ Every test carries a `// <ID>` comment. A feature can have tests at several leve
 | ID | Feature | Tests |
 |---|---|---|
 | ROOM-001 | List subscribed rooms after login | unit: `crates/rc_api/src/wire.rs`, `crates/rc_core/src/domain.rs`, `crates/rc_core/src/rooms.rs`, `crates/rc_core/src/client/tests.rs`, `crates/rc_qt/src/cache.rs`, `crates/rc_qt/src/row_ops.rs`; api: `crates/rc_api/tests/rest.rs`; contract: `crates/rc_api/tests/contract.rs`, `crates/rc_core/tests/contract.rs`; GUI: todo |
-| ROOM-002 | Room shows name and type (channel, private, DM) | unit: `crates/rc_api/src/wire.rs`, `crates/rc_core/src/domain.rs`, `crates/rc_core/src/rooms.rs`, `crates/rc_qt/src/row_ops.rs`; api: `crates/rc_api/tests/rest.rs`; contract: `crates/rc_api/tests/contract.rs`, `crates/rc_core/tests/contract.rs`; GUI: todo |
+| ROOM-002 | Room shows name and type (channel, private, DM) | unit: `crates/rc_api/src/wire.rs`, `crates/rc_core/src/domain.rs`, `crates/rc_core/src/rooms.rs`, `crates/rc_qt/src/room_view.rs`, `crates/rc_qt/src/row_ops.rs`; api: `crates/rc_api/tests/rest.rs`; contract: `crates/rc_api/tests/contract.rs`, `crates/rc_core/tests/contract.rs`; GUI: todo |
 | ROOM-003 | Room shows unread and mention counts | unit: `crates/rc_api/src/wire.rs`, `crates/rc_core/src/domain.rs`, `crates/rc_core/src/rooms.rs`; api: `crates/rc_api/tests/rest.rs`; contract: `crates/rc_api/tests/contract.rs`; GUI: todo |
 | ROOM-004 | Opening a room marks it read | todo |
 | ROOM-005 | Rooms ordered by last activity | todo |
@@ -100,4 +100,4 @@ Every test carries a `// <ID>` comment. A feature can have tests at several leve
 | ID | Feature | Tests |
 |---|---|---|
 | INFRA-001 | XML-RPC client encodes Spix calls and decodes its answers and faults | unit: `crates/rc_gui_tests/src/xmlrpc.rs` |
-| INFRA-002 | GUI test harness reports an app that can't start or exits early | unit: `crates/rc_gui_tests/src/app.rs` |
+| INFRA-002 | GUI test harness reports an app that can't start, exits early or won't quit; passes environment overrides; waits for the UI with a timeout; addresses room rows by id | unit: `crates/rc_gui_tests/src/app.rs`, `crates/rc_gui_tests/src/gui.rs`, `crates/rc_gui_tests/src/paths.rs` |

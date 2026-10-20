@@ -25,5 +25,6 @@ pub mod session_vm;
 
 mod cache;
 mod hub;
+mod room_view;
 mod row_ops;
 mod session_view;

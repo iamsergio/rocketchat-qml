@@ -6,12 +6,16 @@
 
 use std::cell::Cell;
 use std::ops::BitOr;
-use std::time::Duration;
+use std::thread;
+use std::time::{Duration, Instant};
 
 use crate::xmlrpc::{self, Value};
 
 /// How long one call may take, including any queued [`Gui::wait`].
 const CALL_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// How often [`Gui::wait_until`] looks again.
+const POLL_INTERVAL: Duration = Duration::from_millis(50);
 
 #[derive(Debug, thiserror::Error)]
 pub enum GuiError {
@@ -25,6 +29,13 @@ pub enum GuiError {
     Spix(Vec<String>),
     #[error("Spix call {method} returned an unexpected value: {value:?}")]
     UnexpectedValue { method: &'static str, value: Value },
+    #[error("timed out after {timeout:?} waiting for {what}{}", .last.as_ref().map_or_else(String::new, |last| format!(" ({last})")))]
+    Timeout {
+        what: String,
+        timeout: Duration,
+        /// What was seen last, if anything.
+        last: Option<String>,
+    },
 }
 
 pub type Result<T> = std::result::Result<T, GuiError>;
@@ -209,6 +220,70 @@ impl Gui {
         }
     }
 
+    /// Calls `check` until it says true, for up to `timeout`: the core works asynchronously, so the
+    /// UI changes some time after a click. `what` names the awaited state in the timeout error.
+    /// A Spix error from `check` (an element that isn't there yet) is retried; the last one is in
+    /// the timeout error.
+    pub fn wait_until(
+        &self,
+        what: &str,
+        timeout: Duration,
+        mut check: impl FnMut() -> Result<bool>,
+    ) -> Result<()> {
+        let deadline = Instant::now() + timeout;
+        let mut last = None;
+        loop {
+            match check() {
+                Ok(true) => return Ok(()),
+                Ok(false) => {}
+                Err(error @ GuiError::Spix(_)) => last = Some(error.to_string()),
+                Err(error) => return Err(error),
+            }
+            if Instant::now() >= deadline {
+                return Err(GuiError::Timeout {
+                    what: what.to_owned(),
+                    timeout,
+                    last,
+                });
+            }
+            thread::sleep(POLL_INTERVAL);
+        }
+    }
+
+    /// Waits until the element exists and is visible.
+    pub fn wait_until_visible(&self, path: &str, timeout: Duration) -> Result<()> {
+        self.wait_until(&format!("{path} to be visible"), timeout, || {
+            self.exists_and_visible(path)
+        })
+    }
+
+    /// Waits until the element is missing or hidden.
+    pub fn wait_until_hidden(&self, path: &str, timeout: Duration) -> Result<()> {
+        self.wait_until(&format!("{path} to be hidden"), timeout, || {
+            self.exists_and_visible(path).map(|visible| !visible)
+        })
+    }
+
+    /// Waits until the element's `text` is exactly `expected`. The timeout error says what it
+    /// showed last.
+    pub fn wait_until_text(&self, path: &str, expected: &str, timeout: Duration) -> Result<()> {
+        let mut shown = None;
+        self.wait_until(&format!("{path} to show {expected:?}"), timeout, || {
+            let text = self.text(path)?;
+            let done = text == expected;
+            shown = Some(text);
+            Ok(done)
+        })
+        .map_err(|error| match (error, shown) {
+            (GuiError::Timeout { what, timeout, .. }, Some(text)) => GuiError::Timeout {
+                what,
+                timeout,
+                last: Some(format!("it shows {text:?}")),
+            },
+            (error, _) => error,
+        })
+    }
+
     /// Lets the app run for `duration` before it handles the next call.
     pub fn wait(&self, duration: Duration) -> Result<()> {
         let ms = i32::try_from(duration.as_millis()).unwrap_or(i32::MAX);
@@ -284,4 +359,70 @@ impl Gui {
 
 fn unexpected(method: &'static str, value: Value) -> GuiError {
     GuiError::UnexpectedValue { method, value }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A client nothing answers: `wait_until` makes no Spix calls of its own.
+    fn gui() -> Gui {
+        Gui::new(1)
+    }
+
+    // INFRA-002
+    #[test]
+    fn waiting_returns_as_soon_as_the_check_holds() {
+        let mut calls = 0;
+        gui()
+            .wait_until("three calls", Duration::from_secs(10), || {
+                calls += 1;
+                Ok(calls == 3)
+            })
+            .unwrap();
+        assert_eq!(calls, 3);
+    }
+
+    // INFRA-002
+    #[test]
+    fn waiting_names_what_it_waited_for_when_it_times_out() {
+        let result = gui().wait_until("the sun to rise", Duration::from_millis(100), || Ok(false));
+        let message = result.unwrap_err().to_string();
+        assert!(message.contains("the sun to rise"), "{message}");
+        assert!(message.contains("timed out"), "{message}");
+    }
+
+    // INFRA-002
+    #[test]
+    fn waiting_retries_spix_errors_and_reports_the_last_one() {
+        let mut calls = 0;
+        gui()
+            .wait_until("the element", Duration::from_secs(10), || {
+                calls += 1;
+                if calls < 3 {
+                    Err(GuiError::Spix(vec!["item not found".to_owned()]))
+                } else {
+                    Ok(true)
+                }
+            })
+            .unwrap();
+
+        let result = gui().wait_until("the element", Duration::from_millis(100), || {
+            Err(GuiError::Spix(vec!["item not found".to_owned()]))
+        });
+        let message = result.unwrap_err().to_string();
+        assert!(message.contains("item not found"), "{message}");
+    }
+
+    // INFRA-002
+    #[test]
+    fn waiting_gives_up_on_other_errors() {
+        let result = gui().wait_until("anything", Duration::from_secs(10), || {
+            Err(unexpected("getErrors", Value::Bool(true)))
+        });
+        assert!(
+            matches!(result, Err(GuiError::UnexpectedValue { .. })),
+            "{result:?}"
+        );
+    }
 }

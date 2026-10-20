@@ -9,14 +9,34 @@ ApplicationWindow {
     id: root
 
     objectName: "mainWindow"
-    width: 640
-    height: 480
+    width: 900
+    height: 600
     visible: true
     title: qsTr("RocketChatQml")
 
-    Label {
-        objectName: "versionLabel"
-        anchors.centerIn: parent
-        text: qsTr("Rocket.Chat %1").arg(AppInfo.version)
+    // One page per session state. A Loader, so that a page starts empty each time it shows: the
+    // login fields don't keep the password after a logout. While logging in the state is
+    // Connecting, which keeps the login page and its fields.
+    Loader {
+        anchors.fill: parent
+        source: {
+            switch (Session.state) {
+            case Session.LoggedIn:
+                return "RoomPage.qml";
+            case Session.Unknown:
+                return "StartupPage.qml";
+            default:
+                return "LoginPage.qml";
+            }
+        }
+    }
+
+    footer: ToolBar {
+        Label {
+            objectName: "versionLabel"
+            anchors.verticalCenter: parent.verticalCenter
+            leftPadding: 12
+            text: qsTr("Rocket.Chat %1").arg(AppInfo.version)
+        }
     }
 }

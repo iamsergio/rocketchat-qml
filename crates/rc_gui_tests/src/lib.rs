@@ -14,5 +14,5 @@ mod gui;
 pub mod paths;
 mod xmlrpc;
 
-pub use app::{APP_ENV, App, LaunchError};
+pub use app::{APP_ENV, App, LaunchError, QuitError};
 pub use gui::{Gui, GuiError, Key, Modifiers, MouseButton, Rect};
