@@ -21,6 +21,10 @@ release build without Spix, which installs nothing from vcpkg.
 The app logs to stderr (`RUST_LOG` sets the filter, `info` by default). Developer builds also append
 to `build-dev/bin/rocketchat_qml.log`.
 
+To try a change against the local test server, `build-dev/bin/rocketchat_qml --dev` starts with the
+login page filled in for it (`http://127.0.0.1:3000`, `admin` / `admin`; `RC_DEV_SERVER`,
+`RC_DEV_USER` and `RC_DEV_PASS` override them). Only developer builds have `--dev`.
+
 ## Testing
 
     ctest --test-dir build-dev --output-on-failure
