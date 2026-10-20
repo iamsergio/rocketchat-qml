@@ -1,0 +1,755 @@
+// SPDX-FileCopyrightText: 2026 Sergio Martins
+// SPDX-License-Identifier: MIT
+
+//! The body of a message as blocks of formatted text, for any frontend to render. Built from the
+//! server's parsed markdown (`rc_api::md`), or from the plain text when the server sent none.
+
+use rc_api::md;
+
+/// A message body: the text the author wrote and what it looks like formatted.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RichText {
+    /// The text as the author wrote it, markdown source included. For previews, notifications and
+    /// search.
+    pub text: String,
+    /// Empty only if the text is.
+    pub blocks: Vec<Block>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Block {
+    Paragraph(Vec<Inline>),
+    Heading {
+        /// 1 to 6.
+        level: u8,
+        content: Vec<Inline>,
+    },
+    Code {
+        language: Option<String>,
+        /// The lines joined by `\n`.
+        text: String,
+    },
+    Quote(Vec<Block>),
+    BulletList(Vec<Vec<Inline>>),
+    NumberedList {
+        /// The number of the first item.
+        start: u32,
+        items: Vec<Vec<Inline>>,
+    },
+    TaskList(Vec<TaskItem>),
+    /// A message of nothing but emoji, to be shown large.
+    BigEmoji(Vec<Emoji>),
+    /// A formula in display mode, as TeX.
+    Math(String),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TaskItem {
+    pub done: bool,
+    pub content: Vec<Inline>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Inline {
+    Text(String),
+    Bold(Vec<Inline>),
+    Italic(Vec<Inline>),
+    Strike(Vec<Inline>),
+    Code(String),
+    Link {
+        url: String,
+        /// Never empty; the URL itself for a bare link.
+        label: Vec<Inline>,
+    },
+    Image {
+        url: String,
+        alt: String,
+    },
+    Mention(Mention),
+    /// The channel's name, without the `#`.
+    ChannelMention(String),
+    Emoji(Emoji),
+    /// A formula inside a line, as TeX.
+    Math(String),
+    Color {
+        r: u8,
+        g: u8,
+        b: u8,
+        a: u8,
+    },
+    Timestamp {
+        /// `None` if the number is not a time.
+        time: Option<jiff::Timestamp>,
+        /// The format letter the author gave (`R` for relative, `f` for full...).
+        format: String,
+        /// What the author typed; shown when there is no time.
+        fallback: String,
+    },
+    /// Only made for text that has no markup. The server sends one paragraph per line.
+    LineBreak,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Mention {
+    /// The username, without the `@`.
+    User(String),
+    All,
+    Here,
+}
+
+/// At least one of the two is set. The server sends the character for emoji typed as such, and only
+/// the shortcode (`smile`, no colons) for the ones typed by name, which may also be a custom emoji
+/// of the server.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Emoji {
+    pub short_code: Option<String>,
+    pub unicode: Option<String>,
+}
+
+impl RichText {
+    /// A body that has no markup: one paragraph.
+    #[must_use]
+    pub fn plain(text: impl Into<String>) -> Self {
+        let text = text.into();
+        let blocks = if text.is_empty() {
+            Vec::new()
+        } else {
+            vec![Block::Paragraph(plain_inlines(&text))]
+        };
+        Self { text, blocks }
+    }
+
+    /// The body of a message with that text and parsed markdown. Without markup, or when it
+    /// leaves nothing to show, it is the plain text.
+    #[must_use]
+    pub fn from_markdown(text: String, md: Option<&[md::Block]>) -> Self {
+        let blocks: Vec<Block> = md.unwrap_or_default().iter().filter_map(block).collect();
+        if blocks.is_empty() {
+            return Self::plain(text);
+        }
+        Self { text, blocks }
+    }
+}
+
+impl From<String> for RichText {
+    fn from(text: String) -> Self {
+        Self::plain(text)
+    }
+}
+
+impl From<&str> for RichText {
+    fn from(text: &str) -> Self {
+        Self::plain(text)
+    }
+}
+
+fn plain_inlines(text: &str) -> Vec<Inline> {
+    let mut inlines = Vec::new();
+    for (n, line) in text.split('\n').enumerate() {
+        if n > 0 {
+            inlines.push(Inline::LineBreak);
+        }
+        if !line.is_empty() {
+            inlines.push(Inline::Text(line.to_owned()));
+        }
+    }
+    inlines
+}
+
+fn text_block(text: &str) -> Option<Block> {
+    (!text.is_empty()).then(|| Block::Paragraph(vec![Inline::Text(text.to_owned())]))
+}
+
+/// `None` for what shows nothing: the blank-line marker between blocks, which paragraphs already
+/// stand apart for, and an unknown block without text.
+fn block(node: &md::Block) -> Option<Block> {
+    Some(match node {
+        md::Block::Paragraph(content) => Block::Paragraph(inlines(content)),
+        md::Block::Heading { level, content } => Block::Heading {
+            level: *level,
+            content: inlines(content),
+        },
+        md::Block::Code { language, lines } => Block::Code {
+            language: language.clone(),
+            text: lines.join("\n"),
+        },
+        md::Block::Quote(content) => Block::Quote(content.iter().filter_map(block).collect()),
+        md::Block::UnorderedList(items) => {
+            Block::BulletList(items.iter().map(|item| inlines(&item.content)).collect())
+        }
+        md::Block::OrderedList(items) => Block::NumberedList {
+            start: items.first().and_then(|item| item.number).unwrap_or(1),
+            items: items.iter().map(|item| inlines(&item.content)).collect(),
+        },
+        md::Block::Tasks(tasks) => Block::TaskList(
+            tasks
+                .iter()
+                .map(|task| TaskItem {
+                    done: task.done,
+                    content: inlines(&task.content),
+                })
+                .collect(),
+        ),
+        md::Block::BigEmoji(content) => big_emoji(content),
+        md::Block::Katex(tex) => Block::Math(tex.clone()),
+        md::Block::LineBreak => return None,
+        md::Block::Unknown { kind, text } => {
+            tracing::debug!(kind, "markdown block of an unknown type");
+            return text_block(text);
+        }
+    })
+}
+
+/// A block of emoji and nothing else; if the server put anything else in it, a paragraph.
+fn big_emoji(content: &[md::Inline]) -> Block {
+    let emoji: Option<Vec<Emoji>> = content
+        .iter()
+        .map(|node| match node {
+            md::Inline::Emoji {
+                short_code,
+                unicode,
+            } => Some(Emoji {
+                short_code: short_code.clone(),
+                unicode: unicode.clone(),
+            }),
+            _ => None,
+        })
+        .collect();
+    match emoji {
+        Some(emoji) => Block::BigEmoji(emoji),
+        None => Block::Paragraph(inlines(content)),
+    }
+}
+
+fn inlines(nodes: &[md::Inline]) -> Vec<Inline> {
+    nodes.iter().filter_map(inline).collect()
+}
+
+fn inline(node: &md::Inline) -> Option<Inline> {
+    Some(match node {
+        md::Inline::Text(text) => Inline::Text(text.clone()),
+        md::Inline::Bold(content) => Inline::Bold(inlines(content)),
+        md::Inline::Italic(content) => Inline::Italic(inlines(content)),
+        md::Inline::Strike(content) => Inline::Strike(inlines(content)),
+        md::Inline::Code(text) => Inline::Code(text.clone()),
+        md::Inline::Link { url, label } => {
+            let mut label = inlines(label);
+            if label.is_empty() {
+                label.push(Inline::Text(url.clone()));
+            }
+            Inline::Link {
+                url: url.clone(),
+                label,
+            }
+        }
+        md::Inline::Image { url, alt } => Inline::Image {
+            url: url.clone(),
+            alt: alt.clone(),
+        },
+        md::Inline::MentionUser(name) => Inline::Mention(match name.as_str() {
+            "all" => Mention::All,
+            "here" => Mention::Here,
+            _ => Mention::User(name.clone()),
+        }),
+        md::Inline::MentionChannel(name) => Inline::ChannelMention(name.clone()),
+        md::Inline::Emoji {
+            short_code,
+            unicode,
+        } => Inline::Emoji(Emoji {
+            short_code: short_code.clone(),
+            unicode: unicode.clone(),
+        }),
+        md::Inline::Katex(tex) => Inline::Math(tex.clone()),
+        md::Inline::Color { r, g, b, a } => Inline::Color {
+            r: *r,
+            g: *g,
+            b: *b,
+            a: *a,
+        },
+        md::Inline::Timestamp {
+            timestamp,
+            format,
+            fallback,
+        } => Inline::Timestamp {
+            time: timestamp
+                .parse()
+                .ok()
+                .and_then(|seconds| jiff::Timestamp::from_second(seconds).ok()),
+            format: format.clone(),
+            fallback: fallback.clone(),
+        },
+        md::Inline::Unknown { kind, text } => {
+            tracing::debug!(kind, "markdown inline of an unknown type");
+            return (!text.is_empty()).then(|| Inline::Text(text.clone()));
+        }
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::{Value, json};
+
+    use super::*;
+
+    const HISTORY_RICH: &str = include_str!("../../rc_api/tests/fixtures/history_rich.json");
+
+    /// The body of the fixture's message with that text, as the server parsed it.
+    fn rich(text: &str) -> RichText {
+        let history: Value = serde_json::from_str(HISTORY_RICH).unwrap();
+        let message = history["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|m| m["msg"] == text)
+            .unwrap_or_else(|| panic!("no message {text:?} in the fixture"));
+        from_json(text, &message["md"])
+    }
+
+    fn from_json(text: &str, md: &Value) -> RichText {
+        RichText::from_markdown(text.to_owned(), md::parse(md).as_deref())
+    }
+
+    fn t(text: &str) -> Inline {
+        Inline::Text(text.to_owned())
+    }
+
+    fn para(inlines: Vec<Inline>) -> Block {
+        Block::Paragraph(inlines)
+    }
+
+    // RICH-001
+    #[test]
+    fn plain_text_is_one_paragraph() {
+        let body = RichText::plain("hello");
+        assert_eq!(body.text, "hello");
+        assert_eq!(body.blocks, [para(vec![t("hello")])]);
+    }
+
+    // RICH-001
+    #[test]
+    fn plain_text_keeps_its_lines_and_blanks() {
+        assert_eq!(
+            RichText::plain("a\n\nb\n").blocks,
+            [para(vec![
+                t("a"),
+                Inline::LineBreak,
+                Inline::LineBreak,
+                t("b"),
+                Inline::LineBreak
+            ])]
+        );
+    }
+
+    // RICH-001
+    #[test]
+    fn empty_text_has_no_blocks() {
+        assert_eq!(RichText::plain("").blocks, []);
+        assert_eq!(RichText::from_markdown(String::new(), Some(&[])).blocks, []);
+    }
+
+    // RICH-001
+    #[test]
+    fn without_markdown_the_text_is_shown() {
+        let expected = RichText::plain("*hi* there");
+        assert_eq!(RichText::from_markdown("*hi* there".into(), None), expected);
+        assert_eq!(
+            RichText::from_markdown("*hi* there".into(), Some(&[])),
+            expected
+        );
+        assert_eq!(from_json("*hi* there", &json!("garbage")), expected);
+        assert_eq!(
+            from_json("*hi* there", &json!([{"type":"LINE_BREAK"}])),
+            expected
+        );
+        assert_eq!(
+            from_json("*hi* there", &json!([{"type":"X","value":[]}])),
+            expected
+        );
+    }
+
+    // RICH-001
+    #[test]
+    fn a_paragraph_keeps_the_text_the_author_wrote() {
+        let body = rich("plain paragraph");
+        assert_eq!(body.text, "plain paragraph");
+        assert_eq!(body.blocks, [para(vec![t("plain paragraph")])]);
+    }
+
+    // RICH-001
+    #[test]
+    fn blank_lines_between_blocks_are_dropped() {
+        assert_eq!(
+            rich("two\n\nparagraphs").blocks,
+            [para(vec![t("two")]), para(vec![t("paragraphs")])]
+        );
+        let body = rich("hello\n```\ncode\n```\nbye");
+        assert_eq!(
+            body.blocks,
+            [
+                para(vec![t("hello")]),
+                Block::Code {
+                    language: None,
+                    text: "code".into()
+                },
+                para(vec![t("bye")])
+            ]
+        );
+    }
+
+    // RICH-001
+    #[test]
+    fn formatting_and_code() {
+        assert_eq!(
+            rich("**bold** *italic* ~strike~ _it2_ __b2__ ~~st2~~").blocks,
+            [para(vec![
+                Inline::Bold(vec![t("bold")]),
+                t(" "),
+                Inline::Bold(vec![t("italic")]),
+                t(" "),
+                Inline::Strike(vec![t("strike")]),
+                t(" "),
+                Inline::Italic(vec![t("it2")]),
+                t(" "),
+                Inline::Italic(vec![t("b2")]),
+                t(" "),
+                Inline::Strike(vec![t("st2")]),
+            ])]
+        );
+        assert_eq!(
+            rich("`inline code` here").blocks,
+            [para(vec![Inline::Code("inline code".into()), t(" here")])]
+        );
+        assert_eq!(
+            rich("```js\nconsole.log(1)\n```").blocks,
+            [Block::Code {
+                language: Some("js".into()),
+                text: "console.log(1)".into()
+            }]
+        );
+        assert_eq!(
+            rich("```\nno lang\nblock\n```").blocks,
+            [Block::Code {
+                language: None,
+                text: "no lang\nblock".into()
+            }]
+        );
+    }
+
+    // RICH-001
+    #[test]
+    fn nested_formatting_keeps_its_nesting() {
+        let body = rich("mixed **bold [link](https://example.com) text**");
+        assert_eq!(
+            body.blocks,
+            [para(vec![
+                t("mixed "),
+                Inline::Bold(vec![
+                    t("bold "),
+                    Inline::Link {
+                        url: "https://example.com".into(),
+                        label: vec![t("link")]
+                    },
+                    t(" text")
+                ])
+            ])]
+        );
+        let md = json!([{"type":"PARAGRAPH","value":[
+            {"type":"ITALIC","value":[{"type":"BOLD","value":[
+                {"type":"STRIKE","value":[{"type":"PLAIN_TEXT","value":"deep"}]}
+            ]}]}
+        ]}]);
+        assert_eq!(
+            from_json("x", &md).blocks,
+            [para(vec![Inline::Italic(vec![Inline::Bold(vec![
+                Inline::Strike(vec![t("deep")])
+            ])])])]
+        );
+    }
+
+    // RICH-001
+    #[test]
+    fn links_images_and_headings() {
+        assert_eq!(
+            rich("https://example.com/a?b=1").blocks,
+            [para(vec![Inline::Link {
+                url: "https://example.com/a?b=1".into(),
+                label: vec![t("https://example.com/a?b=1")]
+            }])]
+        );
+        assert_eq!(
+            rich("![alt](https://example.com/i.png)").blocks,
+            [para(vec![Inline::Image {
+                url: "https://example.com/i.png".into(),
+                alt: "alt".into()
+            }])]
+        );
+        let body = rich("# H1\n## H2\n### H3\n#### H4\n##### H5\n###### H6");
+        let levels: Vec<_> = body
+            .blocks
+            .iter()
+            .map(|b| match b {
+                Block::Heading { level, .. } => *level,
+                Block::Paragraph(_) => 0,
+                other => panic!("{other:?}"),
+            })
+            .collect();
+        // The server's parser stops at level four; the rest are paragraphs.
+        assert_eq!(levels, [1, 2, 3, 4, 0, 0]);
+    }
+
+    // RICH-001
+    #[test]
+    fn quotes_hold_blocks() {
+        assert_eq!(
+            rich("> quote **bold**\n> - item").blocks,
+            [Block::Quote(vec![
+                para(vec![t("quote "), Inline::Bold(vec![t("bold")])]),
+                para(vec![t("- item")])
+            ])]
+        );
+        assert_eq!(
+            rich("> quote\n\nafter").blocks,
+            [
+                Block::Quote(vec![para(vec![t("quote")])]),
+                para(vec![t("after")])
+            ]
+        );
+    }
+
+    // RICH-001
+    #[test]
+    fn lists() {
+        assert_eq!(
+            rich("1. one\n2. two\n3. three").blocks,
+            [Block::NumberedList {
+                start: 1,
+                items: vec![vec![t("one")], vec![t("two")], vec![t("three")]]
+            }]
+        );
+        assert_eq!(
+            rich("3. starts at three\n4. four").blocks,
+            [Block::NumberedList {
+                start: 3,
+                items: vec![vec![t("starts at three")], vec![t("four")]]
+            }]
+        );
+        assert_eq!(
+            rich("- [ ] todo\n- [x] done").blocks,
+            [Block::TaskList(vec![
+                TaskItem {
+                    done: false,
+                    content: vec![t("todo")]
+                },
+                TaskItem {
+                    done: true,
+                    content: vec![t("done")]
+                }
+            ])]
+        );
+        // The server doesn't nest: the indented item comes out as text between two lists.
+        assert_eq!(
+            rich("- a\n- b\n  - nested\n- c").blocks,
+            [
+                Block::BulletList(vec![vec![t("a")], vec![t("b")]]),
+                para(vec![t("  - nested")]),
+                Block::BulletList(vec![vec![t("c")]])
+            ]
+        );
+    }
+
+    // RICH-002
+    #[test]
+    fn mentions() {
+        assert_eq!(
+            rich("hello @admin and @all and @here").blocks,
+            [para(vec![
+                t("hello "),
+                Inline::Mention(Mention::User("admin".into())),
+                t(" and "),
+                Inline::Mention(Mention::All),
+                t(" and "),
+                Inline::Mention(Mention::Here),
+            ])]
+        );
+        assert_eq!(
+            rich("see #general").blocks,
+            [para(vec![
+                t("see "),
+                Inline::ChannelMention("general".into())
+            ])]
+        );
+    }
+
+    // RICH-003
+    #[test]
+    fn emoji() {
+        let short = |name: &str| Emoji {
+            short_code: Some(name.to_owned()),
+            unicode: None,
+        };
+        let unicode = |c: &str| Emoji {
+            short_code: None,
+            unicode: Some(c.to_owned()),
+        };
+        assert_eq!(
+            rich("use :smile: and :+1: here").blocks,
+            [para(vec![
+                t("use "),
+                Inline::Emoji(short("smile")),
+                t(" and "),
+                Inline::Emoji(short("+1")),
+                t(" here")
+            ])]
+        );
+        assert_eq!(
+            rich("unicode 😀 emoji 👍").blocks,
+            [para(vec![
+                t("unicode "),
+                Inline::Emoji(unicode("😀")),
+                t(" emoji "),
+                Inline::Emoji(unicode("👍"))
+            ])]
+        );
+        assert_eq!(rich("😀").blocks, [Block::BigEmoji(vec![unicode("😀")])]);
+        assert_eq!(
+            rich("😀😀 :smile:").blocks,
+            [Block::BigEmoji(vec![
+                unicode("😀"),
+                unicode("😀"),
+                short("smile")
+            ])]
+        );
+        assert_eq!(
+            rich(":smile:").blocks,
+            [Block::BigEmoji(vec![short("smile")])]
+        );
+    }
+
+    // RICH-001
+    #[test]
+    fn big_emoji_with_anything_else_is_a_paragraph() {
+        let md = json!([{"type":"BIG_EMOJI","value":[
+            {"type":"EMOJI","unicode":"😀"},{"type":"PLAIN_TEXT","value":"x"}
+        ]}]);
+        assert_eq!(
+            from_json("😀x", &md).blocks,
+            [para(vec![
+                Inline::Emoji(Emoji {
+                    short_code: None,
+                    unicode: Some("😀".into())
+                }),
+                t("x")
+            ])]
+        );
+    }
+
+    // RICH-001
+    #[test]
+    fn math_color_and_timestamps() {
+        assert_eq!(
+            rich("\\[\\frac{1}{2}\\]").blocks,
+            [Block::Math("\\frac{1}{2}".into())]
+        );
+        assert_eq!(
+            rich("$$x^2 + y^2$$ and \\(a+b\\)").blocks,
+            [para(vec![
+                t("$$x^2 + y^2$$ and "),
+                Inline::Math("a+b".into())
+            ])]
+        );
+        assert_eq!(
+            rich("color:#ff0000").blocks,
+            [para(vec![Inline::Color {
+                r: 255,
+                g: 0,
+                b: 0,
+                a: 255
+            }])]
+        );
+        let time = Some("2025-01-01T00:00:00Z".parse().unwrap());
+        assert_eq!(
+            rich("<t:1735689600:R> <t:1735689600:f>").blocks,
+            [para(vec![
+                Inline::Timestamp {
+                    time,
+                    format: "R".into(),
+                    fallback: "<t:1735689600:R>".into()
+                },
+                t(" "),
+                Inline::Timestamp {
+                    time,
+                    format: "f".into(),
+                    fallback: "<t:1735689600:f>".into()
+                }
+            ])]
+        );
+    }
+
+    // RICH-001
+    #[test]
+    fn a_timestamp_that_is_no_time_has_none() {
+        let md = json!([{"type":"PARAGRAPH","value":[
+            {"type":"TIMESTAMP","value":{"timestamp":"soon","format":"R"},
+             "fallback":{"type":"PLAIN_TEXT","value":"<t:soon:R>"}},
+            {"type":"TIMESTAMP","value":{"timestamp":"99999999999999999","format":"R"}}
+        ]}]);
+        let [Block::Paragraph(inlines)] = &from_json("x", &md).blocks[..] else {
+            panic!()
+        };
+        assert!(matches!(&inlines[0], Inline::Timestamp { time: None, .. }));
+        assert!(matches!(&inlines[1], Inline::Timestamp { time: None, .. }));
+    }
+
+    // RICH-001
+    #[test]
+    fn unknown_nodes_become_their_text() {
+        let md = json!([
+            {"type":"FANCY","value":[{"type":"PARAGRAPH","value":[{"type":"PLAIN_TEXT","value":"deep"}]}]},
+            {"type":"EMPTY_THING"},
+            {"type":"PARAGRAPH","value":[
+                t_json("a "),
+                {"type":"SPOILER","value":[{"type":"PLAIN_TEXT","value":"secret"}]},
+                {"type":"MYSTERY"},
+                t_json(" b")
+            ]}
+        ]);
+        assert_eq!(
+            from_json("x", &md).blocks,
+            [
+                para(vec![t("deep")]),
+                para(vec![t("a "), t("secret"), t(" b")])
+            ]
+        );
+    }
+
+    fn t_json(text: &str) -> Value {
+        json!({"type":"PLAIN_TEXT","value":text})
+    }
+
+    // RICH-001
+    #[test]
+    fn a_link_without_a_label_shows_its_url() {
+        let md = json!([{"type":"PARAGRAPH","value":[
+            {"type":"LINK","value":{"src":{"type":"PLAIN_TEXT","value":"https://a"},"label":[]}}
+        ]}]);
+        assert_eq!(
+            from_json("x", &md).blocks,
+            [para(vec![Inline::Link {
+                url: "https://a".into(),
+                label: vec![t("https://a")]
+            }])]
+        );
+    }
+
+    // RICH-001
+    #[test]
+    fn every_message_of_the_fixture_maps_to_blocks() {
+        let history: Value = serde_json::from_str(HISTORY_RICH).unwrap();
+        for message in history["messages"].as_array().unwrap() {
+            let text = message["msg"].as_str().unwrap();
+            let body = rich(text);
+            assert_eq!(body.text, text);
+            assert!(!body.blocks.is_empty(), "{text:?}");
+        }
+    }
+}

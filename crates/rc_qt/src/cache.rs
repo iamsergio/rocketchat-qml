@@ -237,7 +237,7 @@ mod tests {
                 display_name: None,
             },
             ts: jiff::Timestamp::from_second(secs).unwrap(),
-            kind: MessageKind::Text(id.to_owned()),
+            kind: MessageKind::Text(id.into()),
             delivery: Delivery::Sent,
         }
     }

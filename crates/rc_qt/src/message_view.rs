@@ -23,7 +23,7 @@ pub fn author_name(author: &Author) -> &str {
 #[must_use]
 pub fn body(message: &Message) -> &str {
     match &message.kind {
-        MessageKind::Text(text) => text,
+        MessageKind::Text(text) => &text.text,
         MessageKind::System(_) => "",
     }
 }

@@ -17,6 +17,7 @@ use std::time::{Duration, Instant};
 use rc_core::adapters::{MemoryStore, RestConnector};
 use rc_core::domain::{Delivery, Message, MessageId, MessageKind, Room, RoomId, RoomKind};
 use rc_core::ports::{Connector, SecretStore, ServerApi};
+use rc_core::rich::{Block, Emoji, Inline, Mention, TaskItem};
 use rc_core::rooms::RoomChange;
 use rc_core::session::{LoginFailure, SessionState};
 use rc_core::timeline::{PAGE_SIZE, TimelineChange, TimelineStatus};
@@ -222,7 +223,7 @@ fn texts(messages: &[Message]) -> Vec<&str> {
     messages
         .iter()
         .filter_map(|m| match &m.kind {
-            MessageKind::Text(text) => Some(text.as_str()),
+            MessageKind::Text(text) => Some(text.text.as_str()),
             MessageKind::System(_) => None,
         })
         .collect()
@@ -342,6 +343,87 @@ fn a_message_posted_to_the_open_room_arrives() {
     });
     assert_eq!(texts(&mirror), ["hello from admin"]);
     assert!(mirror.iter().all(|m| m.room_id.as_str() == id));
+}
+
+/// The blocks of the ordinary message with that text.
+fn blocks_of<'a>(messages: &'a [Message], text: &str) -> &'a [Block] {
+    messages
+        .iter()
+        .find_map(|m| match &m.kind {
+            MessageKind::Text(body) if body.text == text => Some(body.blocks.as_slice()),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("no message {text:?}"))
+}
+
+// RICH-001, RICH-002, RICH-003
+#[test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+fn formatted_messages_arrive_as_blocks_from_history_and_live() {
+    let admin = Admin::login();
+    let user = admin.create_user();
+    let (id, _) = admin.create_channel(&[&user.username]);
+    let formatted = "**bold** and `code` for @all in #general :smile: 😀";
+    let list = "- [x] done\n- [ ] todo\n\n> quoted\n\n```rust\nlet x = 1;\n```";
+    admin.post_message(&id, formatted);
+    admin.post_message(&id, "just text");
+    let (client, events) = logged_in(&user);
+    client.open_room(id.clone().into());
+    let mut mirror = Vec::new();
+    settle(&events, &mut mirror);
+
+    let Block::Paragraph(inlines) = &blocks_of(&mirror, formatted)[0] else {
+        panic!("{:?}", blocks_of(&mirror, formatted));
+    };
+    assert_eq!(inlines[0], Inline::Bold(vec![Inline::Text("bold".into())]));
+    assert_eq!(inlines[2], Inline::Code("code".into()));
+    assert_eq!(inlines[4], Inline::Mention(Mention::All));
+    assert_eq!(inlines[6], Inline::ChannelMention("general".into()));
+    assert!(matches!(
+        &inlines[8],
+        Inline::Emoji(Emoji { short_code: Some(code), unicode: None }) if code == "smile"
+    ));
+    assert!(matches!(
+        &inlines[10],
+        Inline::Emoji(Emoji { short_code: None, unicode: Some(c) }) if c == "😀"
+    ));
+    assert_eq!(
+        blocks_of(&mirror, "just text"),
+        [Block::Paragraph(vec![Inline::Text("just text".into())])]
+    );
+
+    let posted = admin.post_message(&id, list);
+    wait_for(&events, |event| {
+        if let Event::Timeline(changes) = event {
+            for change in changes {
+                change.apply(&mut mirror);
+            }
+        }
+        mirror
+            .iter()
+            .any(|m| m.id.as_str() == posted.id)
+            .then_some(())
+    });
+    assert_eq!(
+        blocks_of(&mirror, list),
+        [
+            Block::TaskList(vec![
+                TaskItem {
+                    done: true,
+                    content: vec![Inline::Text("done".into())]
+                },
+                TaskItem {
+                    done: false,
+                    content: vec![Inline::Text("todo".into())]
+                }
+            ]),
+            Block::Quote(vec![Block::Paragraph(vec![Inline::Text("quoted".into())])]),
+            Block::Code {
+                language: Some("rust".into()),
+                text: "let x = 1;".into()
+            }
+        ]
+    );
 }
 
 // RT-002, ROOM-001

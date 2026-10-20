@@ -98,8 +98,9 @@ pub enum Inline {
     },
 }
 
-/// Reads the `md` field. `None` if it isn't an array.
-pub(crate) fn parse(value: &Value) -> Option<Vec<Block>> {
+/// Reads the `md` field of a message as the server sent it. `None` if it isn't an array.
+#[must_use]
+pub fn parse(value: &Value) -> Option<Vec<Block>> {
     Some(value.as_array()?.iter().map(block).collect())
 }
 

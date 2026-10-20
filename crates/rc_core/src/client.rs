@@ -1192,7 +1192,7 @@ impl<C: Connector> Actor<C> {
                 display_name: me.display_name.clone(),
             },
             ts: jiff::Timestamp::now(),
-            kind: MessageKind::Text(text.to_owned()),
+            kind: MessageKind::Text(text.into()),
             delivery: Delivery::Pending,
         };
         let id = message.id.clone();
@@ -1215,7 +1215,7 @@ impl<C: Connector> Actor<C> {
             tracing::debug!(message = %id, "retry_message ignored: not a failed message");
             return;
         };
-        let text = text.clone();
+        let text = text.text.clone();
         self.change_timeline(&room, |timeline| {
             timeline
                 .set_delivery(id, Delivery::Pending)
