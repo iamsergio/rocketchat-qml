@@ -24,6 +24,8 @@ tracing.workspace = true
 [features]
 # Set by CMake with ROCKETCHATQML_DEVELOPER_MODE: also log to a file next to the executable.
 developer-mode = []
+# Set by CMake with ROCKETCHATQML_SPIX: RC_SECRET_STORE=file:<path> keeps the token in a plain file.
+test-file-store = ["rc_core/test-file-store"]
 
 [build-dependencies]
 cxx-qt-build.workspace = true

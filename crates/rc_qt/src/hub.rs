@@ -12,6 +12,7 @@
 //! never waits for the runtime either (commands don't block). So queueing while holding the lock
 //! is fine.
 
+use std::path::PathBuf;
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use cxx_qt::CxxQtThread;
@@ -27,7 +28,8 @@ use crate::session_view::{SessionView, session_view};
 use crate::session_vm::qobject::SessionVm;
 
 /// Environment variable choosing where the session token is kept. `memory` keeps it in memory
-/// only; anything else, or unset, uses the OS keyring.
+/// only, and `file:<path>` in a plain file (GUI tests, in builds with `test-file-store`); anything
+/// else, or unset, uses the OS keyring.
 const STORE_ENV: &str = "RC_SECRET_STORE";
 
 // There is exactly one core per process, so one hub.
@@ -57,9 +59,38 @@ fn lock() -> MutexGuard<'static, Hub> {
     HUB.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
-/// Whether `RC_SECRET_STORE` (`value`, if set) asks for the in-memory store.
-fn wants_memory_store(value: Option<&str>) -> bool {
-    value == Some("memory")
+/// Where `RC_SECRET_STORE` says the session is kept.
+#[derive(Debug, PartialEq, Eq)]
+enum StoreChoice {
+    Keyring,
+    Memory,
+    File(PathBuf),
+}
+
+/// Reads `RC_SECRET_STORE` (`value`, if set).
+fn store_choice(value: Option<&str>) -> StoreChoice {
+    match value {
+        Some("memory") => StoreChoice::Memory,
+        Some(value) => value
+            .strip_prefix("file:")
+            .map_or(StoreChoice::Keyring, |path| StoreChoice::File(path.into())),
+        None => StoreChoice::Keyring,
+    }
+}
+
+/// The plain-file store, which only builds with `test-file-store` have.
+#[cfg(feature = "test-file-store")]
+fn file_store(path: PathBuf) -> Box<dyn SecretStore> {
+    tracing::info!(path = %path.display(), "secret store: plain file ({STORE_ENV}=file:...)");
+    Box::new(rc_core::adapters::FileStore::new(path))
+}
+
+/// Without the feature the request can't be met. Never the keyring: whoever asked for a file
+/// didn't want the user's real keyring touched.
+#[cfg(not(feature = "test-file-store"))]
+fn file_store(_path: PathBuf) -> Box<dyn SecretStore> {
+    tracing::warn!("{STORE_ENV}=file:... needs a build with test-file-store: using memory");
+    Box::new(MemoryStore::default())
 }
 
 /// Starts the core, unless it is running already. Call on the GUI thread.
@@ -69,12 +100,16 @@ pub fn start() {
         return;
     }
     let value = std::env::var(STORE_ENV).ok();
-    let store: Box<dyn SecretStore> = if wants_memory_store(value.as_deref()) {
-        tracing::info!("secret store: memory ({STORE_ENV}=memory)");
-        Box::new(MemoryStore::default())
-    } else {
-        tracing::info!("secret store: OS keyring, falling back to memory");
-        default_store()
+    let store: Box<dyn SecretStore> = match store_choice(value.as_deref()) {
+        StoreChoice::Memory => {
+            tracing::info!("secret store: memory ({STORE_ENV}=memory)");
+            Box::new(MemoryStore::default())
+        }
+        StoreChoice::File(path) => file_store(path),
+        StoreChoice::Keyring => {
+            tracing::info!("secret store: OS keyring, falling back to memory");
+            default_store()
+        }
     };
     match Client::start(store, dispatch) {
         Ok(client) => lock().client = Some(client),
@@ -158,10 +193,35 @@ mod tests {
 
     // AUTH-004
     #[test]
-    fn only_memory_selects_the_memory_store() {
-        assert!(wants_memory_store(Some("memory")));
-        assert!(!wants_memory_store(Some("keyring")));
-        assert!(!wants_memory_store(Some("")));
-        assert!(!wants_memory_store(None));
+    fn memory_selects_the_memory_store() {
+        assert_eq!(store_choice(Some("memory")), StoreChoice::Memory);
+    }
+
+    // AUTH-004
+    #[test]
+    fn file_selects_the_file_store_with_its_path() {
+        assert_eq!(
+            store_choice(Some("file:/tmp/session.json")),
+            StoreChoice::File("/tmp/session.json".into())
+        );
+        // Everything after the first colon is the path.
+        assert_eq!(
+            store_choice(Some("file:C:\\tmp\\s.json")),
+            StoreChoice::File("C:\\tmp\\s.json".into())
+        );
+    }
+
+    // AUTH-004
+    #[test]
+    fn anything_else_selects_the_keyring() {
+        for value in [
+            Some("keyring"),
+            Some(""),
+            Some("file"),
+            Some("Memory"),
+            None,
+        ] {
+            assert_eq!(store_choice(value), StoreChoice::Keyring, "{value:?}");
+        }
     }
 }

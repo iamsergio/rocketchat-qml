@@ -3,10 +3,16 @@
 
 //! Implementations of the ports for real I/O.
 
+mod blob;
+// The test store writes the token in clear text: it only exists with its feature, and in unit tests.
+#[cfg(any(test, feature = "test-file-store"))]
+mod file;
 mod keyring;
 mod memory;
 mod rest;
 
+#[cfg(any(test, feature = "test-file-store"))]
+pub use file::FileStore;
 pub use keyring::KeyringStore;
 pub use memory::MemoryStore;
 pub use rest::RestConnector;

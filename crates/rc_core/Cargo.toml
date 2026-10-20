@@ -20,6 +20,10 @@ tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync", "ti
 tracing.workspace = true
 tracing-subscriber.workspace = true
 
+[features]
+# FileStore: the session token in a plain file. For tests only; release builds must not have it.
+test-file-store = []
+
 [dev-dependencies]
 rc_test_server.workspace = true
 

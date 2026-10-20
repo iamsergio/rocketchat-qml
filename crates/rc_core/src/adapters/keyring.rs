@@ -4,43 +4,13 @@
 //! The secret store over the OS credential store: Keychain on macOS, Credential Manager on Windows
 //! and the Secret Service on Linux (through the system libdbus).
 
-use keyring_core::{CredentialStore, Entry};
-use secrecy::{ExposeSecret, SecretString};
-use serde::{Deserialize, Serialize};
-
-use crate::domain::{Credentials, StoredSession};
+use super::blob::{decode, encode};
+use crate::domain::StoredSession;
 use crate::ports::{SecretStore, StoreError};
+use keyring_core::{CredentialStore, Entry};
 
 const SERVICE: &str = "RocketChatQml";
 const USER: &str = "session";
-
-/// What goes into the keyring entry, as JSON.
-#[derive(Serialize, Deserialize)]
-struct Blob {
-    server: String,
-    user_id: String,
-    token: String,
-}
-
-fn encode(session: &StoredSession) -> Result<String, StoreError> {
-    serde_json::to_string(&Blob {
-        server: session.server.clone(),
-        user_id: session.credentials.user_id.as_str().to_owned(),
-        token: session.credentials.token.expose_secret().to_owned(),
-    })
-    .map_err(|e| StoreError::Corrupt(e.to_string()))
-}
-
-fn decode(text: &str) -> Result<StoredSession, StoreError> {
-    let blob: Blob = serde_json::from_str(text).map_err(|e| StoreError::Corrupt(e.to_string()))?;
-    Ok(StoredSession {
-        server: blob.server,
-        credentials: Credentials {
-            user_id: blob.user_id.into(),
-            token: SecretString::from(blob.token),
-        },
-    })
-}
 
 fn store_error(error: &keyring_core::Error) -> StoreError {
     match error {
@@ -126,7 +96,10 @@ mod tests {
     use std::process;
     use std::time::{SystemTime, UNIX_EPOCH};
 
+    use secrecy::{ExposeSecret, SecretString};
+
     use super::*;
+    use crate::domain::Credentials;
 
     fn session() -> StoredSession {
         StoredSession {
@@ -135,27 +108,6 @@ mod tests {
                 user_id: "uid".to_owned().into(),
                 token: SecretString::from("tok"),
             },
-        }
-    }
-
-    // AUTH-004
-    #[test]
-    fn the_blob_round_trips() {
-        let text = encode(&session()).unwrap();
-        let back = decode(&text).unwrap();
-        assert_eq!(back.server, "https://chat.example.com");
-        assert_eq!(back.credentials.user_id.as_str(), "uid");
-        assert_eq!(back.credentials.token.expose_secret(), "tok");
-    }
-
-    // AUTH-004
-    #[test]
-    fn a_corrupt_blob_is_reported() {
-        for text in ["", "not json", r#"{"server":"x"}"#] {
-            assert!(
-                matches!(decode(text), Err(StoreError::Corrupt(_))),
-                "{text:?}"
-            );
         }
     }
 
