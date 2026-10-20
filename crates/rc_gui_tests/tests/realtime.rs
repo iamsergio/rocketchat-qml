@@ -10,7 +10,9 @@ mod common;
 use rc_gui_tests::paths::{main_window, message, message_row, room, room_row};
 use rc_test_server::{Admin, Proxy, unique};
 
-use common::{TIMEOUT, launch, log_in_and_wait_for_room, log_in_at_and_wait_for_room, open_room};
+use common::{
+    TIMEOUT, launch, log_in_and_wait_for_room, log_in_at_and_wait_for_room, open_room, row_y,
+};
 
 // RT-001
 #[test]
@@ -68,6 +70,64 @@ fn the_unread_badges_of_other_rooms_update_while_a_room_is_open() {
         .unwrap();
     gui.wait_until_text(&room(&channel_id, room_row::UNREAD), "1", TIMEOUT)
         .unwrap();
+}
+
+// ROOM-004
+#[test]
+#[ignore = "needs the app and a Rocket.Chat server: run through ctest"]
+fn a_message_in_the_open_room_does_not_raise_its_badge() {
+    let admin = Admin::login();
+    let user = admin.create_user();
+    let dm_id = admin.create_dm(&user.username);
+    let (other_id, _) = admin.create_channel(&[&user.username]);
+    // The server hides a direct message from the other person until it has a message.
+    let first = admin.post_message(&dm_id, "first");
+    let app = launch();
+    let gui = app.gui();
+    log_in_and_wait_for_room(gui, &user, &dm_id);
+    open_room(gui, &dm_id);
+    gui.wait_until_visible(&message(&first.id, message_row::BODY), TIMEOUT)
+        .unwrap();
+
+    // A direct message counts every message, so the server raises the open room's count. The
+    // mention in the other room follows it on the same connection.
+    let text = format!("live {}", unique());
+    let posted = admin.post_message(&dm_id, &text);
+    admin.post_message(&other_id, &format!("hello @{}", user.username));
+
+    gui.wait_until_text(&message(&posted.id, message_row::BODY), &text, TIMEOUT)
+        .unwrap();
+    gui.wait_until_text(&room(&other_id, room_row::MENTIONS), "1", TIMEOUT)
+        .unwrap();
+    assert!(
+        !gui.exists_and_visible(&room(&dm_id, room_row::UNREAD))
+            .unwrap()
+    );
+}
+
+// ROOM-005
+#[test]
+#[ignore = "needs the app and a Rocket.Chat server: run through ctest"]
+fn a_new_message_moves_its_room_to_the_top() {
+    let admin = Admin::login();
+    let user = admin.create_user();
+    let (older_id, _) = admin.create_channel(&[&user.username]);
+    let (newer_id, _) = admin.create_channel(&[&user.username]);
+    admin.post_message(&older_id, "first");
+    admin.post_message(&newer_id, "second");
+    let app = launch();
+    let gui = app.gui();
+    log_in_and_wait_for_room(gui, &user, &older_id);
+    gui.wait_until_visible(&room(&newer_id, room_row::NAME), TIMEOUT)
+        .unwrap();
+    assert!(row_y(gui, &newer_id) < row_y(gui, &older_id));
+
+    admin.post_message(&older_id, "third");
+
+    gui.wait_until("the room with the new message on top", TIMEOUT, || {
+        Ok(row_y(gui, &older_id) < row_y(gui, &newer_id))
+    })
+    .unwrap();
 }
 
 // RT-003, RT-002
