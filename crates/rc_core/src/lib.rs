@@ -17,7 +17,7 @@ pub mod rooms;
 pub mod session;
 pub mod timeline;
 
-pub use client::{Client, Event};
+pub use client::{Client, Connection, Event};
 pub use error::Error;
 
 /// Application version, from `version.txt` at the repository root.
