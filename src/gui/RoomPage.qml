@@ -32,12 +32,29 @@ ColumnLayout {
         }
     }
 
-    ListView {
-        objectName: "roomList"
+    RowLayout {
         Layout.fillWidth: true
         Layout.fillHeight: true
-        clip: true
-        model: RoomList
-        delegate: RoomDelegate {}
+        spacing: 0
+
+        ListView {
+            objectName: "roomList"
+            Layout.preferredWidth: 260
+            Layout.fillHeight: true
+            clip: true
+            model: RoomList
+            delegate: RoomDelegate {}
+        }
+
+        Rectangle {
+            Layout.fillHeight: true
+            implicitWidth: 1
+            color: palette.mid
+        }
+
+        RoomView {
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+        }
     }
 }

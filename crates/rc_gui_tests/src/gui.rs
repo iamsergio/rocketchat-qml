@@ -88,10 +88,14 @@ impl Key {
     pub const RETURN: Self = Self(0x0100_0004);
     pub const ENTER: Self = Self(0x0100_0005);
     pub const DELETE: Self = Self(0x0100_0007);
+    pub const HOME: Self = Self(0x0100_0010);
+    pub const END: Self = Self(0x0100_0011);
     pub const LEFT: Self = Self(0x0100_0012);
     pub const UP: Self = Self(0x0100_0013);
     pub const RIGHT: Self = Self(0x0100_0014);
     pub const DOWN: Self = Self(0x0100_0015);
+    pub const PAGE_UP: Self = Self(0x0100_0016);
+    pub const PAGE_DOWN: Self = Self(0x0100_0017);
 }
 
 /// An element's bounds in screen coordinates.

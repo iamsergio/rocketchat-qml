@@ -37,11 +37,11 @@ Every test carries a `// <ID>` comment. A feature can have tests at several leve
 
 | ID | Feature | Tests |
 |---|---|---|
-| MSG-001 | Opening a room shows its latest messages | todo |
-| MSG-002 | Scrolling to the top loads older messages | todo |
-| MSG-003 | Message shows author and timestamp | todo |
-| MSG-004 | Day separators between days | todo |
-| MSG-005 | System messages rendered distinctly | todo |
+| MSG-001 | Opening a room shows its latest messages | unit: `crates/rc_api/src/wire.rs`, `crates/rc_core/src/adapters/message_store.rs`, `crates/rc_core/src/client/tests.rs`, `crates/rc_core/src/domain.rs`, `crates/rc_core/src/timeline.rs`, `crates/rc_qt/src/cache.rs`, `crates/rc_qt/src/message_view.rs`, `crates/rc_qt/src/room_view.rs`, `crates/rc_qt/src/row_ops.rs`; api: `crates/rc_api/tests/rest.rs`; contract: `crates/rc_api/tests/contract.rs`, `crates/rc_core/tests/contract.rs`; GUI: `crates/rc_gui_tests/tests/messages.rs` |
+| MSG-002 | Scrolling to the top loads older messages | unit: `crates/rc_api/src/wire.rs`, `crates/rc_core/src/client/tests.rs`, `crates/rc_core/src/timeline.rs`, `crates/rc_qt/src/cache.rs`, `crates/rc_qt/src/room_view.rs`, `crates/rc_qt/src/row_ops.rs`; api: `crates/rc_api/tests/rest.rs`; contract: `crates/rc_api/tests/contract.rs`, `crates/rc_core/tests/contract.rs`; GUI: `crates/rc_gui_tests/tests/messages.rs` |
+| MSG-003 | Message shows author and timestamp | unit: `crates/rc_api/src/wire.rs`, `crates/rc_core/src/domain.rs`, `crates/rc_qt/src/message_view.rs`; contract: `crates/rc_api/tests/contract.rs`, `crates/rc_core/tests/contract.rs`; GUI: `crates/rc_gui_tests/tests/messages.rs` |
+| MSG-004 | Day separators between days | unit: `crates/rc_qt/src/message_view.rs`; GUI: `crates/rc_gui_tests/tests/messages.rs` |
+| MSG-005 | System messages rendered distinctly | unit: `crates/rc_api/src/wire.rs`, `crates/rc_core/src/domain.rs`, `crates/rc_qt/src/message_view.rs`; contract: `crates/rc_api/tests/contract.rs`; GUI: `crates/rc_gui_tests/tests/messages.rs` |
 
 ## Realtime
 
@@ -100,4 +100,4 @@ Every test carries a `// <ID>` comment. A feature can have tests at several leve
 | ID | Feature | Tests |
 |---|---|---|
 | INFRA-001 | XML-RPC client encodes Spix calls and decodes its answers and faults | unit: `crates/rc_gui_tests/src/xmlrpc.rs` |
-| INFRA-002 | GUI test harness reports an app that can't start, exits early or won't quit; passes environment overrides; waits for the UI with a timeout; addresses room rows by id | unit: `crates/rc_gui_tests/src/app.rs`, `crates/rc_gui_tests/src/gui.rs`, `crates/rc_gui_tests/src/paths.rs` |
+| INFRA-002 | GUI test harness reports an app that can't start, exits early or won't quit; passes environment overrides; waits for the UI with a timeout; addresses room rows and message rows by id | unit: `crates/rc_gui_tests/src/app.rs`, `crates/rc_gui_tests/src/gui.rs`, `crates/rc_gui_tests/src/paths.rs` |

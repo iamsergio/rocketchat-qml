@@ -20,8 +20,10 @@ qt_add_qml_module(
   QML_FILES
   Main.qml
   LoginPage.qml
+  MessageDelegate.qml
   RoomDelegate.qml
   RoomPage.qml
+  RoomView.qml
   StartupPage.qml
   RESOURCES
   icons/channel.svg
