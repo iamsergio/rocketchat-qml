@@ -90,6 +90,11 @@ pub struct Subscription {
     ///
     /// [`RestSession::subscriptions`]: crate::RestSession::subscriptions
     pub last_message: Option<jiff::Timestamp>,
+    /// Identifies the room's own avatar, if it has one. Only [`RestSession::subscriptions`] fills
+    /// it in, from the rooms, like `last_message`.
+    ///
+    /// [`RestSession::subscriptions`]: crate::RestSession::subscriptions
+    pub avatar_etag: Option<String>,
 }
 
 /// Who wrote a message, as the message carries it.
@@ -141,6 +146,14 @@ pub struct HistoryPage {
     pub messages: Vec<Message>,
     /// The server had fewer messages than asked for, so there is nothing before them.
     pub reached_start: bool,
+}
+
+/// A file the server sent.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Download {
+    pub bytes: Vec<u8>,
+    /// The media type the server said, lower case and without parameters (`image/svg+xml`).
+    pub content_type: Option<String>,
 }
 
 /// What the server pushes over the realtime connection, for the streams the client subscribed to.

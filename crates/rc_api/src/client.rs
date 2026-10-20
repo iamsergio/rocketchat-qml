@@ -10,7 +10,7 @@ use serde_json::json;
 
 use crate::error::Error;
 use crate::types::{
-    Credentials, CustomEmoji, HistoryPage, LoginResult, Message, RoomType, ServerInfo,
+    Credentials, CustomEmoji, Download, HistoryPage, LoginResult, Message, RoomType, ServerInfo,
     Subscription, User,
 };
 use crate::wire;
@@ -110,6 +110,20 @@ impl RestClient {
             .base
             .join(path)
             .map_err(|e| Error::InvalidUrl(format!("{path}: {e}")))?;
+        let (status, _, body) = self.send_to(method, url, credentials, payload).await?;
+        Ok((status, body))
+    }
+
+    /// [`send`](Self::send) to a URL, which also returns the `Content-Type` of the answer.
+    async fn send_to(
+        &self,
+        method: Method,
+        url: Url,
+        credentials: Option<&Credentials>,
+        payload: Option<&serde_json::Value>,
+    ) -> Result<(StatusCode, Option<String>, Vec<u8>), Error> {
+        let path = url.path().to_owned();
+        let path = path.as_str();
         let mut request = self.http.request(method.clone(), url);
         if let Some(credentials) = credentials {
             request = request
@@ -125,8 +139,13 @@ impl RestClient {
         let response = request.send().await.map_err(Error::Unreachable)?;
         let status = response.status();
         tracing::debug!(%method, path, status = status.as_u16(), "REST request");
+        let content_type = response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_owned);
         let body = response.bytes().await.map_err(Error::Unreachable)?;
-        Ok((status, body.to_vec()))
+        Ok((status, content_type, body.to_vec()))
     }
 }
 
@@ -168,8 +187,10 @@ impl RestSession {
         )?;
         let mut subscriptions = wire::parse_subscriptions(&subscriptions).map_err(Error::Decode)?;
         let activity = wire::parse_room_activity(&rooms).map_err(Error::Decode)?;
+        let mut avatars = wire::parse_room_avatars(&rooms).map_err(Error::Decode)?;
         for subscription in &mut subscriptions {
             subscription.last_message = activity.get(&subscription.room_id).copied();
+            subscription.avatar_etag = avatars.remove(&subscription.room_id);
         }
         Ok(subscriptions)
     }
@@ -182,6 +203,77 @@ impl RestSession {
     pub async fn custom_emoji(&self) -> Result<Vec<CustomEmoji>, Error> {
         let body = self.call(Method::GET, "api/v1/emoji-custom.list").await?;
         wire::parse_custom_emoji(&body).map_err(Error::Decode)
+    }
+
+    /// The etag of the user's own avatar (`GET /api/v1/users.info`), which says that they have
+    /// one: `None` for a user with the avatar the server generates. The server needs a moment to
+    /// show a new avatar here.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Unauthorized`] if the token is expired or revoked, [`Error::Server`] if there is
+    /// no such user, or any of the other errors.
+    pub async fn user_avatar_etag(&self, username: &str) -> Result<Option<String>, Error> {
+        let path = format!("api/v1/users.info?{}", query("username", username)?);
+        let body = self.call(Method::GET, &path).await?;
+        wire::parse_user_avatar_etag(&body).map_err(Error::Decode)
+    }
+
+    /// The etag of the room's own avatar (`GET /api/v1/rooms.info`): `None` for a room with the
+    /// avatar the server generates.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Unauthorized`] if the token is expired or revoked, [`Error::Server`] if the room
+    /// doesn't exist or isn't visible to the user, or any of the other errors.
+    pub async fn room_avatar_etag(&self, room_id: &str) -> Result<Option<String>, Error> {
+        let path = format!("api/v1/rooms.info?{}", query("roomId", room_id)?);
+        let body = self.call(Method::GET, &path).await?;
+        wire::parse_room_avatar_etag(&body).map_err(Error::Decode)
+    }
+
+    /// The avatar of a user (`GET /avatar/<username>`), an image the server generates from the
+    /// initials when the user has none. Not under `/api/v1`, and answered with the image itself.
+    /// The server answers for any name, so there is no 404 for an unknown user.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Server`] on any non-2xx answer, including a redirect that leaves the server (not
+    /// followed: the login headers must not go there), or any of the other errors.
+    pub async fn user_avatar(&self, username: &str) -> Result<Download, Error> {
+        self.download(&["avatar", username]).await
+    }
+
+    /// The avatar of a channel or group (`GET /avatar/room/<room id>`). For a direct message the
+    /// server draws an initial taken from the room id, so ask for the other user's avatar
+    /// ([`user_avatar`](Self::user_avatar)) instead.
+    ///
+    /// # Errors
+    ///
+    /// As [`user_avatar`](Self::user_avatar).
+    pub async fn room_avatar(&self, room_id: &str) -> Result<Download, Error> {
+        self.download(&["avatar", "room", room_id]).await
+    }
+
+    /// Gets the file at `segments` below the server's base URL. Each segment is escaped, so a name
+    /// can't climb out of its place in the path.
+    async fn download(&self, segments: &[&str]) -> Result<Download, Error> {
+        let mut url = self.client.base.clone();
+        url.path_segments_mut()
+            .map_err(|()| Error::InvalidUrl(self.client.base.to_string()))?
+            .pop_if_empty()
+            .extend(segments);
+        let (status, content_type, body) = self
+            .client
+            .send_to(Method::GET, url, Some(&self.credentials), None)
+            .await?;
+        if !status.is_success() {
+            return Err(server_error(status, &body));
+        }
+        Ok(Download {
+            bytes: body,
+            content_type: content_type.map(|value| media_type(&value)),
+        })
     }
 
     /// A page of a room's history, newest message first (`channels.history`, `groups.history` or
@@ -325,6 +417,24 @@ impl RestSession {
         check(status, &body, || Error::Unauthorized)?;
         Ok(body)
     }
+}
+
+/// `name=value` as a query string, escaped.
+fn query(name: &str, value: &str) -> Result<String, Error> {
+    // Only a URL to escape the query with; the host is never used.
+    let mut escaped = Url::parse("http://unused/").map_err(|e| Error::InvalidUrl(e.to_string()))?;
+    escaped.query_pairs_mut().append_pair(name, value);
+    Ok(escaped.query().unwrap_or_default().to_owned())
+}
+
+/// The media type of a `Content-Type` value, without parameters, in lower case.
+fn media_type(value: &str) -> String {
+    value
+        .split(';')
+        .next()
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase()
 }
 
 /// `server` as an `http` or `https` base URL that ends with `/`, without query or fragment.

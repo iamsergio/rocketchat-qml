@@ -752,3 +752,263 @@ async fn send_message_with_an_expired_token_is_unauthorized() {
 
     assert!(matches!(result, Err(Error::Unauthorized)), "{result:?}");
 }
+
+const SVG: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200"></svg>"#;
+
+fn svg_response() -> ResponseTemplate {
+    ResponseTemplate::new(200).set_body_raw(SVG, "Image/SVG+XML; charset=utf-8")
+}
+
+// RICH-004
+#[tokio::test]
+async fn a_user_avatar_is_downloaded_with_the_login_headers() {
+    let server = MockServer::start().await;
+    mount_authenticated(&server, "GET", "/avatar/alice", svg_response()).await;
+    let avatar = session(&RestClient::new(&server.uri()).unwrap())
+        .user_avatar("alice")
+        .await
+        .unwrap();
+    assert_eq!(avatar.bytes, SVG.as_bytes());
+    assert_eq!(avatar.content_type.as_deref(), Some("image/svg+xml"));
+}
+
+// RICH-004
+#[tokio::test]
+async fn a_room_avatar_is_downloaded_from_the_room_path() {
+    let server = MockServer::start().await;
+    mount_authenticated(&server, "GET", "/avatar/room/rid1", svg_response()).await;
+    let avatar = session(&RestClient::new(&server.uri()).unwrap())
+        .room_avatar("rid1")
+        .await
+        .unwrap();
+    assert_eq!(avatar.bytes, SVG.as_bytes());
+}
+
+// RICH-004
+#[tokio::test]
+async fn avatars_keep_the_path_prefix_of_the_server() {
+    let server = MockServer::start().await;
+    mount_authenticated(&server, "GET", "/chat/avatar/alice", svg_response()).await;
+    let client = RestClient::new(&format!("{}/chat", server.uri())).unwrap();
+    session(&client).user_avatar("alice").await.unwrap();
+}
+
+// RICH-004
+#[tokio::test]
+async fn a_name_is_one_path_segment_whatever_it_contains() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .respond_with(svg_response())
+        .mount(&server)
+        .await;
+    let session = session(&RestClient::new(&server.uri()).unwrap());
+    session.user_avatar("../../api/v1/me").await.unwrap();
+    session.user_avatar("a b?c#d").await.unwrap();
+    let requests = server.received_requests().await.unwrap();
+    let paths: Vec<_> = requests.iter().map(|r| r.url.path()).collect();
+    assert_eq!(
+        paths,
+        ["/avatar/..%2F..%2Fapi%2Fv1%2Fme", "/avatar/a%20b%3Fc%23d"]
+    );
+    assert!(requests.iter().all(|r| r.url.query().is_none()));
+}
+
+// RICH-004
+#[tokio::test]
+async fn a_missing_avatar_is_a_server_error() {
+    let server = MockServer::start().await;
+    mount(&server, "GET", "/avatar/alice", ResponseTemplate::new(404)).await;
+    let result = session(&RestClient::new(&server.uri()).unwrap())
+        .user_avatar("alice")
+        .await;
+    assert!(
+        matches!(result, Err(Error::Server { status: 404, .. })),
+        "{result:?}"
+    );
+}
+
+// RICH-004
+#[tokio::test]
+async fn an_avatar_redirected_to_another_origin_is_not_followed() {
+    let other = MockServer::start().await;
+    Mock::given(method("GET"))
+        .respond_with(svg_response())
+        .expect(0)
+        .mount(&other)
+        .await;
+    let server = MockServer::start().await;
+    let target = format!("{}/elsewhere.svg", other.uri());
+    mount(
+        &server,
+        "GET",
+        "/avatar/alice",
+        ResponseTemplate::new(307).insert_header("location", target.as_str()),
+    )
+    .await;
+    let result = session(&RestClient::new(&server.uri()).unwrap())
+        .user_avatar("alice")
+        .await;
+    assert!(
+        matches!(result, Err(Error::Server { status: 307, .. })),
+        "{result:?}"
+    );
+}
+
+// RICH-004
+#[tokio::test]
+async fn an_avatar_redirected_within_the_server_is_followed() {
+    let server = MockServer::start().await;
+    mount(
+        &server,
+        "GET",
+        "/avatar/alice",
+        ResponseTemplate::new(307).insert_header("location", "/avatar/alice.svg"),
+    )
+    .await;
+    mount_authenticated(&server, "GET", "/avatar/alice.svg", svg_response()).await;
+    let avatar = session(&RestClient::new(&server.uri()).unwrap())
+        .user_avatar("alice")
+        .await
+        .unwrap();
+    assert_eq!(avatar.bytes, SVG.as_bytes());
+}
+
+// RICH-004
+#[tokio::test]
+async fn an_avatar_without_a_content_type_has_none() {
+    let server = MockServer::start().await;
+    mount(
+        &server,
+        "GET",
+        "/avatar/alice",
+        ResponseTemplate::new(200).set_body_bytes(vec![1, 2, 3]),
+    )
+    .await;
+    let avatar = session(&RestClient::new(&server.uri()).unwrap())
+        .user_avatar("alice")
+        .await
+        .unwrap();
+    assert_eq!(avatar.bytes, [1, 2, 3]);
+    assert_eq!(avatar.content_type, None);
+}
+
+// RICH-004
+#[tokio::test]
+async fn subscriptions_carry_the_avatar_etag_of_the_rooms_that_have_one() {
+    let server = MockServer::start().await;
+    mount_authenticated(
+        &server,
+        "GET",
+        "/api/v1/subscriptions.get",
+        json_response(200, SUBSCRIPTIONS),
+    )
+    .await;
+    let subscriptions: serde_json::Value = serde_json::from_str(SUBSCRIPTIONS).unwrap();
+    let ids: Vec<_> = subscriptions["update"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| s["rid"].as_str().unwrap().to_owned())
+        .collect();
+    let rooms = json!({ "update": [{ "_id": ids[0], "avatarETag": "etag-1" }, { "_id": ids[1] }], "remove": [] });
+    mount_authenticated(
+        &server,
+        "GET",
+        "/api/v1/rooms.get",
+        json_response(200, &rooms.to_string()),
+    )
+    .await;
+
+    let listed = session(&RestClient::new(&server.uri()).unwrap())
+        .subscriptions()
+        .await
+        .unwrap();
+
+    let etag_of = |id: &str| {
+        listed
+            .iter()
+            .find(|s| s.room_id == id)
+            .unwrap()
+            .avatar_etag
+            .clone()
+    };
+    assert_eq!(etag_of(&ids[0]).as_deref(), Some("etag-1"));
+    assert_eq!(etag_of(&ids[1]), None);
+}
+
+// RICH-004
+#[tokio::test]
+async fn a_user_has_an_avatar_of_their_own_when_users_info_has_an_etag() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/users.info"))
+        .and(query_param("username", "a b"))
+        .and(header("X-User-Id", USER_ID))
+        .and(header("X-Auth-Token", TOKEN))
+        .respond_with(json_response(
+            200,
+            r#"{"user":{"_id":"u","avatarETag":"e1"},"success":true}"#,
+        ))
+        .mount(&server)
+        .await;
+    mount(
+        &server,
+        "GET",
+        "/api/v1/users.info",
+        json_response(200, r#"{"user":{"_id":"u"},"success":true}"#),
+    )
+    .await;
+    let session = session(&RestClient::new(&server.uri()).unwrap());
+
+    assert_eq!(
+        session.user_avatar_etag("a b").await.unwrap().as_deref(),
+        Some("e1")
+    );
+    assert_eq!(session.user_avatar_etag("other").await.unwrap(), None);
+}
+
+// RICH-004
+#[tokio::test]
+async fn a_room_has_an_avatar_of_its_own_when_rooms_info_has_an_etag() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/rooms.info"))
+        .and(query_param("roomId", "r1"))
+        .respond_with(json_response(
+            200,
+            r#"{"room":{"_id":"r1","avatarETag":"e2"},"success":true}"#,
+        ))
+        .mount(&server)
+        .await;
+    mount(
+        &server,
+        "GET",
+        "/api/v1/rooms.info",
+        json_response(200, r#"{"room":{"_id":"r2"},"success":true}"#),
+    )
+    .await;
+    let session = session(&RestClient::new(&server.uri()).unwrap());
+
+    assert_eq!(
+        session.room_avatar_etag("r1").await.unwrap().as_deref(),
+        Some("e2")
+    );
+    assert_eq!(session.room_avatar_etag("r2").await.unwrap(), None);
+}
+
+// RICH-004
+#[tokio::test]
+async fn avatar_etags_need_a_login_and_an_existing_user() {
+    let server = MockServer::start().await;
+    mount(
+        &server,
+        "GET",
+        "/api/v1/users.info",
+        json_response(401, NOT_LOGGED_IN),
+    )
+    .await;
+    let result = session(&RestClient::new(&server.uri()).unwrap())
+        .user_avatar_etag("x")
+        .await;
+    assert!(matches!(result, Err(Error::Unauthorized)), "{result:?}");
+}

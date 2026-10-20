@@ -995,3 +995,57 @@ async fn sending_to_a_room_that_does_not_exist_is_a_server_error() {
         "{result:?}"
     );
 }
+
+// RICH-004
+#[tokio::test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+async fn a_new_user_has_a_generated_avatar_with_their_initial() {
+    let fixture = Fixture::new();
+    let session = fixture.client.session(fixture.login().await.credentials);
+
+    let avatar = session.user_avatar(&fixture.user.username).await.unwrap();
+
+    assert_eq!(avatar.content_type.as_deref(), Some("image/svg+xml"));
+    let svg = String::from_utf8(avatar.bytes).unwrap();
+    assert!(svg.starts_with("<svg"), "{svg}");
+    // Usernames are `ct-user-...`.
+    assert!(svg.contains(">\nC\n<"), "{svg}");
+}
+
+// RICH-004
+#[tokio::test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+async fn a_room_has_an_avatar_and_so_does_a_name_the_server_has_never_seen() {
+    let fixture = Fixture::new();
+    let (room_id, _) = fixture.create_channel();
+    let session = fixture.client.session(fixture.login().await.credentials);
+
+    let room = session.room_avatar(&room_id).await.unwrap();
+    let stranger = session
+        .user_avatar(&format!("nobody-{}/../x y", unique()))
+        .await
+        .unwrap();
+
+    assert_eq!(room.content_type.as_deref(), Some("image/svg+xml"));
+    assert_eq!(stranger.content_type.as_deref(), Some("image/svg+xml"));
+}
+
+// RICH-004
+#[tokio::test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+async fn users_and_rooms_with_the_generated_avatar_have_no_etag() {
+    let fixture = Fixture::new();
+    let (room_id, _) = fixture.create_channel();
+    let session = fixture.client.session(fixture.login().await.credentials);
+
+    assert_eq!(
+        session
+            .user_avatar_etag(&fixture.user.username)
+            .await
+            .unwrap(),
+        None
+    );
+    assert_eq!(session.room_avatar_etag(&room_id).await.unwrap(), None);
+    let rooms = session.subscriptions().await.unwrap();
+    assert_eq!(find(&rooms, &room_id).avatar_etag, None);
+}

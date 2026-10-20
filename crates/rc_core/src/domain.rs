@@ -340,6 +340,7 @@ mod tests {
             open: true,
             created: None,
             last_message: None,
+            avatar_etag: None,
         }
     }
 
