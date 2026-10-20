@@ -574,7 +574,7 @@ fn an_empty_store_starts_logged_out() {
 fn a_stored_session_is_resumed_without_logging_in() {
     let fake = Fake::new();
     let harness = Harness::with_store(&fake, store_with("http://h"));
-    assert_eq!(harness.first, SessionState::Connecting);
+    assert_eq!(harness.first, SessionState::Resuming);
     harness.expect(&[logged_in("http://h", "alice")]);
     assert_eq!(
         fake.state().me_calls,
@@ -592,6 +592,19 @@ fn a_rejected_stored_session_expires_and_is_forgotten() {
     let harness = Harness::with_store(&fake, store.clone());
     harness.expect(&[logged_out(Some(LoginFailure::SessionExpired))]);
     wait_for_empty(&store);
+}
+
+// AUTH-004
+#[test]
+fn a_login_after_a_failed_resume_is_connecting_not_resuming() {
+    let fake = Fake::new();
+    fake.state().me_result = Some(Err(ApiError::Unauthorized));
+    fake.script_login(None, Ok(()));
+    let harness = Harness::with_store(&fake, store_with("http://h"));
+    assert_eq!(harness.first, SessionState::Resuming);
+    harness.expect(&[logged_out(Some(LoginFailure::SessionExpired))]);
+    harness.login("http://h", "alice");
+    harness.expect(&[SessionState::Connecting, logged_in("http://h", "alice")]);
 }
 
 // AUTH-004
@@ -654,7 +667,7 @@ fn a_session_survives_a_restart() {
     drop(first);
 
     let second = Harness::with_store(&fake, store);
-    assert_eq!(second.first, SessionState::Connecting);
+    assert_eq!(second.first, SessionState::Resuming);
     second.expect(&[logged_in("http://h", "alice")]);
     assert_eq!(fake.login_calls().len(), 1);
 }
@@ -734,7 +747,7 @@ fn logout_while_resuming_cancels_and_forgets() {
     fake.state().me_gate = Some(Arc::clone(&gate));
     let store = store_with("http://h");
     let harness = Harness::with_store(&fake, store.clone());
-    assert_eq!(harness.first, SessionState::Connecting);
+    assert_eq!(harness.first, SessionState::Resuming);
     fake.wait_for_me_call();
 
     harness.client.logout();
@@ -814,7 +827,7 @@ fn a_resumed_session_lists_the_rooms() {
         )]),
     );
     let harness = Harness::with_store(&fake, store_with("http://h"));
-    assert_eq!(harness.first, SessionState::Connecting);
+    assert_eq!(harness.first, SessionState::Resuming);
     harness.expect_events(vec![
         session_event(logged_in("http://h", "alice")),
         rooms_event(vec![room("1", "general", RoomKind::Channel)]),

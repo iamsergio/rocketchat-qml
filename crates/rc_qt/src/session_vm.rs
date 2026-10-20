@@ -16,6 +16,7 @@ pub mod qobject {
         Unknown,
         LoggedOut,
         Connecting,
+        Resuming,
         LoggedIn,
     }
 
@@ -82,6 +83,7 @@ impl From<&SessionView> for SessionVmRust {
                 Status::Unknown => SessionStatus::Unknown,
                 Status::LoggedOut => SessionStatus::LoggedOut,
                 Status::Connecting => SessionStatus::Connecting,
+                Status::Resuming => SessionStatus::Resuming,
                 Status::LoggedIn => SessionStatus::LoggedIn,
             },
             busy: view.busy,
