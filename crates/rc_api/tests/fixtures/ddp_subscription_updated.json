@@ -1,0 +1,26 @@
+{
+  "eventName": "Ye3dR5vXE3r2C6DFh/subscriptions-changed",
+  "args": [
+    "updated",
+    {
+      "_id": "6ad78dc43a2871a71eddee76",
+      "open": true,
+      "alert": true,
+      "unread": 0,
+      "userMentions": 0,
+      "groupMentions": 0,
+      "ts": {
+        "$date": 1792511428093
+      },
+      "rid": "6ad78dc43a2871a71eddee74",
+      "name": "probe29920-c",
+      "fname": "probe29920-c",
+      "t": "c",
+      "u": {
+        "_id": "Ye3dR5vXE3r2C6DFh",
+        "username": "probe29920",
+        "name": "probe29920"
+      }
+    }
+  ]
+}

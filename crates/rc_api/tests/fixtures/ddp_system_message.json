@@ -1,0 +1,28 @@
+{
+  "eventName": "__my_messages__",
+  "args": [
+    {
+      "_id": "6ad78dc53a2871a71eddee78",
+      "t": "ru",
+      "rid": "6ad78dc43a2871a71eddee74",
+      "ts": {
+        "$date": 1792511429191
+      },
+      "msg": "probe29920",
+      "u": {
+        "_id": "6ad72ad3b6de6b54ca599f26",
+        "username": "admin",
+        "name": "Administrator"
+      },
+      "groupable": false,
+      "_updatedAt": {
+        "$date": 1792511429191
+      }
+    },
+    {
+      "roomParticipant": false,
+      "roomType": "c",
+      "roomName": "probe29920-c"
+    }
+  ]
+}

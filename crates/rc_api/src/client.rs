@@ -37,18 +37,7 @@ impl RestClient {
     ///
     /// [`Error::InvalidUrl`] if `server` isn't an `http` or `https` URL with a host.
     pub fn new(server: &str) -> Result<Self, Error> {
-        let mut base =
-            Url::parse(server).map_err(|e| Error::InvalidUrl(format!("{server}: {e}")))?;
-        if !matches!(base.scheme(), "http" | "https") || base.host_str().is_none() {
-            return Err(Error::InvalidUrl(server.to_owned()));
-        }
-        base.set_query(None);
-        base.set_fragment(None);
-        // Url::join replaces the last path segment unless the path ends with a slash.
-        if !base.path().ends_with('/') {
-            let path = format!("{}/", base.path());
-            base.set_path(&path);
-        }
+        let base = base_url(server)?;
         let http = reqwest::Client::builder()
             .connect_timeout(CONNECT_TIMEOUT)
             .timeout(REQUEST_TIMEOUT)
@@ -236,6 +225,22 @@ impl RestSession {
         check(status, &body, || Error::Unauthorized)?;
         Ok(body)
     }
+}
+
+/// `server` as an `http` or `https` base URL that ends with `/`, without query or fragment.
+pub(crate) fn base_url(server: &str) -> Result<Url, Error> {
+    let mut base = Url::parse(server).map_err(|e| Error::InvalidUrl(format!("{server}: {e}")))?;
+    if !matches!(base.scheme(), "http" | "https") || base.host_str().is_none() {
+        return Err(Error::InvalidUrl(server.to_owned()));
+    }
+    base.set_query(None);
+    base.set_fragment(None);
+    // Url::join replaces the last path segment unless the path ends with a slash.
+    if !base.path().ends_with('/') {
+        let path = format!("{}/", base.path());
+        base.set_path(&path);
+    }
+    Ok(base)
 }
 
 /// reqwest only strips the standard `Authorization`-like headers on a redirect, not our

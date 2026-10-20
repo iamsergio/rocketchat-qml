@@ -1,7 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Sergio Martins
 // SPDX-License-Identifier: MIT
 
-//! Public types of the REST API. Plain data: the serde types they come from are in `wire`.
+//! Public types of the REST API and the realtime connection. Plain data: the serde types they come
+//! from are in `wire`.
 
 use std::fmt;
 
@@ -119,6 +120,19 @@ pub struct HistoryPage {
     pub messages: Vec<Message>,
     /// The server had fewer messages than asked for, so there is nothing before them.
     pub reached_start: bool,
+}
+
+/// What the server pushes over the realtime connection, for the streams the client subscribed to.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DdpEvent {
+    /// A new or edited message in one of the user's rooms. System messages are messages too. The
+    /// server also sends the messages of public channels the user isn't in, so a caller that cares
+    /// checks the room against its subscriptions.
+    Message(Message),
+    /// The user joined a room, or one of their rooms changed: its unread count, its name...
+    SubscriptionChanged(Subscription),
+    /// The user left a room or was removed from it.
+    SubscriptionRemoved { room_id: String },
 }
 
 #[cfg(test)]

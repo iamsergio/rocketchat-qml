@@ -15,8 +15,8 @@ Every test carries a `// <ID>` comment. A feature can have tests at several leve
 |---|---|---|
 | AUTH-001 | Log in with server URL, username and password | unit: `crates/rc_api/src/wire.rs`, `crates/rc_core/src/client/tests.rs`, `crates/rc_core/src/session.rs`, `crates/rc_qt/src/session_view.rs`, `crates/rc_qt/src/cache.rs`; api: `crates/rc_api/tests/rest.rs`; contract: `crates/rc_api/tests/contract.rs`, `crates/rc_core/tests/contract.rs`; GUI: `crates/rc_gui_tests/tests/auth.rs` |
 | AUTH-002 | Invalid credentials show an error | unit: `crates/rc_core/src/client/tests.rs`, `crates/rc_qt/src/session_view.rs`; api: `crates/rc_api/tests/rest.rs`; contract: `crates/rc_api/tests/contract.rs`, `crates/rc_core/tests/contract.rs`; GUI: `crates/rc_gui_tests/tests/auth.rs` |
-| AUTH-003 | Unreachable or non-Rocket.Chat server shows an error | unit: `crates/rc_api/src/client.rs`, `crates/rc_api/src/types.rs`, `crates/rc_api/src/wire.rs`, `crates/rc_core/src/client/tests.rs`, `crates/rc_core/src/session.rs`, `crates/rc_qt/src/session_view.rs`; api: `crates/rc_api/tests/rest.rs`; contract: `crates/rc_api/tests/contract.rs`, `crates/rc_core/tests/contract.rs`; GUI: `crates/rc_gui_tests/tests/auth.rs` |
-| AUTH-004 | Session resumes at startup from the stored token | unit: `crates/rc_api/src/wire.rs`, `crates/rc_core/src/client/tests.rs`, `crates/rc_core/src/adapters/blob.rs`, `crates/rc_core/src/adapters/file.rs`, `crates/rc_core/src/adapters/memory.rs`, `crates/rc_core/src/adapters/keyring.rs`, `crates/rc_qt/src/hub.rs`; api: `crates/rc_api/tests/rest.rs`; contract: `crates/rc_api/tests/contract.rs`, `crates/rc_core/tests/contract.rs`; GUI: `crates/rc_gui_tests/tests/auth.rs` |
+| AUTH-003 | Unreachable or non-Rocket.Chat server shows an error | unit: `crates/rc_api/src/client.rs`, `crates/rc_api/src/ddp.rs`, `crates/rc_api/src/types.rs`, `crates/rc_api/src/wire.rs`, `crates/rc_core/src/client/tests.rs`, `crates/rc_core/src/session.rs`, `crates/rc_qt/src/session_view.rs`; api: `crates/rc_api/tests/rest.rs`; contract: `crates/rc_api/tests/contract.rs`, `crates/rc_core/tests/contract.rs`; GUI: `crates/rc_gui_tests/tests/auth.rs` |
+| AUTH-004 | Session resumes at startup from the stored token | unit: `crates/rc_api/src/ddp.rs`, `crates/rc_api/src/wire.rs`, `crates/rc_core/src/client/tests.rs`, `crates/rc_core/src/adapters/blob.rs`, `crates/rc_core/src/adapters/file.rs`, `crates/rc_core/src/adapters/memory.rs`, `crates/rc_core/src/adapters/keyring.rs`, `crates/rc_qt/src/hub.rs`; api: `crates/rc_api/tests/rest.rs`; contract: `crates/rc_api/tests/contract.rs`, `crates/rc_core/tests/contract.rs`; GUI: `crates/rc_gui_tests/tests/auth.rs` |
 | AUTH-005 | Logout clears the stored token and returns to login | unit: `crates/rc_core/src/client/tests.rs`, `crates/rc_qt/src/session_view.rs`; api: `crates/rc_api/tests/rest.rs`; contract: `crates/rc_api/tests/contract.rs`, `crates/rc_core/tests/contract.rs`; GUI: `crates/rc_gui_tests/tests/auth.rs` |
 | AUTH-006 | 2FA (TOTP / email code) | todo |
 | AUTH-007 | Personal access token login | todo |
@@ -47,9 +47,9 @@ Every test carries a `// <ID>` comment. A feature can have tests at several leve
 
 | ID | Feature | Tests |
 |---|---|---|
-| RT-001 | New message in the open room appears live | todo |
-| RT-002 | Unread counts of other rooms update live | todo |
-| RT-003 | Reconnect after connection loss, catch up on missed messages | todo |
+| RT-001 | New message in the open room appears live | unit: `crates/rc_api/src/ddp.rs`, `crates/rc_api/src/wire.rs`; contract: `crates/rc_api/tests/contract.rs` (rc_api only: not shown in the GUI yet) |
+| RT-002 | Unread counts of other rooms update live | unit: `crates/rc_api/src/ddp.rs`, `crates/rc_api/src/wire.rs`; contract: `crates/rc_api/tests/contract.rs` (rc_api only: not shown in the GUI yet) |
+| RT-003 | Reconnect after connection loss, catch up on missed messages | unit: `crates/rc_api/src/ddp.rs` (rc_api only: detecting the loss; reconnecting is not done yet) |
 | RT-004 | Connection status indicator | todo |
 
 ## Sending

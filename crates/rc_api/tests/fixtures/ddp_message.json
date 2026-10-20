@@ -1,0 +1,44 @@
+{
+  "eventName": "__my_messages__",
+  "args": [
+    {
+      "_id": "u3ypgHtNkxNsvxXpZ",
+      "alias": "",
+      "msg": "hello live",
+      "attachments": [],
+      "parseUrls": true,
+      "groupable": false,
+      "ts": {
+        "$date": 1792511428626
+      },
+      "u": {
+        "_id": "6ad72ad3b6de6b54ca599f26",
+        "username": "admin",
+        "name": "Administrator"
+      },
+      "rid": "6ad78dc43a2871a71eddee74",
+      "_updatedAt": {
+        "$date": 1792511428632
+      },
+      "urls": [],
+      "mentions": [],
+      "channels": [],
+      "md": [
+        {
+          "type": "PARAGRAPH",
+          "value": [
+            {
+              "type": "PLAIN_TEXT",
+              "value": "hello live"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "roomParticipant": true,
+      "roomType": "c",
+      "roomName": "probe29920-c"
+    }
+  ]
+}
