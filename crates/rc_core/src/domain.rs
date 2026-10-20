@@ -120,6 +120,15 @@ pub struct StoredSession {
     pub credentials: Credentials,
 }
 
+/// Whose avatar it is.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum AvatarOwner {
+    /// By username.
+    User(String),
+    /// A channel or group.
+    Room(RoomId),
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RoomKind {
     Channel,
@@ -135,6 +144,11 @@ pub struct Room {
     pub kind: RoomKind,
     /// What the room list shows.
     pub name: String,
+    /// The other user's username, for a direct message with one other user.
+    pub peer: Option<String>,
+    /// Identifies the room's own avatar, if it has one; the server draws the others. A change
+    /// that only a push brings isn't seen here, as pushes don't carry it.
+    pub avatar_etag: Option<String>,
     pub unread: u32,
     /// Mentions of the user (`@name`).
     pub user_mentions: u32,
@@ -148,6 +162,16 @@ pub struct Room {
 }
 
 impl Room {
+    /// The avatar the room shows: the other user's for a direct message, else the room's own. The
+    /// server draws a direct message's own avatar from its id, which says nothing about anyone.
+    #[must_use]
+    pub fn avatar_owner(&self) -> AvatarOwner {
+        match &self.peer {
+            Some(username) => AvatarOwner::User(username.clone()),
+            None => AvatarOwner::Room(self.id.clone()),
+        }
+    }
+
     /// Whether the room shows as unread.
     #[must_use]
     pub fn has_unread(&self) -> bool {
@@ -185,7 +209,10 @@ pub(crate) fn room_from(sub: rc_api::Subscription) -> Option<Room> {
         return None;
     }
     // The display name is empty for rooms such as `general`; a DM's `name` is the other user's
-    // username while its display name is their real name.
+    // username while its display name is their real name. A group DM's is all of them, joined.
+    let peer = Some(&sub.name)
+        .filter(|name| kind == RoomKind::Direct && !name.is_empty() && !name.contains(','))
+        .cloned();
     let name = sub
         .display_name
         .filter(|name| !name.is_empty())
@@ -195,6 +222,8 @@ pub(crate) fn room_from(sub: rc_api::Subscription) -> Option<Room> {
         id: sub.room_id.into(),
         kind,
         name,
+        peer,
+        avatar_etag: sub.avatar_etag,
         unread: sub.unread,
         user_mentions: sub.user_mentions,
         group_mentions: sub.group_mentions,

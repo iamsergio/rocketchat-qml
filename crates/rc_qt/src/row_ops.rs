@@ -201,6 +201,8 @@ mod tests {
             id: "r".to_owned().into(),
             kind: RoomKind::Channel,
             name: "r".to_owned(),
+            peer: None,
+            avatar_etag: None,
             unread: 0,
             user_mentions: 0,
             group_mentions: 0,

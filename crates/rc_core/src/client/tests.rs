@@ -514,6 +514,9 @@ fn room(id: &str, name: &str, kind: RoomKind) -> Room {
         id: id.to_owned().into(),
         kind,
         name: name.to_owned(),
+        // A direct message is called after the other user.
+        peer: (kind == RoomKind::Direct).then(|| name.to_owned()),
+        avatar_etag: None,
         unread: 0,
         user_mentions: 0,
         group_mentions: 0,
