@@ -123,6 +123,17 @@ pub struct Message {
     pub md: Option<Vec<crate::md::Block>>,
 }
 
+/// An emoji the server has added, shown as the image at `/emoji-custom/<name>.<extension>`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CustomEmoji {
+    /// What is typed between the colons.
+    pub name: String,
+    /// Other names for it.
+    pub aliases: Vec<String>,
+    /// The file's extension, without the dot.
+    pub extension: String,
+}
+
 /// One page of a room's history.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HistoryPage {

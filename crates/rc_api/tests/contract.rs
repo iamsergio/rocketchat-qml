@@ -16,7 +16,7 @@ use rc_api::{
     Credentials, DdpClient, DdpEvent, DdpEvents, Error, Message, RestClient, RoomType,
     ServerVersion, Subscription, User,
 };
-use rc_test_server::{Admin, TestUser, server_url, unique};
+use rc_test_server::{Admin, TestUser, server_url, status_without_login, unique};
 use secrecy::{ExposeSecret, SecretString};
 
 const POLL_TIMEOUT: Duration = Duration::from_secs(3);
@@ -531,6 +531,26 @@ async fn history_has_system_messages_with_their_kind() {
         .find(|m| m.kind.as_deref() == Some("room_changed_topic"))
         .unwrap();
     assert_eq!(topic.author.username, fixture.admin.username);
+}
+
+// RICH-003
+#[tokio::test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+async fn custom_emoji_lists_a_new_emoji_and_its_image_needs_no_login() {
+    let fixture = Fixture::new();
+    let name = format!("ct_emoji_{}", unique().replace('-', "_"));
+    fixture.admin.create_emoji(&name);
+    let session = fixture.client.session(fixture.login().await.credentials);
+
+    let emoji = session.custom_emoji().await.unwrap();
+
+    let found = emoji.iter().find(|emoji| emoji.name == name).unwrap();
+    assert_eq!(found.extension, "png");
+    let url = format!(
+        "{}/emoji-custom/{name}.png",
+        server_url().trim_end_matches('/')
+    );
+    assert_eq!(status_without_login(&url), 200);
 }
 
 // RICH-001, RICH-002, RICH-003
