@@ -6,6 +6,7 @@ import QtQuick.Controls
 import QtQuick.Layouts
 import RocketChat.Bridge
 
+// The fields start empty, or filled in for the local test server when a developer build got --dev.
 Item {
     ColumnLayout {
         anchors.centerIn: parent
@@ -23,6 +24,7 @@ Item {
 
             objectName: "loginServerField"
             Layout.fillWidth: true
+            text: Session.prefillServer
             enabled: !Session.busy
             placeholderText: qsTr("Server, e.g. https://chat.example.com")
             inputMethodHints: Qt.ImhUrlCharactersOnly | Qt.ImhNoAutoUppercase
@@ -33,6 +35,7 @@ Item {
 
             objectName: "loginUsernameField"
             Layout.fillWidth: true
+            text: Session.prefillUsername
             enabled: !Session.busy
             placeholderText: qsTr("Username")
             inputMethodHints: Qt.ImhNoAutoUppercase
@@ -43,6 +46,7 @@ Item {
 
             objectName: "loginPasswordField"
             Layout.fillWidth: true
+            text: Session.prefillPassword
             enabled: !Session.busy
             placeholderText: qsTr("Password")
             echoMode: TextInput.Password

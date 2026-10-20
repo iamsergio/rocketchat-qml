@@ -30,6 +30,22 @@ pub mod qobject {
         #[qproperty(QString, error_text, cxx_name = "errorText", READ, NOTIFY)]
         #[qproperty(QString, username, READ, NOTIFY)]
         #[qproperty(QString, server, READ, NOTIFY)]
+        // What the login fields start with: empty, unless a developer-mode build got `--dev`.
+        #[qproperty(QString, prefill_server, cxx_name = "prefillServer", READ, CONSTANT)]
+        #[qproperty(
+            QString,
+            prefill_username,
+            cxx_name = "prefillUsername",
+            READ,
+            CONSTANT
+        )]
+        #[qproperty(
+            QString,
+            prefill_password,
+            cxx_name = "prefillPassword",
+            READ,
+            CONSTANT
+        )]
         type SessionVm = super::SessionVmRust;
 
         /// Starts logging in; the outcome shows in the properties. Ignored unless logged out.
@@ -56,6 +72,7 @@ use cxx_qt::{CxxQtType, Threading};
 use cxx_qt_lib::QString;
 use secrecy::SecretString;
 
+use crate::dev_login;
 use crate::hub;
 use crate::session_view::{SessionView, Status};
 
@@ -68,6 +85,9 @@ pub struct SessionVmRust {
     error_text: QString,
     username: QString,
     server: QString,
+    prefill_server: QString,
+    prefill_username: QString,
+    prefill_password: QString,
 }
 
 impl Default for SessionVmRust {
@@ -78,6 +98,8 @@ impl Default for SessionVmRust {
 
 impl From<&SessionView> for SessionVmRust {
     fn from(view: &SessionView) -> Self {
+        // Set before the QML is loaded and never changed, so `show` keeps the same values.
+        let prefill = dev_login::prefill();
         Self {
             state: match view.status {
                 Status::Unknown => SessionStatus::Unknown,
@@ -90,6 +112,9 @@ impl From<&SessionView> for SessionVmRust {
             error_text: QString::from(&view.error_text),
             username: QString::from(&view.username),
             server: QString::from(&view.server),
+            prefill_server: QString::from(&prefill.server),
+            prefill_username: QString::from(&prefill.username),
+            prefill_password: QString::from(&prefill.password),
         }
     }
 }

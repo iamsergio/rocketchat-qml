@@ -14,6 +14,11 @@ pub mod ffi {
         /// Stops the core, waiting a moment for a pending logout to finish. Call on the GUI
         /// thread after the event loop has ended.
         fn stop_core();
+
+        /// `--dev`: the login page starts filled in for the local test server (`RC_DEV_SERVER`,
+        /// `RC_DEV_USER` and `RC_DEV_PASS` override it). Only builds with `developer-mode` do it.
+        /// Call before the QML is loaded.
+        fn enable_dev_login();
     }
 }
 
@@ -23,4 +28,11 @@ fn start_core() {
 
 fn stop_core() {
     crate::hub::stop();
+}
+
+fn enable_dev_login() {
+    #[cfg(feature = "developer-mode")]
+    crate::dev_login::enable();
+    #[cfg(not(feature = "developer-mode"))]
+    tracing::warn!("--dev needs a developer-mode build: ignored");
 }

@@ -101,3 +101,4 @@ Every test carries a `// <ID>` comment. A feature can have tests at several leve
 |---|---|---|
 | INFRA-001 | XML-RPC client encodes Spix calls and decodes its answers and faults | unit: `crates/rc_gui_tests/src/xmlrpc.rs` |
 | INFRA-002 | GUI test harness reports an app that can't start, exits early or won't quit; passes environment overrides; waits for the UI with a timeout; addresses room rows and message rows by id | unit: `crates/rc_gui_tests/src/app.rs`, `crates/rc_gui_tests/src/gui.rs`, `crates/rc_gui_tests/src/paths.rs` |
+| INFRA-003 | Developer builds' `--dev` fills in the login page for the local test server, with environment overrides; release builds have no such option | unit: `crates/rc_qt/src/dev_login.rs` |

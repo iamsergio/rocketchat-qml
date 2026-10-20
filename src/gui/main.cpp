@@ -30,6 +30,12 @@ int main(int argc, char *argv[])
     const QCommandLineOption spixPortOption("spix-port", "Start the Spix UI test server on <port>.", "port");
     parser.addOption(spixPortOption);
 #endif
+#ifdef ROCKETCHATQML_DEVELOPER_MODE
+    // Never in release builds.
+    const QCommandLineOption devOption(
+        "dev", "Fill in the login page for the local test server (RC_DEV_SERVER, RC_DEV_USER and RC_DEV_PASS override it).");
+    parser.addOption(devOption);
+#endif
     parser.process(app);
 
 #ifdef ROCKETCHATQML_SPIX
@@ -48,6 +54,11 @@ int main(int argc, char *argv[])
     // After QGuiApplication, so the core's events can reach the GUI thread; before the QML is
     // loaded, which creates the view models that listen to it.
     rc_qt::start_core();
+#ifdef ROCKETCHATQML_DEVELOPER_MODE
+    if (parser.isSet(devOption)) {
+        rc_qt::enable_dev_login();
+    }
+#endif
 
     QQmlApplicationEngine engine;
     QObject::connect(

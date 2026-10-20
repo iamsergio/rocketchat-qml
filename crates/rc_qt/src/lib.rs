@@ -32,6 +32,7 @@ pub mod room_vm;
 pub mod session_vm;
 
 mod cache;
+mod dev_login;
 mod hub;
 mod message_view;
 mod room_view;
