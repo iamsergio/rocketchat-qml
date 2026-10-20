@@ -91,6 +91,28 @@ pub mod qobject {
         #[cxx_name = "endRemoveRows"]
         unsafe fn end_remove_rows(self: Pin<&mut MessageListModel>);
 
+        /// Returns `false` if the move is invalid, in which case there is nothing to end.
+        ///
+        /// # Safety
+        ///
+        /// If it returns `true`, call `end_move_rows` after changing the data.
+        #[inherit]
+        #[cxx_name = "beginMoveRows"]
+        unsafe fn begin_move_rows(
+            self: Pin<&mut MessageListModel>,
+            source_parent: &QModelIndex,
+            source_first: i32,
+            source_last: i32,
+            destination_parent: &QModelIndex,
+            destination_child: i32,
+        ) -> bool;
+        /// # Safety
+        ///
+        /// Only after `begin_move_rows` returned `true`.
+        #[inherit]
+        #[cxx_name = "endMoveRows"]
+        unsafe fn end_move_rows(self: Pin<&mut MessageListModel>);
+
         /// # Safety
         ///
         /// Call `end_reset_model` after changing the data.
@@ -134,7 +156,9 @@ use rc_core::domain::{Message, MessageKind};
 use rc_core::timeline::TimelineChange;
 
 use crate::hub;
-use crate::message_view::{author_name, body, day_label, first_of_day, system_text, time_text};
+use crate::message_view::{
+    author_name, body, day_label, delivery_name, first_of_day, system_text, time_text,
+};
 use crate::row_ops::{MessageOp, apply_newest_first, message_ops};
 
 use qobject::MessageListModel;
@@ -152,6 +176,7 @@ const IS_SYSTEM_ROLE: i32 = 261;
 const SYSTEM_TEXT_ROLE: i32 = 262;
 const FIRST_OF_DAY_ROLE: i32 = 263;
 const DAY_LABEL_ROLE: i32 = 264;
+const DELIVERY_ROLE: i32 = 265;
 
 /// Backing data of [`qobject::MessageListModel`]: the messages, mirrored from the core's changes
 /// and held newest first.
@@ -206,19 +231,41 @@ impl MessageListModel {
                         // SAFETY: after `begin_insert_rows`.
                         unsafe { self.as_mut().end_insert_rows() };
                     }
-                    MessageOp::Update { first, last } => {
-                        let top_left = self.index(row(first), 0, &no_parent);
-                        let bottom_right = self.index(row(last), 0, &no_parent);
-                        // No roles listed means all of them.
-                        self.as_mut().data_changed(
-                            &top_left,
-                            &bottom_right,
-                            &QVector::<i32>::default(),
-                        );
+                    MessageOp::Update { first, last } => self.as_mut().rows_changed(first, last),
+                    MessageOp::Replace { first, last } => {
+                        apply_newest_first(change, &mut self.as_mut().rust_mut().messages);
+                        self.as_mut().rows_changed(first, last);
+                    }
+                    MessageOp::Move { from, destination } => {
+                        // SAFETY: `end_move_rows` is called below if this returns `true`.
+                        let moving = unsafe {
+                            self.as_mut().begin_move_rows(
+                                &no_parent,
+                                row(from),
+                                row(from),
+                                &no_parent,
+                                row(destination),
+                            )
+                        };
+                        apply_newest_first(change, &mut self.as_mut().rust_mut().messages);
+                        if moving {
+                            // SAFETY: after `begin_move_rows` returned `true`.
+                            unsafe { self.as_mut().end_move_rows() };
+                        }
                     }
                 }
             }
         }
+    }
+
+    /// Announces new content in every role of the rows `first..=last`.
+    fn rows_changed(mut self: Pin<&mut Self>, first: usize, last: usize) {
+        let no_parent = QModelIndex::default();
+        let top_left = self.index(row(first), 0, &no_parent);
+        let bottom_right = self.index(row(last), 0, &no_parent);
+        // No roles listed means all of them.
+        self.as_mut()
+            .data_changed(&top_left, &bottom_right, &QVector::<i32>::default());
     }
 
     fn row_count(&self, _parent: &QModelIndex) -> i32 {
@@ -248,6 +295,7 @@ impl MessageListModel {
                 &self.zone,
             )),
             DAY_LABEL_ROLE => text(&day_label(message.ts, &self.zone, Timestamp::now())),
+            DELIVERY_ROLE => text(delivery_name(message.delivery)),
             _ => QVariant::default(),
         }
     }
@@ -266,6 +314,7 @@ impl MessageListModel {
             (SYSTEM_TEXT_ROLE, "systemText"),
             (FIRST_OF_DAY_ROLE, "firstOfDay"),
             (DAY_LABEL_ROLE, "dayLabel"),
+            (DELIVERY_ROLE, "delivery"),
         ] {
             names.insert(role, QByteArray::from(name));
         }
