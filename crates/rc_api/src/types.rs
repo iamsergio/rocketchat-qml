@@ -83,6 +83,13 @@ pub struct Subscription {
     pub group_mentions: u32,
     pub alert: bool,
     pub open: bool,
+    /// When the user joined the room.
+    pub created: Option<jiff::Timestamp>,
+    /// The time of the room's last message. Only [`RestSession::subscriptions`] fills it in, from
+    /// the rooms, and only for rooms with messages: the subscription itself doesn't carry it.
+    ///
+    /// [`RestSession::subscriptions`]: crate::RestSession::subscriptions
+    pub last_message: Option<jiff::Timestamp>,
 }
 
 /// Who wrote a message, as the message carries it.
@@ -133,6 +140,12 @@ pub enum DdpEvent {
     SubscriptionChanged(Subscription),
     /// The user left a room or was removed from it.
     SubscriptionRemoved { room_id: String },
+    /// One of the user's rooms has a message at `last_message`. Pushed for every new message, and
+    /// again for other changes of the room (a rename...), with the same time.
+    RoomActivity {
+        room_id: String,
+        last_message: jiff::Timestamp,
+    },
 }
 
 #[cfg(test)]

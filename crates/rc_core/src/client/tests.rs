@@ -469,6 +469,8 @@ fn subscription(id: &str, name: &str, room_type: rc_api::RoomType) -> rc_api::Su
         group_mentions: 0,
         alert: false,
         open: true,
+        created: None,
+        last_message: None,
     }
 }
 

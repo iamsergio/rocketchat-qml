@@ -103,6 +103,17 @@ impl DdpClient {
         self.subscribe("stream-notify-user", params).await
     }
 
+    /// When the user's rooms have new messages, as [`DdpEvent::RoomActivity`]
+    /// (`stream-notify-user` with `<user id>/rooms-changed`). Needs a login as `user_id` first.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::ConnectionClosed`] if the connection ended, or [`Error::Refused`].
+    pub async fn subscribe_room_activity(&self, user_id: &str) -> Result<(), Error> {
+        let params = json!([format!("{user_id}/rooms-changed"), false]);
+        self.subscribe("stream-notify-user", params).await
+    }
+
     async fn call(&self, method: &'static str, params: Value) -> Result<Value, Error> {
         let (reply, answer) = oneshot::channel();
         self.send(Command::Call {
@@ -717,6 +728,43 @@ mod tests {
         subscribing.await.unwrap().unwrap();
     }
 
+    // ROOM-005
+    #[tokio::test]
+    async fn room_activity_is_subscribed_for_the_user() {
+        let (client, _events, mut peer) = connected().await;
+        let subscribing = tokio::spawn(async move { client.subscribe_room_activity("u1").await });
+
+        let frame = peer.recv().await;
+        assert_eq!(frame["name"], "stream-notify-user");
+        assert_eq!(frame["params"], json!(["u1/rooms-changed", false]));
+        peer.send(json!({ "msg": "ready", "subs": [frame["id"]] }))
+            .await;
+
+        subscribing.await.unwrap().unwrap();
+    }
+
+    // ROOM-005
+    #[tokio::test]
+    async fn a_room_change_with_a_last_message_arrives_as_activity() {
+        let (_client, mut events, mut peer) = connected().await;
+        peer.send(
+            json!({ "msg": "changed", "collection": "stream-notify-user", "id": "id",
+            "fields": { "eventName": "u1/rooms-changed", "args": ["updated",
+                { "_id": "r1", "lm": { "$date": 1_792_517_519_831_i64 } }] } }),
+        )
+        .await;
+
+        let Some(DdpEvent::RoomActivity {
+            room_id,
+            last_message,
+        }) = events.recv().await
+        else {
+            panic!("expected room activity");
+        };
+        assert_eq!(room_id, "r1");
+        assert_eq!(last_message.as_millisecond(), 1_792_517_519_831);
+    }
+
     // RT-001
     #[tokio::test]
     async fn a_refused_subscription_is_an_error() {
@@ -798,7 +846,7 @@ mod tests {
         // Known streams, but not events this crate follows or can read.
         peer.send(
             json!({ "msg": "changed", "collection": "stream-notify-user", "id": "id",
-            "fields": { "eventName": "u1/rooms-changed", "args": ["inserted", {}] } }),
+            "fields": { "eventName": "u1/rooms-changed", "args": ["inserted", { "_id": "r1" }] } }),
         )
         .await;
         peer.send(

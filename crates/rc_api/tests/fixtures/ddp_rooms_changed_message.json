@@ -1,0 +1,43 @@
+{
+  "eventName": "BgfG6m6XhK8BNoTkB/rooms-changed",
+  "args": [
+    "updated",
+    {
+      "_USERNAMES": ["admin", "probe29920"],
+      "_id": "6ad7a58d3a2871a71ede2062",
+      "_updatedAt": {
+        "$date": 1792517519854
+      },
+      "default": false,
+      "lastMessage": {
+        "_id": "7RHaSDfiaeyWCzDTL",
+        "_updatedAt": {
+          "$date": 1792517519839
+        },
+        "msg": "one",
+        "rid": "6ad7a58d3a2871a71ede2062",
+        "ts": {
+          "$date": 1792517519831
+        },
+        "u": {
+          "_id": "6ad72ad3b6de6b54ca599f26",
+          "name": "Administrator",
+          "username": "admin"
+        }
+      },
+      "lm": {
+        "$date": 1792517519831
+      },
+      "msgs": 1,
+      "ro": false,
+      "sysMes": true,
+      "t": "d",
+      "ts": {
+        "$date": 1792517517674
+      },
+      "uids": ["6ad72ad3b6de6b54ca599f26", "BgfG6m6XhK8BNoTkB"],
+      "usernames": ["admin", "probe29920"],
+      "usersCount": 2
+    }
+  ]
+}

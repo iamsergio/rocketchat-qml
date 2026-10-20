@@ -153,14 +153,24 @@ impl RestSession {
         wire::parse_user(&body).map_err(Error::Decode)
     }
 
-    /// The rooms the user has joined (`GET /api/v1/subscriptions.get`).
+    /// The rooms the user has joined (`GET /api/v1/subscriptions.get`), each with the time of its
+    /// last message ([`Subscription::last_message`]), which comes from a second request
+    /// (`GET /api/v1/rooms.get`): the subscriptions don't carry it.
     ///
     /// # Errors
     ///
     /// [`Error::Unauthorized`] if the token is expired or revoked, or any of the other errors.
     pub async fn subscriptions(&self) -> Result<Vec<Subscription>, Error> {
-        let body = self.call(Method::GET, "api/v1/subscriptions.get").await?;
-        wire::parse_subscriptions(&body).map_err(Error::Decode)
+        let (subscriptions, rooms) = tokio::try_join!(
+            self.call(Method::GET, "api/v1/subscriptions.get"),
+            self.call(Method::GET, "api/v1/rooms.get"),
+        )?;
+        let mut subscriptions = wire::parse_subscriptions(&subscriptions).map_err(Error::Decode)?;
+        let activity = wire::parse_room_activity(&rooms).map_err(Error::Decode)?;
+        for subscription in &mut subscriptions {
+            subscription.last_message = activity.get(&subscription.room_id).copied();
+        }
+        Ok(subscriptions)
     }
 
     /// A page of a room's history, newest message first (`channels.history`, `groups.history` or

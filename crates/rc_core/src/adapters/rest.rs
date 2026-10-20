@@ -140,6 +140,7 @@ fn pushed_from(event: DdpEvent) -> Option<Pushed> {
         DdpEvent::Message(message) => Pushed::Message(message_from(message)?),
         DdpEvent::SubscriptionChanged(subscription) => Pushed::Subscription(subscription),
         DdpEvent::SubscriptionRemoved { room_id } => Pushed::SubscriptionRemoved(room_id.into()),
+        DdpEvent::RoomActivity { .. } => return None,
     })
 }
 
