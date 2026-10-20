@@ -57,6 +57,14 @@ impl ServerApi for RestApi {
         Ok(session.subscriptions().await?)
     }
 
+    async fn custom_emoji(
+        &self,
+        credentials: &Credentials,
+    ) -> Result<Vec<rc_api::CustomEmoji>, ApiError> {
+        let session = self.client.session(api_credentials(credentials));
+        Ok(session.custom_emoji().await?)
+    }
+
     async fn history(
         &self,
         credentials: &Credentials,

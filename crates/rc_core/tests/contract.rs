@@ -426,6 +426,36 @@ fn formatted_messages_arrive_as_blocks_from_history_and_live() {
     );
 }
 
+// RICH-003
+#[test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+fn logging_in_brings_the_custom_emoji_of_the_server() {
+    let admin = Admin::login();
+    let user = admin.create_user();
+    let name = format!("ct_emoji_{}", unique().replace('-', "_"));
+    admin.create_emoji(&name);
+    let (client, events) = start();
+    client.login(&server_url(), &user.username, password(&user));
+
+    let url = wait_for(&events, |event| match event {
+        Event::CustomEmoji(emoji) => emoji.url(&name).map(str::to_owned),
+        _ => None,
+    });
+
+    assert_eq!(
+        url,
+        format!(
+            "{}/emoji-custom/{name}.png",
+            server_url().trim_end_matches('/')
+        )
+    );
+    client.logout();
+    wait_for(&events, |event| match event {
+        Event::CustomEmoji(emoji) => emoji.url(&name).is_none().then_some(()),
+        _ => None,
+    });
+}
+
 // RT-002, ROOM-001
 #[test]
 #[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
