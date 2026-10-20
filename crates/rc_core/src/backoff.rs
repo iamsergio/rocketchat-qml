@@ -3,11 +3,9 @@
 
 //! How long to wait before trying the server again after the realtime connection was lost.
 
-use std::collections::hash_map::RandomState;
-use std::hash::BuildHasher;
-use std::sync::OnceLock;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
+
+use crate::random;
 
 /// The wait after the first failure.
 const BASE: Duration = Duration::from_secs(1);
@@ -50,7 +48,7 @@ impl Backoff {
 
     /// The wait before the next try, which counts as a failure.
     pub fn next_delay(&mut self) -> Duration {
-        let delay = self.delay(random_unit());
+        let delay = self.delay(random::unit());
         self.failures = self.failures.saturating_add(1);
         delay
     }
@@ -81,22 +79,6 @@ impl Backoff {
             1.0
         };
         step.mul_f64(0.5 + 0.5 * jitter)
-    }
-}
-
-/// A number in `0.0..1.0`. Not for anything that needs secure randomness: the standard library
-/// seeds a hasher randomly per process, and hashing a counter with it gives a different number
-/// every time, without a dependency on a random number crate.
-fn random_unit() -> f64 {
-    static COUNTER: AtomicU64 = AtomicU64::new(0);
-    static HASHER: OnceLock<RandomState> = OnceLock::new();
-    let bits = HASHER
-        .get_or_init(RandomState::new)
-        .hash_one(COUNTER.fetch_add(1, Ordering::Relaxed));
-    // The top 53 bits are what an `f64` holds exactly.
-    #[allow(clippy::cast_precision_loss)]
-    {
-        (bits >> 11) as f64 / (1_u64 << 53) as f64
     }
 }
 
