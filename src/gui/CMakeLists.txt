@@ -24,6 +24,15 @@ qt_add_qml_module(
 
 target_link_libraries(rocketchat_qml PRIVATE Qt6::Core Qt6::Gui Qt6::Quick Qt6::QuickControls2 rc_qt_qml_module)
 
+# rc_core keeps the session in the Secret Service through the system libdbus (the Rust side builds
+# against it with pkg-config but doesn't pass it on to this link). Link the very library QtDBus
+# loads, so the process has only one libdbus.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  find_package(PkgConfig REQUIRED)
+  pkg_check_modules(DBus1 REQUIRED IMPORTED_TARGET dbus-1)
+  target_link_libraries(rocketchat_qml PRIVATE PkgConfig::DBus1)
+endif()
+
 if(ROCKETCHATQML_SPIX)
   target_link_libraries(rocketchat_qml PRIVATE Spix::QtQuick)
   target_compile_definitions(rocketchat_qml PRIVATE ROCKETCHATQML_SPIX)

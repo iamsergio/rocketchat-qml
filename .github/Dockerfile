@@ -36,7 +36,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential g++-14 gcc-14 lld cmake ninja-build pkg-config git curl ca-certificates \
         zip unzip tar xz-utils perl python3 python3-venv python3-pip \
         libgl-dev libegl-dev libopengl-dev libgles-dev libglx-dev libgl1 libegl1 libgles2 libgl1-mesa-dri \
-        libxkbcommon-dev libxkbcommon-x11-0 libfontconfig1-dev libfreetype-dev libdbus-1-3 libglib2.0-0t64 \
+        libxkbcommon-dev libxkbcommon-x11-0 libfontconfig1-dev libfreetype-dev libdbus-1-3 libdbus-1-dev libglib2.0-0t64 \
         libx11-dev libx11-xcb-dev libxext6 libxrender1 libxi6 \
         libxcb1-dev libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-randr0 \
         libxcb-render-util0 libxcb-shape0 libxcb-shm0 libxcb-sync1 libxcb-xfixes0 libxcb-xinerama0 \

@@ -1,6 +1,6 @@
 # Traceability
 
-Every test carries a `// <ID>` comment. A feature can have tests at several levels (unit, core integration against `rc_fake_server`, GUI through Spix).
+Every test carries a `// <ID>` comment. A feature can have tests at several levels (unit, api against a mock HTTP server for `rc_api`, contract against a real server, opt-in with `RC_TEST_SERVER_URL`, core integration against `rc_fake_server`, GUI through Spix).
 
 ## App
 
@@ -13,11 +13,11 @@ Every test carries a `// <ID>` comment. A feature can have tests at several leve
 
 | ID | Feature | Tests |
 |---|---|---|
-| AUTH-001 | Log in with server URL, username and password | todo |
-| AUTH-002 | Invalid credentials show an error | todo |
-| AUTH-003 | Unreachable or non-Rocket.Chat server shows an error | todo |
-| AUTH-004 | Session resumes at startup from the stored token | todo |
-| AUTH-005 | Logout clears the stored token and returns to login | todo |
+| AUTH-001 | Log in with server URL, username and password | unit: `crates/rc_api/src/wire.rs`; api: `crates/rc_api/tests/rest.rs`; contract: `crates/rc_api/tests/contract.rs`; unit: `crates/rc_core/src/client/tests.rs`, `crates/rc_core/src/session.rs`; contract: `crates/rc_core/tests/contract.rs`; core, GUI: todo |
+| AUTH-002 | Invalid credentials show an error | api: `crates/rc_api/tests/rest.rs`; contract: `crates/rc_api/tests/contract.rs`; unit: `crates/rc_core/src/client/tests.rs`; contract: `crates/rc_core/tests/contract.rs`; core, GUI: todo |
+| AUTH-003 | Unreachable or non-Rocket.Chat server shows an error | unit: `crates/rc_api/src/client.rs`, `crates/rc_api/src/types.rs`, `crates/rc_api/src/wire.rs`; api: `crates/rc_api/tests/rest.rs`; contract: `crates/rc_api/tests/contract.rs`; unit: `crates/rc_core/src/client/tests.rs`, `crates/rc_core/src/session.rs`; contract: `crates/rc_core/tests/contract.rs`; core, GUI: todo |
+| AUTH-004 | Session resumes at startup from the stored token | unit: `crates/rc_api/src/wire.rs`, `crates/rc_core/src/client/tests.rs`, `crates/rc_core/src/adapters/memory.rs`, `crates/rc_core/src/adapters/keyring.rs`; api: `crates/rc_api/tests/rest.rs`; contract: `crates/rc_api/tests/contract.rs`, `crates/rc_core/tests/contract.rs`; core, GUI: todo |
+| AUTH-005 | Logout clears the stored token and returns to login | api: `crates/rc_api/tests/rest.rs`; contract: `crates/rc_api/tests/contract.rs`; unit: `crates/rc_core/src/client/tests.rs`; contract: `crates/rc_core/tests/contract.rs`; core, GUI: todo |
 | AUTH-006 | 2FA (TOTP / email code) | todo |
 | AUTH-007 | Personal access token login | todo |
 | AUTH-008 | OAuth/SSO login | todo |
@@ -27,9 +27,9 @@ Every test carries a `// <ID>` comment. A feature can have tests at several leve
 
 | ID | Feature | Tests |
 |---|---|---|
-| ROOM-001 | List subscribed rooms after login | todo |
-| ROOM-002 | Room shows name and type (channel, private, DM) | todo |
-| ROOM-003 | Room shows unread and mention counts | todo |
+| ROOM-001 | List subscribed rooms after login | unit: `crates/rc_api/src/wire.rs`; api: `crates/rc_api/tests/rest.rs`; contract: `crates/rc_api/tests/contract.rs`; unit: `crates/rc_core/src/domain.rs`, `crates/rc_core/src/rooms.rs`, `crates/rc_core/src/client/tests.rs`; contract: `crates/rc_core/tests/contract.rs`; core, GUI: todo |
+| ROOM-002 | Room shows name and type (channel, private, DM) | unit: `crates/rc_api/src/wire.rs`; api: `crates/rc_api/tests/rest.rs`; contract: `crates/rc_api/tests/contract.rs`; unit: `crates/rc_core/src/domain.rs`, `crates/rc_core/src/rooms.rs`; contract: `crates/rc_core/tests/contract.rs`; core, GUI: todo |
+| ROOM-003 | Room shows unread and mention counts | unit: `crates/rc_api/src/wire.rs`; api: `crates/rc_api/tests/rest.rs`; contract: `crates/rc_api/tests/contract.rs`; unit: `crates/rc_core/src/domain.rs`, `crates/rc_core/src/rooms.rs`; core, GUI: todo |
 | ROOM-004 | Opening a room marks it read | todo |
 | ROOM-005 | Rooms ordered by last activity | todo |
 

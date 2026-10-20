@@ -19,7 +19,7 @@ A Rocket.Chat desktop client. The logic is in Rust and doesn't depend on any GUI
 Dependencies only point downwards. Nothing in `rc_core` or `rc_api` knows about Qt or Slint.
 
 - **rc_api**: a typed client for the Rocket.Chat REST API and the realtime DDP protocol over WebSocket. It keeps no application state. Wire (serde) types stay here, and `rc_core` maps them to domain types so that protocol quirks don't leak upwards.
-- **rc_core**: domain types (rooms, messages, users, with ID newtypes), the session state machine, the sync engine and the use cases (log in, open a room, send...). Frontends drive it through a `Client` handle that accepts commands and emits events. It defines ports (traits) for what it needs from outside: secret storage, persistence and a cache directory. Adapters implement them, with in-memory versions for tests.
+- **rc_core**: domain types (rooms, messages, users, with ID newtypes), the session state machine, the sync engine and the use cases (log in, open a room, send...). Frontends drive it through a `Client` handle that accepts commands and emits events. It keeps lists such as the rooms in display order and emits index-based changes (insert, update, move, remove), which view models apply one to one. It defines ports (traits) for what it needs from outside: the server API, secret storage, persistence and a cache directory. Adapters implement them, with in-memory versions for tests.
 - **rc_qt**: cxx-qt QObjects and `QAbstractListModel`s that turn core events into Qt properties, signals and incremental model updates. It is the only crate that uses `unsafe` (cxx-qt bridge code).
 - **QML**: presentation only. It binds to view models and calls their invokables. It has no business logic and makes no network calls.
 - **C++ host** (`src/gui/main.cpp`): sets up logging through `rc_qt` (`rc_core::logging`: stderr, plus `<executable>.log` in developer-mode builds, filtered by `RUST_LOG`), creates `QGuiApplication`, registers the Rust QML module, loads `Main.qml`, and, in builds with `ROCKETCHATQML_SPIX`, starts the Spix test server when given `--spix-port <port>`. It does nothing else.
@@ -36,9 +36,11 @@ Test-only crates:
 - **GUI thread**: runs the Qt event loop and owns every QObject and model. Nothing on it blocks, and it never waits on the network.
 - **Tokio runtime** (multi-threaded, few workers), owned by `rc_core`:
   - **Session actor**: a single task that owns the authoritative client state, so the state needs no mutexes. It processes commands one at a time.
+  - **Store worker**: runs the secret-store calls (keyring or memory), which block and may wait for the user to unlock the keyring. It takes them in order, one at a time, on blocking threads, so a save and a later clear never swap and the async threads never stall.
   - **I/O tasks**: the DDP connection (read loop, ping, reconnect with backoff), REST requests and avatar/file downloads. They report back to the actor through channels.
 - **Commands (GUI → core)**: sent on a non-blocking `mpsc` channel.
-- **Events (core → GUI)**: a forwarder task receives core events and hands each one to the GUI thread through `CxxQtThread::queue`, where the view model applies it as a diff (insert, update or remove rows). Qt objects are never touched from a Tokio thread.
+- **Events (core → GUI)**: the frontend gives `Client` an event callback, which the actor calls in order from a runtime thread. The callback hands each event to the GUI thread through `CxxQtThread::queue`, where the view model applies it as a diff (insert, update or remove rows). Qt objects are never touched from a Tokio thread.
+- **Shutdown**: dropping `Client` ends the actor, which first waits briefly (2 s at most) for a pending logout: the token revocation and the store clear. The GUI thread blocks for that bounded time only.
 
 ## GUI testing contract
 
@@ -68,8 +70,9 @@ The harness starts the binary named by `RC_GUI_TEST_APP` with `--spix-port <free
 | thiserror | Typed errors in library crates |
 | tracing | Structured logging |
 | ureq, roxmltree | HTTP and XML for the small XML-RPC client in `rc_gui_tests` (Spix uses a handful of value types, so no XML-RPC crate) |
+| wiremock | Dev only: mock HTTP server for the `rc_api` tests |
 | secrecy | Keeps passwords and tokens out of logs and `Debug` output |
-| keyring | OS credential storage for the session token |
+| keyring-core + native stores | OS credential storage for the session token (on Linux the Secret Service through the system libdbus, which Qt loads too, so it needs `libdbus-1-dev` to build) |
 | 3rdparty/spix (fork) | UI test server inside the app, with Qt Quick and Slint backends and XML-RPC control. Needs AnyRPC |
 | 3rdparty/vcpkg (fork) | Provides the C++ dependencies Qt doesn't ship (AnyRPC for Spix). Pinned to the same commit as Spix's copy |
 | 3rdparty/QtCommander | Development tool only: an MCP server so agents can inspect and drive the running app. Not linked into the product |

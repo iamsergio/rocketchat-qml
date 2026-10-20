@@ -10,7 +10,9 @@ A Rocket.Chat client with a Rust core and a QML GUI, connected through cxx-qt.
 Requires Qt ≥ 6.12 (its `bin` directory on `PATH`), CMake ≥ 3.24, Ninja, a C++23 compiler and
 rustup. The Rust toolchain version is pinned in `rust-toolchain.toml`; rustup installs it on first
 use. The first configure bootstraps vcpkg (`3rdparty/vcpkg`), which needs network access and curl,
-zip, unzip and tar.
+zip, unzip and tar. On Linux it also needs the libdbus development package (`libdbus-1-dev` on
+Debian/Ubuntu, `dbus` on Arch) and pkg-config able to find `dbus-1`: the session is kept in the
+Secret Service (the desktop's keyring) through the system libdbus.
 
 `scripts/build.sh` uses the `dev` preset (`build-dev/`): a debug build with the Spix UI test server,
 whose AnyRPC dependency comes from vcpkg. `cmake --preset=rel && cmake --build build-rel` is a
@@ -28,6 +30,14 @@ app offscreen and drive it through Spix. A plain `cargo test` skips the GUI test
 hand:
 
     RC_GUI_TEST_APP=$PWD/build-dev/bin/rocketchat_qml cargo test -p rc_gui_tests -- --ignored
+
+The `rc_api` contract tests run against a real Rocket.Chat server and are skipped the same way. Start
+one with `scripts/run_test_server.sh`, then:
+
+    RC_TEST_SERVER_URL=http://127.0.0.1:3000 cargo test -p rc_api --test contract -- --ignored
+
+They create their own users and rooms, so they can run repeatedly against the same server. The admin
+login comes from `RC_ADMIN_USER` / `RC_ADMIN_PASS` (default `admin` / `admin`).
 
 See [PLAN.md](PLAN.md) for the roadmap, [ARCHITECTURE.md](ARCHITECTURE.md) for the design and
 [TRACEABILITY.md](TRACEABILITY.md) for the features and their tests.

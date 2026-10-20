@@ -1,0 +1,226 @@
+// SPDX-FileCopyrightText: 2026 Sergio Martins
+// SPDX-License-Identifier: MIT
+
+//! The client against a real Rocket.Chat server, named by `RC_TEST_SERVER_URL`. Run with
+//! `--ignored` (see the README).
+//!
+//! Only admin logs in successfully, each test with its own token. A wrong password is never tried
+//! for a real account: repeated failures would lock it and break the other tests.
+
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
+use std::net::TcpListener;
+use std::process;
+use std::sync::mpsc::{self, Receiver};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+use rc_core::adapters::MemoryStore;
+use rc_core::domain::{Room, RoomKind};
+use rc_core::ports::SecretStore;
+use rc_core::rooms::RoomChange;
+use rc_core::session::{LoginFailure, SessionState};
+use rc_core::{Client, Event};
+use secrecy::{ExposeSecret, SecretString};
+
+const TIMEOUT: Duration = Duration::from_secs(15);
+
+fn server_url() -> String {
+    std::env::var("RC_TEST_SERVER_URL")
+        .expect("RC_TEST_SERVER_URL is not set: point it at a Rocket.Chat server, e.g. http://127.0.0.1:3000")
+}
+
+fn admin() -> (String, SecretString) {
+    let user = std::env::var("RC_ADMIN_USER").unwrap_or_else(|_| "admin".into());
+    let pass = std::env::var("RC_ADMIN_PASS").unwrap_or_else(|_| "admin".into());
+    (user, SecretString::from(pass))
+}
+
+/// A client with nothing stored, past its first event.
+fn start() -> (Client, Receiver<Event>) {
+    let (client, events) = start_with(MemoryStore::default());
+    assert_eq!(next(&events), SessionState::LoggedOut { failure: None });
+    (client, events)
+}
+
+/// A client on `store`; the first event is left to the caller.
+fn start_with(store: MemoryStore) -> (Client, Receiver<Event>) {
+    let (tx, rx) = mpsc::channel();
+    let client = Client::start(store, move |event| {
+        let _ = tx.send(event);
+    })
+    .unwrap();
+    (client, rx)
+}
+
+/// The next session state. Room events are skipped: only the room test looks at them.
+fn next(events: &Receiver<Event>) -> SessionState {
+    loop {
+        if let Event::Session(state) = events.recv_timeout(TIMEOUT).expect("no event") {
+            return state;
+        }
+    }
+}
+
+/// Expects `Connecting`, then returns the state the login ends in.
+fn outcome(events: &Receiver<Event>) -> SessionState {
+    assert_eq!(next(events), SessionState::Connecting);
+    next(events)
+}
+
+fn assert_failure(state: &SessionState, expected: &LoginFailure) {
+    assert_eq!(
+        state,
+        &SessionState::LoggedOut {
+            failure: Some(expected.clone())
+        }
+    );
+}
+
+// AUTH-001
+#[test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+fn admin_logs_in() {
+    let (client, events) = start();
+    let (user, password) = admin();
+    client.login(&server_url(), &user, password);
+    let SessionState::LoggedIn(account) = outcome(&events) else {
+        panic!("login failed");
+    };
+    assert_eq!(account.user.username, user);
+    assert_eq!(account.server, server_url());
+}
+
+// AUTH-002
+#[test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+fn unknown_user_is_refused() {
+    let (client, events) = start();
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let username = format!("ct-nobody-{}-{nanos}", process::id());
+    client.login(&server_url(), &username, SecretString::from("whatever"));
+    assert_failure(&outcome(&events), &LoginFailure::InvalidCredentials);
+}
+
+// AUTH-003
+#[test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+fn closed_port_is_unreachable() {
+    let port = TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port();
+    let (client, events) = start();
+    client.login(
+        &format!("http://127.0.0.1:{port}"),
+        "u",
+        SecretString::from("p"),
+    );
+    assert_failure(&outcome(&events), &LoginFailure::Unreachable);
+}
+
+// AUTH-005
+#[test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+fn admin_logs_out() {
+    let (client, events) = start();
+    let (user, password) = admin();
+    client.login(&server_url(), &user, password);
+    assert!(matches!(outcome(&events), SessionState::LoggedIn(_)));
+    client.logout();
+    assert_eq!(next(&events), SessionState::LoggedOut { failure: None });
+}
+
+// AUTH-004
+#[test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+fn a_new_client_resumes_the_stored_session() {
+    let (user, password) = admin();
+    let store = MemoryStore::default();
+
+    let (first, events) = start_with(store.clone());
+    assert_eq!(next(&events), SessionState::LoggedOut { failure: None });
+    first.login(&server_url(), &user, password);
+    assert!(matches!(outcome(&events), SessionState::LoggedIn(_)));
+    // Dropping flushes the queued save, like quitting the app.
+    drop(first);
+    drop(events);
+
+    // No login command this time.
+    let (second, events) = start_with(store.clone());
+    assert_eq!(next(&events), SessionState::Connecting);
+    let SessionState::LoggedIn(account) = next(&events) else {
+        panic!("resume failed");
+    };
+    assert_eq!(account.user.username, user);
+
+    second.logout();
+    assert_eq!(next(&events), SessionState::LoggedOut { failure: None });
+    // Dropping flushes the queued clear.
+    drop(second);
+    assert!(store.load().unwrap().is_none());
+}
+
+/// Creates a channel as admin, who becomes a member, and returns its id and name. The room is
+/// the test's own: the server may hold anything else, and `general` isn't joined by default.
+fn create_channel() -> (String, String) {
+    let (user, password) = admin();
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    runtime.block_on(async {
+        let login = rc_api::RestClient::new(&server_url())
+            .unwrap()
+            .login(&user, &password)
+            .await
+            .unwrap();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let name = format!("ct-room-{}-{nanos}", process::id());
+        let response = reqwest::Client::new()
+            .post(format!(
+                "{}/api/v1/channels.create",
+                server_url().trim_end_matches('/')
+            ))
+            .header("X-User-Id", login.credentials.user_id)
+            .header("X-Auth-Token", login.credentials.token.expose_secret())
+            .json(&serde_json::json!({ "name": name }))
+            .send()
+            .await
+            .unwrap();
+        let status = response.status();
+        let json: serde_json::Value = response.json().await.unwrap();
+        assert!(status.is_success(), "channels.create: {status} {json}");
+        (json["channel"]["_id"].as_str().unwrap().to_owned(), name)
+    })
+}
+
+// ROOM-001, ROOM-002
+#[test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+fn admin_gets_their_rooms_after_logging_in() {
+    let (id, name) = create_channel();
+    let (client, events) = start();
+    let (user, password) = admin();
+    client.login(&server_url(), &user, password);
+    assert!(matches!(outcome(&events), SessionState::LoggedIn(_)));
+    let Event::Rooms(changes) = events.recv_timeout(TIMEOUT).expect("no rooms event") else {
+        panic!("expected the rooms right after logging in");
+    };
+    let [RoomChange::Reset(rooms)] = changes.as_slice() else {
+        panic!("expected a single reset, got {changes:?}");
+    };
+    // Only the test's own room: the server may hold any number of others.
+    let room: &Room = rooms
+        .iter()
+        .find(|room| room.id.as_str() == id)
+        .expect("the new channel isn't listed");
+    assert_eq!(room.kind, RoomKind::Channel);
+    assert_eq!(room.name, name);
+}
