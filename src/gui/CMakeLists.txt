@@ -19,6 +19,9 @@ qt_add_qml_module(
   rocketchat
   VERSION
   1.0
+  SOURCES
+  debugtools.h
+  debugtools.cpp
   QML_FILES
   Avatar.qml
   Main.qml
@@ -45,10 +48,17 @@ qt_add_qml_module(
   icons/file.svg
   icons/logout.svg
   icons/private.svg
+  icons/settings.svg
   IMPORT_PATH
   ${rc_qt_export_dir}/qml_modules)
 
 target_link_libraries(rocketchat_qml PRIVATE Qt6::Core Qt6::Gui Qt6::Quick Qt6::QuickControls2 rc_qt_qml_module)
+target_include_directories(rocketchat_qml PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+
+# KDToolBox's dpiinfo.h asks Windows for the process' DPI awareness.
+if(WIN32)
+  target_link_libraries(rocketchat_qml PRIVATE Shcore)
+endif()
 
 # rc_core keeps the session in the Secret Service through the system libdbus (the Rust side builds
 # against it with pkg-config but doesn't pass it on to this link). Link the very library QtDBus

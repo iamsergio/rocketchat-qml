@@ -187,6 +187,55 @@ ColumnLayout {
                 }
 
                 ToolButton {
+                    id: settings
+
+                    objectName: "settingsButton"
+                    // Only the tool tip and the accessibility name show it.
+                    display: AbstractButton.IconOnly
+                    implicitHeight: Theme.iconButtonSize
+                    implicitWidth: Theme.iconButtonSize
+                    padding: Theme.spacingNone
+                    text: qsTr("Settings")
+                    // Above the button: it is at the bottom of the window.
+                    onClicked: settingsMenu.popup(this, 0, -settingsMenu.implicitHeight)
+
+                    ToolTip.delay: Theme.toolTipDelay
+                    ToolTip.text: text
+                    ToolTip.visible: hovered && !settingsMenu.visible
+
+                    background: Rectangle {
+                        color: settings.hovered ? Theme.raised : Theme.transparent
+                        radius: Theme.radiusControl
+                    }
+
+                    contentItem: Item {
+                        Icon {
+                            anchors.centerIn: parent
+                            height: Theme.iconButtonIconSize
+                            source: "icons/settings.svg"
+                            tint: settings.hovered ? Theme.text : Theme.textMuted
+                            width: Theme.iconButtonIconSize
+                        }
+                    }
+
+                    // The popup is parented to the window's overlay while open, so Spix finds its
+                    // items by name from the window (mainWindow/dumpInfoAction), and only while it
+                    // is open.
+                    Menu {
+                        id: settingsMenu
+
+                        // Keeps the menu inside the window when it opens near an edge.
+                        margins: Theme.spacingL
+
+                        MenuItem {
+                            objectName: "dumpInfoAction"
+                            text: qsTr("Dump info")
+                            onTriggered: DebugTools.dumpInfo()
+                        }
+                    }
+                }
+
+                ToolButton {
                     id: logout
 
                     objectName: "logoutButton"
