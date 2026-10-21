@@ -50,13 +50,78 @@ ColumnLayout {
         Layout.fillHeight: true
         spacing: 0
 
-        ListView {
-            objectName: "roomList"
-            Layout.preferredWidth: 260
+        ColumnLayout {
             Layout.fillHeight: true
-            clip: true
-            model: RoomList
-            delegate: RoomDelegate {}
+            Layout.maximumWidth: 260
+            Layout.minimumWidth: 260
+            Layout.preferredWidth: 260
+            spacing: 0
+
+            // One list, so that everything scrolls together. The favorites come first, and the
+            // sections show only while there are any.
+            ListView {
+                objectName: "roomList"
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                clip: true
+                model: RoomList
+                section.criteria: ViewSection.FullString
+                section.property: "favorite"
+                delegate: RoomDelegate {}
+
+                // The value of `section` is the text of the bool: "true" for the favorites.
+                section.delegate: Rectangle {
+                    id: header
+
+                    // The name of the section it heads, as `roomKind_<kind>` names a kind.
+                    readonly property bool favorites: section === "true"
+                    required property string section
+
+                    clip: true
+                    color: palette.window
+                    // The view decides whether a section item is visible, so without favorites it
+                    // is left empty and with no height.
+                    height: RoomList.hasFavorites ? headerLabel.implicitHeight + 8 : 0
+                    objectName: "roomSection_" + (favorites ? "favorites" : "rooms")
+                    width: ListView.view.width
+
+                    Label {
+                        id: headerLabel
+
+                        objectName: "roomSectionHeader"
+                        anchors.left: parent.left
+                        anchors.leftMargin: 12
+                        anchors.verticalCenter: parent.verticalCenter
+                        color: palette.placeholderText
+                        font.bold: true
+                        text: header.favorites ? qsTr("Favorites") : qsTr("Rooms")
+                        visible: RoomList.hasFavorites
+                    }
+                }
+            }
+
+            // Why the last command on a room failed, until it is dismissed or the user tries again.
+            RowLayout {
+                objectName: "roomListError"
+                Layout.fillWidth: true
+                Layout.margins: 8
+                visible: RoomList.roomActionError !== ""
+
+                Label {
+                    objectName: "roomListErrorText"
+                    Layout.fillWidth: true
+                    color: "#c62828"
+                    text: RoomList.roomActionError
+                    textFormat: Text.PlainText
+                    wrapMode: Text.Wrap
+                }
+
+                ToolButton {
+                    objectName: "roomListErrorDismiss"
+                    text: qsTr("Dismiss")
+                    onClicked: RoomList.dismissRoomActionError()
+                }
+            }
         }
 
         Rectangle {

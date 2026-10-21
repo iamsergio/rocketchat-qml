@@ -27,6 +27,12 @@ pub fn action_name(action: MessageAction) -> &'static str {
     }
 }
 
+/// Whether any of the rooms is a favorite: the room list shows its sections only then.
+#[must_use]
+pub fn any_favorite(rooms: &[Room]) -> bool {
+    rooms.iter().any(|room| room.favorite)
+}
+
 /// What sending `text` from the composer hands to the core: the open room, the text and the
 /// message it quotes (`quoted_id` is empty for none), or `None` if there is nothing to send,
 /// because no room is open or the text is blank.
@@ -83,6 +89,7 @@ pub fn room_state(rooms: &[Room], status: &TimelineStatus) -> RoomState {
 
 #[cfg(test)]
 mod tests {
+    use rc_core::rooms::{RoomChange, RoomList};
     use rc_core::timeline::TimelineError;
 
     use super::*;
@@ -105,6 +112,7 @@ mod tests {
             user_mentions: 0,
             group_mentions: 0,
             alert: false,
+            favorite: false,
             last_activity: jiff::Timestamp::UNIX_EPOCH,
         }
     }
@@ -118,6 +126,54 @@ mod tests {
             MessageAction::React,
         ];
         assert_eq!(actions.map(action_name), ["edit", "delete", "react"]);
+    }
+
+    fn favorite(room: Room) -> Room {
+        Room {
+            favorite: true,
+            ..room
+        }
+    }
+
+    // ROOM-006
+    #[test]
+    fn there_are_favorites_while_any_room_is_one() {
+        let (mut list, mut mirror) = (RoomList::default(), Vec::new());
+        let mut check = |change: Option<RoomChange>, expected: bool| {
+            if let Some(change) = change {
+                change.apply(&mut mirror);
+            }
+            assert_eq!(any_favorite(&mirror), expected, "{mirror:?}");
+        };
+        check(Some(list.reset(Vec::new())), false);
+        check(list.upsert(room("a", "alpha", RoomKind::Channel)), false);
+        check(
+            list.upsert(favorite(room("b", "bravo", RoomKind::Direct))),
+            true,
+        );
+        // Moves: a bump of a room above the other one, and a favorite taken back and set again.
+        check(
+            list.upsert(favorite(room("a", "alpha", RoomKind::Channel))),
+            true,
+        );
+        check(list.upsert(room("b", "bravo", RoomKind::Direct)), true);
+        check(list.upsert(room("a", "alpha", RoomKind::Channel)), false);
+        check(
+            list.upsert(favorite(room("c", "charlie", RoomKind::Private))),
+            true,
+        );
+        // Updates in place.
+        let mut busy = favorite(room("c", "charlie", RoomKind::Private));
+        busy.unread = 2;
+        check(list.upsert(busy), true);
+        // Removals.
+        check(list.remove(&"a".to_owned().into()), true);
+        check(list.remove(&"c".to_owned().into()), false);
+        check(
+            Some(list.reset(vec![favorite(room("d", "delta", RoomKind::Channel))])),
+            true,
+        );
+        check(Some(list.reset(Vec::new())), false);
     }
 
     // SEND-001

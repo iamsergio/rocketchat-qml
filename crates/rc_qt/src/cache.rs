@@ -241,6 +241,7 @@ mod tests {
             user_mentions: 0,
             group_mentions: 0,
             alert: false,
+            favorite: false,
             last_activity: jiff::Timestamp::UNIX_EPOCH,
         }
     }

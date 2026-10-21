@@ -120,6 +120,8 @@ Item {
         modal: true
         parent: Overlay.overlay
         title: qsTr("Delete message")
+        // A width of its own: the wrapping label can't size the dialog it is sized by.
+        width: 360
 
         footer: DialogButtonBox {
             Button {
