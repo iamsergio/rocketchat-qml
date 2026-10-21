@@ -21,22 +21,22 @@ Item {
     required property string initialsName
     readonly property bool loaded: image.status === Image.Ready
 
-    implicitWidth: 32
-    implicitHeight: 32
+    implicitWidth: Theme.avatarSize
+    implicitHeight: Theme.avatarSize
 
     Rectangle {
         objectName: root.placeholderName
         anchors.fill: parent
-        radius: width / 4
+        radius: width * Theme.avatarRadiusRatio
         color: root.fillColor
         visible: !root.loaded
 
         Label {
             objectName: root.initialsName
             anchors.centerIn: parent
-            color: "white"
+            color: Theme.onAvatar
             font.bold: true
-            font.pixelSize: root.height * 0.4
+            font.pixelSize: root.height * Theme.avatarFontScale
             text: root.initials
             textFormat: Text.PlainText
         }
@@ -72,7 +72,7 @@ Item {
 
         Rectangle {
             anchors.fill: parent
-            radius: width / 4
+            radius: width * Theme.avatarRadiusRatio
         }
     }
 }

@@ -14,8 +14,8 @@ ColumnLayout {
 
         RowLayout {
             anchors.fill: parent
-            anchors.leftMargin: 12
-            anchors.rightMargin: 12
+            anchors.leftMargin: Theme.spacingXXL
+            anchors.rightMargin: Theme.spacingXXL
 
             Label {
                 objectName: "currentUser"
@@ -37,7 +37,7 @@ ColumnLayout {
         Layout.fillWidth: true
         visible: Session.connectionText !== ""
         text: Session.connectionText
-        padding: 6
+        padding: Theme.spacingM
         horizontalAlignment: Text.AlignHCenter
         color: palette.toolTipText
         background: Rectangle {
@@ -52,9 +52,9 @@ ColumnLayout {
 
         ColumnLayout {
             Layout.fillHeight: true
-            Layout.maximumWidth: 260
-            Layout.minimumWidth: 260
-            Layout.preferredWidth: 260
+            Layout.maximumWidth: Theme.sidebarWidth
+            Layout.minimumWidth: Theme.sidebarWidth
+            Layout.preferredWidth: Theme.sidebarWidth
             spacing: 0
 
             // One list, so that everything scrolls together. The favorites come first, and the
@@ -81,7 +81,7 @@ ColumnLayout {
                     color: palette.window
                     // The view decides whether a section item is visible, so without favorites it
                     // is left empty and with no height.
-                    height: RoomList.hasFavorites ? headerLabel.implicitHeight + 8 : 0
+                    height: RoomList.hasFavorites ? headerLabel.implicitHeight + Theme.spacingL : 0
                     objectName: "roomSection_" + (favorites ? "favorites" : "rooms")
                     width: ListView.view.width
 
@@ -90,7 +90,7 @@ ColumnLayout {
 
                         objectName: "roomSectionHeader"
                         anchors.left: parent.left
-                        anchors.leftMargin: 12
+                        anchors.leftMargin: Theme.spacingXXL
                         anchors.verticalCenter: parent.verticalCenter
                         color: palette.placeholderText
                         font.bold: true
@@ -104,13 +104,13 @@ ColumnLayout {
             RowLayout {
                 objectName: "roomListError"
                 Layout.fillWidth: true
-                Layout.margins: 8
+                Layout.margins: Theme.spacingL
                 visible: RoomList.roomActionError !== ""
 
                 Label {
                     objectName: "roomListErrorText"
                     Layout.fillWidth: true
-                    color: "#c62828"
+                    color: Theme.error
                     text: RoomList.roomActionError
                     textFormat: Text.PlainText
                     wrapMode: Text.Wrap
@@ -126,7 +126,7 @@ ColumnLayout {
 
         Rectangle {
             Layout.fillHeight: true
-            implicitWidth: 1
+            implicitWidth: Theme.separatorWidth
             color: palette.mid
         }
 

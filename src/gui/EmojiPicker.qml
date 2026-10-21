@@ -19,17 +19,17 @@ Popup {
 
     anchors.centerIn: Overlay.overlay
     closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
-    height: 340
+    height: Theme.emojiPickerHeight
     modal: true
-    padding: 8
+    padding: Theme.spacingL
     parent: Overlay.overlay
-    width: 360
+    width: Theme.emojiPickerWidth
 
     onAboutToShow: search.clear()
     onOpened: search.forceActiveFocus()
 
     contentItem: ColumnLayout {
-        spacing: 8
+        spacing: Theme.spacingL
 
         TextField {
             id: search
@@ -46,8 +46,8 @@ Popup {
             objectName: "emojiGrid"
             Layout.fillHeight: true
             Layout.fillWidth: true
-            cellHeight: 40
-            cellWidth: 40
+            cellHeight: Theme.emojiCellSize
+            cellWidth: Theme.emojiCellSize
             clip: true
             model: EmojiCatalog
 
@@ -67,7 +67,7 @@ Popup {
 
                 Label {
                     anchors.centerIn: parent
-                    font.pointSize: 18
+                    font.pointSize: Theme.fontSizeEmoji
                     text: pick.glyph
                     textFormat: Text.PlainText
                     visible: pick.image === ""
@@ -77,10 +77,10 @@ Popup {
                     anchors.centerIn: parent
                     asynchronous: true
                     fillMode: Image.PreserveAspectFit
-                    height: 28
+                    height: Theme.emojiButtonSize
                     source: pick.image
                     visible: pick.image !== ""
-                    width: 28
+                    width: Theme.emojiButtonSize
                 }
 
                 // Not a TapHandler, which Spix clicks don't trigger.
@@ -98,12 +98,12 @@ Popup {
                 Rectangle {
                     anchors.fill: parent
                     color: root.palette.highlight
-                    opacity: 0.2
-                    radius: 4
+                    opacity: Theme.highlightOpacity
+                    radius: Theme.radiusSmall
                     visible: area.containsMouse
                 }
 
-                ToolTip.delay: 400
+                ToolTip.delay: Theme.toolTipDelay
                 ToolTip.text: pick.shortcode
                 ToolTip.visible: area.containsMouse
             }

@@ -11,6 +11,8 @@ set_target_properties(rocketchat_qml PROPERTIES AUTOMOC ON)
 # Lets qmllint and qmlcachegen see the Rust QML module (RocketChat.Bridge).
 get_target_property(rc_qt_export_dir rc_qt CXX_QT_EXPORT_DIR)
 
+set_source_files_properties(Theme.qml PROPERTIES QT_QML_SINGLETON_TYPE TRUE)
+
 qt_add_qml_module(
   rocketchat_qml
   URI
@@ -28,6 +30,7 @@ qt_add_qml_module(
   RoomPage.qml
   RoomView.qml
   StartupPage.qml
+  Theme.qml
   RESOURCES
   icons/channel.svg
   icons/direct.svg

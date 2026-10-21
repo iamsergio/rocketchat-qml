@@ -57,7 +57,7 @@ Item {
 
     objectName: "msg_" + messageId
     width: ListView.view.width
-    implicitHeight: column.implicitHeight + 8
+    implicitHeight: column.implicitHeight + Theme.spacingL
 
     HoverHandler {
         id: rowHover
@@ -121,7 +121,7 @@ Item {
         parent: Overlay.overlay
         title: qsTr("Delete message")
         // A width of its own: the wrapping label can't size the dialog it is sized by.
-        width: 360
+        width: Theme.dialogWidth
 
         footer: DialogButtonBox {
             Button {
@@ -153,7 +153,7 @@ Item {
         anchors.fill: parent
         visible: root.mentionsMe
         color: root.palette.highlight
-        opacity: 0.18
+        opacity: Theme.highlightOpacity
     }
 
     ColumnLayout {
@@ -161,21 +161,21 @@ Item {
 
         anchors.left: parent.left
         anchors.right: parent.right
-        anchors.leftMargin: 12
-        anchors.rightMargin: 12
+        anchors.leftMargin: Theme.spacingXXL
+        anchors.rightMargin: Theme.spacingXXL
         anchors.verticalCenter: parent.verticalCenter
-        spacing: 2
+        spacing: Theme.spacingXS
 
         // A heading above the first message of each day.
         RowLayout {
             Layout.fillWidth: true
-            Layout.topMargin: 6
+            Layout.topMargin: Theme.spacingM
             visible: root.firstOfDay
-            spacing: 8
+            spacing: Theme.spacingL
 
             Rectangle {
                 Layout.fillWidth: true
-                implicitHeight: 1
+                implicitHeight: Theme.separatorWidth
                 color: root.palette.mid
             }
 
@@ -188,7 +188,7 @@ Item {
 
             Rectangle {
                 Layout.fillWidth: true
-                implicitHeight: 1
+                implicitHeight: Theme.separatorWidth
                 color: root.palette.mid
             }
         }
@@ -196,12 +196,12 @@ Item {
         RowLayout {
             Layout.fillWidth: true
             visible: !root.isSystem
-            spacing: 10
+            spacing: Theme.spacingXL
 
             Avatar {
                 Layout.alignment: Qt.AlignTop
-                Layout.preferredWidth: 32
-                Layout.preferredHeight: 32
+                Layout.preferredWidth: Theme.avatarSize
+                Layout.preferredHeight: Theme.avatarSize
                 url: root.avatar
                 initials: root.avatarInitials
                 fillColor: root.avatarColor
@@ -214,11 +214,11 @@ Item {
                 id: content
 
                 Layout.fillWidth: true
-                spacing: 2
+                spacing: Theme.spacingXS
 
                 RowLayout {
                     Layout.fillWidth: true
-                    spacing: 8
+                    spacing: Theme.spacingL
 
                     Label {
                         objectName: "msgAuthor"
@@ -239,7 +239,7 @@ Item {
                         objectName: "msgEdited"
                         color: root.palette.placeholderText
                         font.italic: true
-                        font.pointSize: timeLabel.font.pointSize * 0.85
+                        font.pointSize: Theme.fontSizeSmall
                         text: qsTr("(edited)")
                         visible: root.edited
                     }
@@ -252,8 +252,8 @@ Item {
                     // It keeps its place the rest of the time, so the rows don't change height.
                     ToolButton {
                         objectName: "msgMenuButton"
-                        Layout.preferredHeight: 22
-                        Layout.preferredWidth: 28
+                        Layout.preferredHeight: Theme.menuButtonHeight
+                        Layout.preferredWidth: Theme.menuButtonWidth
                         opacity: rowHover.hovered || menu.opened ? 1 : 0
                         padding: 0
                         text: "\u22EF"
@@ -279,7 +279,7 @@ Item {
 
                         sourceComponent: Label {
                             objectName: "msgFailed"
-                            color: "#c62828"
+                            color: Theme.error
                             text: qsTr("Not sent")
                         }
                     }
@@ -310,20 +310,20 @@ Item {
                         objectName: "quote" + index
                         Layout.fillHeight: false
                         Layout.fillWidth: true
-                        spacing: 8
+                        spacing: Theme.spacingL
 
                         Rectangle {
                             Layout.fillHeight: true
                             color: root.palette.mid
-                            implicitWidth: 3
+                            implicitWidth: Theme.accentBarWidth
                         }
 
                         ColumnLayout {
                             Layout.fillWidth: true
-                            spacing: 1
+                            spacing: Theme.spacingXXS
 
                             RowLayout {
-                                spacing: 6
+                                spacing: Theme.spacingM
 
                                 Label {
                                     objectName: "quoteAuthor"
@@ -372,7 +372,7 @@ Item {
                     implicitHeight: bodyText.implicitHeight
                     // A message of only files or quotes has no text to leave a blank line for.
                     visible: root.body !== "" || (root.attachments.length === 0 && root.quotes.length === 0)
-                    opacity: root.delivery === "sent" ? 1 : 0.6
+                    opacity: root.delivery === "sent" ? 1 : Theme.disabledOpacity
                     property string text: root.body
 
                     Label {
@@ -403,13 +403,13 @@ Item {
                         required property int index
                         required property var modelData
                         // The image is shown at its size, at most this wide and tall.
-                        readonly property real naturalWidth: modelData.width > 0 ? modelData.width : 360
-                        readonly property real naturalHeight: modelData.height > 0 ? modelData.height : 240
-                        readonly property real fit: Math.min(1, Math.min(360, content.width) / naturalWidth, 480 / naturalHeight)
+                        readonly property real naturalWidth: modelData.width > 0 ? modelData.width : Theme.attachmentFallbackWidth
+                        readonly property real naturalHeight: modelData.height > 0 ? modelData.height : Theme.attachmentFallbackHeight
+                        readonly property real fit: Math.min(1, Math.min(Theme.attachmentMaxWidth, content.width) / naturalWidth, Theme.attachmentMaxHeight / naturalHeight)
 
                         objectName: "attachment" + index
                         Layout.fillWidth: true
-                        spacing: 2
+                        spacing: Theme.spacingXS
 
                         Item {
                             Layout.preferredWidth: attachment.naturalWidth * attachment.fit
@@ -420,7 +420,7 @@ Item {
                                 objectName: "attachmentPlaceholder"
                                 anchors.fill: parent
                                 color: root.palette.mid
-                                opacity: 0.3
+                                opacity: Theme.placeholderOpacity
                                 visible: picture.status !== Image.Ready
                             }
 
@@ -455,7 +455,7 @@ Item {
                             objectName: "attachmentLink"
                             Layout.fillWidth: true
                             visible: !attachment.modelData.isImage
-                            spacing: 8
+                            spacing: Theme.spacingL
 
                             Label {
                                 objectName: "attachmentTitle"
@@ -499,7 +499,7 @@ Item {
                 Flow {
                     objectName: "msgReactions"
                     Layout.fillWidth: true
-                    spacing: 6
+                    spacing: Theme.spacingM
                     visible: root.reactions.length > 0
 
                     Repeater {
@@ -515,17 +515,17 @@ Item {
 
                             objectName: "reaction" + index
                             border.color: modelData.mine ? root.palette.highlight : root.palette.mid
-                            border.width: 1
-                            color: modelData.mine ? Qt.alpha(root.palette.highlight, 0.2) : "transparent"
-                            implicitHeight: 24
-                            implicitWidth: chipRow.implicitWidth + 14
+                            border.width: Theme.borderWidth
+                            color: modelData.mine ? Qt.alpha(root.palette.highlight, Theme.highlightOpacity) : "transparent"
+                            implicitHeight: Theme.chipHeight
+                            implicitWidth: chipRow.implicitWidth + Theme.chipPadding
                             radius: height / 2
 
                             Row {
                                 id: chipRow
 
                                 anchors.centerIn: parent
-                                spacing: 5
+                                spacing: Theme.spacingS
 
                                 Item {
                                     // What is shown, which is what the tests read: the glyph, else the
@@ -533,8 +533,8 @@ Item {
                                     property string text: chip.modelData.glyph !== "" ? chip.modelData.glyph : chip.modelData.image !== "" ? chip.modelData.image : chip.modelData.emoji
 
                                     objectName: "reactionEmoji"
-                                    height: 18
-                                    width: chip.modelData.image !== "" ? 18 : shortcode.implicitWidth
+                                    height: Theme.chipEmojiSize
+                                    width: chip.modelData.image !== "" ? Theme.chipEmojiSize : shortcode.implicitWidth
 
                                     Label {
                                         id: shortcode
@@ -550,7 +550,7 @@ Item {
                                         asynchronous: true
                                         fillMode: Image.PreserveAspectFit
                                         source: chip.modelData.image
-                                        sourceSize.height: 18
+                                        sourceSize.height: Theme.chipEmojiSize
                                         visible: chip.modelData.image !== ""
                                     }
                                 }
@@ -576,7 +576,7 @@ Item {
                                                       !chip.modelData.mine)
                             }
 
-                            ToolTip.delay: 400
+                            ToolTip.delay: Theme.toolTipDelay
                             ToolTip.text: chip.modelData.users
                             ToolTip.visible: hover.hovered
                         }
@@ -586,10 +586,10 @@ Item {
                     Rectangle {
                         objectName: "reactionAdd"
                         border.color: root.palette.mid
-                        border.width: 1
+                        border.width: Theme.borderWidth
                         color: "transparent"
-                        implicitHeight: 24
-                        implicitWidth: 32
+                        implicitHeight: Theme.chipHeight
+                        implicitWidth: Theme.chipAddWidth
                         radius: height / 2
                         visible: root.canReact
 
@@ -612,7 +612,7 @@ Item {
         RowLayout {
             Layout.fillWidth: true
             visible: root.isSystem
-            spacing: 8
+            spacing: Theme.spacingL
 
             Label {
                 objectName: "msgSystem"

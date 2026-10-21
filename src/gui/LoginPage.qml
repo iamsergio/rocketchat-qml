@@ -10,13 +10,13 @@ import RocketChat.Bridge
 Item {
     ColumnLayout {
         anchors.centerIn: parent
-        width: Math.min(parent.width - 32, 360)
-        spacing: 12
+        width: Math.min(parent.width - Theme.pageMargin, Theme.loginFormWidth)
+        spacing: Theme.spacingXXL
 
         Label {
             Layout.alignment: Qt.AlignHCenter
             text: qsTr("Log in to Rocket.Chat")
-            font.pixelSize: 20
+            font.pointSize: Theme.fontSizeTitle
         }
 
         TextField {
@@ -58,8 +58,7 @@ Item {
             Layout.fillWidth: true
             visible: text !== ""
             text: Session.errorText
-            // A plain error red; the default style has no palette role for it.
-            color: "#c62828"
+            color: Theme.error
             wrapMode: Text.Wrap
         }
 

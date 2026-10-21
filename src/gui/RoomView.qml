@@ -19,8 +19,8 @@ ColumnLayout {
         Label {
             objectName: "roomTitle"
             anchors.fill: parent
-            anchors.leftMargin: 12
-            anchors.rightMargin: 12
+            anchors.leftMargin: Theme.spacingXXL
+            anchors.rightMargin: Theme.spacingXXL
             verticalAlignment: Text.AlignVCenter
             elide: Text.ElideRight
             font.bold: true
@@ -43,10 +43,10 @@ ColumnLayout {
     Label {
         objectName: "roomError"
         Layout.fillWidth: true
-        Layout.margins: 12
+        Layout.margins: Theme.spacingXXL
         visible: text !== ""
         text: Room.errorText
-        color: "#c62828"
+        color: Theme.error
         wrapMode: Text.Wrap
     }
 
@@ -79,7 +79,7 @@ ColumnLayout {
             // The list's content item, as wide as the list. Not ListView.view.width, which qmllint
             // rejects here (attached-property-reuse).
             width: parent?.width ?? 0
-            height: startLabel.visible || olderBusy.visible ? 40 : 0
+            height: startLabel.visible || olderBusy.visible ? Theme.historyFooterHeight : 0
 
             Label {
                 id: startLabel
@@ -96,7 +96,7 @@ ColumnLayout {
 
                 objectName: "loadingOlder"
                 anchors.centerIn: parent
-                height: 32
+                height: Theme.busyIndicatorSize
                 visible: Room.loadingOlder
                 running: visible
             }
@@ -143,13 +143,13 @@ ColumnLayout {
     RowLayout {
         objectName: "roomActionError"
         Layout.fillWidth: true
-        Layout.margins: 8
+        Layout.margins: Theme.spacingL
         visible: Room.actionError !== ""
 
         Label {
             objectName: "roomActionErrorText"
             Layout.fillWidth: true
-            color: "#c62828"
+            color: Theme.error
             text: Room.actionError
             textFormat: Text.PlainText
             wrapMode: Text.Wrap
@@ -180,7 +180,7 @@ ColumnLayout {
         id: composer
 
         Layout.fillWidth: true
-        Layout.margins: 8
+        Layout.margins: Theme.spacingL
         visible: Room.roomId !== ""
     }
 }
