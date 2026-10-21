@@ -19,6 +19,7 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 use cxx_qt::CxxQtThread;
 use rc_core::adapters::{DiskFileCache, MemoryStore, default_store};
 use rc_core::domain::{AvatarOwner, MessageId, RoomId};
+use rc_core::emoji::CustomEmojis;
 use rc_core::policy::{ActionError, MessageAction};
 use rc_core::ports::SecretStore;
 use rc_core::rooms::RoomChange;
@@ -29,6 +30,7 @@ use secrecy::SecretString;
 use crate::attachment_view::ImageUrls;
 use crate::avatar_view::AvatarUrls;
 use crate::cache::Cache;
+use crate::emoji_picker_model::qobject::EmojiPickerModel;
 use crate::message_list_model::qobject::MessageListModel;
 use crate::rich_html::Viewer;
 use crate::room_list_model::qobject::RoomListModel;
@@ -52,6 +54,7 @@ struct Hub {
     rooms: Option<CxxQtThread<RoomListModel>>,
     room: Option<CxxQtThread<RoomVm>>,
     messages: Option<CxxQtThread<MessageListModel>>,
+    picker: Option<CxxQtThread<EmojiPickerModel>>,
 }
 
 impl Hub {
@@ -63,6 +66,7 @@ impl Hub {
             rooms: None,
             room: None,
             messages: None,
+            picker: None,
         }
     }
 }
@@ -223,6 +227,14 @@ pub fn edit_message(message_id: String, text: &str) {
     }
 }
 
+pub fn react(message_id: String, emoji: &str, react: bool) {
+    if let Some(client) = &lock().client {
+        client.react(MessageId::from(message_id), emoji, react);
+    } else {
+        tracing::warn!("react ignored: the core isn't running");
+    }
+}
+
 pub fn delete_message(message_id: String) {
     if let Some(client) = &lock().client {
         client.delete_message(MessageId::from(message_id));
@@ -279,6 +291,14 @@ pub fn register_messages(
     )
 }
 
+/// Registers the `EmojiCatalog` model and returns the custom emoji it lists now. Call on the GUI
+/// thread; the changes that follow are queued to `thread`.
+pub fn register_emoji_picker(thread: CxxQtThread<EmojiPickerModel>) -> CustomEmojis {
+    let mut hub = lock();
+    hub.picker = Some(thread);
+    hub.cache.viewer().emoji
+}
+
 /// The core's event callback, on a runtime thread.
 fn dispatch(event: Event) {
     let mut guard = lock();
@@ -291,18 +311,11 @@ fn dispatch(event: Event) {
             action,
             outcome,
         } => answer_action(hub, id, action, outcome),
-        Event::Session(_) | Event::Connection(_) | Event::CustomEmoji(_) => {
-            show_viewer(hub);
-            let view = hub.cache.session_view();
-            let gone = hub
-                .session
-                .as_ref()
-                .is_some_and(|thread| thread.queue(move |vm| vm.show(&view)).is_err());
-            if gone {
-                tracing::debug!("the Session object is gone, unregistered");
-                hub.session = None;
-            }
+        Event::CustomEmoji(emoji) => {
+            show_emoji(hub, &emoji);
+            show_session(hub);
         }
+        Event::Session(_) | Event::Connection(_) => show_session(hub),
         Event::Rooms(changes) => {
             let gone = hub
                 .rooms
@@ -338,7 +351,34 @@ fn dispatch(event: Event) {
     }
 }
 
-/// Tells the `Room` view model how an edit or a deletion ended.
+/// Tells the `Session` view model, and the `MessageList` model, what the cache says now.
+fn show_session(hub: &mut Hub) {
+    show_viewer(hub);
+    let view = hub.cache.session_view();
+    let gone = hub
+        .session
+        .as_ref()
+        .is_some_and(|thread| thread.queue(move |vm| vm.show(&view)).is_err());
+    if gone {
+        tracing::debug!("the Session object is gone, unregistered");
+        hub.session = None;
+    }
+}
+
+/// Tells the `EmojiCatalog` model which custom emoji the server has.
+fn show_emoji(hub: &mut Hub, emoji: &CustomEmojis) {
+    let emoji = emoji.clone();
+    let gone = hub
+        .picker
+        .as_ref()
+        .is_some_and(|thread| thread.queue(move |model| model.set_emoji(&emoji)).is_err());
+    if gone {
+        tracing::debug!("the EmojiCatalog object is gone, unregistered");
+        hub.picker = None;
+    }
+}
+
+/// Tells the `Room` view model how an edit, a deletion or a reaction ended.
 fn answer_action(
     hub: &mut Hub,
     id: MessageId,

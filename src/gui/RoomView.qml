@@ -66,6 +66,7 @@ ColumnLayout {
         delegate: MessageDelegate {
             onEditRequested: messageId => composer.beginEdit(messageId)
             onQuoteRequested: messageId => composer.beginQuote(messageId)
+            onReactRequested: messageId => picker.openFor(messageId)
         }
         verticalLayoutDirection: ListView.BottomToTop
         boundsBehavior: Flickable.StopAtBounds
@@ -137,7 +138,8 @@ ColumnLayout {
         }
     }
 
-    // Why the last edit or deletion failed, until it is dismissed or the user tries again.
+    // Why the last edit, deletion or reaction failed, until it is dismissed or the user tries
+    // again.
     RowLayout {
         objectName: "roomActionError"
         Layout.fillWidth: true
@@ -158,6 +160,20 @@ ColumnLayout {
             text: qsTr("Dismiss")
             onClicked: Room.dismissActionError()
         }
+    }
+
+    // The emoji to react with, for the message whose menu or "+" chip asked.
+    EmojiPicker {
+        id: picker
+
+        property string messageId
+
+        function openFor(id) {
+            messageId = id;
+            open();
+        }
+
+        onPicked: shortcode => Room.react(messageId, shortcode, true)
     }
 
     Composer {

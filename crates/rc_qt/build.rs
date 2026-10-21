@@ -8,6 +8,7 @@ fn main() {
         .qt_module("Qml")
         .files([
             "src/app_info.rs",
+            "src/emoji_picker_model.rs",
             "src/lifecycle.rs",
             "src/logging.rs",
             "src/message_list_model.rs",

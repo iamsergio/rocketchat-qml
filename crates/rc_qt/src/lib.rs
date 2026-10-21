@@ -10,6 +10,8 @@
 // which have no Qt types and therefore unit tests.
 #[allow(unsafe_code, clippy::unnecessary_box_returns)]
 pub mod app_info;
+#[allow(unsafe_code, clippy::unnecessary_box_returns)]
+pub mod emoji_picker_model;
 #[allow(unsafe_code)]
 pub mod lifecycle;
 #[allow(unsafe_code)]
@@ -39,6 +41,7 @@ mod attachment_view;
 mod avatar_view;
 mod cache;
 mod dev_login;
+mod emoji_picker_view;
 mod hub;
 mod message_view;
 mod quote_view;

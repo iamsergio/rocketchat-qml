@@ -21,6 +21,7 @@ qt_add_qml_module(
   Avatar.qml
   Main.qml
   Composer.qml
+  EmojiPicker.qml
   LoginPage.qml
   MessageDelegate.qml
   RoomDelegate.qml
