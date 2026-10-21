@@ -41,6 +41,9 @@ Item {
     required property bool canDelete
     // Whether the message can be quoted: it is text and the server has it, whoever wrote it.
     required property bool canQuote
+    // Whether the user can react to the message: it is text and the server has it, whoever wrote
+    // it.
+    required property bool canReact
     // The messages this one quotes, in order: a list of maps with author (the username), bodyHtml,
     // body (as written) and time (empty if unknown).
     required property var quotes
@@ -49,6 +52,8 @@ Item {
     signal editRequested(string messageId)
     // The user chose to quote the message: the composer takes over.
     signal quoteRequested(string messageId)
+    // The user wants to add a reaction to the message: the emoji picker opens.
+    signal reactRequested(string messageId)
 
     objectName: "msg_" + messageId
     width: ListView.view.width
@@ -62,7 +67,7 @@ Item {
     MouseArea {
         acceptedButtons: Qt.RightButton
         anchors.fill: parent
-        enabled: root.canQuote || root.canEdit || root.canDelete
+        enabled: root.canQuote || root.canReact || root.canEdit || root.canDelete
         onClicked: mouse => menu.popup(root, mouse.x, mouse.y)
     }
 
@@ -78,6 +83,15 @@ Item {
             text: qsTr("Quote")
             visible: root.canQuote
             onTriggered: root.quoteRequested(root.messageId)
+        }
+
+        MenuItem {
+            objectName: "msgReactAction"
+            enabled: root.canReact
+            height: visible ? implicitHeight : 0
+            text: qsTr("Add reaction")
+            visible: root.canReact
+            onTriggered: root.reactRequested(root.messageId)
         }
 
         MenuItem {
@@ -241,7 +255,7 @@ Item {
                         opacity: rowHover.hovered || menu.opened ? 1 : 0
                         padding: 0
                         text: "\u22EF"
-                        visible: root.canQuote || root.canEdit || root.canDelete
+                        visible: root.canQuote || root.canReact || root.canEdit || root.canDelete
                         onClicked: menu.popup(this, 0, height)
                     }
 
@@ -550,9 +564,43 @@ Item {
                                 id: hover
                             }
 
+                            // Takes the user's reaction back, or joins the others in it. Not a
+                            // TapHandler, which Spix clicks don't trigger.
+                            MouseArea {
+                                anchors.fill: parent
+                                cursorShape: root.canReact ? Qt.PointingHandCursor : Qt.ArrowCursor
+                                enabled: root.canReact
+                                onClicked: Room.react(root.messageId, chip.modelData.emoji,
+                                                      !chip.modelData.mine)
+                            }
+
                             ToolTip.delay: 400
                             ToolTip.text: chip.modelData.users
                             ToolTip.visible: hover.hovered
+                        }
+                    }
+
+                    // Another emoji of the user's choosing.
+                    Rectangle {
+                        objectName: "reactionAdd"
+                        border.color: root.palette.mid
+                        border.width: 1
+                        color: "transparent"
+                        implicitHeight: 24
+                        implicitWidth: 32
+                        radius: height / 2
+                        visible: root.canReact
+
+                        Label {
+                            anchors.centerIn: parent
+                            text: "+"
+                            textFormat: Text.PlainText
+                        }
+
+                        MouseArea {
+                            anchors.fill: parent
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: root.reactRequested(root.messageId)
                         }
                     }
                 }

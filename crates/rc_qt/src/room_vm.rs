@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: MIT
 
 //! The `Room` view model: the open room, how loading its messages is going, and the commands to
-//! open a room, to load older messages, to send (quoting a message if asked), and to edit and
-//! delete the user's messages.
+//! open a room, to load older messages, to send (quoting a message if asked), to edit and delete
+//! the user's messages, and to react to messages.
 
 #[cxx_qt::bridge]
 pub mod qobject {
@@ -24,9 +24,8 @@ pub mod qobject {
         #[qproperty(bool, loading_older, cxx_name = "loadingOlder", READ, NOTIFY)]
         #[qproperty(bool, reached_start, cxx_name = "reachedStart", READ, NOTIFY)]
         #[qproperty(QString, error_text, cxx_name = "errorText", READ, NOTIFY)]
-        // `actionError`: why the last edit or deletion failed, to show until it is dismissed.
-        // Cleared by the next edit or deletion, by `dismissActionError` and by opening another
-        // room.
+        // `actionError`: why the last edit, deletion or reaction failed, to show until it is
+        // dismissed. Cleared by the next one, by `dismissActionError` and by opening another room.
         #[qproperty(QString, action_error, cxx_name = "actionError", READ, NOTIFY)]
         type RoomVm = super::RoomVmRust;
 
@@ -61,6 +60,12 @@ pub mod qobject {
         #[qinvokable]
         fn remove(self: Pin<&mut RoomVm>, message_id: &QString);
 
+        /// Adds the user's reaction with the emoji (a shortcode, colons optional) to a message of
+        /// the open room, or takes it back. Answered by `actionDone`, as `edit` is. The reaction
+        /// shows in `MessageList` before the answer comes.
+        #[qinvokable]
+        fn react(self: Pin<&mut RoomVm>, message_id: &QString, emoji: &QString, reacted: bool);
+
         /// The id of the newest message of the open room that the user can edit now, or empty.
         #[qinvokable]
         #[cxx_name = "lastEditable"]
@@ -83,8 +88,8 @@ pub mod qobject {
         #[cxx_name = "dismissActionError"]
         fn dismiss_action_error(self: Pin<&mut RoomVm>);
 
-        /// An edit or a deletion ended. `action` is `"edit"` or `"delete"`; `errorText` is empty
-        /// if `ok`. A failure is in `actionError` too.
+        /// An edit, a deletion or a reaction ended. `action` is `"edit"`, `"delete"` or `"react"`;
+        /// `errorText` is empty if `ok`. A failure is in `actionError` too.
         #[qsignal]
         #[cxx_name = "actionDone"]
         fn action_done(
@@ -193,7 +198,8 @@ impl qobject::RoomVm {
         }
     }
 
-    /// Takes the core's answer to an edit or a deletion in: a failure becomes `actionError`.
+    /// Takes the core's answer to an edit, a deletion or a reaction in: a failure becomes
+    /// `actionError`.
     pub fn finish_action(
         mut self: Pin<&mut Self>,
         message_id: &str,
@@ -257,6 +263,11 @@ impl qobject::RoomVm {
     fn remove(mut self: Pin<&mut Self>, message_id: &QString) {
         self.as_mut().set_action_error_text("");
         hub::delete_message(message_id.to_string());
+    }
+
+    fn react(mut self: Pin<&mut Self>, message_id: &QString, emoji: &QString, reacted: bool) {
+        self.as_mut().set_action_error_text("");
+        hub::react(message_id.to_string(), &emoji.to_string(), reacted);
     }
 
     #[allow(clippy::unused_self)]

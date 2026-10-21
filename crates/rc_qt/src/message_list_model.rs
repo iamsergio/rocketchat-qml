@@ -160,8 +160,8 @@ use crate::attachment_view::{AttachmentView, ImageUrls, attachments, paths, show
 use crate::avatar_view::{AvatarUrls, color, initials, message_owner, owners, rows_using, runs};
 use crate::hub;
 use crate::message_view::{
-    author_name, body, can_delete, can_edit, can_quote, day_label, delivery_name, first_of_day,
-    html, mentions_me, system_text, time_text,
+    author_name, body, can_delete, can_edit, can_quote, can_react, day_label, delivery_name,
+    first_of_day, html, mentions_me, system_text, time_text,
 };
 use crate::quote_view::{QuoteView, quotes};
 use crate::reaction_view::{ReactionView, reactions};
@@ -196,6 +196,7 @@ const CAN_EDIT_ROLE: i32 = 274;
 const CAN_DELETE_ROLE: i32 = 275;
 const QUOTES_ROLE: i32 = 276;
 const CAN_QUOTE_ROLE: i32 = 277;
+const CAN_REACT_ROLE: i32 = 278;
 
 /// Backing data of [`qobject::MessageListModel`]: the messages, mirrored from the core's changes
 /// and held newest first.
@@ -481,6 +482,7 @@ impl MessageListModel {
                 },
             )),
             CAN_QUOTE_ROLE => QVariant::from(&can_quote(message)),
+            CAN_REACT_ROLE => QVariant::from(&can_react(message)),
             _ => QVariant::default(),
         }
     }
@@ -512,6 +514,7 @@ impl MessageListModel {
             (CAN_DELETE_ROLE, "canDelete"),
             (QUOTES_ROLE, "quotes"),
             (CAN_QUOTE_ROLE, "canQuote"),
+            (CAN_REACT_ROLE, "canReact"),
         ] {
             names.insert(role, QByteArray::from(name));
         }

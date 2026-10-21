@@ -74,6 +74,12 @@ pub fn can_quote(message: &Message) -> bool {
     matches!(message.kind, MessageKind::Text(_)) && !message.is_unsent()
 }
 
+/// Whether the viewer can react to the message: the rule of the core, whoever wrote it.
+#[must_use]
+pub fn can_react(message: &Message) -> bool {
+    rc_core::policy::can_react(message)
+}
+
 /// How QML sees the delivery state of a message: a string, as for the kind of a room.
 #[must_use]
 pub fn delivery_name(delivery: Delivery) -> &'static str {
@@ -329,6 +335,28 @@ mod tests {
         failed.delivery = Delivery::Failed;
         for message in [pending, failed, system(SystemEvent::Joined)] {
             assert!(!can_quote(&message), "{message:?}");
+        }
+    }
+
+    // ACT-003
+    #[test]
+    fn a_sent_text_message_can_be_reacted_to_whoever_wrote_it() {
+        let own = text("2026-10-20T10:00:00Z");
+        let mut others = own.clone();
+        others.author.id = "other".to_owned().into();
+        assert!(can_react(&own));
+        assert!(can_react(&others));
+    }
+
+    // ACT-003
+    #[test]
+    fn an_unsent_message_and_a_system_message_cannot_be_reacted_to() {
+        let mut pending = text("2026-10-20T10:00:00Z");
+        pending.delivery = Delivery::Pending;
+        let mut failed = pending.clone();
+        failed.delivery = Delivery::Failed;
+        for message in [pending, failed, system(SystemEvent::Joined)] {
+            assert!(!can_react(&message), "{message:?}");
         }
     }
 

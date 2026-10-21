@@ -43,3 +43,14 @@ With `-Cinstrument-coverage`, rustc links the LLVM profiler runtime (`profiler_b
 
 - **Workaround:** with `ROCKETCHATQML_COVERAGE` (the `coverage` preset), `src/gui/CMakeLists.txt` links the toolchain's `libprofiler_builtins-*.rlib` (a plain archive) after the staticlib, with `-Wl,-u,__llvm_profile_runtime` to pull in the member that registers the write at exit. The flag itself reaches cargo through Corrosion's `corrosion_add_target_rustflags`.
 - **Possible patch (Corrosion or rustc):** link `profiler_builtins` into staticlibs built with coverage instrumentation, or let Corrosion add it to the imported target.
+
+## A list model that QML creates as an element is an unresolved type for qmllint
+
+An `EmojiPickerModel` declared with `#[qml_element]` and `#[base = QAbstractListModel]`, used as `EmojiPickerModel { }` in QML, makes qmllint warn "QAbstractListModel was not found" and "Type ... is used but it is not resolved". The generated QML module does not carry a type for the base class (Qt doesn't register `QAbstractListModel` for QML either), so the element can't be linted. A singleton has no such problem, because QML only reads its properties.
+
+- **Workaround:** the emoji picker's model is a `#[qml_singleton]` (`EmojiCatalog`), which fits, as there is one picker. A second picker would have to share it. Its `query` property is set from the search box's `onTextChanged`: a `Binding { target: EmojiCatalog }` is rejected by qmllint too ("Cannot assign binding of type EmojiCatalog to QObject").
+- **Possible patch:** let a `#[base = ...]` that cxx-qt-lib knows (`QAbstractListModel`) come with a `.qmltypes` entry, or generate `QML_ANONYMOUS`/`QML_FOREIGN` registrations for the base.
+
+## A property with a custom setter
+
+`#[qproperty(QString, query, READ, WRITE = set_query_text, NOTIFY)]` works when `set_query_text` is declared in the bridge as a `#[qinvokable]` with `#[cxx_name = "setQueryText"]`; Qt's `Q_PROPERTY(... WRITE setQueryText)` accepts an invokable. The function has to emit the `NOTIFY` signal itself. The default setter stores the value and emits the signal, with no hook to reset a model first.
