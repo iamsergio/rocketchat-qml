@@ -80,6 +80,75 @@ pub fn can_react(message: &Message) -> bool {
     rc_core::policy::can_react(message)
 }
 
+/// Whether the message can start a thread, or has one: a sent text message that is not a reply
+/// itself. It is the rule of `Client::open_thread`, which the room's messages are held for.
+#[must_use]
+pub fn can_start_thread(message: &Message) -> bool {
+    matches!(message.kind, MessageKind::Text(_))
+        && !message.is_unsent()
+        && message.thread_id.is_none()
+}
+
+/// How many replies the message has as the parent of a thread; 0 for any other.
+#[must_use]
+pub fn thread_replies(message: &Message) -> i32 {
+    i32::try_from(message.thread_replies).unwrap_or(i32::MAX)
+}
+
+/// When the last reply of the message's thread was sent, for the summary under the parent: the
+/// time of day if it was today, else the heading of its day (see [`day_label`]). Empty for a
+/// message that has no replies.
+#[must_use]
+pub fn thread_last_reply_text(message: &Message, zone: &TimeZone, now: Timestamp) -> String {
+    let Some(last) = message
+        .thread_last_reply
+        .filter(|_| message.thread_replies > 0)
+    else {
+        return String::new();
+    };
+    if same_day(last, now, zone) {
+        time_text(last, zone)
+    } else {
+        day_label(last, zone, now)
+    }
+}
+
+/// Whether both instants are on the same day in `zone`.
+fn same_day(a: Timestamp, b: Timestamp, zone: &TimeZone) -> bool {
+    a.to_zoned(zone.clone()).date() == b.to_zoned(zone.clone()).date()
+}
+
+/// The thread a reply belongs to (the id of its parent), empty for a message that is not one.
+#[must_use]
+pub fn thread_id(message: &Message) -> &str {
+    message.thread_id.as_ref().map_or("", |id| id.as_str())
+}
+
+/// Whether the message is a reply that was also sent to the room, so that the room shows it with
+/// a line that leads to its thread.
+#[must_use]
+pub fn in_thread_shown(message: &Message) -> bool {
+    message.thread_id.is_some() && message.thread_shown
+}
+
+/// The text of the parent of the thread `message` replies to, if `messages` holds it, on one
+/// line, for the line that says where the reply belongs. Empty otherwise, and for a message that
+/// is no reply.
+#[must_use]
+pub fn thread_parent_text(messages: &[Message], message: &Message) -> String {
+    message
+        .thread_id
+        .as_ref()
+        .and_then(|parent| messages.iter().find(|held| &held.id == parent))
+        .map(|parent| {
+            body(parent)
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ")
+        })
+        .unwrap_or_default()
+}
+
 /// How QML sees the delivery state of a message: a string, as for the kind of a room.
 #[must_use]
 pub fn delivery_name(delivery: Delivery) -> &'static str {
@@ -479,5 +548,100 @@ mod tests {
         let ts = at("2026-10-20T12:00:00Z");
         assert_eq!(day_label(ts, &TimeZone::UTC, now), "Today");
         assert_eq!(day_label(ts, &zone("Europe/Lisbon"), now), "Yesterday");
+    }
+
+    // ACT-004
+    #[test]
+    fn a_sent_text_message_that_is_not_a_reply_can_start_a_thread() {
+        let plain = text("2026-10-20T10:00:00Z");
+        assert!(can_start_thread(&plain));
+        // One with replies already is the parent of a thread, and can be opened again.
+        let mut parent = plain.clone();
+        parent.thread_replies = 3;
+        assert!(can_start_thread(&parent));
+        let mut reply = plain.clone();
+        reply.thread_id = Some("parent".to_owned().into());
+        let mut pending = plain.clone();
+        pending.delivery = Delivery::Pending;
+        let mut failed = plain;
+        failed.delivery = Delivery::Failed;
+        for message in [reply, pending, failed, system(SystemEvent::Joined)] {
+            assert!(!can_start_thread(&message), "{message:?}");
+        }
+    }
+
+    // ACT-004
+    #[test]
+    fn the_summary_of_a_thread_counts_the_replies_and_says_when_the_last_came() {
+        let now = at("2026-10-20T12:00:00Z");
+        let mut parent = text("2026-10-19T10:00:00Z");
+        assert_eq!(thread_replies(&parent), 0);
+        assert_eq!(thread_last_reply_text(&parent, &TimeZone::UTC, now), "");
+
+        parent.thread_replies = 3;
+        // Today: the time of day.
+        parent.thread_last_reply = Some(at("2026-10-20T09:24:00Z"));
+        assert_eq!(thread_replies(&parent), 3);
+        assert_eq!(
+            thread_last_reply_text(&parent, &TimeZone::UTC, now),
+            "09:24"
+        );
+        // Another day: the heading of the day, as the room's separators say it.
+        parent.thread_last_reply = Some(at("2026-10-19T23:59:00Z"));
+        assert_eq!(
+            thread_last_reply_text(&parent, &TimeZone::UTC, now),
+            "Yesterday"
+        );
+        parent.thread_last_reply = Some(at("2026-10-18T12:00:00Z"));
+        assert_eq!(
+            thread_last_reply_text(&parent, &TimeZone::UTC, now),
+            "Sunday, 18 October 2026"
+        );
+        // Days are those of the zone.
+        parent.thread_last_reply = Some(at("2026-10-20T23:30:00Z"));
+        let late = at("2026-10-20T23:45:00Z");
+        assert_eq!(
+            thread_last_reply_text(&parent, &TimeZone::UTC, late),
+            "23:30"
+        );
+        assert_eq!(
+            thread_last_reply_text(&parent, &zone("Europe/Lisbon"), late),
+            "00:30"
+        );
+        // A count without a time says nothing of when.
+        parent.thread_last_reply = None;
+        assert_eq!(thread_last_reply_text(&parent, &TimeZone::UTC, now), "");
+    }
+
+    // ACT-004
+    #[test]
+    fn a_reply_names_its_thread_and_says_if_the_room_shows_it() {
+        let plain = text("2026-10-20T10:00:00Z");
+        assert_eq!(thread_id(&plain), "");
+        assert!(!in_thread_shown(&plain));
+
+        let mut reply = plain;
+        reply.thread_id = Some("parent".to_owned().into());
+        assert_eq!(thread_id(&reply), "parent");
+        // In its thread only.
+        assert!(!in_thread_shown(&reply));
+        reply.thread_shown = true;
+        assert!(in_thread_shown(&reply));
+    }
+
+    // ACT-004
+    #[test]
+    fn the_parent_text_comes_from_the_held_messages() {
+        let mut parent = text("2026-10-20T10:00:00Z");
+        parent.id = "parent".to_owned().into();
+        parent.kind = MessageKind::Text("what is\nthis?  ".into());
+        let mut reply = text("2026-10-20T10:05:00Z");
+        reply.id = "reply".to_owned().into();
+        reply.thread_id = Some("parent".to_owned().into());
+        let held = [parent.clone(), reply.clone()];
+        assert_eq!(thread_parent_text(&held, &reply), "what is this?");
+        // Not held, or not a reply: nothing.
+        assert_eq!(thread_parent_text(&held[1..], &reply), "");
+        assert_eq!(thread_parent_text(&held, &parent), "");
     }
 }

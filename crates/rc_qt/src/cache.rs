@@ -9,7 +9,7 @@ use rc_core::emoji::CustomEmojis;
 use rc_core::policy::MessagePolicy;
 use rc_core::rooms::RoomChange;
 use rc_core::session::SessionState;
-use rc_core::timeline::{TimelineChange, TimelineStatus};
+use rc_core::timeline::{ThreadStatus, TimelineChange, TimelineStatus};
 use rc_core::{AvatarUpdate, ImageUpdate};
 use rc_core::{Connection, Event};
 
@@ -19,8 +19,10 @@ use crate::message_view::{author_name, body, can_edit};
 use crate::rich_html::Viewer;
 use crate::room_view::{RoomState, room_state};
 use crate::session_view::{SessionView, session_view};
+use crate::thread_view::{ThreadState, thread_state};
 
-/// The latest session state, a mirror of the room list and a mirror of the open room's messages.
+/// The latest session state, a mirror of the room list and mirrors of the open room's messages and
+/// of the open thread's.
 #[derive(Debug)]
 pub struct Cache {
     /// `None` before the first event.
@@ -31,6 +33,9 @@ pub struct Cache {
     room: Option<RoomId>,
     messages: Vec<Message>,
     status: TimelineStatus,
+    /// The open thread's messages: the parent, then the replies. Empty when none is open.
+    thread_messages: Vec<Message>,
+    thread_status: ThreadStatus,
     /// The logged-in user, if any.
     username: Option<String>,
     user_id: Option<UserId>,
@@ -63,6 +68,14 @@ impl Cache {
             messages: Vec::new(),
             status: TimelineStatus {
                 room: None,
+                loading: false,
+                loading_older: false,
+                reached_start: false,
+                error: None,
+            },
+            thread_messages: Vec::new(),
+            thread_status: ThreadStatus {
+                parent: None,
                 loading: false,
                 loading_older: false,
                 reached_start: false,
@@ -117,9 +130,12 @@ impl Cache {
                 }
             }
             Event::TimelineStatus(status) => self.status = status.clone(),
-            // The thread pane will use these.
-            #[allow(clippy::match_same_arms)]
-            Event::ThreadTimeline(_) | Event::ThreadStatus(_) => {}
+            Event::ThreadTimeline(changes) => {
+                for change in changes {
+                    change.apply(&mut self.thread_messages);
+                }
+            }
+            Event::ThreadStatus(status) => self.thread_status = status.clone(),
             _ => {}
         }
     }
@@ -145,6 +161,15 @@ impl Cache {
         }
     }
 
+    /// The change that brings an empty thread model to the current thread messages.
+    #[must_use]
+    pub fn thread_snapshot(&self) -> TimelineChange {
+        TimelineChange::Reset {
+            room: self.room.clone(),
+            messages: self.thread_messages.clone(),
+        }
+    }
+
     /// Who the messages are shown to.
     #[must_use]
     pub fn viewer(&self) -> Viewer {
@@ -157,32 +182,38 @@ impl Cache {
         }
     }
 
-    /// The id of the newest message of the open room that the user can edit now, if any.
+    /// The newest message of the open room that the user can edit now, if any.
     #[must_use]
     pub fn last_editable(&self, now: jiff::Timestamp) -> Option<&Message> {
-        let viewer = self.viewer();
-        self.messages
-            .iter()
-            .rev()
-            .find(|message| can_edit(message, &viewer, now))
+        newest_editable(&self.messages, &self.viewer(), now)
     }
 
-    /// The text of a message of the open room as its author wrote it, if it is held.
+    /// The newest message of the open thread (the parent counts) that the user can edit now, if
+    /// any.
+    #[must_use]
+    pub fn thread_last_editable(&self, now: jiff::Timestamp) -> Option<&Message> {
+        newest_editable(&self.thread_messages, &self.viewer(), now)
+    }
+
+    /// A held message of the open room or the open thread, which hold some messages in common.
+    fn held(&self, id: &str) -> Option<&Message> {
+        self.messages
+            .iter()
+            .chain(&self.thread_messages)
+            .find(|message| message.id.as_str() == id)
+    }
+
+    /// The text of a message of the open room or thread as its author wrote it, if it is held.
     #[must_use]
     pub fn message_text(&self, id: &str) -> Option<&str> {
-        self.messages
-            .iter()
-            .find(|message| message.id.as_str() == id)
-            .map(body)
+        self.held(id).map(body)
     }
 
-    /// Who wrote a message of the open room, by display name else username, if it is held.
+    /// Who wrote a message of the open room or thread, by display name else username, if it is
+    /// held.
     #[must_use]
     pub fn message_author(&self, id: &str) -> Option<&str> {
-        self.messages
-            .iter()
-            .find(|message| message.id.as_str() == id)
-            .map(|message| author_name(&message.author))
+        self.held(id).map(|message| author_name(&message.author))
     }
 
     /// The avatar files known now, as URLs.
@@ -222,6 +253,24 @@ impl Cache {
     pub fn room_state(&self) -> RoomState {
         room_state(&self.rooms, &self.status)
     }
+
+    /// What the `Thread` view model shows now.
+    #[must_use]
+    pub fn thread_state(&self) -> ThreadState {
+        thread_state(&self.rooms, self.status.room.as_ref(), &self.thread_status)
+    }
+}
+
+/// The newest of `messages` (held oldest first) that `viewer` can edit at `now`.
+fn newest_editable<'a>(
+    messages: &'a [Message],
+    viewer: &Viewer,
+    now: jiff::Timestamp,
+) -> Option<&'a Message> {
+    messages
+        .iter()
+        .rev()
+        .find(|message| can_edit(message, viewer, now))
 }
 
 #[cfg(test)]
@@ -630,6 +679,188 @@ mod tests {
         assert_eq!(cache.room_state().name, "beta");
         cache.apply(&Event::TimelineStatus(TimelineStatus::default()));
         assert_eq!(cache.room_state(), RoomState::default());
+    }
+
+    /// A reply to `parent` in the thread, sent by somebody else.
+    fn reply(id: &str, secs: i64) -> Message {
+        let mut reply = from_other(id, secs);
+        reply.thread_id = Some("p".to_owned().into());
+        reply
+    }
+
+    /// Events as the core would emit them for opening a thread, loading its replies, receiving
+    /// one, a reply being edited and deleted, and the thread closing.
+    fn thread_script() -> Vec<Event> {
+        let status = |parent: Option<&str>, loading: bool, start: bool| {
+            Event::ThreadStatus(ThreadStatus {
+                parent: parent.map(|id| id.to_owned().into()),
+                loading,
+                loading_older: false,
+                reached_start: start,
+                error: None,
+            })
+        };
+        let room = Some("a".to_owned().into());
+        let mut edited = reply("r2", 3);
+        edited.edited = true;
+        vec![
+            Event::ThreadTimeline(vec![TimelineChange::Reset {
+                room: room.clone(),
+                messages: Vec::new(),
+            }]),
+            status(Some("p"), true, false),
+            Event::ThreadTimeline(vec![TimelineChange::Appended(vec![
+                reply("r2", 3),
+                reply("r3", 4),
+            ])]),
+            status(Some("p"), false, false),
+            Event::ThreadTimeline(vec![TimelineChange::Prepended(vec![
+                message("p", 1),
+                reply("r1", 2),
+            ])]),
+            status(Some("p"), false, true),
+            Event::ThreadTimeline(vec![TimelineChange::Appended(vec![reply("r4", 5)])]),
+            Event::ThreadTimeline(vec![TimelineChange::Updated {
+                index: 2,
+                message: edited,
+            }]),
+            Event::ThreadTimeline(vec![TimelineChange::Removed { index: 3 }]),
+            Event::ThreadTimeline(vec![TimelineChange::Reset {
+                room,
+                messages: Vec::new(),
+            }]),
+            status(None, false, false),
+        ]
+    }
+
+    // ACT-004
+    #[test]
+    fn a_thread_snapshot_taken_at_any_point_followed_by_the_rest_equals_the_replay() {
+        let events = thread_script();
+        let mut replay = Vec::new();
+        for event in &events {
+            if let Event::ThreadTimeline(changes) = event {
+                for change in changes {
+                    change.apply(&mut replay);
+                }
+            }
+        }
+        for taken in 0..=events.len() {
+            let mut cache = Cache::new();
+            events[..taken].iter().for_each(|event| cache.apply(event));
+            let mut mirror = Vec::new();
+            cache.thread_snapshot().apply(&mut mirror);
+            for event in &events[taken..] {
+                if let Event::ThreadTimeline(changes) = event {
+                    for change in changes {
+                        change.apply(&mut mirror);
+                    }
+                }
+            }
+            assert_eq!(mirror, replay, "registered after {taken} events");
+        }
+    }
+
+    // ACT-004
+    #[test]
+    fn the_thread_snapshot_holds_the_open_threads_messages_and_not_the_rooms() {
+        let mut cache = cache_with_four_messages();
+        thread_script()[..7]
+            .iter()
+            .for_each(|event| cache.apply(event));
+        let TimelineChange::Reset { room, messages } = cache.thread_snapshot() else {
+            panic!("not a reset");
+        };
+        assert_eq!(room, Some("a".to_owned().into()));
+        let ids: Vec<_> = messages.iter().map(|m| m.id.as_str()).collect();
+        assert_eq!(ids, ["p", "r1", "r2", "r3", "r4"]);
+        // The room's own snapshot is as it was.
+        let TimelineChange::Reset { messages, .. } = cache.timeline_snapshot() else {
+            panic!("not a reset");
+        };
+        assert_eq!(messages.len(), 4);
+    }
+
+    // ACT-004
+    #[test]
+    fn the_text_and_author_of_a_message_in_the_thread_are_given_too() {
+        let mut cache = cache_with_four_messages();
+        let mut text_reply = reply("r1", 5);
+        text_reply.kind = MessageKind::Text("in the thread".into());
+        cache.apply(&Event::ThreadTimeline(vec![TimelineChange::Reset {
+            room: Some("a".to_owned().into()),
+            messages: vec![message("a", 1), text_reply],
+        }]));
+        assert_eq!(cache.message_text("r1"), Some("in the thread"));
+        assert_eq!(cache.message_author("r1"), Some("u"));
+        // The room's messages still are.
+        assert_eq!(cache.message_text("b"), Some("b"));
+        assert_eq!(cache.message_text("a"), Some("a"));
+        assert_eq!(cache.message_text("nope"), None);
+        // Closed, the thread holds nothing.
+        cache.apply(&Event::ThreadTimeline(vec![TimelineChange::Reset {
+            room: Some("a".to_owned().into()),
+            messages: Vec::new(),
+        }]));
+        assert_eq!(cache.message_text("r1"), None);
+        assert_eq!(cache.message_author("r1"), None);
+    }
+
+    // ACT-004
+    #[test]
+    fn the_newest_message_the_user_can_edit_in_the_thread_is_the_last_editable_there() {
+        let mut cache = cache_with_four_messages();
+        let now = jiff::Timestamp::from_second(100).unwrap();
+        assert_eq!(cache.thread_last_editable(now), None);
+        let mut own_reply = reply("r2", 4);
+        own_reply.author.id = "u".to_owned().into();
+        cache.apply(&Event::ThreadTimeline(vec![TimelineChange::Reset {
+            room: Some("a".to_owned().into()),
+            messages: vec![message("p", 1), reply("r1", 2), own_reply, reply("r3", 5)],
+        }]));
+        // The room's newest editable message is another one.
+        assert_eq!(
+            cache.thread_last_editable(now).map(|m| m.id.as_str()),
+            Some("r2")
+        );
+        assert_eq!(cache.last_editable(now).map(|m| m.id.as_str()), Some("c"));
+        cache.apply(&Event::Session(SessionState::LoggedOut { failure: None }));
+        assert_eq!(cache.thread_last_editable(now), None);
+    }
+
+    // ACT-004
+    #[test]
+    fn the_thread_state_follows_the_status_and_the_names_of_the_open_room() {
+        let mut cache = Cache::new();
+        assert_eq!(cache.thread_state(), ThreadState::default());
+        cache.apply(&Event::Rooms(vec![RoomChange::Reset(vec![room(
+            "a", "alpha",
+        )])]));
+        cache.apply(&Event::TimelineStatus(TimelineStatus {
+            room: Some("a".to_owned().into()),
+            ..TimelineStatus::default()
+        }));
+        // A room without a thread.
+        assert_eq!(cache.thread_state().room_name, "alpha");
+        assert_eq!(cache.thread_state().parent_id, "");
+        cache.apply(&Event::ThreadStatus(ThreadStatus {
+            parent: Some("p".to_owned().into()),
+            loading: true,
+            ..ThreadStatus::default()
+        }));
+        let state = cache.thread_state();
+        assert_eq!(
+            (state.parent_id.as_str(), state.room_id.as_str()),
+            ("p", "a")
+        );
+        assert!(state.loading);
+        // The room list renaming the room changes the state too.
+        cache.apply(&Event::Rooms(vec![RoomChange::Reset(vec![room(
+            "a", "beta",
+        )])]));
+        assert_eq!(cache.thread_state().room_name, "beta");
+        cache.apply(&Event::ThreadStatus(ThreadStatus::default()));
+        assert_eq!(cache.thread_state().parent_id, "");
     }
 
     fn avatar(username: &str, path: Option<&str>) -> AvatarUpdate {

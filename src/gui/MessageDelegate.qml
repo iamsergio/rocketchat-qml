@@ -8,8 +8,8 @@ import QtQuick.Controls.Basic
 import QtQuick.Layouts
 import RocketChat.Bridge
 
-// One message of the open room. Named by message id, as the room rows are by room id. Its parts
-// are named like the model roles.
+// One message of the open room, or of the open thread (`inThreadPane`). Named by message id, as the
+// room rows are by room id. Its parts are named like the model roles.
 Item {
     id: root
 
@@ -47,6 +47,22 @@ Item {
     // The messages this one quotes, in order: a list of maps with author (the username), bodyHtml,
     // body (as written) and time (empty if unknown).
     required property var quotes
+    // As the parent of a thread: how many replies it has, and when the last came (a time of day, or
+    // a day; empty without replies).
+    required property int threadReplies
+    required property string threadLastReply
+    // As a reply: the id of its parent, else empty. A reply also sent to the room (`inThreadShown`)
+    // shows a line that leads to its thread, with the start of the parent's text, if the room holds
+    // it.
+    required property string threadId
+    required property bool inThreadShown
+    required property string threadParentText
+    // Whether the message can start a thread: it is a sent text message that is not a reply.
+    required property bool canStartThread
+
+    // The message is in the thread pane and not in the room: it has no thread of its own to start
+    // or to show.
+    property bool inThreadPane: false
 
     // The user chose to edit the message: the composer takes over.
     signal editRequested(string messageId)
@@ -54,6 +70,12 @@ Item {
     signal quoteRequested(string messageId)
     // The user wants to add a reaction to the message: the emoji picker opens.
     signal reactRequested(string messageId)
+
+    // The thread opens from this message, here or in the pane.
+    readonly property bool threadStartable: canStartThread && !inThreadPane
+    // The message is the parent of the thread beside the room.
+    readonly property bool threadOpen: !inThreadPane && Thread.isOpen && Thread.parentId === messageId
+    readonly property bool hasMenu: threadStartable || canQuote || canReact || canEdit || canDelete
 
     objectName: "msg_" + messageId
     width: ListView.view.width
@@ -69,7 +91,7 @@ Item {
     MouseArea {
         acceptedButtons: Qt.RightButton
         anchors.fill: parent
-        enabled: root.canQuote || root.canReact || root.canEdit || root.canDelete
+        enabled: root.hasMenu
         onClicked: mouse => menu.popup(root, mouse.x, mouse.y)
     }
 
@@ -80,6 +102,15 @@ Item {
 
         // Keeps the menu inside the window when it opens near an edge.
         margins: Theme.spacingL
+
+        MenuItem {
+            objectName: "msgThreadAction"
+            enabled: root.threadStartable
+            height: visible ? implicitHeight : Theme.spacingNone
+            text: qsTr("Reply in thread")
+            visible: root.threadStartable
+            onTriggered: Thread.open(root.messageId)
+        }
 
         MenuItem {
             objectName: "msgQuoteAction"
@@ -159,6 +190,17 @@ Item {
         color: Theme.rowHover
         height: root.rowItem.height + 2 * Theme.messagePaddingV
         visible: rowHover.hovered
+        width: parent.width
+        y: column.y + root.rowItem.y - Theme.messagePaddingV
+    }
+
+    // Marks the message whose thread is open beside the room: a faint tint, and no edge, which
+    // means "about you".
+    Rectangle {
+        objectName: "msgThreadOpen"
+        color: Theme.ownTint
+        height: root.rowItem.height + 2 * Theme.messagePaddingV
+        visible: root.threadOpen
         width: parent.width
         y: column.y + root.rowItem.y - Theme.messagePaddingV
     }
@@ -254,6 +296,10 @@ Item {
 
                     Label {
                         objectName: "msgAuthor"
+                        // A long name gives way to the time and the menu button, in a narrow list.
+                        Layout.fillWidth: true
+                        Layout.maximumWidth: implicitWidth
+                        elide: Text.ElideRight
                         font.weight: Theme.fontWeightSemibold
                         text: root.author
                         textFormat: Text.PlainText
@@ -291,7 +337,7 @@ Item {
                         opacity: rowHover.hovered || menu.opened ? 1 : 0
                         padding: Theme.spacingNone
                         text: "\u22EF"
-                        visible: root.canQuote || root.canReact || root.canEdit || root.canDelete
+                        visible: root.hasMenu
                         onClicked: menu.popup(this, 0, height)
 
                         background: Rectangle {
@@ -342,6 +388,53 @@ Item {
                             text: qsTr("Retry")
                             onClicked: Room.retry(root.messageId)
                         }
+                    }
+                }
+
+                // A reply that was also sent to the room says where it belongs, and leads there. The
+                // room shows it; the pane is the thread already. `text` is what is shown, which the
+                // tests read.
+                Item {
+                    id: inThread
+
+                    property string text: root.threadParentText !== "" ? qsTr("Replied in a thread: %1").arg(root.threadParentText) : qsTr("Replied in a thread")
+
+                    objectName: "msgInThread"
+                    Layout.fillWidth: true
+                    implicitHeight: inThreadRow.implicitHeight
+                    visible: root.inThreadShown && !root.inThreadPane
+
+                    RowLayout {
+                        id: inThreadRow
+
+                        anchors.left: parent.left
+                        anchors.right: parent.right
+                        spacing: Theme.spacingM
+
+                        Icon {
+                            Layout.preferredHeight: Theme.inThreadIconSize
+                            Layout.preferredWidth: Theme.inThreadIconSize
+                            source: "icons/corner.svg"
+                            tint: inThreadArea.containsMouse ? Theme.own : Theme.textFaint
+                        }
+
+                        Label {
+                            Layout.fillWidth: true
+                            color: inThreadArea.containsMouse ? Theme.own : Theme.textFaint
+                            elide: Text.ElideRight
+                            font.pointSize: Theme.fontSizeSmall
+                            text: inThread.text
+                            textFormat: Text.PlainText
+                        }
+                    }
+
+                    MouseArea {
+                        id: inThreadArea
+
+                        anchors.fill: parent
+                        cursorShape: Qt.PointingHandCursor
+                        hoverEnabled: true
+                        onClicked: Thread.open(root.threadId)
                     }
                 }
 
@@ -694,6 +787,67 @@ Item {
                         }
                     }
                 }
+
+                // The thread this message starts: how many replies it has and when the last came.
+                // Clicking opens it beside the room.
+                Rectangle {
+                    id: summary
+
+                    objectName: "msgThreadSummary"
+                    Layout.topMargin: Theme.spacingM
+                    border.color: root.threadOpen ? Theme.ownBorder : summaryHover.hovered ? Theme.raisedHover : Theme.transparent
+                    border.width: Theme.borderWidth
+                    color: root.threadOpen ? Theme.ownWash : summaryHover.hovered ? Theme.raised : Theme.transparent
+                    implicitHeight: Theme.threadSummaryHeight
+                    implicitWidth: summaryRow.implicitWidth + 2 * Theme.spacingXL
+                    radius: Theme.radiusControl
+                    visible: root.threadReplies > 0 && !root.inThreadPane
+
+                    RowLayout {
+                        id: summaryRow
+
+                        anchors.centerIn: parent
+                        spacing: Theme.spacingL
+
+                        Icon {
+                            Layout.preferredHeight: Theme.threadSummaryIconSize
+                            Layout.preferredWidth: Theme.threadSummaryIconSize
+                            source: "icons/thread.svg"
+                            tint: Theme.own
+                        }
+
+                        Label {
+                            objectName: "msgThreadCount"
+                            color: Theme.own
+                            font.pointSize: Theme.fontSizeSmall
+                            font.weight: Theme.fontWeightBold
+                            font.features: ({
+                                    "tnum": 1
+                                })
+                            text: root.threadReplies === 1 ? qsTr("1 reply") : qsTr("%1 replies").arg(root.threadReplies)
+                        }
+
+                        Label {
+                            objectName: "msgThreadLastReply"
+                            color: Theme.textFaint
+                            font.pointSize: Theme.fontSizeTiny
+                            text: qsTr("Last reply %1").arg(root.threadLastReply)
+                            textFormat: Text.PlainText
+                            visible: root.threadLastReply !== ""
+                        }
+                    }
+
+                    HoverHandler {
+                        id: summaryHover
+                    }
+
+                    // Not a TapHandler, which Spix clicks don't trigger.
+                    MouseArea {
+                        anchors.fill: parent
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: Thread.open(root.messageId)
+                    }
+                }
             }
         }
 
@@ -720,6 +874,32 @@ Item {
                 color: Theme.textFaint
                 font.pointSize: Theme.fontSizeTiny
                 text: root.time
+            }
+        }
+
+        // Under the parent in the thread pane: how many replies follow.
+        RowLayout {
+            Layout.bottomMargin: Theme.spacingXS
+            Layout.fillWidth: true
+            Layout.topMargin: Theme.spacingXXL
+            spacing: Theme.spacingXXL
+            visible: root.inThreadPane && root.messageId === Thread.parentId && root.threadReplies > 0
+
+            Label {
+                objectName: "threadReplies"
+                color: Theme.textMuted
+                font.pointSize: Theme.fontSizeSmall
+                font.weight: Theme.fontWeightSemibold
+                font.features: ({
+                        "tnum": 1
+                    })
+                text: root.threadReplies === 1 ? qsTr("1 reply") : qsTr("%1 replies").arg(root.threadReplies)
+            }
+
+            Rectangle {
+                Layout.fillWidth: true
+                color: Theme.line
+                implicitHeight: Theme.separatorWidth
             }
         }
     }

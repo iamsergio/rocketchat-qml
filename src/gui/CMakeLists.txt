@@ -38,17 +38,22 @@ qt_add_qml_module(
   RoomPage.qml
   RoomView.qml
   StartupPage.qml
+  ThreadPane.qml
   Theme.qml
   VersionLabel.qml
   RESOURCES
   fonts/InstrumentSans.ttf
   fonts/InstrumentSans-Italic.ttf
   icons/channel.svg
+  icons/check.svg
+  icons/close.svg
+  icons/corner.svg
   icons/direct.svg
   icons/file.svg
   icons/logout.svg
   icons/private.svg
   icons/settings.svg
+  icons/thread.svg
   IMPORT_PATH
   ${rc_qt_export_dir}/qml_modules)
 

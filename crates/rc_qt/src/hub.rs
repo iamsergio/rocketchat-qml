@@ -3,11 +3,11 @@
 
 //! Connects the one `rc_core::Client` to the view models.
 //!
-//! `Session`, `RoomList`, `Room` and `MessageList` need the events of the same client, and QML
-//! creates them on its own schedule. The hub owns the client, remembers what the events said (see
-//! [`Cache`]), and queues each event to the view models that registered. A view model registering
-//! later replays the cache, so it doesn't matter whether it is created before or after the first
-//! events.
+//! `Session`, `RoomList`, `Room`, `MessageList`, `Thread` and `ThreadMessageList` need the events
+//! of the same client, and QML creates them on its own schedule. The hub owns the client,
+//! remembers what the events said (see [`Cache`]), and queues each event to the view models that
+//! registered. A view model registering later replays the cache, so it doesn't matter whether it
+//! is created before or after the first events.
 //!
 //! The event callback runs on a runtime thread and never waits for the GUI thread; the GUI thread
 //! never waits for the runtime either (commands don't block). So queueing while holding the lock
@@ -38,6 +38,9 @@ use crate::room_view::RoomState;
 use crate::room_vm::qobject::RoomVm;
 use crate::session_view::SessionView;
 use crate::session_vm::qobject::SessionVm;
+use crate::thread_message_list_model::qobject::ThreadMessageListModel;
+use crate::thread_view::ThreadState;
+use crate::thread_vm::qobject::ThreadVm;
 
 /// Environment variable choosing where the session token is kept. `memory` keeps it in memory
 /// only, and `file:<path>` in a plain file (GUI tests, in builds with `test-file-store`); anything
@@ -54,6 +57,8 @@ struct Hub {
     rooms: Option<CxxQtThread<RoomListModel>>,
     room: Option<CxxQtThread<RoomVm>>,
     messages: Option<CxxQtThread<MessageListModel>>,
+    thread: Option<CxxQtThread<ThreadVm>>,
+    thread_messages: Option<CxxQtThread<ThreadMessageListModel>>,
     picker: Option<CxxQtThread<EmojiPickerModel>>,
 }
 
@@ -66,6 +71,8 @@ impl Hub {
             rooms: None,
             room: None,
             messages: None,
+            thread: None,
+            thread_messages: None,
             picker: None,
         }
     }
@@ -211,6 +218,45 @@ pub fn send_message(room: RoomId, text: &str, quote: Option<MessageId>) {
     }
 }
 
+/// Sends a reply in the open thread `parent`, also to the room if `also_to_channel`.
+pub fn send_reply(
+    room: RoomId,
+    text: &str,
+    quote: Option<MessageId>,
+    parent: MessageId,
+    also_to_channel: bool,
+) {
+    if let Some(client) = &lock().client {
+        client.send_message(room, text, quote, Some(parent), also_to_channel);
+    } else {
+        tracing::warn!("send_reply ignored: the core isn't running");
+    }
+}
+
+pub fn open_thread(message_id: String) {
+    if let Some(client) = &lock().client {
+        client.open_thread(MessageId::from(message_id));
+    } else {
+        tracing::warn!("open_thread ignored: the core isn't running");
+    }
+}
+
+pub fn close_thread() {
+    if let Some(client) = &lock().client {
+        client.close_thread();
+    } else {
+        tracing::warn!("close_thread ignored: the core isn't running");
+    }
+}
+
+pub fn load_older_thread() {
+    if let Some(client) = &lock().client {
+        client.load_older_thread();
+    } else {
+        tracing::warn!("load_older_thread ignored: the core isn't running");
+    }
+}
+
 pub fn retry_message(message_id: String) {
     if let Some(client) = &lock().client {
         client.retry_message(MessageId::from(message_id));
@@ -283,7 +329,15 @@ pub fn last_editable() -> String {
         .map_or_else(String::new, |message| message.id.to_string())
 }
 
-/// The text of a message of the open room as written, or empty if it isn't held.
+/// The id of the newest message of the open thread that the user can edit now, or empty.
+pub fn last_editable_in_thread() -> String {
+    lock()
+        .cache
+        .thread_last_editable(jiff::Timestamp::now())
+        .map_or_else(String::new, |message| message.id.to_string())
+}
+
+/// The text of a message of the open room or thread as written, or empty if it isn't held.
 pub fn message_text(message_id: &str) -> String {
     lock()
         .cache
@@ -291,7 +345,8 @@ pub fn message_text(message_id: &str) -> String {
         .map_or_else(String::new, str::to_owned)
 }
 
-/// Who wrote a message of the open room, by display name else username, or empty if it isn't held.
+/// Who wrote a message of the open room or thread, by display name else username, or empty if it
+/// isn't held.
 pub fn message_author(message_id: &str) -> String {
     lock()
         .cache
@@ -321,6 +376,35 @@ pub fn register_messages(
         hub.cache.avatars(),
         hub.cache.images(),
     )
+}
+
+/// Registers the `Thread` view model and returns what it shows now. Call on the GUI thread; the
+/// events that follow the returned state are queued to `thread`.
+pub fn register_thread(thread: CxxQtThread<ThreadVm>) -> ThreadState {
+    let mut hub = lock();
+    hub.thread = Some(thread);
+    hub.cache.thread_state()
+}
+
+/// Registers the `ThreadMessageList` model and returns the change that brings it up to date, who
+/// it shows the messages to, and the avatars and attachment images it shows, as
+/// [`register_messages`] does for `MessageList`.
+pub fn register_thread_messages(
+    thread: CxxQtThread<ThreadMessageListModel>,
+) -> (TimelineChange, Viewer, AvatarUrls, ImageUrls) {
+    let mut hub = lock();
+    hub.thread_messages = Some(thread);
+    (
+        hub.cache.thread_snapshot(),
+        hub.cache.viewer(),
+        hub.cache.avatars(),
+        hub.cache.images(),
+    )
+}
+
+/// The thread's state now, for sending a reply.
+pub fn thread_state() -> ThreadState {
+    lock().cache.thread_state()
 }
 
 /// Registers the `EmojiCatalog` model and returns the custom emoji it lists now. Call on the GUI
@@ -360,6 +444,7 @@ fn dispatch(event: Event) {
             }
             // The open room's name may have changed.
             show_room(hub);
+            show_thread(hub);
         }
         Event::Timeline(changes) => {
             let gone = hub
@@ -371,10 +456,21 @@ fn dispatch(event: Event) {
                 hub.messages = None;
             }
         }
-        Event::TimelineStatus(_) => show_room(hub),
-        // The thread pane will use these.
-        #[allow(clippy::match_same_arms)]
-        Event::ThreadTimeline(_) | Event::ThreadStatus(_) => {}
+        Event::TimelineStatus(_) => {
+            show_room(hub);
+            show_thread(hub);
+        }
+        Event::ThreadTimeline(changes) => {
+            let gone = hub
+                .thread_messages
+                .as_ref()
+                .is_some_and(|thread| thread.queue(move |model| model.apply(&changes)).is_err());
+            if gone {
+                tracing::debug!("the ThreadMessageList object is gone, unregistered");
+                hub.thread_messages = None;
+            }
+        }
+        Event::ThreadStatus(_) => show_thread(hub),
         Event::Avatars(updates) => {
             let changes = hub.cache.avatar_changes(&updates);
             show_avatars(hub, &changes);
@@ -445,17 +541,27 @@ fn answer_room_action(hub: &mut Hub, outcome: Result<(), RoomActionError>) {
     }
 }
 
-/// Tells the `MessageList` model which attachment images changed.
+/// Tells the message models which attachment images changed.
 fn show_images(hub: &mut Hub, changes: &[(String, String)]) {
-    let changes = changes.to_vec();
+    let for_room = changes.to_vec();
     let gone = hub.messages.as_ref().is_some_and(|thread| {
         thread
-            .queue(move |model| model.set_images(&changes))
+            .queue(move |model| model.set_images(&for_room))
             .is_err()
     });
     if gone {
         tracing::debug!("the MessageList object is gone, unregistered");
         hub.messages = None;
+    }
+    let for_thread = changes.to_vec();
+    let thread_gone = hub.thread_messages.as_ref().is_some_and(|thread| {
+        thread
+            .queue(move |model| model.set_images(&for_thread))
+            .is_err()
+    });
+    if thread_gone {
+        tracing::debug!("the ThreadMessageList object is gone, unregistered");
+        hub.thread_messages = None;
     }
 }
 
@@ -481,18 +587,39 @@ fn show_avatars(hub: &mut Hub, changes: &[(AvatarOwner, String)]) {
         tracing::debug!("the MessageList object is gone, unregistered");
         hub.messages = None;
     }
+    let for_thread = changes.to_vec();
+    let thread_gone = hub.thread_messages.as_ref().is_some_and(|thread| {
+        thread
+            .queue(move |model| model.set_avatars(&for_thread))
+            .is_err()
+    });
+    if thread_gone {
+        tracing::debug!("the ThreadMessageList object is gone, unregistered");
+        hub.thread_messages = None;
+    }
 }
 
-/// Tells the `MessageList` model who it shows the messages to now.
+/// Tells the message models who they show the messages to now.
 fn show_viewer(hub: &mut Hub) {
-    let viewer = hub.cache.viewer();
-    let gone = hub
-        .messages
-        .as_ref()
-        .is_some_and(|thread| thread.queue(move |model| model.set_viewer(viewer)).is_err());
+    let for_room = hub.cache.viewer();
+    let gone = hub.messages.as_ref().is_some_and(|thread| {
+        thread
+            .queue(move |model| model.set_viewer(for_room))
+            .is_err()
+    });
     if gone {
         tracing::debug!("the MessageList object is gone, unregistered");
         hub.messages = None;
+    }
+    let for_thread = hub.cache.viewer();
+    let thread_gone = hub.thread_messages.as_ref().is_some_and(|thread| {
+        thread
+            .queue(move |model| model.set_viewer(for_thread))
+            .is_err()
+    });
+    if thread_gone {
+        tracing::debug!("the ThreadMessageList object is gone, unregistered");
+        hub.thread_messages = None;
     }
 }
 
@@ -506,6 +633,19 @@ fn show_room(hub: &mut Hub) {
     if gone {
         tracing::debug!("the Room object is gone, unregistered");
         hub.room = None;
+    }
+}
+
+/// Sends the `Thread` view model what the cache says it shows now.
+fn show_thread(hub: &mut Hub) {
+    let state = hub.cache.thread_state();
+    let gone = hub
+        .thread
+        .as_ref()
+        .is_some_and(|thread| thread.queue(move |vm| vm.show(&state)).is_err());
+    if gone {
+        tracing::debug!("the Thread object is gone, unregistered");
+        hub.thread = None;
     }
 }
 
