@@ -205,6 +205,47 @@ pub trait ServerApi: Clone + Send + Sync + 'static {
         room: &RoomId,
     ) -> impl Future<Output = Result<(), ApiError>> + Send;
 
+    /// Tells the server the user has marked the room unread: it sets the unread count to one and
+    /// the alert flag, and pushes the changed subscription.
+    ///
+    /// # Errors
+    ///
+    /// [`ApiError::Unauthorized`] if the credentials have expired or were revoked,
+    /// [`ApiError::Server`] if the server refuses (the room has no messages...).
+    fn mark_unread(
+        &self,
+        credentials: &Credentials,
+        room: &RoomId,
+    ) -> impl Future<Output = Result<(), ApiError>> + Send;
+
+    /// Marks the room as one of the user's favorites, or takes it back. Asking for what is so
+    /// already succeeds. The server pushes the changed subscription.
+    ///
+    /// # Errors
+    ///
+    /// [`ApiError::Unauthorized`] if the credentials have expired or were revoked,
+    /// [`ApiError::Server`] if the user isn't in the room.
+    fn set_favorite(
+        &self,
+        credentials: &Credentials,
+        room: &RoomId,
+        favorite: bool,
+    ) -> impl Future<Output = Result<(), ApiError>> + Send;
+
+    /// Leaves a channel or a private group. The server removes the subscription and pushes that.
+    ///
+    /// # Errors
+    ///
+    /// [`ApiError::Unauthorized`] if the credentials have expired or were revoked,
+    /// [`ApiError::Server`] if the server refuses (the user is the last owner of the room...),
+    /// [`ApiError::Unexpected`] for a direct message, which can't be left.
+    fn leave_room(
+        &self,
+        credentials: &Credentials,
+        room: &RoomId,
+        kind: RoomKind,
+    ) -> impl Future<Output = Result<(), ApiError>> + Send;
+
     /// What happened to the room's messages since `since`: the ones sent or changed (whole) and the
     /// ids of the ones deleted. It may list more than changed, so the caller applies it to what
     /// it holds. The server decides by its own clock, so the caller leaves a margin.

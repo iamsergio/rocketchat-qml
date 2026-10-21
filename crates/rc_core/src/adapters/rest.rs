@@ -193,6 +193,36 @@ impl ServerApi for RestApi {
         Ok(session.mark_read(room.as_str()).await?)
     }
 
+    async fn mark_unread(&self, credentials: &Credentials, room: &RoomId) -> Result<(), ApiError> {
+        let session = self.client.session(api_credentials(credentials));
+        Ok(session.mark_unread(room.as_str()).await?)
+    }
+
+    async fn set_favorite(
+        &self,
+        credentials: &Credentials,
+        room: &RoomId,
+        favorite: bool,
+    ) -> Result<(), ApiError> {
+        let session = self.client.session(api_credentials(credentials));
+        Ok(session.set_favorite(room.as_str(), favorite).await?)
+    }
+
+    async fn leave_room(
+        &self,
+        credentials: &Credentials,
+        room: &RoomId,
+        kind: RoomKind,
+    ) -> Result<(), ApiError> {
+        let room_type = match kind {
+            RoomKind::Channel => rc_api::RoomType::Channel,
+            RoomKind::Private => rc_api::RoomType::Private,
+            RoomKind::Direct => rc_api::RoomType::Direct,
+        };
+        let session = self.client.session(api_credentials(credentials));
+        Ok(session.leave(room.as_str(), &room_type).await?)
+    }
+
     async fn changes_since(
         &self,
         credentials: &Credentials,
@@ -344,7 +374,7 @@ impl From<rc_api::Error> for ApiError {
             rc_api::Error::Unauthorized => Self::Unauthorized,
             rc_api::Error::Server { status, message } => Self::Server { status, message },
             rc_api::Error::UnsupportedRoomType(code) => {
-                Self::Unexpected(format!("rooms of type {code:?} have no history"))
+                Self::Unexpected(format!("rooms of type {code:?} are not supported here"))
             }
             rc_api::Error::Decode(source) => Self::Unexpected(chain(&source)),
             rc_api::Error::WebSocket(source) => Self::Unreachable(chain(&source)),

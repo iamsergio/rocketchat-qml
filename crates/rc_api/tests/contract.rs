@@ -377,6 +377,194 @@ async fn mark_read_with_a_revoked_token_is_unauthorized() {
     assert!(matches!(result, Err(Error::Unauthorized)), "{result:?}");
 }
 
+// ROOM-006
+#[tokio::test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+async fn a_favorite_shows_in_the_subscriptions_until_it_is_taken_back() {
+    let fixture = Fixture::new();
+    let (channel_id, _) = fixture.create_channel();
+    let (other_id, _) = fixture.create_channel();
+    let session = fixture.client.session(fixture.login().await.credentials);
+    let rooms = session.subscriptions().await.unwrap();
+    assert!(!find(&rooms, &channel_id).favorite, "never favorited");
+
+    session.set_favorite(&channel_id, true).await.unwrap();
+    session.set_favorite(&channel_id, true).await.unwrap();
+    let rooms = session.subscriptions().await.unwrap();
+    assert!(find(&rooms, &channel_id).favorite);
+    assert!(!find(&rooms, &other_id).favorite, "other rooms are not");
+
+    session.set_favorite(&channel_id, false).await.unwrap();
+    let rooms = session.subscriptions().await.unwrap();
+    assert!(!find(&rooms, &channel_id).favorite);
+}
+
+// ROOM-006
+#[tokio::test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+async fn a_room_without_subscription_cannot_be_a_favorite() {
+    let fixture = Fixture::new();
+    let (channel_id, _) = fixture.admin.create_channel(&[]);
+    let session = fixture.client.session(fixture.login().await.credentials);
+
+    let result = session.set_favorite(&channel_id, true).await;
+
+    assert!(
+        matches!(result, Err(Error::Server { status: 400, ref message })
+            if message.starts_with("You must be part of a room to favorite it")),
+        "{result:?}"
+    );
+}
+
+// ROOM-007
+#[tokio::test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+async fn mark_unread_makes_the_subscription_unread_with_an_alert() {
+    let fixture = Fixture::new();
+    let (channel_id, _) = fixture.create_channel();
+    fixture.admin.post_message(&channel_id, "one");
+    fixture.admin.post_message(&channel_id, "two");
+    let session = fixture.client.session(fixture.login().await.credentials);
+    session.mark_read(&channel_id).await.unwrap();
+    let rooms = subscriptions_when(&session, |rooms| !find(rooms, &channel_id).alert).await;
+    assert_eq!(find(&rooms, &channel_id).unread, 0);
+
+    session.mark_unread(&channel_id).await.unwrap();
+
+    // Whatever the number of messages, the server counts one unread message, raises the alert and
+    // leaves the mentions alone.
+    let rooms = subscriptions_when(&session, |rooms| find(rooms, &channel_id).alert).await;
+    let channel = find(&rooms, &channel_id);
+    assert_eq!(channel.unread, 1, "{channel:?}");
+    assert!(channel.alert, "{channel:?}");
+    assert_eq!(channel.user_mentions, 0, "{channel:?}");
+    assert_eq!(channel.group_mentions, 0, "{channel:?}");
+
+    session.mark_unread(&channel_id).await.unwrap();
+    let rooms = session.subscriptions().await.unwrap();
+    assert_eq!(find(&rooms, &channel_id).unread, 1, "again changes nothing");
+}
+
+// ROOM-007
+#[tokio::test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+async fn mark_unread_of_a_room_without_messages_is_refused_with_a_text() {
+    let fixture = Fixture::new();
+    let (channel_id, _) = fixture.create_channel();
+    let session = fixture.client.session(fixture.login().await.credentials);
+
+    let result = session.mark_unread(&channel_id).await;
+
+    assert!(
+        matches!(result, Err(Error::Server { status: 400, ref message })
+            if message == "There are no messages to mark unread [error-no-message-for-unread]"),
+        "{result:?}"
+    );
+}
+
+// ROOM-007
+#[tokio::test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+async fn mark_unread_with_a_revoked_token_is_unauthorized() {
+    let fixture = Fixture::new();
+    let (channel_id, _) = fixture.create_channel();
+    let session = fixture.client.session(fixture.login().await.credentials);
+    session.logout().await.unwrap();
+
+    let result = session.mark_unread(&channel_id).await;
+
+    assert!(matches!(result, Err(Error::Unauthorized)), "{result:?}");
+}
+
+// ROOM-007
+#[tokio::test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+async fn leaving_a_channel_or_a_group_removes_the_subscription() {
+    let fixture = Fixture::new();
+    let (channel_id, _) = fixture.create_channel();
+    let (group_id, _) = fixture.create_group();
+    let (kept_id, _) = fixture.create_channel();
+    let session = fixture.client.session(fixture.login().await.credentials);
+
+    session
+        .leave(&channel_id, &RoomType::Channel)
+        .await
+        .unwrap();
+    session.leave(&group_id, &RoomType::Private).await.unwrap();
+
+    let rooms = session.subscriptions().await.unwrap();
+    assert!(rooms.iter().all(|r| r.room_id != channel_id));
+    assert!(rooms.iter().all(|r| r.room_id != group_id));
+    find(&rooms, &kept_id);
+}
+
+// ROOM-007
+#[tokio::test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+async fn leaving_a_room_that_was_left_already_is_refused() {
+    let fixture = Fixture::new();
+    let (channel_id, _) = fixture.create_channel();
+    let session = fixture.client.session(fixture.login().await.credentials);
+    session
+        .leave(&channel_id, &RoomType::Channel)
+        .await
+        .unwrap();
+
+    let result = session.leave(&channel_id, &RoomType::Channel).await;
+
+    assert!(
+        matches!(result, Err(Error::Server { status: 400, ref message })
+            if message.starts_with("You are not in this room")),
+        "{result:?}"
+    );
+}
+
+// ROOM-007
+#[tokio::test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+async fn the_last_owner_of_a_group_or_a_channel_cannot_leave_it() {
+    let fixture = Fixture::new();
+    let owner = Admin::login_as(&fixture.user.username, &fixture.user.password);
+    let (group_id, _) = owner.create_group(&[]);
+    let (channel_id, _) = owner.create_channel(&[]);
+    let session = fixture.client.session(fixture.login().await.credentials);
+
+    // The text is shown to the user as the server words it.
+    let refusal = "You are the last owner. Please set new owner before leaving the room. \
+                   [error-you-are-last-owner]";
+    for (room_id, kind) in [
+        (&group_id, RoomType::Private),
+        (&channel_id, RoomType::Channel),
+    ] {
+        let result = session.leave(room_id, &kind).await;
+        assert!(
+            matches!(result, Err(Error::Server { status: 400, ref message }) if message == refusal),
+            "{result:?}"
+        );
+    }
+    let rooms = session.subscriptions().await.unwrap();
+    find(&rooms, &group_id);
+    find(&rooms, &channel_id);
+}
+
+// ROOM-007
+#[tokio::test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+async fn leaving_a_room_of_the_other_type_is_refused() {
+    let fixture = Fixture::new();
+    let (channel_id, _) = fixture.create_channel();
+    let session = fixture.client.session(fixture.login().await.credentials);
+
+    let result = session.leave(&channel_id, &RoomType::Private).await;
+
+    assert!(
+        matches!(result, Err(Error::Server { status: 400, .. })),
+        "{result:?}"
+    );
+    let rooms = session.subscriptions().await.unwrap();
+    find(&rooms, &channel_id);
+}
+
 // AUTH-005
 #[tokio::test]
 #[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
@@ -798,6 +986,57 @@ async fn a_message_raises_the_unread_count_of_its_room() {
     };
     assert_eq!(subscription.room_type, RoomType::Direct);
     assert!(subscription.alert);
+}
+
+// ROOM-006, ROOM-007
+#[tokio::test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+async fn favorites_unreads_and_leaving_arrive_as_subscription_changes() {
+    let fixture = Fixture::new();
+    let (room_id, _) = fixture.create_channel();
+    let (left_id, _) = fixture.create_channel();
+    fixture
+        .admin
+        .post_message(&room_id, "something to mark unread");
+    let login = fixture.login().await;
+    let session = fixture.client.session(login.credentials.clone());
+    session.mark_read(&room_id).await.unwrap();
+    let (client, mut events) = connect_and_login(&login.credentials).await;
+    client
+        .subscribe_subscription_changes(&fixture.user.id)
+        .await
+        .unwrap();
+
+    session.set_favorite(&room_id, true).await.unwrap();
+    event_where(
+        &mut events,
+        |e| matches!(e, DdpEvent::SubscriptionChanged(s) if s.room_id == room_id && s.favorite),
+    )
+    .await;
+    session.set_favorite(&room_id, false).await.unwrap();
+    event_where(
+        &mut events,
+        |e| matches!(e, DdpEvent::SubscriptionChanged(s) if s.room_id == room_id && !s.favorite),
+    )
+    .await;
+
+    session.mark_unread(&room_id).await.unwrap();
+    let event = event_where(
+        &mut events,
+        |e| matches!(e, DdpEvent::SubscriptionChanged(s) if s.room_id == room_id && s.alert),
+    )
+    .await;
+    let DdpEvent::SubscriptionChanged(subscription) = event else {
+        panic!("not the event that was waited for")
+    };
+    assert_eq!(subscription.unread, 1);
+
+    session.leave(&left_id, &RoomType::Channel).await.unwrap();
+    event_where(
+        &mut events,
+        |e| matches!(e, DdpEvent::SubscriptionRemoved { room_id: r } if *r == left_id),
+    )
+    .await;
 }
 
 // RT-001, RT-002

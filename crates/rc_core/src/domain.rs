@@ -157,6 +157,9 @@ pub struct Room {
     pub group_mentions: u32,
     /// Something new that the counts don't cover (e.g. thread replies): show the room as unread.
     pub alert: bool,
+    /// The user marked the room as a favorite: the room list shows favorites first, in a section
+    /// of their own.
+    pub favorite: bool,
     /// When the room last had a message; when it joined it, for a room without messages. The room
     /// list shows the most recent first.
     pub last_activity: jiff::Timestamp,
@@ -185,6 +188,12 @@ impl Room {
     #[must_use]
     pub fn has_unread(&self) -> bool {
         self.unread > 0 || self.user_mentions > 0 || self.group_mentions > 0 || self.alert
+    }
+
+    /// Whether the user may leave the room: channels and private groups, not direct messages.
+    #[must_use]
+    pub fn can_leave(&self) -> bool {
+        self.kind != RoomKind::Direct
     }
 
     /// The room with nothing unread.
@@ -237,6 +246,7 @@ pub(crate) fn room_from(sub: rc_api::Subscription) -> Option<Room> {
         user_mentions: sub.user_mentions,
         group_mentions: sub.group_mentions,
         alert: sub.alert,
+        favorite: sub.favorite,
         last_activity: sub
             .last_message
             .or(sub.created)
@@ -515,6 +525,7 @@ mod tests {
             group_mentions: 0,
             alert: false,
             open: true,
+            favorite: false,
             created: None,
             last_message: None,
             avatar_etag: None,
@@ -627,6 +638,28 @@ mod tests {
             ),
             (7, 2, 1, true)
         );
+    }
+
+    // ROOM-006
+    #[test]
+    fn copies_the_favorite_flag() {
+        let mut s = sub("r", RoomType::Channel);
+        assert!(!room_from(s.clone()).unwrap().favorite);
+        s.favorite = true;
+        assert!(room_from(s).unwrap().favorite);
+    }
+
+    // ROOM-007
+    #[test]
+    fn only_channels_and_private_groups_can_be_left() {
+        let can_leave = |kind| {
+            let mut s = sub("r", kind);
+            s.name = "x".into();
+            room_from(s).unwrap().can_leave()
+        };
+        assert!(can_leave(RoomType::Channel));
+        assert!(can_leave(RoomType::Private));
+        assert!(!can_leave(RoomType::Direct));
     }
 
     fn entry(kind: Option<&str>, text: &str) -> rc_api::Message {

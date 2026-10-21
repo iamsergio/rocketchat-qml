@@ -7,6 +7,7 @@
 use std::cmp::Ordering;
 
 use crate::domain::{Room, RoomId};
+use crate::ports::ApiError;
 
 /// One step for a frontend's mirror of the room list. Apply the changes in order.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -63,11 +64,51 @@ pub struct RoomList {
     rooms: Vec<Room>,
 }
 
-/// The display order: the most recently active room first, then by name, ignoring case, and by id
-/// between equal names.
+/// Something the user does to a room from the room list's menu.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RoomAction {
+    Favorite,
+    Unfavorite,
+    MarkRead,
+    MarkUnread,
+    Leave,
+}
+
+/// Why a [`RoomAction`] didn't happen. The texts are meant to be shown as they are.
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum RoomActionError {
+    /// Refused without asking the server: the room isn't in the list, is a direct message and
+    /// can't be left, or is the open room and can't be marked unread.
+    #[error("This room can't be {}", match .0 {
+        RoomAction::Favorite => "added to the favorites",
+        RoomAction::Unfavorite => "removed from the favorites",
+        RoomAction::MarkRead => "marked as read",
+        RoomAction::MarkUnread => "marked as unread",
+        RoomAction::Leave => "left",
+    })]
+    NotAllowed(RoomAction),
+    #[error("Can't reach the server")]
+    Unreachable,
+    /// Any other error, with its message.
+    #[error("The server reported an error: {0}")]
+    Server(String),
+}
+
+impl From<&ApiError> for RoomActionError {
+    fn from(error: &ApiError) -> Self {
+        match error {
+            ApiError::Unreachable(_) => Self::Unreachable,
+            other => Self::Server(other.to_string()),
+        }
+    }
+}
+
+/// The display order: the favorites first; in each group the most recently active room first, then
+/// by name, ignoring case, and by id between equal names.
 fn display_order(a: &Room, b: &Room) -> Ordering {
-    b.last_activity
-        .cmp(&a.last_activity)
+    b.favorite
+        .cmp(&a.favorite)
+        .then_with(|| b.last_activity.cmp(&a.last_activity))
         .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
         .then_with(|| a.id.cmp(&b.id))
 }
@@ -171,6 +212,7 @@ mod tests {
             user_mentions: 0,
             group_mentions: 0,
             alert: false,
+            favorite: false,
             last_activity: jiff::Timestamp::UNIX_EPOCH,
         }
     }
@@ -430,6 +472,170 @@ mod tests {
         assert_eq!(names(&list), ["new", "alpha", "alpha", "beta", "old"]);
         let ids: Vec<_> = list.rooms().iter().map(|r| r.id.as_str()).collect();
         assert_eq!(ids, ["4", "0", "3", "2", "1"]);
+    }
+
+    fn favorite(room: Room) -> Room {
+        Room {
+            favorite: true,
+            ..room
+        }
+    }
+
+    // ROOM-006
+    #[test]
+    fn favorites_come_first_each_group_ordered_by_activity_then_name_then_id() {
+        let mut list = RoomList::default();
+        list.reset(vec![
+            active("1", "recent", 50),
+            favorite(active("2", "old favorite", 10)),
+            active("3", "older", 5),
+            favorite(active("4", "new favorite", 30)),
+            favorite(active("5", "Alpha", 10)),
+        ]);
+        assert_eq!(
+            names(&list),
+            ["new favorite", "Alpha", "old favorite", "recent", "older"]
+        );
+    }
+
+    // ROOM-006
+    #[test]
+    fn a_new_favorite_moves_up_above_more_recent_rooms() {
+        let mut list = list_of(vec![
+            active("a", "a", 30),
+            active("b", "b", 20),
+            active("c", "c", 10),
+        ]);
+        let change = list.upsert(favorite(active("c", "c", 10)));
+        assert_eq!(
+            change,
+            Some(RoomChange::Moved {
+                from: 2,
+                to: 0,
+                room: favorite(active("c", "c", 10))
+            })
+        );
+        assert_eq!(names(&list), ["c", "a", "b"]);
+    }
+
+    // ROOM-006
+    #[test]
+    fn a_favorite_that_stays_first_updates_in_place_and_one_taken_back_moves_down() {
+        let mut list = list_of(vec![favorite(active("a", "a", 10)), active("b", "b", 20)]);
+        assert_eq!(names(&list), ["a", "b"]);
+        let mut busy = favorite(active("a", "a", 10));
+        busy.unread = 2;
+        assert_eq!(
+            list.upsert(busy.clone()),
+            Some(RoomChange::Updated {
+                index: 0,
+                room: busy
+            })
+        );
+        assert_eq!(
+            list.upsert(active("a", "a", 10)),
+            Some(RoomChange::Moved {
+                from: 0,
+                to: 1,
+                room: active("a", "a", 10)
+            })
+        );
+        assert_eq!(names(&list), ["b", "a"]);
+    }
+
+    // ROOM-006
+    #[test]
+    fn a_bump_does_not_lift_a_room_above_the_favorites() {
+        let mut list = list_of(vec![
+            favorite(active("f", "f", 10)),
+            active("a", "a", 30),
+            active("b", "b", 20),
+        ]);
+        let change = list.bump(&"b".to_owned().into(), at(40));
+        assert_eq!(
+            change,
+            Some(RoomChange::Moved {
+                from: 2,
+                to: 1,
+                room: active("b", "b", 40)
+            })
+        );
+        assert_eq!(names(&list), ["f", "b", "a"]);
+        // A favorite bumped stays among the favorites, above everything else.
+        list.bump(&"f".to_owned().into(), at(60));
+        assert_eq!(names(&list), ["f", "b", "a"]);
+    }
+
+    // ROOM-006
+    #[test]
+    fn sync_moves_the_rooms_whose_favorite_flag_changed() {
+        let mut list = list_of(vec![active("a", "a", 30), active("b", "b", 20)]);
+        let changes = list.sync(vec![active("a", "a", 30), favorite(active("b", "b", 20))]);
+        assert_eq!(
+            changes,
+            [RoomChange::Moved {
+                from: 1,
+                to: 0,
+                room: favorite(active("b", "b", 20))
+            }]
+        );
+    }
+
+    // ROOM-006
+    #[test]
+    fn a_mirror_following_the_favorite_changes_equals_the_list() {
+        let (mut list, mut mirror) = (RoomList::default(), Vec::new());
+        let l = &mut list;
+        let m = &mut mirror;
+        step(l, m, |l| {
+            Some(l.reset(vec![
+                active("a", "a", 10),
+                favorite(active("b", "b", 20)),
+                active("c", "c", 30),
+            ]))
+        });
+        step(l, m, |l| l.upsert(favorite(active("a", "a", 10))));
+        step(l, m, |l| l.upsert(favorite(active("a", "a", 10))));
+        step(l, m, |l| l.upsert(active("b", "b", 20)));
+        step(l, m, |l| l.upsert(favorite(active("d", "d", 5))));
+        step(l, m, |l| l.bump(&"c".to_owned().into(), at(99)));
+        step(l, m, |l| l.remove(&"a".to_owned().into()));
+        assert_eq!(names(&list), ["d", "c", "b"]);
+    }
+
+    // ROOM-007
+    #[test]
+    fn room_actions_say_why_they_were_refused() {
+        let text = |action| RoomActionError::NotAllowed(action).to_string();
+        assert_eq!(
+            text(RoomAction::Favorite),
+            "This room can't be added to the favorites"
+        );
+        assert_eq!(
+            text(RoomAction::Unfavorite),
+            "This room can't be removed from the favorites"
+        );
+        assert_eq!(
+            text(RoomAction::MarkRead),
+            "This room can't be marked as read"
+        );
+        assert_eq!(
+            text(RoomAction::MarkUnread),
+            "This room can't be marked as unread"
+        );
+        assert_eq!(text(RoomAction::Leave), "This room can't be left");
+        assert_eq!(
+            RoomActionError::from(&ApiError::Unreachable("refused".into())).to_string(),
+            "Can't reach the server"
+        );
+        let server = ApiError::Server {
+            status: 400,
+            message: "You are the last owner".into(),
+        };
+        assert_eq!(
+            RoomActionError::from(&server).to_string(),
+            "The server reported an error: the server answered 400: You are the last owner"
+        );
     }
 
     // ROOM-005

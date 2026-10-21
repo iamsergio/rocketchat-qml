@@ -314,6 +314,162 @@ async fn mark_read_of_a_room_without_subscription_is_a_server_error_with_the_mes
     );
 }
 
+/// Mounts a POST that only matches with the auth headers and `body`, and expects it once.
+async fn mount_post(server: &MockServer, route: &str, body: serde_json::Value, status: u16) {
+    let answer = if status == 200 {
+        r#"{"success":true}"#
+    } else {
+        r#"{"success":false,"error":"nope [error-nope]"}"#
+    };
+    Mock::given(method("POST"))
+        .and(path(route))
+        .and(header("X-User-Id", USER_ID))
+        .and(header("X-Auth-Token", TOKEN))
+        .and(body_json(body))
+        .respond_with(json_response(status, answer))
+        .expect(1)
+        .mount(server)
+        .await;
+}
+
+// ROOM-007
+#[tokio::test]
+async fn mark_unread_posts_the_room_id() {
+    let server = MockServer::start().await;
+    mount_post(
+        &server,
+        "/api/v1/subscriptions.unread",
+        json!({ "roomId": "room1" }),
+        200,
+    )
+    .await;
+    session(&RestClient::new(&server.uri()).unwrap())
+        .mark_unread("room1")
+        .await
+        .unwrap();
+}
+
+// ROOM-007
+#[tokio::test]
+async fn mark_unread_of_a_room_without_messages_is_a_server_error_with_the_message() {
+    let server = MockServer::start().await;
+    mount_post(
+        &server,
+        "/api/v1/subscriptions.unread",
+        json!({ "roomId": "room1" }),
+        400,
+    )
+    .await;
+    let result = session(&RestClient::new(&server.uri()).unwrap())
+        .mark_unread("room1")
+        .await;
+    let Err(Error::Server { status, message }) = result else {
+        panic!("{result:?}");
+    };
+    assert_eq!((status, message.as_str()), (400, "nope [error-nope]"));
+}
+
+// ROOM-006
+#[tokio::test]
+async fn set_favorite_says_which_of_the_two_is_wanted() {
+    let server = MockServer::start().await;
+    mount_post(
+        &server,
+        "/api/v1/rooms.favorite",
+        json!({ "roomId": "room1", "favorite": true }),
+        200,
+    )
+    .await;
+    mount_post(
+        &server,
+        "/api/v1/rooms.favorite",
+        json!({ "roomId": "room1", "favorite": false }),
+        200,
+    )
+    .await;
+    let session = session(&RestClient::new(&server.uri()).unwrap());
+    session.set_favorite("room1", true).await.unwrap();
+    session.set_favorite("room1", false).await.unwrap();
+}
+
+// ROOM-006
+#[tokio::test]
+async fn set_favorite_of_a_room_without_subscription_is_a_server_error() {
+    let server = MockServer::start().await;
+    mount_post(
+        &server,
+        "/api/v1/rooms.favorite",
+        json!({ "roomId": "room1", "favorite": true }),
+        400,
+    )
+    .await;
+    let result = session(&RestClient::new(&server.uri()).unwrap())
+        .set_favorite("room1", true)
+        .await;
+    assert!(
+        matches!(result, Err(Error::Server { status: 400, .. })),
+        "{result:?}"
+    );
+}
+
+// ROOM-007
+#[tokio::test]
+async fn leave_uses_the_call_of_the_room_type() {
+    let server = MockServer::start().await;
+    mount_post(
+        &server,
+        "/api/v1/channels.leave",
+        json!({ "roomId": "chan" }),
+        200,
+    )
+    .await;
+    mount_post(
+        &server,
+        "/api/v1/groups.leave",
+        json!({ "roomId": "group" }),
+        200,
+    )
+    .await;
+    let session = session(&RestClient::new(&server.uri()).unwrap());
+    session.leave("chan", &RoomType::Channel).await.unwrap();
+    session.leave("group", &RoomType::Private).await.unwrap();
+}
+
+// ROOM-007
+#[tokio::test]
+async fn direct_messages_and_other_rooms_cannot_be_left_and_no_request_is_made() {
+    let server = MockServer::start().await;
+    let session = session(&RestClient::new(&server.uri()).unwrap());
+    for kind in [RoomType::Direct, RoomType::Other("l".into())] {
+        let result = session.leave("room1", &kind).await;
+        assert!(
+            matches!(result, Err(Error::UnsupportedRoomType(_))),
+            "{result:?}"
+        );
+    }
+    assert!(server.received_requests().await.unwrap().is_empty());
+}
+
+// ROOM-007
+#[tokio::test]
+async fn leaving_as_the_last_owner_is_a_server_error_with_the_message() {
+    let server = MockServer::start().await;
+    mount_post(
+        &server,
+        "/api/v1/groups.leave",
+        json!({ "roomId": "group" }),
+        400,
+    )
+    .await;
+    let result = session(&RestClient::new(&server.uri()).unwrap())
+        .leave("group", &RoomType::Private)
+        .await;
+    let Err(Error::Server { status, message }) = result else {
+        panic!("{result:?}");
+    };
+    assert_eq!((status, message.as_str()), (400, "nope [error-nope]"));
+}
+
 // RICH-003
 #[tokio::test]
 async fn custom_emoji_lists_the_emoji_of_the_server() {

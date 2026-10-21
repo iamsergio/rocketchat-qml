@@ -31,7 +31,7 @@ use crate::ports::{
     Realtime, SecretStore, ServerApi, StoreError,
 };
 use crate::quote::{permalink, wire_text};
-use crate::rooms::{RoomChange, RoomList};
+use crate::rooms::{RoomAction, RoomActionError, RoomChange, RoomList};
 use crate::session::{Established, LoginFailure, SessionState, log_in, resume};
 use crate::timeline::{PAGE_SIZE, Timeline, TimelineChange, TimelineError, TimelineStatus};
 
@@ -88,6 +88,13 @@ pub enum Event {
         action: MessageAction,
         outcome: Result<(), ActionError>,
     },
+    /// How a command on a room (a favorite, mark as read or unread, leaving) ended. A refusal that
+    /// needs no request is answered at once. Nothing comes if the session ends first.
+    RoomAction {
+        room: RoomId,
+        action: RoomAction,
+        outcome: Result<(), RoomActionError>,
+    },
 }
 
 /// Whether the session is live. The held rooms and messages stay on show while it is not.
@@ -127,6 +134,10 @@ enum Command {
         /// The shortcode with its colons.
         emoji: String,
         react: bool,
+    },
+    RoomAction {
+        room: RoomId,
+        action: RoomAction,
     },
 }
 
@@ -337,6 +348,51 @@ impl Client {
             id,
             emoji: emoji::shortcode(emoji),
             react,
+        });
+    }
+
+    /// Marks the room as one of the user's favorites, or takes it back. The answer comes as
+    /// [`Event::RoomAction`], and the room moves in the list with it (favorites come first),
+    /// without waiting for the server's push. Asking for what is so already succeeds. Refused at
+    /// once, without a request, if the room isn't in the list. Ignored unless logged in.
+    pub fn set_favorite(&self, room: RoomId, favorite: bool) {
+        let action = if favorite {
+            RoomAction::Favorite
+        } else {
+            RoomAction::Unfavorite
+        };
+        self.send(Command::RoomAction { room, action });
+    }
+
+    /// Marks the room read, on the server and in the room list, as opening it does. The answer
+    /// comes as [`Event::RoomAction`]. Refused at once, without a request, if the room isn't in
+    /// the list. Ignored unless logged in.
+    pub fn mark_read(&self, room: RoomId) {
+        self.send(Command::RoomAction {
+            room,
+            action: RoomAction::MarkRead,
+        });
+    }
+
+    /// Marks the room unread: the server counts one unread message and raises the alert, and the
+    /// room list shows that at once. The answer comes as [`Event::RoomAction`]. Refused at once,
+    /// without a request, if the room isn't in the list or is the open room, which stays read
+    /// while it is open. Ignored unless logged in.
+    pub fn mark_unread(&self, room: RoomId) {
+        self.send(Command::RoomAction {
+            room,
+            action: RoomAction::MarkUnread,
+        });
+    }
+
+    /// Leaves a channel or a private group. The answer comes as [`Event::RoomAction`], and the
+    /// room leaves the list with it, and is closed if it was open. The server refuses the last
+    /// owner of a room, and that is the answer. Refused at once, without a request, if the room
+    /// isn't in the list or is a direct message. Ignored unless logged in.
+    pub fn leave_room(&self, room: RoomId) {
+        self.send(Command::RoomAction {
+            room,
+            action: RoomAction::Leave,
         });
     }
 
@@ -614,6 +670,15 @@ struct MarkReadDone {
     outcome: Result<(), ApiError>,
 }
 
+/// A command on a room's answer.
+struct RoomActionDone {
+    /// The login attempt the call belongs to: the answer is stale if the session has changed.
+    attempt: u64,
+    room: RoomId,
+    action: RoomAction,
+    outcome: Result<(), ApiError>,
+}
+
 /// What an edit, a deletion or a reaction did on the server.
 enum Applied {
     /// The message as the server stored it.
@@ -653,6 +718,7 @@ enum Done<A> {
     Send(SendDone),
     MarkRead(MarkReadDone),
     Action(ActionDone),
+    RoomAction(RoomActionDone),
 }
 
 /// A history fetch in flight.
@@ -796,6 +862,7 @@ impl<C: Connector> Actor<C> {
                     Done::Send(done) => self.handle_send_done(done),
                     Done::MarkRead(done) => self.handle_mark_read_done(done),
                     Done::Action(done) => self.handle_action_done(done),
+                    Done::RoomAction(done) => self.handle_room_action_done(done),
                 },
             }
         }
@@ -864,6 +931,7 @@ impl<C: Connector> Actor<C> {
             Command::EditMessage { id, text } => self.edit_own_message(id, &text),
             Command::DeleteMessage(id) => self.delete_own_message(id),
             Command::React { id, emoji, react } => self.react_to_message(id, emoji, react),
+            Command::RoomAction { room, action } => self.act_on_room(room, action),
         }
     }
 
@@ -1200,6 +1268,122 @@ impl<C: Connector> Actor<C> {
             Err(error) => {
                 tracing::warn!(%error, room = %done.room, "can't mark the room read");
             }
+        }
+    }
+
+    /// Answers a command on a room the frontend asked for.
+    fn answer_room(&self, room: RoomId, action: RoomAction, outcome: Result<(), RoomActionError>) {
+        (self.on_event)(Event::RoomAction {
+            room,
+            action,
+            outcome,
+        });
+    }
+
+    /// Starts a command on a room, unless the rules refuse it: the room must be in the list, a
+    /// direct message can't be left, and the open room, which stays read, can't be marked unread.
+    fn act_on_room(&mut self, room: RoomId, action: RoomAction) {
+        if self.own_user().is_none() {
+            tracing::debug!(?action, "room command ignored: not logged in");
+            return;
+        }
+        let is_open = self
+            .open
+            .as_ref()
+            .is_some_and(|open| open.timeline.room() == &room);
+        let allowed = self.rooms.get(&room).is_some_and(|held| match action {
+            RoomAction::Leave => held.can_leave(),
+            RoomAction::MarkUnread => !is_open,
+            _ => true,
+        });
+        if !allowed {
+            tracing::debug!(%room, ?action, "refused: not a room the user can do this to");
+            self.answer_room(room, action, Err(RoomActionError::NotAllowed(action)));
+            return;
+        }
+        self.request_room_action(room, action);
+    }
+
+    /// Asks the server for the command, in a task that reports the outcome.
+    fn request_room_action(&self, room: RoomId, action: RoomAction) {
+        let (Some(session), Some(held)) = (&self.session, self.rooms.get(&room)) else {
+            return;
+        };
+        let kind = held.kind;
+        let api = session.api.clone();
+        let credentials = session.credentials.clone();
+        let attempt = self.attempt;
+        let done = self.done_tx.clone();
+        tokio::spawn(async move {
+            let outcome = match action {
+                RoomAction::Favorite => api.set_favorite(&credentials, &room, true).await,
+                RoomAction::Unfavorite => api.set_favorite(&credentials, &room, false).await,
+                RoomAction::MarkRead => api.mark_read(&credentials, &room).await,
+                RoomAction::MarkUnread => api.mark_unread(&credentials, &room).await,
+                RoomAction::Leave => api.leave_room(&credentials, &room, kind).await,
+            };
+            // Fails only if the actor is gone.
+            let _ = done.send(Done::RoomAction(RoomActionDone {
+                attempt,
+                room,
+                action,
+                outcome,
+            }));
+        });
+    }
+
+    fn handle_room_action_done(&mut self, done: RoomActionDone) {
+        if done.attempt != self.attempt || !matches!(self.state, SessionState::LoggedIn(_)) {
+            tracing::debug!("answer of a stale room command dropped");
+            return;
+        }
+        match done.outcome {
+            Ok(()) => {
+                self.apply_room_action(&done.room, done.action);
+                self.answer_room(done.room, done.action, Ok(()));
+            }
+            Err(ApiError::Unauthorized) => self.expire_session(),
+            Err(error) => {
+                tracing::warn!(%error, room = %done.room, action = ?done.action, "refused");
+                self.answer_room(done.room, done.action, Err(RoomActionError::from(&error)));
+            }
+        }
+    }
+
+    /// Puts what the server did in the room list without waiting for its push, which then changes
+    /// nothing: the room is taken as it is now, and what is set is set, not toggled. Nothing if
+    /// the room has gone meanwhile.
+    fn apply_room_action(&mut self, room: &RoomId, action: RoomAction) {
+        match action {
+            RoomAction::Favorite => self.change_room(room, |held| Room {
+                favorite: true,
+                ..held
+            }),
+            RoomAction::Unfavorite => self.change_room(room, |held| Room {
+                favorite: false,
+                ..held
+            }),
+            RoomAction::MarkRead => self.change_room(room, Room::read),
+            // What the server's push says: one unread message and the alert, the mentions as
+            // they are.
+            RoomAction::MarkUnread => self.change_room(room, |held| Room {
+                unread: held.unread.max(1),
+                alert: true,
+                ..held
+            }),
+            RoomAction::Leave => self.remove_room(room),
+        }
+    }
+
+    /// Changes a listed room and tells the frontend, unless nothing changes. The open room stays
+    /// read, as for a push.
+    fn change_room(&mut self, id: &RoomId, change: impl FnOnce(Room) -> Room) {
+        let Some(held) = self.rooms.get(id).cloned() else {
+            return;
+        };
+        let room = self.seen_if_open(change(held));
+        if let Some(change) = self.rooms.upsert(room) {
+            (self.on_event)(Event::Rooms(vec![change]));
         }
     }
 
