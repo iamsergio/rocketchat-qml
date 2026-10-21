@@ -17,6 +17,7 @@
 mod proxy;
 
 use std::process;
+use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -140,7 +141,9 @@ pub struct Posted {
     pub ts: String,
 }
 
-/// The admin account, logged in. Its token is its own: every `Admin` is a new login.
+/// The admin account, logged in. The admins of a process share one login (see [`Admin::login`]);
+/// [`Admin::login_as`] is a new one.
+#[derive(Clone)]
 pub struct Admin {
     agent: ureq::Agent,
     base: String,
@@ -153,16 +156,24 @@ pub struct Admin {
 }
 
 impl Admin {
-    /// Logs in as `RC_ADMIN_USER` / `RC_ADMIN_PASS` (`admin` / `admin` if unset).
+    /// Logs in as `RC_ADMIN_USER` / `RC_ADMIN_PASS` (`admin` / `admin` if unset), once per
+    /// process: later calls share that login. The server keeps only a user's 50 newest logins
+    /// (`MAX_RESUME_LOGIN_TOKENS`) and forgets older ones, so tests that each logged in, in
+    /// parallel and in other runs on the same server, would log each other out.
     ///
     /// # Panics
     ///
     /// If the server is unset, unreachable or refuses the login.
     #[must_use]
     pub fn login() -> Self {
-        let username = std::env::var("RC_ADMIN_USER").unwrap_or_else(|_| "admin".into());
-        let password = std::env::var("RC_ADMIN_PASS").unwrap_or_else(|_| "admin".into());
-        Self::login_as(&username, &password)
+        static SHARED: OnceLock<Admin> = OnceLock::new();
+        SHARED
+            .get_or_init(|| {
+                let username = std::env::var("RC_ADMIN_USER").unwrap_or_else(|_| "admin".into());
+                let password = std::env::var("RC_ADMIN_PASS").unwrap_or_else(|_| "admin".into());
+                Self::login_as(&username, &password)
+            })
+            .clone()
     }
 
     /// Logs in as any user, to act as them: the calls work as far as the user's roles allow, so
