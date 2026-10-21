@@ -8,13 +8,13 @@ use std::sync::Arc;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tokio::sync::oneshot;
 
-use crate::domain::StoredSession;
+use crate::domain::{AccountId, StoredAccount};
 use crate::ports::{SecretStore, StoreError};
 
 pub(crate) enum StoreOp {
-    Load(oneshot::Sender<Result<Option<StoredSession>, StoreError>>),
-    Save(StoredSession),
-    Clear,
+    Load(oneshot::Sender<Result<Vec<StoredAccount>, StoreError>>),
+    Save(StoredAccount),
+    Remove(AccountId),
 }
 
 /// Queues secret-store calls for the store worker. The worker ends when the last clone is dropped
@@ -23,19 +23,19 @@ pub(crate) enum StoreOp {
 pub(crate) struct StoreHandle(pub(crate) UnboundedSender<StoreOp>);
 
 impl StoreHandle {
-    pub(crate) async fn load(&self) -> Result<Option<StoredSession>, StoreError> {
+    pub(crate) async fn load(&self) -> Result<Vec<StoredAccount>, StoreError> {
         let (answer, answered) = oneshot::channel();
         let gone = || StoreError::Unavailable("the store worker is gone".to_owned());
         self.0.send(StoreOp::Load(answer)).map_err(|_| gone())?;
         answered.await.map_err(|_| gone())?
     }
 
-    pub(crate) fn save(&self, session: StoredSession) {
-        self.queue(StoreOp::Save(session));
+    pub(crate) fn save(&self, account: StoredAccount) {
+        self.queue(StoreOp::Save(account));
     }
 
-    pub(crate) fn clear(&self) {
-        self.queue(StoreOp::Clear);
+    pub(crate) fn remove(&self, id: AccountId) {
+        self.queue(StoreOp::Remove(id));
     }
 
     fn queue(&self, op: StoreOp) {
@@ -60,8 +60,8 @@ pub(crate) async fn run_store_worker<S: SecretStore>(
                 let _ = answer.send(store.load());
                 Ok(())
             }
-            StoreOp::Save(session) => store.save(&session),
-            StoreOp::Clear => store.clear(),
+            StoreOp::Save(account) => store.save(&account),
+            StoreOp::Remove(id) => store.remove(&id),
         })
         .await;
         match result {

@@ -6,7 +6,7 @@
 use rc_api::ServerVersion;
 use secrecy::SecretString;
 
-use crate::domain::{Account, Credentials, StoredSession};
+use crate::domain::{Account, Credentials};
 use crate::ports::{ApiError, Connector, ServerApi};
 
 /// The oldest Rocket.Chat the app supports. Follows the company server (see PLAN.md, Decisions);
@@ -133,21 +133,19 @@ pub(crate) async fn log_in<C: Connector>(
 /// belong to. [`LoginFailure::SessionExpired`] means the server doesn't accept them any more.
 pub(crate) async fn resume<C: Connector>(
     connector: &C,
-    stored: &StoredSession,
+    server: &str,
+    credentials: &Credentials,
 ) -> Result<Established<C::Api>, LoginFailure> {
-    let (api, site_url) = connect_checked(connector, &stored.server).await?;
-    let user = api
-        .me(&stored.credentials)
-        .await
-        .map_err(|error| match error {
-            ApiError::Unauthorized => LoginFailure::SessionExpired,
-            other => other.into(),
-        })?;
+    let (api, site_url) = connect_checked(connector, server).await?;
+    let user = api.me(credentials).await.map_err(|error| match error {
+        ApiError::Unauthorized => LoginFailure::SessionExpired,
+        other => other.into(),
+    })?;
     Ok(Established {
         api,
-        credentials: stored.credentials.clone(),
+        credentials: credentials.clone(),
         account: Account {
-            server: stored.server.clone(),
+            server: server.to_owned(),
             user,
         },
         site_url,

@@ -20,9 +20,9 @@ use crate::avatars::AvatarUpdate;
 use crate::backoff::Backoff;
 use crate::client::{Client, Connection, Event};
 use crate::domain::{
-    Account, Attachment, Author, AvatarOwner, Credentials, Delivery, ImageAttachment, Message,
-    MessageId, MessageKind, Quote, Reaction, Room, RoomId, RoomKind, StoredSession, SystemEvent,
-    User, room_from,
+    Account, AccountId, Attachment, Author, AvatarOwner, Credentials, Delivery, ImageAttachment,
+    Message, MessageId, MessageKind, Quote, Reaction, Room, RoomId, RoomKind, StoredAccount,
+    SystemEvent, User, room_from,
 };
 use crate::emoji::CustomEmojis;
 use crate::images::ImageUpdate;
