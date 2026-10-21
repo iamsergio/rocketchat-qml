@@ -37,6 +37,8 @@ QtObject {
     readonly property color ownWash: "#247f9cff"
     // Own at 50%: the border of the focused composer and of the user's reactions.
     readonly property color ownBorder: "#807f9cff"
+    // Own at 6%: the message whose thread is open beside the room.
+    readonly property color ownTint: "#0f7f9cff"
     readonly property color warning: "#e8b44f"
     // Warning at 12%.
     readonly property color warningWash: "#1fe8b44f"
@@ -103,6 +105,7 @@ QtObject {
     readonly property int radiusControl: 7
     readonly property int radiusPanel: 12
     readonly property int radiusAttachment: 8
+    readonly property int radiusCheckBox: 4
 
     // Lines
     readonly property int accentBarWidth: 3
@@ -111,6 +114,9 @@ QtObject {
     readonly property int separatorWidth: 1
 
     // Sizes
+    // The box of a check box, its radius and the mark in it.
+    readonly property int checkBoxSize: 15
+    readonly property int checkMarkSize: 11
     readonly property int attachmentFallbackHeight: 240
     readonly property int attachmentFallbackWidth: 360
     readonly property int attachmentMaxHeight: 480
@@ -135,6 +141,8 @@ QtObject {
     readonly property int historyFooterHeight: 40
     readonly property int iconButtonSize: 30
     readonly property int iconButtonIconSize: 17
+    // The corner arrow of "Replied in a thread".
+    readonly property int inThreadIconSize: 13
     readonly property int loginFormWidth: 340
     readonly property int menuButtonHeight: 22
     readonly property int menuButtonWidth: 28
@@ -145,6 +153,10 @@ QtObject {
     readonly property int roomRowHeight: 34
     readonly property int serverMarkSize: 26
     readonly property int sidebarWidth: 264
+    // The thread pane beside the room, and the summary of a thread under its parent.
+    readonly property int threadPaneWidth: 360
+    readonly property int threadSummaryHeight: 28
+    readonly property int threadSummaryIconSize: 14
     readonly property int unreadBadgeHeight: 18
     readonly property int unreadBadgeMinWidth: 20
     readonly property int windowHeight: 600

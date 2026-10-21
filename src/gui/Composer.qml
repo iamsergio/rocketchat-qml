@@ -6,7 +6,8 @@ import QtQuick.Controls.Basic
 import QtQuick.Layouts
 import RocketChat.Bridge
 
-// The box under the messages of the open room. Enter sends, Shift+Enter starts a new line.
+// The box under the messages of the open room, or of the open thread (`forThread`). Enter sends,
+// Shift+Enter starts a new line.
 //
 // It also edits a message of the user's: beginEdit() puts the message's text in the field, a bar
 // above it says so, and Enter saves instead of sending. Escape, the bar's button, or opening
@@ -16,8 +17,17 @@ import RocketChat.Bridge
 // And it quotes a message: beginQuote() shows a bar above the field with the author and the text of
 // the message, and Enter sends the text as a reply to it. Escape or the bar's button drops the
 // quote, and so does opening another room. Quoting and editing exclude each other.
+//
+// For a thread it replies in the open thread, with a check box to send the reply to the room too,
+// and Escape with nothing to cancel closes the thread. The edits, deletions and reactions go
+// through Room in both cases.
 Rectangle {
     id: root
+
+    // The box writes in the open thread and not in the room.
+    property bool forThread: false
+    // Where the messages it reads are: the thread's view model, or the room's.
+    readonly property var target: forThread ? Thread : Room
 
     // The message being edited, or empty when the box writes a new message.
     property string editingId: ""
@@ -40,23 +50,29 @@ Rectangle {
     radius: Theme.radiusPanel
 
     function send() {
-        if (Room.send(field.text, quotingId)) {
+        if (forThread ? Thread.send(field.text, quotingId, alsoToChannel.checked) : Room.send(field.text, quotingId)) {
             field.clear();
             dropQuote();
+            alsoToChannel.checked = false;
         }
+    }
+
+    // Gives the field the focus.
+    function focusField() {
+        field.forceActiveFocus();
     }
 
     // Starts quoting a message of the open room, ending an edit first. Nothing happens if the
     // message isn't known.
     function beginQuote(messageId) {
-        const author = Room.messageAuthor(messageId);
+        const author = target.messageAuthor(messageId);
         if (author === "")
             return;
         if (editing)
             endEdit();
         quotingId = messageId;
         quotedAuthor = author;
-        quotedText = Room.messageText(messageId);
+        quotedText = target.messageText(messageId);
         field.forceActiveFocus();
     }
 
@@ -74,7 +90,7 @@ Rectangle {
 
     // Starts editing a message of the open room. Nothing happens if its text isn't known.
     function beginEdit(messageId) {
-        const text = Room.messageText(messageId);
+        const text = target.messageText(messageId);
         if (text === "")
             return;
         if (!editing)
@@ -105,7 +121,7 @@ Rectangle {
 
     // Up in an empty box edits the user's newest message.
     function editLast() {
-        const id = Room.lastEditable();
+        const id = target.lastEditable();
         if (id !== "")
             beginEdit(id);
     }
@@ -128,6 +144,19 @@ Rectangle {
                 root.endEdit();
             root.dropQuote();
         }
+    }
+
+    // Another thread is another conversation: what was started for the last one is dropped.
+    Connections {
+        function onParentIdChanged() {
+            if (root.editing)
+                root.endEdit();
+            root.dropQuote();
+            alsoToChannel.checked = false;
+        }
+
+        enabled: root.forThread
+        target: Thread
     }
 
     // Inside the border.
@@ -264,7 +293,7 @@ Rectangle {
                     background: null
                     bottomPadding: Theme.textAreaPaddingV
                     leftPadding: Theme.spacingNone
-                    placeholderText: qsTr("Message")
+                    placeholderText: root.forThread ? qsTr("Reply in the thread") : qsTr("Message")
                     readOnly: root.saving
                     rightPadding: Theme.spacingNone
                     topPadding: Theme.textAreaPaddingV
@@ -283,6 +312,9 @@ Rectangle {
                         } else if (event.key === Qt.Key_Escape && root.quoting) {
                             root.endQuote();
                             event.accepted = true;
+                        } else if (event.key === Qt.Key_Escape && root.forThread) {
+                            Thread.close();
+                            event.accepted = true;
                         } else if (event.key === Qt.Key_Up && !root.editing && field.length === 0) {
                             root.editLast();
                             event.accepted = true;
@@ -297,6 +329,63 @@ Rectangle {
                 text: root.editing ? qsTr("Save") : qsTr("Send")
                 enabled: field.length > 0 && !root.saving
                 onClicked: root.editing ? root.save() : root.send()
+            }
+        }
+
+        // Under the text, inside the box: also shows the reply in the room. Off for each reply.
+        CheckBox {
+            id: alsoToChannel
+
+            objectName: "composerAlsoToChannel"
+            Layout.bottomMargin: Theme.spacingL
+            // As wide as its text, and no wider than the box: the room's name may be long.
+            Layout.fillWidth: true
+            Layout.leftMargin: Theme.composerPaddingH
+            Layout.maximumWidth: implicitWidth
+            Layout.rightMargin: Theme.composerPaddingH
+            // The content sits right of the box.
+            leftPadding: Theme.checkBoxSize + Theme.spacingL
+            padding: Theme.spacingNone
+            visible: root.forThread
+
+            contentItem: RowLayout {
+                spacing: Theme.spacingS
+
+                Label {
+                    color: Theme.textMuted
+                    font.pointSize: Theme.fontSizeSmall
+                    text: qsTr("Also send to")
+                }
+
+                Label {
+                    Layout.fillWidth: true
+                    color: Theme.text
+                    elide: Text.ElideRight
+                    font.pointSize: Theme.fontSizeSmall
+                    font.weight: Theme.fontWeightSemibold
+                    text: "#" + Thread.roomName
+                    textFormat: Text.PlainText
+                }
+            }
+
+            indicator: Rectangle {
+                x: Theme.spacingNone
+                y: (alsoToChannel.height - height) / 2
+                border.color: alsoToChannel.checked ? Theme.own : Theme.raisedHover
+                border.width: Theme.borderWidth
+                color: alsoToChannel.checked ? Theme.own : Theme.surface
+                implicitHeight: Theme.checkBoxSize
+                implicitWidth: Theme.checkBoxSize
+                radius: Theme.radiusCheckBox
+
+                Icon {
+                    anchors.centerIn: parent
+                    height: Theme.checkMarkSize
+                    source: "icons/check.svg"
+                    tint: Theme.textOnOwn
+                    visible: alsoToChannel.checked
+                    width: Theme.checkMarkSize
+                }
             }
         }
     }

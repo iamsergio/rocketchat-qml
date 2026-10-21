@@ -279,5 +279,11 @@ ColumnLayout {
             Layout.fillWidth: true
             Layout.fillHeight: true
         }
+
+        ThreadPane {
+            Layout.fillHeight: true
+            Layout.preferredWidth: Theme.threadPaneWidth
+            visible: Thread.isOpen
+        }
     }
 }

@@ -1,0 +1,490 @@
+// SPDX-FileCopyrightText: 2026 Sergio Martins
+// SPDX-License-Identifier: MIT
+
+//! What the `MessageList` and `ThreadMessageList` models share: a mirror of the core's messages,
+//! held newest first (row 0 is the newest), with the roles the views read, and the macro that
+//! makes the models' bridges apply the core's changes to it. The models are thin: a bridge, the
+//! notifications Qt wants around each change, and this.
+
+use cxx_qt_lib::{
+    QByteArray, QHash, QHashPair_i32_QByteArray, QList, QMap, QMapPair_QString_QVariant, QString,
+    QVariant,
+};
+use jiff::Timestamp;
+use jiff::tz::TimeZone;
+use rc_core::domain::{AvatarOwner, Message, MessageKind};
+use rc_core::timeline::TimelineChange;
+
+use crate::attachment_view::{AttachmentView, ImageUrls, attachments, paths, shows_image};
+use crate::avatar_view::{AvatarUrls, color, initials, message_owner, owners, rows_using, runs};
+use crate::message_view::{
+    author_name, body, can_delete, can_edit, can_quote, can_react, can_start_thread, day_label,
+    delivery_name, first_of_day, html, in_thread_shown, mentions_me, system_text, thread_id,
+    thread_last_reply_text, thread_parent_text, thread_replies, time_text,
+};
+use crate::quote_view::{QuoteView, quotes};
+use crate::reaction_view::{ReactionView, reactions};
+use crate::rich_html::{Clock, Viewer};
+use crate::row_ops::{MessageOp, apply_newest_first, message_ops};
+
+/// `Qt::DisplayRole`, which shows the body too.
+const DISPLAY_ROLE: i32 = 0;
+
+// The custom roles, from `Qt::UserRole` on (see `RoomListModel`).
+pub const MESSAGE_ID_ROLE: i32 = 256;
+pub const AUTHOR_ROLE: i32 = 257;
+pub const USERNAME_ROLE: i32 = 258;
+pub const TIME_ROLE: i32 = 259;
+pub const BODY_ROLE: i32 = 260;
+pub const IS_SYSTEM_ROLE: i32 = 261;
+pub const SYSTEM_TEXT_ROLE: i32 = 262;
+pub const FIRST_OF_DAY_ROLE: i32 = 263;
+pub const DAY_LABEL_ROLE: i32 = 264;
+pub const DELIVERY_ROLE: i32 = 265;
+pub const HTML_ROLE: i32 = 266;
+pub const MENTIONS_ME_ROLE: i32 = 267;
+pub const AVATAR_ROLE: i32 = 268;
+pub const AVATAR_INITIALS_ROLE: i32 = 269;
+pub const AVATAR_COLOR_ROLE: i32 = 270;
+pub const ATTACHMENTS_ROLE: i32 = 271;
+pub const EDITED_ROLE: i32 = 272;
+pub const REACTIONS_ROLE: i32 = 273;
+pub const CAN_EDIT_ROLE: i32 = 274;
+pub const CAN_DELETE_ROLE: i32 = 275;
+pub const QUOTES_ROLE: i32 = 276;
+pub const CAN_QUOTE_ROLE: i32 = 277;
+pub const CAN_REACT_ROLE: i32 = 278;
+pub const THREAD_REPLIES_ROLE: i32 = 279;
+pub const THREAD_LAST_REPLY_ROLE: i32 = 280;
+pub const THREAD_ID_ROLE: i32 = 281;
+pub const IN_THREAD_SHOWN_ROLE: i32 = 282;
+pub const CAN_START_THREAD_ROLE: i32 = 283;
+pub const THREAD_PARENT_TEXT_ROLE: i32 = 284;
+
+/// The attachments as a `QVariantList` of `QVariantMap`s, with the keys QML reads.
+fn attachments_variant(views: &[AttachmentView]) -> QVariant {
+    let text = |value: &str| QVariant::from(&QString::from(value));
+    let mut list = QList::<QVariant>::default();
+    for view in views {
+        let mut map = QMap::<QMapPair_QString_QVariant>::default();
+        for (key, value) in [
+            ("title", text(&view.title)),
+            ("description", text(&view.description)),
+            ("size", text(&view.size)),
+            ("link", text(&view.link)),
+            ("isImage", QVariant::from(&view.is_image)),
+            ("image", text(&view.image)),
+            ("width", QVariant::from(&view.width)),
+            ("height", QVariant::from(&view.height)),
+        ] {
+            map.insert(QString::from(key), value);
+        }
+        list.append(QVariant::from(&map));
+    }
+    QVariant::from(&list)
+}
+
+/// The reactions as a `QVariantList` of `QVariantMap`s, with the keys QML reads.
+fn reactions_variant(views: &[ReactionView]) -> QVariant {
+    let text = |value: &str| QVariant::from(&QString::from(value));
+    let mut list = QList::<QVariant>::default();
+    for view in views {
+        let mut map = QMap::<QMapPair_QString_QVariant>::default();
+        for (key, value) in [
+            ("emoji", text(&view.emoji)),
+            ("glyph", text(&view.glyph)),
+            ("image", text(&view.image)),
+            ("count", QVariant::from(&view.count)),
+            ("mine", QVariant::from(&view.mine)),
+            ("users", text(&view.users)),
+        ] {
+            map.insert(QString::from(key), value);
+        }
+        list.append(QVariant::from(&map));
+    }
+    QVariant::from(&list)
+}
+
+/// The quotes as a `QVariantList` of `QVariantMap`s, with the keys QML reads.
+fn quotes_variant(views: &[QuoteView]) -> QVariant {
+    let text = |value: &str| QVariant::from(&QString::from(value));
+    let mut list = QList::<QVariant>::default();
+    for view in views {
+        let mut map = QMap::<QMapPair_QString_QVariant>::default();
+        for (key, value) in [
+            ("author", text(&view.author)),
+            ("bodyHtml", text(&view.body_html)),
+            ("body", text(&view.body)),
+            ("time", text(&view.time)),
+        ] {
+            map.insert(QString::from(key), value);
+        }
+        list.append(QVariant::from(&map));
+    }
+    QVariant::from(&list)
+}
+
+/// The messages of a list, mirrored from the core's changes and held newest first.
+pub struct MessageMirror {
+    messages: Vec<Message>,
+    /// Where times and days are read: the user's.
+    zone: TimeZone,
+    /// Who the messages are shown to: it decides the mentions that stand out.
+    viewer: Viewer,
+    avatars: AvatarUrls,
+    images: ImageUrls,
+}
+
+impl Default for MessageMirror {
+    fn default() -> Self {
+        Self::new(
+            Viewer::default(),
+            AvatarUrls::default(),
+            ImageUrls::default(),
+        )
+    }
+}
+
+/// `index` as the `int` Qt wants. A room never comes near `i32::MAX` messages.
+pub fn row(index: usize) -> i32 {
+    i32::try_from(index).unwrap_or(i32::MAX)
+}
+
+impl MessageMirror {
+    /// An empty mirror, showing the messages to `viewer`.
+    #[must_use]
+    pub fn new(viewer: Viewer, avatars: AvatarUrls, images: ImageUrls) -> Self {
+        Self {
+            messages: Vec::new(),
+            zone: TimeZone::system(),
+            viewer,
+            avatars,
+            images,
+        }
+    }
+
+    #[must_use]
+    pub fn row_count(&self) -> i32 {
+        row(self.messages.len())
+    }
+
+    /// The notifications to make for `change`, which [`apply`](Self::apply) then applies.
+    #[must_use]
+    pub fn ops(&self, change: &TimelineChange) -> Vec<MessageOp> {
+        message_ops(change, self.messages.len())
+    }
+
+    /// Applies `change` to the mirrored messages.
+    pub fn apply(&mut self, change: &TimelineChange) {
+        apply_newest_first(change, &mut self.messages);
+    }
+
+    /// Shows the messages to someone else, with other custom emoji or under another policy: what
+    /// they show, and what the viewer can do with them, changes. Returns the rows to announce as
+    /// changed (first and last), if there are any.
+    pub fn set_viewer(&mut self, viewer: Viewer) -> Option<(usize, usize)> {
+        if self.viewer == viewer {
+            return None;
+        }
+        self.viewer = viewer;
+        self.messages.len().checked_sub(1).map(|last| (0, last))
+    }
+
+    /// Takes new avatar files in. Returns the runs of rows (first and last) that show them.
+    pub fn set_avatars(&mut self, changes: &[(AvatarOwner, String)]) -> Vec<(usize, usize)> {
+        self.avatars.set(changes);
+        rows_using(self.messages.len(), &owners(changes), |at| {
+            self.messages.get(at).and_then(message_owner)
+        })
+    }
+
+    /// Takes new image files in. Returns the runs of rows (first and last) whose message shows
+    /// them.
+    pub fn set_images(&mut self, changes: &[(String, String)]) -> Vec<(usize, usize)> {
+        self.images.set(changes);
+        let wanted = paths(changes);
+        runs(self.messages.len(), |at| {
+            self.messages
+                .get(at)
+                .is_some_and(|message| shows_image(message, &wanted))
+        })
+    }
+
+    /// The value of `role` for the message at `row`.
+    #[must_use]
+    pub fn data(&self, row: i32, role: i32) -> QVariant {
+        let Some(at) = usize::try_from(row).ok() else {
+            return QVariant::default();
+        };
+        let Some(message) = self.messages.get(at) else {
+            return QVariant::default();
+        };
+        let text = |value: &str| QVariant::from(&QString::from(value));
+        match role {
+            MESSAGE_ID_ROLE => text(message.id.as_str()),
+            AUTHOR_ROLE => text(author_name(&message.author)),
+            USERNAME_ROLE => text(&message.author.username),
+            TIME_ROLE => text(&time_text(message.ts, &self.zone)),
+            DISPLAY_ROLE | BODY_ROLE => text(body(message)),
+            IS_SYSTEM_ROLE => QVariant::from(&matches!(message.kind, MessageKind::System(_))),
+            SYSTEM_TEXT_ROLE => text(&system_text(message)),
+            FIRST_OF_DAY_ROLE => QVariant::from(&first_of_day(
+                // The message before this one is the next row: rows run from newest to oldest.
+                self.messages.get(at + 1),
+                message,
+                &self.zone,
+            )),
+            DAY_LABEL_ROLE => text(&day_label(message.ts, &self.zone, Timestamp::now())),
+            DELIVERY_ROLE => text(delivery_name(message.delivery)),
+            HTML_ROLE => text(&html(
+                message,
+                &self.viewer,
+                Clock {
+                    zone: &self.zone,
+                    now: Timestamp::now(),
+                },
+            )),
+            MENTIONS_ME_ROLE => QVariant::from(&mentions_me(message, &self.viewer)),
+            AVATAR_ROLE => {
+                text(message_owner(message).map_or("", |owner| self.avatars.url(&owner)))
+            }
+            AVATAR_INITIALS_ROLE => text(&initials(author_name(&message.author))),
+            AVATAR_COLOR_ROLE => text(&color(&message.author.username)),
+            ATTACHMENTS_ROLE => attachments_variant(&attachments(
+                message,
+                self.viewer.server.as_deref(),
+                &self.images,
+            )),
+            EDITED_ROLE => QVariant::from(&message.edited),
+            REACTIONS_ROLE => reactions_variant(&reactions(message, &self.viewer)),
+            // Read at each call, so a time limit that runs out shows the next time the row is
+            // drawn.
+            CAN_EDIT_ROLE => QVariant::from(&can_edit(message, &self.viewer, Timestamp::now())),
+            CAN_DELETE_ROLE => QVariant::from(&can_delete(message, &self.viewer, Timestamp::now())),
+            QUOTES_ROLE => quotes_variant(&quotes(
+                message,
+                &self.viewer,
+                Clock {
+                    zone: &self.zone,
+                    now: Timestamp::now(),
+                },
+            )),
+            CAN_QUOTE_ROLE => QVariant::from(&can_quote(message)),
+            CAN_REACT_ROLE => QVariant::from(&can_react(message)),
+            THREAD_REPLIES_ROLE => QVariant::from(&thread_replies(message)),
+            THREAD_LAST_REPLY_ROLE => text(&thread_last_reply_text(
+                message,
+                &self.zone,
+                Timestamp::now(),
+            )),
+            THREAD_ID_ROLE => text(thread_id(message)),
+            IN_THREAD_SHOWN_ROLE => QVariant::from(&in_thread_shown(message)),
+            CAN_START_THREAD_ROLE => QVariant::from(&can_start_thread(message)),
+            THREAD_PARENT_TEXT_ROLE => text(&thread_parent_text(&self.messages, message)),
+            _ => QVariant::default(),
+        }
+    }
+
+    /// The names QML reads the roles by.
+    #[must_use]
+    #[allow(clippy::unused_self)] // Part of the mirror's interface, like `data`.
+    pub fn role_names(&self) -> QHash<QHashPair_i32_QByteArray> {
+        let mut names = QHash::<QHashPair_i32_QByteArray>::default();
+        for (role, name) in [
+            (DISPLAY_ROLE, "display"),
+            (MESSAGE_ID_ROLE, "messageId"),
+            (AUTHOR_ROLE, "author"),
+            (USERNAME_ROLE, "username"),
+            (TIME_ROLE, "time"),
+            (BODY_ROLE, "body"),
+            (IS_SYSTEM_ROLE, "isSystem"),
+            (SYSTEM_TEXT_ROLE, "systemText"),
+            (FIRST_OF_DAY_ROLE, "firstOfDay"),
+            (DAY_LABEL_ROLE, "dayLabel"),
+            (DELIVERY_ROLE, "delivery"),
+            (HTML_ROLE, "html"),
+            (MENTIONS_ME_ROLE, "mentionsMe"),
+            (AVATAR_ROLE, "avatar"),
+            (AVATAR_INITIALS_ROLE, "avatarInitials"),
+            (AVATAR_COLOR_ROLE, "avatarColor"),
+            (ATTACHMENTS_ROLE, "attachments"),
+            (EDITED_ROLE, "edited"),
+            (REACTIONS_ROLE, "reactions"),
+            (CAN_EDIT_ROLE, "canEdit"),
+            (CAN_DELETE_ROLE, "canDelete"),
+            (QUOTES_ROLE, "quotes"),
+            (CAN_QUOTE_ROLE, "canQuote"),
+            (CAN_REACT_ROLE, "canReact"),
+            (THREAD_REPLIES_ROLE, "threadReplies"),
+            (THREAD_LAST_REPLY_ROLE, "threadLastReply"),
+            (THREAD_ID_ROLE, "threadId"),
+            (IN_THREAD_SHOWN_ROLE, "inThreadShown"),
+            (CAN_START_THREAD_ROLE, "canStartThread"),
+            (THREAD_PARENT_TEXT_ROLE, "threadParentText"),
+        ] {
+            names.insert(role, QByteArray::from(name));
+        }
+        names
+    }
+}
+
+/// Makes a model bridge apply the core's changes to its `mirror` (a [`MessageMirror`] field of its
+/// Rust struct), announcing each one to the views, and read the roles from it. The bridge
+/// declares the `begin*` and `end*` calls, the `dataChanged` signal and `index`, whose types are
+/// its own, and `row_count`, `data` and `role_names` as overrides of the base class.
+macro_rules! message_model {
+    ($model:ident) => {
+        impl $model {
+            /// Applies the changes in order, announcing each one to the views.
+            pub fn apply(
+                mut self: ::core::pin::Pin<&mut Self>,
+                changes: &[::rc_core::timeline::TimelineChange],
+            ) {
+                use ::cxx_qt::CxxQtType;
+                use $crate::message_mirror::row;
+                use $crate::row_ops::MessageOp;
+
+                let no_parent = ::cxx_qt_lib::QModelIndex::default();
+                for change in changes {
+                    for op in self.mirror.ops(change) {
+                        match op {
+                            MessageOp::Reset => {
+                                // SAFETY: balanced by `end_reset_model` below.
+                                unsafe { self.as_mut().begin_reset_model() };
+                                self.as_mut().rust_mut().mirror.apply(change);
+                                // SAFETY: after `begin_reset_model`.
+                                unsafe { self.as_mut().end_reset_model() };
+                            }
+                            MessageOp::Insert { first, last } => {
+                                // SAFETY: balanced by `end_insert_rows` below.
+                                unsafe {
+                                    self.as_mut().begin_insert_rows(
+                                        &no_parent,
+                                        row(first),
+                                        row(last),
+                                    );
+                                }
+                                self.as_mut().rust_mut().mirror.apply(change);
+                                // SAFETY: after `begin_insert_rows`.
+                                unsafe { self.as_mut().end_insert_rows() };
+                            }
+                            MessageOp::Remove { row: at } => {
+                                // SAFETY: balanced by `end_remove_rows` below.
+                                unsafe {
+                                    self.as_mut()
+                                        .begin_remove_rows(&no_parent, row(at), row(at));
+                                }
+                                self.as_mut().rust_mut().mirror.apply(change);
+                                // SAFETY: after `begin_remove_rows`.
+                                unsafe { self.as_mut().end_remove_rows() };
+                            }
+                            MessageOp::Update { first, last } => {
+                                self.as_mut().rows_changed(first, last);
+                            }
+                            MessageOp::Replace { first, last } => {
+                                self.as_mut().rust_mut().mirror.apply(change);
+                                self.as_mut().rows_changed(first, last);
+                            }
+                            MessageOp::Move { from, destination } => {
+                                // SAFETY: `end_move_rows` is called below if this returns `true`.
+                                let moving = unsafe {
+                                    self.as_mut().begin_move_rows(
+                                        &no_parent,
+                                        row(from),
+                                        row(from),
+                                        &no_parent,
+                                        row(destination),
+                                    )
+                                };
+                                self.as_mut().rust_mut().mirror.apply(change);
+                                if moving {
+                                    // SAFETY: after `begin_move_rows` returned `true`.
+                                    unsafe { self.as_mut().end_move_rows() };
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            /// Shows the messages to someone else (see [`MessageMirror::set_viewer`]).
+            pub fn set_viewer(
+                mut self: ::core::pin::Pin<&mut Self>,
+                viewer: $crate::rich_html::Viewer,
+            ) {
+                use ::cxx_qt::CxxQtType;
+
+                if let Some((first, last)) = self.as_mut().rust_mut().mirror.set_viewer(viewer) {
+                    self.rows_changed(first, last);
+                }
+            }
+
+            /// Takes new avatar files in and announces their role, and only that, for the rows
+            /// that show them.
+            pub fn set_avatars(
+                mut self: ::core::pin::Pin<&mut Self>,
+                changes: &[(::rc_core::domain::AvatarOwner, String)],
+            ) {
+                use ::cxx_qt::CxxQtType;
+
+                let runs = self.as_mut().rust_mut().mirror.set_avatars(changes);
+                self.role_changed(&runs, $crate::message_mirror::AVATAR_ROLE);
+            }
+
+            /// Takes new image files in and announces the attachments role, and only that, for
+            /// the rows whose message shows them.
+            pub fn set_images(mut self: ::core::pin::Pin<&mut Self>, changes: &[(String, String)]) {
+                use ::cxx_qt::CxxQtType;
+
+                let runs = self.as_mut().rust_mut().mirror.set_images(changes);
+                self.role_changed(&runs, $crate::message_mirror::ATTACHMENTS_ROLE);
+            }
+
+            /// Announces new content of `role`, and only that, in the runs of rows.
+            fn role_changed(
+                mut self: ::core::pin::Pin<&mut Self>,
+                runs: &[(usize, usize)],
+                role: i32,
+            ) {
+                use $crate::message_mirror::row;
+
+                let no_parent = ::cxx_qt_lib::QModelIndex::default();
+                for &(first, last) in runs {
+                    let top_left = self.index(row(first), 0, &no_parent);
+                    let bottom_right = self.index(row(last), 0, &no_parent);
+                    let mut roles = ::cxx_qt_lib::QVector::<i32>::default();
+                    roles.append(role);
+                    self.as_mut().data_changed(&top_left, &bottom_right, &roles);
+                }
+            }
+
+            /// Announces new content in every role of the rows `first..=last`.
+            fn rows_changed(mut self: ::core::pin::Pin<&mut Self>, first: usize, last: usize) {
+                use $crate::message_mirror::row;
+
+                let no_parent = ::cxx_qt_lib::QModelIndex::default();
+                let top_left = self.index(row(first), 0, &no_parent);
+                let bottom_right = self.index(row(last), 0, &no_parent);
+                // No roles listed means all of them.
+                self.as_mut().data_changed(
+                    &top_left,
+                    &bottom_right,
+                    &::cxx_qt_lib::QVector::<i32>::default(),
+                );
+            }
+
+            fn row_count(&self, _parent: &::cxx_qt_lib::QModelIndex) -> i32 {
+                self.mirror.row_count()
+            }
+
+            fn data(&self, index: &::cxx_qt_lib::QModelIndex, role: i32) -> ::cxx_qt_lib::QVariant {
+                self.mirror.data(index.row(), role)
+            }
+
+            fn role_names(&self) -> ::cxx_qt_lib::QHash<::cxx_qt_lib::QHashPair_i32_QByteArray> {
+                self.mirror.role_names()
+            }
+        }
+    };
+}
+pub(crate) use message_model;

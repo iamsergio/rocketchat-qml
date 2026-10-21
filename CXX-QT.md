@@ -54,3 +54,10 @@ An `EmojiPickerModel` declared with `#[qml_element]` and `#[base = QAbstractList
 ## A property with a custom setter
 
 `#[qproperty(QString, query, READ, WRITE = set_query_text, NOTIFY)]` works when `set_query_text` is declared in the bridge as a `#[qinvokable]` with `#[cxx_name = "setQueryText"]`; Qt's `Q_PROPERTY(... WRITE setQueryText)` accepts an invokable. The function has to emit the `NOTIFY` signal itself. The default setter stores the value and emits the signal, with no hook to reset a model first.
+
+## A model bridge can't be shared between two models
+
+The `begin*`/`end*` declarations, `dataChanged`, `index` and the overrides are declared in each bridge, with the bridge's own type as `self`, so `MessageList` and `ThreadMessageList` repeat about a hundred lines of declarations. A `#[cxx_qt::bridge]` can't be generic, and one shared `#[qobject]` can't be registered under two QML names.
+
+- **Workaround:** everything that doesn't name the bridge's type is in `message_mirror.rs` (`MessageMirror`: the messages, the roles, the changes). The code that calls the declarations is a `macro_rules!` there (`message_model!`), invoked by each model, so it exists once.
+- **Possible patch:** generics or a trait for `#[qobject]` types in cxx-qt, or the safe `QAbstractListModel` helpers suggested above.
