@@ -504,6 +504,25 @@ impl Admin {
         }
     }
 
+    /// The newest reply in the thread of `thread_id` (`chat.getThreadMessages`, newest first),
+    /// or `None` if it has none. The channel's history does not list a reply unless it was also
+    /// sent to the channel.
+    ///
+    /// # Panics
+    ///
+    /// If the server refuses.
+    #[must_use]
+    pub fn last_in_thread(&self, thread_id: &str) -> Option<Posted> {
+        let json = self.get(&format!(
+            "chat.getThreadMessages?tmid={thread_id}&count=1&sort=%7B%22ts%22%3A-1%7D"
+        ));
+        let message = json["messages"].as_array()?.first()?;
+        Some(Posted {
+            id: message["_id"].as_str().unwrap().to_owned(),
+            ts: message["ts"].as_str().unwrap().to_owned(),
+        })
+    }
+
     /// Adds a custom emoji called `name` (letters, digits and underscores), a one-pixel PNG, which
     /// the server then lists and serves.
     ///

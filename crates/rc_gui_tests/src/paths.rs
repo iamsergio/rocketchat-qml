@@ -134,6 +134,43 @@ pub mod main_window {
     /// exist.
     pub const EMOJI_GRID: &str = "mainWindow/emojiGrid";
 
+    // The thread pane, beside the room, visible only while a thread is open. The elements of its
+    // message list are the room's (the parent and the replies also sent to the room are in both),
+    // so they are addressed through the pane (see [`thread_message`](super::thread_message)), and
+    // the composer through its own name, as in [`THREAD_COMPOSER_FIELD`].
+    pub const THREAD_PANE: &str = "mainWindow/threadPane";
+    /// "Thread", in the header of the pane.
+    pub const THREAD_TITLE: &str = "mainWindow/threadTitle";
+    /// Closes the thread.
+    pub const THREAD_CLOSE: &str = "mainWindow/threadClose";
+    /// The messages of the open thread, oldest first: the parent, then the replies. Its `count`
+    /// is how many are loaded.
+    pub const THREAD_MESSAGE_LIST: &str = "mainWindow/threadMessageList";
+    /// Under the parent, once it is there and the thread has replies: "N replies" (or "1 reply"),
+    /// as its `text`.
+    pub const THREAD_REPLIES: &str = "mainWindow/threadReplies";
+    /// Shown in the pane while the newest replies load.
+    pub const THREAD_LOADING: &str = "mainWindow/threadLoading";
+    /// Why the replies of the open thread couldn't be loaded.
+    pub const THREAD_ERROR: &str = "mainWindow/threadError";
+    /// The box to reply in. Its parts are found through it, as the room's are by name alone.
+    pub const THREAD_COMPOSER: &str = "mainWindow/threadComposer";
+    /// Where the reply is typed. Enter sends it, Escape closes the thread when there is nothing to
+    /// cancel.
+    pub const THREAD_COMPOSER_FIELD: &str = "mainWindow/threadComposer/composerField";
+    /// Sends the reply, or saves it while a message is edited.
+    pub const THREAD_COMPOSER_SEND: &str = "mainWindow/threadComposer/composerSend";
+    /// The check box under the text: also shows the reply in the room. Its `checked` is whether it
+    /// will; it is off for each reply.
+    pub const THREAD_ALSO_TO_CHANNEL: &str = "mainWindow/threadComposer/composerAlsoToChannel";
+    /// Above the thread composer while a message is quoted.
+    pub const THREAD_COMPOSER_QUOTE_BAR: &str = "mainWindow/threadComposer/composerQuoteBar";
+    /// Above the thread composer while a message is edited.
+    pub const THREAD_COMPOSER_EDIT_BAR: &str = "mainWindow/threadComposer/composerEditBar";
+    /// An item of the open message menu: opens the thread of the message. Visible for every sent
+    /// text message of the room that is not a reply, and never in the pane.
+    pub const MESSAGE_THREAD_ACTION: &str = "mainWindow/msgThreadAction";
+
     // The indicators of a message the server hasn't confirmed, for a test that can't know its id
     // (the client picks it). They exist only while a message is in that state, so the name alone
     // finds it, as long as there is one such message in view.
@@ -207,6 +244,18 @@ pub mod message_row {
     pub const FAILED: &str = "msgFailed";
     /// Exists with `FAILED`: sends the message again.
     pub const RETRY: &str = "msgRetry";
+    /// Under a message that has replies, in the room: opens the thread. Visible only then.
+    pub const THREAD_SUMMARY: &str = "msgThreadSummary";
+    /// In the summary: "N replies" (or "1 reply"), as its `text`.
+    pub const THREAD_COUNT: &str = "msgThreadCount";
+    /// In the summary: "Last reply" and the time of day of the last reply, or its day if it is not
+    /// today, as its `text`.
+    pub const THREAD_LAST_REPLY: &str = "msgThreadLastReply";
+    /// Marks the message whose thread is open: visible only then, and only in the room.
+    pub const THREAD_OPEN: &str = "msgThreadOpen";
+    /// Above a reply that was also sent to the room, in the room: "Replied in a thread", and the
+    /// start of the parent's text when the room holds it, as its `text`. Clicking opens the thread.
+    pub const IN_THREAD: &str = "msgInThread";
 }
 
 /// A part of the row of the message with this id (see [`message_row`]). Like rooms, messages are
@@ -214,6 +263,13 @@ pub mod message_row {
 #[must_use]
 pub fn message(id: &str, part: &str) -> String {
     format!("{}/msg_{id}/{part}", main_window::WINDOW)
+}
+
+/// A part of the row, in the thread pane, of the message with this id (see [`message_row`]): the
+/// parent and the replies, which the room may show too under the same names.
+#[must_use]
+pub fn thread_message(id: &str, part: &str) -> String {
+    format!("{}/threadPane/msg_{id}/{part}", main_window::WINDOW)
 }
 
 /// The parts of an attachment of a message, for [`attachment`].
@@ -321,6 +377,15 @@ mod tests {
         assert_eq!(
             message("m7", message_row::DAY_SEPARATOR),
             "mainWindow/msg_m7/msgDaySeparator"
+        );
+    }
+
+    // INFRA-002
+    #[test]
+    fn a_thread_message_part_is_addressed_through_the_pane() {
+        assert_eq!(
+            thread_message("m7", message_row::BODY),
+            "mainWindow/threadPane/msg_m7/msgBody"
         );
     }
 

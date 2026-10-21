@@ -12,7 +12,9 @@ use std::path::PathBuf;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use rc_gui_tests::paths::{emoji_pick, main_window, message, message_row, room, room_row};
+use rc_gui_tests::paths::{
+    emoji_pick, main_window, message, message_row, room, room_row, thread_message,
+};
 use rc_gui_tests::{App, Gui, Key, Modifiers};
 use rc_test_server::{Admin, Posted, TestUser, server_url};
 
@@ -186,4 +188,45 @@ pub fn wait_until_sent(gui: &Gui) {
 pub fn escape(gui: &Gui) {
     gui.enter_key(main_window::COMPOSER_FIELD, Key::ESCAPE, Modifiers::NONE)
         .unwrap();
+}
+
+/// Opens the menu of the message with this id in the thread pane with its button and chooses the
+/// item at `action`.
+pub fn choose_in_thread(gui: &Gui, message_id: &str, action: &str) {
+    gui.mouse_click(&thread_message(message_id, message_row::MENU_BUTTON))
+        .unwrap();
+    gui.wait_until_visible(action, TIMEOUT).unwrap();
+    gui.mouse_click(action).unwrap();
+}
+
+/// Types `text` in the composer of the thread pane and presses Enter.
+pub fn type_and_send_in_thread(gui: &Gui, text: &str) {
+    gui.mouse_click(main_window::THREAD_COMPOSER_FIELD).unwrap();
+    gui.set_text(main_window::THREAD_COMPOSER_FIELD, text)
+        .unwrap();
+    gui.enter_key(
+        main_window::THREAD_COMPOSER_FIELD,
+        Key::RETURN,
+        Modifiers::NONE,
+    )
+    .unwrap();
+}
+
+/// The newest reply in the thread once it is not `before` any more (`None` for the first reply):
+/// how a test learns the id of a reply the app sent, which the app picked, and which the channel's
+/// history does not list unless it was also sent to the channel.
+pub fn wait_for_reply_after(admin: &Admin, thread_id: &str, before: Option<&str>) -> Posted {
+    let deadline = Instant::now() + TIMEOUT;
+    loop {
+        if let Some(last) = admin.last_in_thread(thread_id)
+            && Some(last.id.as_str()) != before
+        {
+            return last;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the reply never reached the server"
+        );
+        thread::sleep(Duration::from_millis(100));
+    }
 }

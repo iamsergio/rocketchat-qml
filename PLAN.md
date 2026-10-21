@@ -100,7 +100,7 @@ Done when: day-to-day use works. Edit, delete, react, threads, DMs, search and u
 - [x] Add and remove reactions (emoji picker)
 - [x] Favorites first in the room list, in their own section
 - [x] Room menu: favorite, mark as read or unread, leave
-- [ ] Threads: open a thread panel, reply, see thread counts in the main timeline
+- [x] Threads: open a thread panel, reply, see thread counts in the main timeline
 - [x] Reply/quote a message
 - [ ] Typing indicators (send and receive)
 - [ ] Start a DM, search the directory, join a channel
