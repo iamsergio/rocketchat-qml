@@ -22,7 +22,18 @@ Every test carries a `// <ID>` comment. A feature can have tests at several leve
 | AUTH-006 | 2FA (TOTP / email code) | todo |
 | AUTH-007 | Personal access token login | todo |
 | AUTH-008 | OAuth/SSO login | todo |
-| AUTH-009 | Multiple server accounts | todo |
+
+## Accounts
+
+| ID | Feature | Tests |
+|---|---|---|
+| ACCT-001 | Add an account on another server while signed in | todo |
+| ACCT-002 | Every stored account resumes at startup, independently of the others | todo |
+| ACCT-003 | Switching accounts shows that account's rooms, open room and thread | todo |
+| ACCT-004 | Accounts in the background stay live, with their unread and mention totals | todo |
+| ACCT-005 | Logging out of one account removes it and leaves the others signed in | todo |
+| ACCT-006 | An expired account stays listed and logs in again with the server and user filled in | todo |
+| ACCT-007 | The same user on the same server can't be added twice | todo |
 
 ## Rooms
 
