@@ -26,7 +26,11 @@ pub mod message_list_model;
     clippy::must_use_candidate // The generated `dataChanged` signal.
 )]
 pub mod room_list_model;
-#[allow(unsafe_code, clippy::unnecessary_box_returns)]
+#[allow(
+    unsafe_code,
+    clippy::unnecessary_box_returns,
+    clippy::must_use_candidate // The generated `actionDone` signal.
+)]
 pub mod room_vm;
 #[allow(unsafe_code, clippy::unnecessary_box_returns)]
 pub mod session_vm;

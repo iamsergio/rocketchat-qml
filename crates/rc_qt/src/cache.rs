@@ -4,8 +4,9 @@
 //! What the hub remembers of the core's events, so that a view model created late can catch up.
 //! Plain Rust, so it can be unit-tested without Qt or a [`Client`](rc_core::Client).
 
-use rc_core::domain::{AvatarOwner, Message, Room, RoomId};
+use rc_core::domain::{AvatarOwner, Message, Room, RoomId, UserId};
 use rc_core::emoji::CustomEmojis;
+use rc_core::policy::MessagePolicy;
 use rc_core::rooms::RoomChange;
 use rc_core::session::SessionState;
 use rc_core::timeline::{TimelineChange, TimelineStatus};
@@ -14,6 +15,7 @@ use rc_core::{Connection, Event};
 
 use crate::attachment_view::ImageUrls;
 use crate::avatar_view::AvatarUrls;
+use crate::message_view::{body, can_edit};
 use crate::rich_html::Viewer;
 use crate::room_view::{RoomState, room_state};
 use crate::session_view::{SessionView, session_view};
@@ -31,8 +33,11 @@ pub struct Cache {
     status: TimelineStatus,
     /// The logged-in user, if any.
     username: Option<String>,
+    user_id: Option<UserId>,
     /// The URL the user logged in with.
     server: Option<String>,
+    /// `None` until the core sends some, like `emoji`: then everything is allowed.
+    policy: Option<MessagePolicy>,
     /// `None` until the core sends some: a `HashMap` can't be built in `new`.
     emoji: Option<CustomEmojis>,
     /// `None` until the core sends some, like `emoji`.
@@ -64,7 +69,9 @@ impl Cache {
                 error: None,
             },
             username: None,
+            user_id: None,
             server: None,
+            policy: None,
             emoji: None,
             avatars: None,
             images: None,
@@ -76,18 +83,20 @@ impl Cache {
         match event {
             Event::Session(state) => {
                 self.state = Some(state.clone());
-                (self.username, self.server) = match state {
+                (self.username, self.user_id, self.server) = match state {
                     SessionState::LoggedIn(account) => (
                         Some(account.user.username.clone()),
+                        Some(account.user.id.clone()),
                         Some(account.server.clone()),
                     ),
-                    _ => (None, None),
+                    _ => (None, None, None),
                 };
                 // A session starts connected, and the core says nothing about it then.
                 self.connection = Connection::Connected;
             }
             Event::Connection(connection) => self.connection = *connection,
             Event::CustomEmoji(emoji) => self.emoji = Some(emoji.clone()),
+            Event::MessagePolicy(policy) => self.policy = Some(*policy),
             Event::Avatars(updates) => {
                 self.avatars.get_or_insert_default().apply(updates);
             }
@@ -140,7 +149,28 @@ impl Cache {
             username: self.username.clone(),
             server: self.server.clone(),
             emoji: self.emoji.clone().unwrap_or_default(),
+            user_id: self.user_id.clone(),
+            policy: self.policy.unwrap_or_default(),
         }
+    }
+
+    /// The id of the newest message of the open room that the user can edit now, if any.
+    #[must_use]
+    pub fn last_editable(&self, now: jiff::Timestamp) -> Option<&Message> {
+        let viewer = self.viewer();
+        self.messages
+            .iter()
+            .rev()
+            .find(|message| can_edit(message, &viewer, now))
+    }
+
+    /// The text of a message of the open room as its author wrote it, if it is held.
+    #[must_use]
+    pub fn message_text(&self, id: &str) -> Option<&str> {
+        self.messages
+            .iter()
+            .find(|message| message.id.as_str() == id)
+            .map(body)
     }
 
     /// The avatar files known now, as URLs.
@@ -270,7 +300,9 @@ mod tests {
             Viewer {
                 username: Some("alice".into()),
                 server: Some("http://h".into()),
-                emoji
+                emoji,
+                user_id: Some("u".to_owned().into()),
+                policy: MessagePolicy::default(),
             }
         );
         cache.apply(&Event::Session(SessionState::LoggedOut { failure: None }));
@@ -360,6 +392,89 @@ mod tests {
             edited: false,
             reactions: Vec::new(),
         }
+    }
+
+    fn from_other(id: &str, secs: i64) -> Message {
+        let mut message = message(id, secs);
+        message.author.id = "other".to_owned().into();
+        message
+    }
+
+    /// Room `a` with the messages `a` (own), `b` (somebody else's), `c` (own) and `d` (somebody
+    /// else's), oldest first, shown to `alice` (id `u`).
+    fn cache_with_four_messages() -> Cache {
+        let mut cache = Cache::new();
+        cache.apply(&logged_in("alice"));
+        cache.apply(&Event::Timeline(vec![TimelineChange::Reset {
+            room: Some("a".to_owned().into()),
+            messages: vec![
+                message("a", 1),
+                from_other("b", 2),
+                message("c", 3),
+                from_other("d", 4),
+            ],
+        }]));
+        cache
+    }
+
+    // ACT-001
+    #[test]
+    fn the_newest_message_the_user_can_edit_is_the_last_editable() {
+        let mut cache = cache_with_four_messages();
+        let now = jiff::Timestamp::from_second(100).unwrap();
+        assert_eq!(cache.last_editable(now).map(|m| m.id.as_str()), Some("c"));
+
+        // With a time limit, it counts from when the message was sent.
+        cache.apply(&Event::MessagePolicy(MessagePolicy::from(
+            rc_api::MessageSettings {
+                edit_minutes: 1,
+                ..rc_api::MessageSettings::default()
+            },
+        )));
+        let soon = jiff::Timestamp::from_second(3 + 60).unwrap();
+        assert_eq!(cache.last_editable(soon).map(|m| m.id.as_str()), Some("c"));
+        let later = jiff::Timestamp::from_second(3 + 61).unwrap();
+        assert_eq!(cache.last_editable(later), None);
+    }
+
+    // ACT-001
+    #[test]
+    fn nothing_is_editable_when_editing_is_off_or_nobody_is_logged_in() {
+        let mut cache = cache_with_four_messages();
+        let now = jiff::Timestamp::from_second(100).unwrap();
+        cache.apply(&Event::MessagePolicy(MessagePolicy::from(
+            rc_api::MessageSettings {
+                editing_allowed: false,
+                ..rc_api::MessageSettings::default()
+            },
+        )));
+        assert_eq!(cache.last_editable(now), None);
+
+        let mut cache = cache_with_four_messages();
+        cache.apply(&Event::Session(SessionState::LoggedOut { failure: None }));
+        assert_eq!(cache.last_editable(now), None);
+    }
+
+    // ACT-001
+    #[test]
+    fn the_text_of_a_held_message_is_given_as_written() {
+        let cache = cache_with_four_messages();
+        assert_eq!(cache.message_text("c"), Some("c"));
+        assert_eq!(cache.message_text("nope"), None);
+    }
+
+    // ACT-001, ACT-002
+    #[test]
+    fn the_viewer_carries_the_users_id_and_the_policy() {
+        let mut cache = cache_with_four_messages();
+        let policy = MessagePolicy::from(rc_api::MessageSettings {
+            deleting_allowed: false,
+            ..rc_api::MessageSettings::default()
+        });
+        cache.apply(&Event::MessagePolicy(policy));
+        let viewer = cache.viewer();
+        assert_eq!(viewer.user_id, Some("u".to_owned().into()));
+        assert_eq!(viewer.policy, policy);
     }
 
     /// Events as the core would emit them for opening a room, loading older messages, receiving

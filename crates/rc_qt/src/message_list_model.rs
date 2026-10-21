@@ -160,8 +160,8 @@ use crate::attachment_view::{AttachmentView, ImageUrls, attachments, paths, show
 use crate::avatar_view::{AvatarUrls, color, initials, message_owner, owners, rows_using, runs};
 use crate::hub;
 use crate::message_view::{
-    author_name, body, day_label, delivery_name, first_of_day, html, mentions_me, system_text,
-    time_text,
+    author_name, body, can_delete, can_edit, day_label, delivery_name, first_of_day, html,
+    mentions_me, system_text, time_text,
 };
 use crate::reaction_view::{ReactionView, reactions};
 use crate::rich_html::{Clock, Viewer};
@@ -191,6 +191,8 @@ const AVATAR_COLOR_ROLE: i32 = 270;
 const ATTACHMENTS_ROLE: i32 = 271;
 const EDITED_ROLE: i32 = 272;
 const REACTIONS_ROLE: i32 = 273;
+const CAN_EDIT_ROLE: i32 = 274;
+const CAN_DELETE_ROLE: i32 = 275;
 
 /// Backing data of [`qobject::MessageListModel`]: the messages, mirrored from the core's changes
 /// and held newest first.
@@ -336,7 +338,8 @@ impl MessageListModel {
         }
     }
 
-    /// Shows the messages to someone else, or with other custom emoji: their formatting changes.
+    /// Shows the messages to someone else, with other custom emoji or under another policy: what
+    /// they show, and what the viewer can do with them, changes.
     pub fn set_viewer(mut self: Pin<&mut Self>, viewer: Viewer) {
         if self.viewer == viewer {
             return;
@@ -443,6 +446,10 @@ impl MessageListModel {
             )),
             EDITED_ROLE => QVariant::from(&message.edited),
             REACTIONS_ROLE => reactions_variant(&reactions(message, &self.viewer)),
+            // Read at each call, so a time limit that runs out shows the next time the row is
+            // drawn.
+            CAN_EDIT_ROLE => QVariant::from(&can_edit(message, &self.viewer, Timestamp::now())),
+            CAN_DELETE_ROLE => QVariant::from(&can_delete(message, &self.viewer, Timestamp::now())),
             _ => QVariant::default(),
         }
     }
@@ -470,6 +477,8 @@ impl MessageListModel {
             (ATTACHMENTS_ROLE, "attachments"),
             (EDITED_ROLE, "edited"),
             (REACTIONS_ROLE, "reactions"),
+            (CAN_EDIT_ROLE, "canEdit"),
+            (CAN_DELETE_ROLE, "canDelete"),
         ] {
             names.insert(role, QByteArray::from(name));
         }

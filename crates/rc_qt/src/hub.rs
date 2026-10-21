@@ -19,6 +19,7 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 use cxx_qt::CxxQtThread;
 use rc_core::adapters::{DiskFileCache, MemoryStore, default_store};
 use rc_core::domain::{AvatarOwner, MessageId, RoomId};
+use rc_core::policy::{ActionError, MessageAction};
 use rc_core::ports::SecretStore;
 use rc_core::rooms::RoomChange;
 use rc_core::timeline::TimelineChange;
@@ -214,6 +215,38 @@ pub fn retry_message(message_id: String) {
     }
 }
 
+pub fn edit_message(message_id: String, text: &str) {
+    if let Some(client) = &lock().client {
+        client.edit_message(MessageId::from(message_id), text);
+    } else {
+        tracing::warn!("edit_message ignored: the core isn't running");
+    }
+}
+
+pub fn delete_message(message_id: String) {
+    if let Some(client) = &lock().client {
+        client.delete_message(MessageId::from(message_id));
+    } else {
+        tracing::warn!("delete_message ignored: the core isn't running");
+    }
+}
+
+/// The id of the newest message of the open room that the user can edit now, or empty.
+pub fn last_editable() -> String {
+    lock()
+        .cache
+        .last_editable(jiff::Timestamp::now())
+        .map_or_else(String::new, |message| message.id.to_string())
+}
+
+/// The text of a message of the open room as written, or empty if it isn't held.
+pub fn message_text(message_id: &str) -> String {
+    lock()
+        .cache
+        .message_text(message_id)
+        .map_or_else(String::new, str::to_owned)
+}
+
 /// Registers the `Room` view model and returns what it shows now. Call on the GUI thread; the
 /// events that follow the returned state are queued to `thread`.
 pub fn register_room(thread: CxxQtThread<RoomVm>) -> RoomState {
@@ -244,6 +277,12 @@ fn dispatch(event: Event) {
     let hub = &mut *guard;
     hub.cache.apply(&event);
     match event {
+        Event::MessagePolicy(_) => show_viewer(hub),
+        Event::MessageAction {
+            id,
+            action,
+            outcome,
+        } => answer_action(hub, id, action, outcome),
         Event::Session(_) | Event::Connection(_) | Event::CustomEmoji(_) => {
             show_viewer(hub);
             let view = hub.cache.session_view();
@@ -288,6 +327,24 @@ fn dispatch(event: Event) {
             show_images(hub, &changes);
         }
         _ => {}
+    }
+}
+
+/// Tells the `Room` view model how an edit or a deletion ended.
+fn answer_action(
+    hub: &mut Hub,
+    id: MessageId,
+    action: MessageAction,
+    outcome: Result<(), ActionError>,
+) {
+    let gone = hub.room.as_ref().is_some_and(|thread| {
+        thread
+            .queue(move |vm| vm.finish_action(id.as_str(), action, &outcome))
+            .is_err()
+    });
+    if gone {
+        tracing::debug!("the Room object is gone, unregistered");
+        hub.room = None;
     }
 }
 

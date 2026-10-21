@@ -12,7 +12,9 @@ use std::fmt::Write as _;
 
 use jiff::Timestamp;
 use jiff::tz::TimeZone;
+use rc_core::domain::UserId;
 use rc_core::emoji::{CustomEmojis, Shown};
+use rc_core::policy::MessagePolicy;
 use rc_core::rich::{Block, Emoji, Inline, Mention, RichText};
 
 const CODE_BACKGROUND: &str = "rgba(127,127,127,0.2)";
@@ -39,6 +41,10 @@ pub struct Viewer {
     /// The URL the user logged in with: attachment links are relative to it.
     pub server: Option<String>,
     pub emoji: CustomEmojis,
+    /// The logged-in user's id: their messages are the ones they may change.
+    pub user_id: Option<UserId>,
+    /// What the server lets users do with their own messages.
+    pub policy: MessagePolicy,
 }
 
 /// Where times are read and when it is now, so that tests don't depend on either.
@@ -374,6 +380,7 @@ mod tests {
                     extension: "gif".into(),
                 }],
             ),
+            ..Viewer::default()
         }
     }
 
@@ -820,6 +827,7 @@ mod tests {
                     extension: "gif".into(),
                 }],
             ),
+            ..Viewer::default()
         };
         let shown = html_with(vec![para(vec![Inline::Emoji(code("party"))])], &viewer);
         assert!(shown.contains(":party:"));

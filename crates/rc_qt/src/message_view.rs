@@ -49,6 +49,25 @@ pub fn mentions_me(message: &Message, viewer: &Viewer) -> bool {
         .is_some_and(|me| !message.author.username.eq_ignore_ascii_case(me) && message.mentions(me))
 }
 
+/// Whether the viewer can edit the message at `now`: their own, sent and written by them, and
+/// within what the server allows.
+#[must_use]
+pub fn can_edit(message: &Message, viewer: &Viewer, now: Timestamp) -> bool {
+    viewer
+        .user_id
+        .as_ref()
+        .is_some_and(|me| viewer.policy.can_edit(message, me, now))
+}
+
+/// Whether the viewer can delete the message at `now`, as for [`can_edit`].
+#[must_use]
+pub fn can_delete(message: &Message, viewer: &Viewer, now: Timestamp) -> bool {
+    viewer
+        .user_id
+        .as_ref()
+        .is_some_and(|me| viewer.policy.can_delete(message, me, now))
+}
+
 /// How QML sees the delivery state of a message: a string, as for the kind of a room.
 #[must_use]
 pub fn delivery_name(delivery: Delivery) -> &'static str {
@@ -122,6 +141,7 @@ fn long_date(day: &Zoned) -> String {
 #[cfg(test)]
 mod tests {
     use rc_core::domain::{Delivery, MessageKind};
+    use rc_core::policy::MessagePolicy;
     use rc_core::rich::{Block, Inline, Mention, RichText};
 
     use super::*;
@@ -234,6 +254,53 @@ mod tests {
         assert!(!mentions_me(&own, &viewer("Bob")));
         assert!(!mentions_me(&text("2026-10-20T10:00:00Z"), &viewer("bob")));
         assert!(!mentions_me(&system(SystemEvent::Joined), &viewer("bob")));
+    }
+
+    fn editor(policy: MessagePolicy) -> Viewer {
+        Viewer {
+            user_id: Some("u".to_owned().into()),
+            policy,
+            ..Viewer::default()
+        }
+    }
+
+    // ACT-001, ACT-002
+    #[test]
+    fn the_viewer_can_change_their_own_sent_text_messages() {
+        let own = text("2026-10-20T10:00:00Z");
+        let now = at("2026-10-20T10:01:00Z");
+        let viewer = editor(MessagePolicy::default());
+        assert!(can_edit(&own, &viewer, now));
+        assert!(can_delete(&own, &viewer, now));
+
+        let mut others = own.clone();
+        others.author.id = "other".to_owned().into();
+        let mut unsent = own.clone();
+        unsent.delivery = Delivery::Pending;
+        let joined = system(SystemEvent::Joined);
+        for message in [others, unsent, joined] {
+            assert!(!can_edit(&message, &viewer, now), "{message:?}");
+            assert!(!can_delete(&message, &viewer, now), "{message:?}");
+        }
+        // Nobody is logged in.
+        assert!(!can_edit(&own, &Viewer::default(), now));
+        assert!(!can_delete(&own, &Viewer::default(), now));
+    }
+
+    // ACT-001, ACT-002
+    #[test]
+    fn the_policy_and_its_time_limit_decide() {
+        let own = text("2026-10-20T10:00:00Z");
+        let policy = MessagePolicy::from(rc_api::MessageSettings {
+            editing_allowed: true,
+            edit_minutes: 5,
+            deleting_allowed: false,
+            delete_minutes: 0,
+        });
+        let viewer = editor(policy);
+        assert!(can_edit(&own, &viewer, at("2026-10-20T10:05:00Z")));
+        assert!(!can_edit(&own, &viewer, at("2026-10-20T10:05:01Z")));
+        assert!(!can_delete(&own, &viewer, at("2026-10-20T10:00:01Z")));
     }
 
     // SEND-001, SEND-002
