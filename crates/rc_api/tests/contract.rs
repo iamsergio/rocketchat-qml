@@ -1392,3 +1392,91 @@ async fn sync_messages_of_a_room_the_user_cannot_see_is_a_server_error() {
 
     assert!(matches!(result, Err(Error::Server { .. })), "{result:?}");
 }
+
+impl Fixture {
+    /// The new user, acting through the admin helpers: their own posts.
+    fn as_user(&self) -> Admin {
+        Admin::login_as(&self.user.username, &self.user.password)
+    }
+}
+
+/// The newest messages of the channel.
+async fn channel_history(session: &rc_api::RestSession, room_id: &str) -> Vec<Message> {
+    session
+        .history(room_id, &RoomType::Channel, None, 50)
+        .await
+        .unwrap()
+        .messages
+}
+
+// ACT-001
+#[tokio::test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+async fn a_user_edits_their_own_message_and_the_history_shows_it_edited() {
+    let fixture = Fixture::new();
+    let (room_id, _) = fixture.create_channel();
+    let session = fixture.client.session(fixture.login().await.credentials);
+    let posted = fixture.as_user().post_message(&room_id, "before");
+
+    let stored = session
+        .edit_message(&room_id, &posted.id, "after the edit")
+        .await
+        .unwrap();
+
+    assert_eq!(stored.id, posted.id);
+    assert_eq!(stored.text, "after the edit");
+    assert!(stored.edited);
+    let history = channel_history(&session, &room_id).await;
+    let found = history.iter().find(|m| m.id == posted.id).unwrap();
+    assert_eq!(found.text, "after the edit");
+    assert!(found.edited);
+}
+
+// ACT-002
+#[tokio::test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+async fn a_user_deletes_their_own_message_and_it_leaves_the_history() {
+    let fixture = Fixture::new();
+    let (room_id, _) = fixture.create_channel();
+    let session = fixture.client.session(fixture.login().await.credentials);
+    let kept = fixture.as_user().post_message(&room_id, "kept");
+    let doomed = fixture.as_user().post_message(&room_id, "doomed");
+
+    session.delete_message(&room_id, &doomed.id).await.unwrap();
+
+    let history = channel_history(&session, &room_id).await;
+    assert!(history.iter().all(|m| m.id != doomed.id));
+    assert!(history.iter().any(|m| m.id == kept.id));
+}
+
+// ACT-001, ACT-002
+#[tokio::test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+async fn a_user_cannot_edit_or_delete_the_message_of_somebody_else() {
+    let fixture = Fixture::new();
+    let (room_id, _) = fixture.create_channel();
+    let session = fixture.client.session(fixture.login().await.credentials);
+    let theirs = fixture.admin.post_message(&room_id, "not yours");
+
+    let edit = session.edit_message(&room_id, &theirs.id, "mine now").await;
+    let delete = session.delete_message(&room_id, &theirs.id).await;
+
+    assert!(matches!(edit, Err(Error::Server { .. })), "{edit:?}");
+    assert!(matches!(delete, Err(Error::Server { .. })), "{delete:?}");
+    let history = channel_history(&session, &room_id).await;
+    let found = history.iter().find(|m| m.id == theirs.id).unwrap();
+    assert_eq!(found.text, "not yours");
+}
+
+// ACT-001, ACT-002
+#[tokio::test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+async fn message_settings_are_the_servers_with_editing_and_deleting_allowed_without_limit() {
+    let fixture = Fixture::new();
+    let session = fixture.client.session(fixture.login().await.credentials);
+
+    let settings = session.message_settings().await.unwrap();
+
+    // The test server keeps the defaults for these settings.
+    assert_eq!(settings, rc_api::MessageSettings::default());
+}

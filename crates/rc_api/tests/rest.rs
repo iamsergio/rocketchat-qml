@@ -816,6 +816,157 @@ async fn send_message_with_an_expired_token_is_unauthorized() {
     assert!(matches!(result, Err(Error::Unauthorized)), "{result:?}");
 }
 
+const EDITED: &str = r#"{"message":{"_id":"m1","rid":"rid","msg":"hello again","ts":"2026-10-20T17:00:57.427Z","u":{"_id":"u8paxsGQXMH9vSnSc","username":"fx9300","name":"Fixture User"},"_updatedAt":"2026-10-20T17:05:00.000Z","editedAt":"2026-10-20T17:05:00.000Z","editedBy":{"_id":"u8paxsGQXMH9vSnSc","username":"fx9300"},"urls":[],"mentions":[],"channels":[]},"success":true}"#;
+const SETTINGS: &str = r#"{"settings":[{"_id":"Message_AllowDeleting","value":true},{"_id":"Message_AllowDeleting_BlockDeleteInMinutes","value":30},{"_id":"Message_AllowEditing","value":false},{"_id":"Message_AllowEditing_BlockEditInMinutes","value":0}],"success":true}"#;
+
+// ACT-001
+#[tokio::test]
+async fn edit_message_posts_the_ids_and_the_text_and_returns_the_edited_message() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/api/v1/chat.update"))
+        .and(header("X-User-Id", USER_ID))
+        .and(header("X-Auth-Token", TOKEN))
+        .and(body_json(
+            json!({ "roomId": "rid", "msgId": "m1", "text": "hello again" }),
+        ))
+        .respond_with(json_response(200, EDITED))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let message = session(&RestClient::new(&server.uri()).unwrap())
+        .edit_message("rid", "m1", "hello again")
+        .await
+        .unwrap();
+
+    assert_eq!(message.text, "hello again");
+    assert!(message.edited);
+}
+
+// ACT-001
+#[tokio::test]
+async fn a_refused_edit_is_a_server_error_with_the_message() {
+    let server = MockServer::start().await;
+    mount(
+        &server,
+        "POST",
+        "/api/v1/chat.update",
+        json_response(
+            400,
+            r#"{"success":false,"error":"Action Not allowed [error-action-not-allowed]"}"#,
+        ),
+    )
+    .await;
+    let result = session(&RestClient::new(&server.uri()).unwrap())
+        .edit_message("rid", "m1", "x")
+        .await;
+    assert!(
+        matches!(result, Err(Error::Server { status: 400, ref message }) if message.contains("error-action-not-allowed")),
+        "{result:?}"
+    );
+}
+
+// ACT-001
+#[tokio::test]
+async fn edit_message_with_an_expired_token_is_unauthorized() {
+    let server = MockServer::start().await;
+    mount(
+        &server,
+        "POST",
+        "/api/v1/chat.update",
+        json_response(401, NOT_LOGGED_IN),
+    )
+    .await;
+    let result = session(&RestClient::new(&server.uri()).unwrap())
+        .edit_message("rid", "m1", "x")
+        .await;
+    assert!(matches!(result, Err(Error::Unauthorized)), "{result:?}");
+}
+
+// ACT-002
+#[tokio::test]
+async fn delete_message_posts_the_ids() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/api/v1/chat.delete"))
+        .and(header("X-User-Id", USER_ID))
+        .and(header("X-Auth-Token", TOKEN))
+        .and(body_json(json!({ "roomId": "rid", "msgId": "m1" })))
+        .respond_with(json_response(
+            200,
+            r#"{"_id":"m1","ts":1760000000000,"message":{"_id":"m1"},"success":true}"#,
+        ))
+        .expect(1)
+        .mount(&server)
+        .await;
+    session(&RestClient::new(&server.uri()).unwrap())
+        .delete_message("rid", "m1")
+        .await
+        .unwrap();
+}
+
+// ACT-002
+#[tokio::test]
+async fn a_refused_deletion_is_a_server_error_and_an_expired_token_unauthorized() {
+    let server = MockServer::start().await;
+    mount(
+        &server,
+        "POST",
+        "/api/v1/chat.delete",
+        json_response(
+            400,
+            r#"{"success":false,"error":"Not allowed [error-action-not-allowed]"}"#,
+        ),
+    )
+    .await;
+    let client = RestClient::new(&server.uri()).unwrap();
+    let result = session(&client).delete_message("rid", "m1").await;
+    assert!(
+        matches!(result, Err(Error::Server { status: 400, .. })),
+        "{result:?}"
+    );
+
+    let server = MockServer::start().await;
+    mount(
+        &server,
+        "POST",
+        "/api/v1/chat.delete",
+        json_response(401, NOT_LOGGED_IN),
+    )
+    .await;
+    let result = session(&RestClient::new(&server.uri()).unwrap())
+        .delete_message("rid", "m1")
+        .await;
+    assert!(matches!(result, Err(Error::Unauthorized)), "{result:?}");
+}
+
+// ACT-001, ACT-002
+#[tokio::test]
+async fn message_settings_asks_for_the_four_settings() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/settings.public"))
+        .and(query_param(
+            "_id",
+            "Message_AllowEditing,Message_AllowEditing_BlockEditInMinutes,Message_AllowDeleting,\
+             Message_AllowDeleting_BlockDeleteInMinutes",
+        ))
+        .respond_with(json_response(200, SETTINGS))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let settings = session(&RestClient::new(&server.uri()).unwrap())
+        .message_settings()
+        .await
+        .unwrap();
+
+    assert!(!settings.editing_allowed);
+    assert!(settings.deleting_allowed);
+    assert_eq!((settings.edit_minutes, settings.delete_minutes), (0, 30));
+}
+
 const SVG: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200"></svg>"#;
 
 fn svg_response() -> ResponseTemplate {
