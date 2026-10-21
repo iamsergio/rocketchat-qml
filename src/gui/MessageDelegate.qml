@@ -39,9 +39,16 @@ Item {
     // server's settings allow it.
     required property bool canEdit
     required property bool canDelete
+    // Whether the message can be quoted: it is text and the server has it, whoever wrote it.
+    required property bool canQuote
+    // The messages this one quotes, in order: a list of maps with author (the username), bodyHtml,
+    // body (as written) and time (empty if unknown).
+    required property var quotes
 
     // The user chose to edit the message: the composer takes over.
     signal editRequested(string messageId)
+    // The user chose to quote the message: the composer takes over.
+    signal quoteRequested(string messageId)
 
     objectName: "msg_" + messageId
     width: ListView.view.width
@@ -55,7 +62,7 @@ Item {
     MouseArea {
         acceptedButtons: Qt.RightButton
         anchors.fill: parent
-        enabled: root.canEdit || root.canDelete
+        enabled: root.canQuote || root.canEdit || root.canDelete
         onClicked: mouse => menu.popup(root, mouse.x, mouse.y)
     }
 
@@ -63,6 +70,15 @@ Item {
     // them by name from the window (mainWindow/msgEditAction), and only while they are open.
     Menu {
         id: menu
+
+        MenuItem {
+            objectName: "msgQuoteAction"
+            enabled: root.canQuote
+            height: visible ? implicitHeight : 0
+            text: qsTr("Quote")
+            visible: root.canQuote
+            onTriggered: root.quoteRequested(root.messageId)
+        }
 
         MenuItem {
             objectName: "msgEditAction"
@@ -225,7 +241,7 @@ Item {
                         opacity: rowHover.hovered || menu.opened ? 1 : 0
                         padding: 0
                         text: "\u22EF"
-                        visible: root.canEdit || root.canDelete
+                        visible: root.canQuote || root.canEdit || root.canDelete
                         onClicked: menu.popup(this, 0, height)
                     }
 
@@ -263,6 +279,74 @@ Item {
                     }
                 }
 
+                // The messages this one quotes, above what it says: a bar down the left, who said it
+                // and when, and what it said. `quoteBody` has the text as written, which the tests
+                // read; `quoteBodyHtml` is what is shown.
+                Repeater {
+                    model: root.quotes
+
+                    delegate: RowLayout {
+                        id: quote
+
+                        required property int index
+                        required property var modelData
+
+                        objectName: "quote" + index
+                        Layout.fillHeight: false
+                        Layout.fillWidth: true
+                        spacing: 8
+
+                        Rectangle {
+                            Layout.fillHeight: true
+                            color: root.palette.mid
+                            implicitWidth: 3
+                        }
+
+                        ColumnLayout {
+                            Layout.fillWidth: true
+                            spacing: 1
+
+                            RowLayout {
+                                spacing: 6
+
+                                Label {
+                                    objectName: "quoteAuthor"
+                                    font.bold: true
+                                    text: quote.modelData.author
+                                    textFormat: Text.PlainText
+                                }
+
+                                Label {
+                                    objectName: "quoteTime"
+                                    color: root.palette.placeholderText
+                                    text: quote.modelData.time
+                                    textFormat: Text.PlainText
+                                }
+                            }
+
+                            Item {
+                                objectName: "quoteBody"
+                                Layout.fillWidth: true
+                                implicitHeight: quoteBodyText.implicitHeight
+                                property string text: quote.modelData.body
+
+                                Label {
+                                    id: quoteBodyText
+
+                                    objectName: "quoteBodyHtml"
+                                    width: parent.width
+                                    color: root.palette.placeholderText
+                                    linkColor: root.palette.link
+                                    text: quote.modelData.bodyHtml
+                                    textFormat: Text.RichText
+                                    wrapMode: Text.Wrap
+                                    onLinkActivated: link => Qt.openUrlExternally(link)
+                                }
+                            }
+                        }
+                    }
+                }
+
                 // `text` is the message as written, which the tests read; `msgBodyHtml` is what is shown.
                 Item {
                     id: bodyItem
@@ -270,8 +354,8 @@ Item {
                     objectName: "msgBody"
                     Layout.fillWidth: true
                     implicitHeight: bodyText.implicitHeight
-                    // A message of only files has no text to leave a blank line for.
-                    visible: root.body !== "" || root.attachments.length === 0
+                    // A message of only files or quotes has no text to leave a blank line for.
+                    visible: root.body !== "" || (root.attachments.length === 0 && root.quotes.length === 0)
                     opacity: root.delivery === "sent" ? 1 : 0.6
                     property string text: root.body
 

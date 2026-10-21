@@ -199,9 +199,9 @@ pub fn load_older() {
     }
 }
 
-pub fn send_message(room: RoomId, text: &str) {
+pub fn send_message(room: RoomId, text: &str, quote: Option<MessageId>) {
     if let Some(client) = &lock().client {
-        client.send_message(room, text, None);
+        client.send_message(room, text, quote);
     } else {
         tracing::warn!("send_message ignored: the core isn't running");
     }
@@ -244,6 +244,14 @@ pub fn message_text(message_id: &str) -> String {
     lock()
         .cache
         .message_text(message_id)
+        .map_or_else(String::new, str::to_owned)
+}
+
+/// Who wrote a message of the open room, by display name else username, or empty if it isn't held.
+pub fn message_author(message_id: &str) -> String {
+    lock()
+        .cache
+        .message_author(message_id)
         .map_or_else(String::new, str::to_owned)
 }
 

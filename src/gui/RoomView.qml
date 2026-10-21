@@ -65,6 +65,7 @@ ColumnLayout {
         model: MessageList
         delegate: MessageDelegate {
             onEditRequested: messageId => composer.beginEdit(messageId)
+            onQuoteRequested: messageId => composer.beginQuote(messageId)
         }
         verticalLayoutDirection: ListView.BottomToTop
         boundsBehavior: Flickable.StopAtBounds

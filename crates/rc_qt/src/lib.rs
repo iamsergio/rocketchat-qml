@@ -41,6 +41,7 @@ mod cache;
 mod dev_login;
 mod hub;
 mod message_view;
+mod quote_view;
 mod reaction_view;
 mod rich_html;
 mod room_view;

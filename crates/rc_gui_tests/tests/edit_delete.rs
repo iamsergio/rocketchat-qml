@@ -231,10 +231,10 @@ fn a_message_is_deleted_through_its_menu_after_confirming() {
     );
 }
 
-// ACT-001, ACT-002
+// ACT-001, ACT-002, ACT-005
 #[test]
 #[ignore = "needs the app and a Rocket.Chat server: run through ctest"]
-fn a_right_click_opens_the_menu_of_the_users_own_messages_only() {
+fn a_right_click_opens_the_menu_of_a_message() {
     let admin = Admin::login();
     let user = admin.create_user();
     let (channel_id, _) = admin.create_channel(&[&user.username]);
@@ -260,12 +260,16 @@ fn a_right_click_opens_the_menu_of_the_users_own_messages_only() {
         gui.exists_and_visible(main_window::MESSAGE_DELETE_ACTION)
             .unwrap()
     );
+    assert!(
+        gui.exists_and_visible(main_window::MESSAGE_QUOTE_ACTION)
+            .unwrap()
+    );
 }
 
-// ACT-001, ACT-002
+// ACT-001, ACT-002, ACT-005
 #[test]
 #[ignore = "needs the app and a Rocket.Chat server: run through ctest"]
-fn the_message_of_somebody_else_has_no_menu() {
+fn the_menu_of_the_message_of_somebody_else_can_only_quote() {
     let admin = Admin::login();
     let user = admin.create_user();
     let (channel_id, _) = admin.create_channel(&[&user.username]);
@@ -280,12 +284,17 @@ fn the_message_of_somebody_else_has_no_menu() {
     gui.wait_until_visible(&message(&own.id, message_row::BODY), TIMEOUT)
         .unwrap();
 
+    gui.mouse_click(&message(&other.id, message_row::MENU_BUTTON))
+        .unwrap();
+
+    gui.wait_until_visible(main_window::MESSAGE_QUOTE_ACTION, TIMEOUT)
+        .unwrap();
     assert!(
-        gui.exists_and_visible(&message(&own.id, message_row::MENU_BUTTON))
+        !gui.exists_and_visible(main_window::MESSAGE_EDIT_ACTION)
             .unwrap()
     );
     assert!(
-        !gui.exists_and_visible(&message(&other.id, message_row::MENU_BUTTON))
+        !gui.exists_and_visible(main_window::MESSAGE_DELETE_ACTION)
             .unwrap()
     );
 }

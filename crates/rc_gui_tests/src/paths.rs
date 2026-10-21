@@ -48,6 +48,15 @@ pub mod main_window {
     /// In the bar: stops editing and gives the composer back its draft.
     pub const COMPOSER_EDIT_CANCEL: &str = "mainWindow/composerEditCancel";
 
+    /// Above the composer while a message is quoted.
+    pub const COMPOSER_QUOTE_BAR: &str = "mainWindow/composerQuoteBar";
+    /// In the bar: the name of the quoted message's author, as its `text`.
+    pub const COMPOSER_QUOTE_AUTHOR: &str = "mainWindow/composerQuoteAuthor";
+    /// In the bar: the quoted message's text as written, as its `text`. Cut to a line when shown.
+    pub const COMPOSER_QUOTE_TEXT: &str = "mainWindow/composerQuoteText";
+    /// In the bar: stops quoting.
+    pub const COMPOSER_QUOTE_CANCEL: &str = "mainWindow/composerQuoteCancel";
+
     /// Why the last edit or deletion failed. Visible only then.
     pub const ROOM_ACTION_ERROR: &str = "mainWindow/roomActionError";
     /// The reason, as its `text`.
@@ -58,6 +67,9 @@ pub mod main_window {
     // The menu of a message and the confirmation of a deletion are popups, which hang off the
     // window while they are open and not off the message. Only one is open at a time, so their
     // items are addressed from the window.
+    /// An item of the open message menu: quotes the message in the composer. Visible for every
+    /// sent text message.
+    pub const MESSAGE_QUOTE_ACTION: &str = "mainWindow/msgQuoteAction";
     /// An item of the open message menu: edits the message. Visible for the user's own messages.
     pub const MESSAGE_EDIT_ACTION: &str = "mainWindow/msgEditAction";
     /// An item of the open message menu: asks for a confirmation to delete the message.
@@ -129,8 +141,9 @@ pub mod message_row {
     /// The chips of the reactions, visible if there are any. Each is a
     /// [`reaction`](super::reaction).
     pub const REACTIONS: &str = "msgReactions";
-    /// Opens the message's menu (edit, delete). Visible only for a message the user can change; it
-    /// is clear until the pointer is over the message, but a click gets to it all the same.
+    /// Opens the message's menu (quote, edit, delete). Visible only for a message that can be
+    /// quoted or that the user can change; it is clear until the pointer is over the message, but
+    /// a click gets to it all the same.
     pub const MENU_BUTTON: &str = "msgMenuButton";
     /// Exists while the message is being sent.
     pub const PENDING: &str = "msgPending";
@@ -172,6 +185,32 @@ pub fn attachment(message_id: &str, index: usize, part: &str) -> String {
         "{}/msg_{message_id}/attachment{index}/{part}",
         main_window::WINDOW
     )
+}
+
+/// The parts of a quote in a message, for [`quote`].
+pub mod quote_row {
+    /// The username of the quoted message's author: its `text`.
+    pub const AUTHOR: &str = "quoteAuthor";
+    /// The time of day of the quoted message: its `text`. Empty if the server didn't say.
+    pub const TIME: &str = "quoteTime";
+    /// The quoted message as written, without the links of what it quotes itself: its `text` is
+    /// the markdown source.
+    pub const BODY: &str = "quoteBody";
+    /// The quoted message as shown: its `text` is the rich text (HTML) of the body.
+    pub const BODY_HTML: &str = "quoteBodyHtml";
+}
+
+/// A part of the quote with this index (0 is the first) of the message with this id (see
+/// [`quote_row`]), or the quote itself with an empty `part`. The quotes of a message are named by
+/// their index, and exist only while the message has them.
+#[must_use]
+pub fn quote(message_id: &str, index: usize, part: &str) -> String {
+    let quote = format!("{}/msg_{message_id}/quote{index}", main_window::WINDOW);
+    if part.is_empty() {
+        quote
+    } else {
+        format!("{quote}/{part}")
+    }
 }
 
 /// The parts of a reaction of a message, for [`reaction`].
@@ -229,6 +268,16 @@ mod tests {
             attachment("m7", 1, attachment_row::LINK),
             "mainWindow/msg_m7/attachment1/attachmentLink"
         );
+    }
+
+    // INFRA-002
+    #[test]
+    fn a_quote_part_is_addressed_by_the_message_id_and_the_index() {
+        assert_eq!(
+            quote("m7", 0, quote_row::AUTHOR),
+            "mainWindow/msg_m7/quote0/quoteAuthor"
+        );
+        assert_eq!(quote("m7", 1, ""), "mainWindow/msg_m7/quote1");
     }
 
     // INFRA-002

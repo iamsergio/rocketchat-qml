@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: MIT
 
 //! The `Room` view model: the open room, how loading its messages is going, and the commands to
-//! open a room, to load older messages, to send, and to edit and delete the user's messages.
+//! open a room, to load older messages, to send (quoting a message if asked), and to edit and
+//! delete the user's messages.
 
 #[cxx_qt::bridge]
 pub mod qobject {
@@ -39,10 +40,11 @@ pub mod qobject {
         #[cxx_name = "loadOlder"]
         fn load_older(self: Pin<&mut RoomVm>);
 
-        /// Sends the text to the open room. It shows in `MessageList` at once as pending. Returns
-        /// whether there was anything to send, so that the composer knows to clear itself.
+        /// Sends the text to the open room, quoting the message `quoted_id` (empty for none). It
+        /// shows in `MessageList` at once as pending. Returns whether there was anything to send,
+        /// so that the composer knows to clear itself.
         #[qinvokable]
-        fn send(self: Pin<&mut RoomVm>, text: &QString) -> bool;
+        fn send(self: Pin<&mut RoomVm>, text: &QString, quoted_id: &QString) -> bool;
 
         /// Sends a message of the open room that failed again.
         #[qinvokable]
@@ -69,6 +71,12 @@ pub mod qobject {
         #[qinvokable]
         #[cxx_name = "messageText"]
         fn message_text(self: Pin<&mut RoomVm>, message_id: &QString) -> QString;
+
+        /// Who wrote a message of the open room, by display name else username, for the composer
+        /// to say whom it quotes. Empty if the message isn't there.
+        #[qinvokable]
+        #[cxx_name = "messageAuthor"]
+        fn message_author(self: Pin<&mut RoomVm>, message_id: &QString) -> QString;
 
         /// Clears `actionError`.
         #[qinvokable]
@@ -224,11 +232,15 @@ impl qobject::RoomVm {
         hub::load_older();
     }
 
-    fn send(self: Pin<&mut Self>, text: &QString) -> bool {
-        let Some((room, text)) = outgoing(&self.room_id.to_string(), &text.to_string()) else {
+    fn send(self: Pin<&mut Self>, text: &QString, quoted_id: &QString) -> bool {
+        let Some((room, text, quoted)) = outgoing(
+            &self.room_id.to_string(),
+            &text.to_string(),
+            &quoted_id.to_string(),
+        ) else {
             return false;
         };
-        hub::send_message(room, &text);
+        hub::send_message(room, &text, quoted);
         true
     }
 
@@ -255,6 +267,11 @@ impl qobject::RoomVm {
     #[allow(clippy::unused_self)]
     fn message_text(self: Pin<&mut Self>, message_id: &QString) -> QString {
         QString::from(&hub::message_text(&message_id.to_string()))
+    }
+
+    #[allow(clippy::unused_self)]
+    fn message_author(self: Pin<&mut Self>, message_id: &QString) -> QString {
+        QString::from(&hub::message_author(&message_id.to_string()))
     }
 
     fn dismiss_action_error(self: Pin<&mut Self>) {

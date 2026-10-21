@@ -160,9 +160,10 @@ use crate::attachment_view::{AttachmentView, ImageUrls, attachments, paths, show
 use crate::avatar_view::{AvatarUrls, color, initials, message_owner, owners, rows_using, runs};
 use crate::hub;
 use crate::message_view::{
-    author_name, body, can_delete, can_edit, day_label, delivery_name, first_of_day, html,
-    mentions_me, system_text, time_text,
+    author_name, body, can_delete, can_edit, can_quote, day_label, delivery_name, first_of_day,
+    html, mentions_me, system_text, time_text,
 };
+use crate::quote_view::{QuoteView, quotes};
 use crate::reaction_view::{ReactionView, reactions};
 use crate::rich_html::{Clock, Viewer};
 use crate::row_ops::{MessageOp, apply_newest_first, message_ops};
@@ -193,6 +194,8 @@ const EDITED_ROLE: i32 = 272;
 const REACTIONS_ROLE: i32 = 273;
 const CAN_EDIT_ROLE: i32 = 274;
 const CAN_DELETE_ROLE: i32 = 275;
+const QUOTES_ROLE: i32 = 276;
+const CAN_QUOTE_ROLE: i32 = 277;
 
 /// Backing data of [`qobject::MessageListModel`]: the messages, mirrored from the core's changes
 /// and held newest first.
@@ -259,6 +262,25 @@ fn reactions_variant(views: &[ReactionView]) -> QVariant {
             ("count", QVariant::from(&view.count)),
             ("mine", QVariant::from(&view.mine)),
             ("users", text(&view.users)),
+        ] {
+            map.insert(QString::from(key), value);
+        }
+        list.append(QVariant::from(&map));
+    }
+    QVariant::from(&list)
+}
+
+/// The quotes as a `QVariantList` of `QVariantMap`s, with the keys QML reads.
+fn quotes_variant(views: &[QuoteView]) -> QVariant {
+    let text = |value: &str| QVariant::from(&QString::from(value));
+    let mut list = QList::<QVariant>::default();
+    for view in views {
+        let mut map = QMap::<QMapPair_QString_QVariant>::default();
+        for (key, value) in [
+            ("author", text(&view.author)),
+            ("bodyHtml", text(&view.body_html)),
+            ("body", text(&view.body)),
+            ("time", text(&view.time)),
         ] {
             map.insert(QString::from(key), value);
         }
@@ -450,6 +472,15 @@ impl MessageListModel {
             // drawn.
             CAN_EDIT_ROLE => QVariant::from(&can_edit(message, &self.viewer, Timestamp::now())),
             CAN_DELETE_ROLE => QVariant::from(&can_delete(message, &self.viewer, Timestamp::now())),
+            QUOTES_ROLE => quotes_variant(&quotes(
+                message,
+                &self.viewer,
+                Clock {
+                    zone: &self.zone,
+                    now: Timestamp::now(),
+                },
+            )),
+            CAN_QUOTE_ROLE => QVariant::from(&can_quote(message)),
             _ => QVariant::default(),
         }
     }
@@ -479,6 +510,8 @@ impl MessageListModel {
             (REACTIONS_ROLE, "reactions"),
             (CAN_EDIT_ROLE, "canEdit"),
             (CAN_DELETE_ROLE, "canDelete"),
+            (QUOTES_ROLE, "quotes"),
+            (CAN_QUOTE_ROLE, "canQuote"),
         ] {
             names.insert(role, QByteArray::from(name));
         }

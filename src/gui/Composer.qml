@@ -12,6 +12,10 @@ import RocketChat.Bridge
 // above it says so, and Enter saves instead of sending. Escape, the bar's button, or opening
 // another room cancels. The draft that was in the field before editing comes back when editing
 // ends, by saving or cancelling.
+//
+// And it quotes a message: beginQuote() shows a bar above the field with the author and the text of
+// the message, and Enter sends the text as a reply to it. Escape or the bar's button drops the
+// quote, and so does opening another room. Quoting and editing exclude each other.
 ColumnLayout {
     id: root
 
@@ -22,12 +26,46 @@ ColumnLayout {
     // The edit was sent and the answer is awaited.
     property bool saving: false
     readonly property bool editing: editingId !== ""
+    // The message being quoted, or empty when the box writes a message that quotes nothing, with
+    // what the bar shows of it.
+    property string quotingId: ""
+    property string quotedAuthor: ""
+    property string quotedText: ""
+    readonly property bool quoting: quotingId !== ""
 
     spacing: 4
 
     function send() {
-        if (Room.send(field.text))
+        if (Room.send(field.text, quotingId)) {
             field.clear();
+            dropQuote();
+        }
+    }
+
+    // Starts quoting a message of the open room, ending an edit first. Nothing happens if the
+    // message isn't known.
+    function beginQuote(messageId) {
+        const author = Room.messageAuthor(messageId);
+        if (author === "")
+            return;
+        if (editing)
+            endEdit();
+        quotingId = messageId;
+        quotedAuthor = author;
+        quotedText = Room.messageText(messageId);
+        field.forceActiveFocus();
+    }
+
+    function dropQuote() {
+        quotingId = "";
+        quotedAuthor = "";
+        quotedText = "";
+    }
+
+    // Stops quoting and gives the field the focus back.
+    function endQuote() {
+        dropQuote();
+        field.forceActiveFocus();
     }
 
     // Starts editing a message of the open room. Nothing happens if its text isn't known.
@@ -37,6 +75,7 @@ ColumnLayout {
             return;
         if (!editing)
             draft = field.text;
+        dropQuote();
         editingId = messageId;
         saving = false;
         field.text = text;
@@ -83,6 +122,50 @@ ColumnLayout {
         function onRoomIdChanged() {
             if (root.editing)
                 root.endEdit();
+            root.dropQuote();
+        }
+    }
+
+    RowLayout {
+        objectName: "composerQuoteBar"
+        // A layout with a child that fills the height would otherwise take the room's spare height.
+        Layout.fillHeight: false
+        Layout.fillWidth: true
+        visible: root.quoting
+        spacing: 8
+
+        Rectangle {
+            Layout.fillHeight: true
+            color: root.palette.mid
+            implicitWidth: 3
+        }
+
+        ColumnLayout {
+            Layout.fillWidth: true
+            spacing: 1
+
+            Label {
+                objectName: "composerQuoteAuthor"
+                font.bold: true
+                text: root.quotedAuthor
+                textFormat: Text.PlainText
+            }
+
+            Label {
+                objectName: "composerQuoteText"
+                Layout.fillWidth: true
+                color: root.palette.placeholderText
+                elide: Text.ElideRight
+                maximumLineCount: 1
+                text: root.quotedText
+                textFormat: Text.PlainText
+            }
+        }
+
+        ToolButton {
+            objectName: "composerQuoteCancel"
+            text: qsTr("Cancel")
+            onClicked: root.endQuote()
         }
     }
 
@@ -131,6 +214,9 @@ ColumnLayout {
                         event.accepted = true;
                     } else if (event.key === Qt.Key_Escape && root.editing) {
                         root.endEdit();
+                        event.accepted = true;
+                    } else if (event.key === Qt.Key_Escape && root.quoting) {
+                        root.endQuote();
                         event.accepted = true;
                     } else if (event.key === Qt.Key_Up && !root.editing && field.length === 0) {
                         root.editLast();
