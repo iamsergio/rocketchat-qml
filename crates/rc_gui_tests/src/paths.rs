@@ -19,6 +19,43 @@ pub mod main_window {
     pub const LOGIN_BUSY: &str = "mainWindow/loginBusy";
 
     pub const ROOM_LIST: &str = "mainWindow/roomList";
+    /// The section of the favorites in the room list. It is always there, with no height unless
+    /// the user has favorites: look at its header for whether it shows, and at its geometry for
+    /// where.
+    pub const ROOM_SECTION_FAVORITES: &str = "mainWindow/roomSection_favorites";
+    /// Its heading ("Favorites"), as its `text`. Visible only while the user has favorites.
+    pub const ROOM_SECTION_FAVORITES_HEADER: &str =
+        "mainWindow/roomSection_favorites/roomSectionHeader";
+    /// The section of the other rooms, like the favorites'.
+    pub const ROOM_SECTION_ROOMS: &str = "mainWindow/roomSection_rooms";
+    /// Its heading ("Rooms"), as its `text`. Visible only while the user has favorites.
+    pub const ROOM_SECTION_ROOMS_HEADER: &str = "mainWindow/roomSection_rooms/roomSectionHeader";
+    /// Why the last command on a room (a favorite, mark as read or unread, leaving) failed.
+    /// Visible only then, under the room list.
+    pub const ROOM_LIST_ERROR: &str = "mainWindow/roomListError";
+    /// The reason, as its `text`.
+    pub const ROOM_LIST_ERROR_TEXT: &str = "mainWindow/roomListErrorText";
+    /// Hides the error.
+    pub const ROOM_LIST_ERROR_DISMISS: &str = "mainWindow/roomListErrorDismiss";
+
+    // The menu of a room (right-click on its row) and the confirmation to leave are popups too,
+    // addressed from the window while they are open.
+    /// An item of the open room menu: "Add to favorites" or "Remove from favorites", as its `text`.
+    pub const ROOM_FAVORITE_ACTION: &str = "mainWindow/roomFavoriteAction";
+    /// An item of the open room menu: marks the room read. Visible for a room that shows unread.
+    pub const ROOM_MARK_READ_ACTION: &str = "mainWindow/roomMarkReadAction";
+    /// An item of the open room menu: marks the room unread. Visible for a room that shows read,
+    /// except the open room, which stays read.
+    pub const ROOM_MARK_UNREAD_ACTION: &str = "mainWindow/roomMarkUnreadAction";
+    /// An item of the open room menu: asks for a confirmation to leave the room. Hidden for
+    /// direct messages.
+    pub const ROOM_LEAVE_ACTION: &str = "mainWindow/roomLeaveAction";
+    /// The confirmation to leave a room: the question it asks, naming the room, in its body.
+    pub const ROOM_LEAVE_DIALOG: &str = "mainWindow/roomLeaveDialog";
+    /// In the confirmation: leaves the room.
+    pub const ROOM_LEAVE_CONFIRM: &str = "mainWindow/roomLeaveConfirm";
+    /// In the confirmation: stays in the room.
+    pub const ROOM_LEAVE_CANCEL: &str = "mainWindow/roomLeaveCancel";
     pub const CURRENT_USER: &str = "mainWindow/currentUser";
     pub const LOGOUT_BUTTON: &str = "mainWindow/logoutButton";
     /// Shown while the realtime connection is down.
@@ -111,6 +148,8 @@ pub mod room_row {
     pub const KIND_DIRECT: &str = "roomKind_direct";
     pub const UNREAD: &str = "roomUnread";
     pub const MENTIONS: &str = "roomMentions";
+    /// The star of a favorite: visible only for the user's favorites.
+    pub const FAVORITE: &str = "roomFavorite";
     /// The avatar, visible once its file has loaded: its `text` is the file URL.
     pub const AVATAR: &str = "roomAvatar";
     /// The initials on a colour, visible until the avatar has loaded, and always for a room
