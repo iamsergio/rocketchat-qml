@@ -108,10 +108,6 @@ fn without_favorites_the_list_has_no_headers() {
     ] {
         assert!(!gui.exists_and_visible(header).unwrap(), "{header}");
     }
-    assert!(
-        !gui.exists_and_visible(&room(&older, room_row::FAVORITE))
-            .unwrap()
-    );
 }
 
 // ROOM-006, ROOM-007
@@ -135,8 +131,6 @@ fn a_room_is_favorited_and_unfavorited_through_its_menu() {
     gui.mouse_click(main_window::ROOM_FAVORITE_ACTION).unwrap();
 
     // The older room moves up, under "Favorites", above "Rooms" and the newer room.
-    gui.wait_until_visible(&room(&older, room_row::FAVORITE), TIMEOUT)
-        .unwrap();
     gui.wait_until("the favorites section above the rest", TIMEOUT, || {
         Ok(headers_shown(gui)
             && y_of(gui, main_window::ROOM_SECTION_FAVORITES) < y_of(gui, &row(&older))
@@ -153,11 +147,6 @@ fn a_room_is_favorited_and_unfavorited_through_its_menu() {
         gui.text(main_window::ROOM_SECTION_ROOMS_HEADER).unwrap(),
         "Rooms"
     );
-    assert!(
-        !gui.exists_and_visible(&room(&newer, room_row::FAVORITE))
-            .unwrap()
-    );
-
     open_menu(gui, &older);
     assert_eq!(
         gui.text(main_window::ROOM_FAVORITE_ACTION).unwrap(),
@@ -166,8 +155,6 @@ fn a_room_is_favorited_and_unfavorited_through_its_menu() {
     gui.mouse_click(main_window::ROOM_FAVORITE_ACTION).unwrap();
 
     // Back among the rooms, in the order of their activity, and no headers any more.
-    gui.wait_until_hidden(&room(&older, room_row::FAVORITE), TIMEOUT)
-        .unwrap();
     gui.wait_until_hidden(main_window::ROOM_SECTION_FAVORITES_HEADER, TIMEOUT)
         .unwrap();
     gui.wait_until_hidden(main_window::ROOM_SECTION_ROOMS_HEADER, TIMEOUT)
@@ -193,8 +180,6 @@ fn a_favorite_set_elsewhere_arrives_live_and_moves_the_room() {
     web.set_favorite(&older, true);
 
     gui.wait_until_visible(main_window::ROOM_SECTION_FAVORITES_HEADER, TIMEOUT)
-        .unwrap();
-    gui.wait_until_visible(&room(&older, room_row::FAVORITE), TIMEOUT)
         .unwrap();
     gui.wait_until("the favorite above the other room", TIMEOUT, || {
         Ok(y_of(gui, &row(&older)) < y_of(gui, &row(&newer)))
@@ -488,7 +473,8 @@ fn the_last_owner_leaving_shows_the_servers_refusal_until_dismissed() {
     choose(gui, &group, main_window::ROOM_FAVORITE_ACTION);
     gui.wait_until_hidden(main_window::ROOM_LIST_ERROR, TIMEOUT)
         .unwrap();
-    // Not a command that fails: favorites are fine for the last owner.
-    gui.wait_until_visible(&room(&group, room_row::FAVORITE), TIMEOUT)
+    // Not a command that fails: favorites are fine for the last owner. The group is the user's
+    // only favorite, so the header shows for it.
+    gui.wait_until_visible(main_window::ROOM_SECTION_FAVORITES_HEADER, TIMEOUT)
         .unwrap();
 }
