@@ -34,6 +34,11 @@ ApplicationWindow {
     }
 
     footer: ToolBar {
+        bottomPadding: Theme.toolBarPaddingV
+        leftPadding: Theme.toolBarPaddingH
+        rightPadding: Theme.toolBarPaddingH
+        topPadding: Theme.toolBarLinePadding
+
         Label {
             objectName: "versionLabel"
             anchors.verticalCenter: parent.verticalCenter

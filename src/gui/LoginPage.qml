@@ -64,6 +64,7 @@ Item {
 
         RowLayout {
             Layout.fillWidth: true
+            spacing: Theme.spacingL
 
             Button {
                 id: loginButton
@@ -76,6 +77,8 @@ Item {
 
             BusyIndicator {
                 objectName: "loginBusy"
+                Layout.preferredHeight: Theme.busyIndicatorSize
+                Layout.preferredWidth: Theme.busyIndicatorSize
                 visible: Session.busy
                 running: visible
             }

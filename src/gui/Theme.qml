@@ -20,6 +20,7 @@ QtObject {
     readonly property real avatarFontScale: 0.4
 
     // Spacing, margins and paddings
+    readonly property int spacingNone: 0
     readonly property int spacingXXS: 1
     readonly property int spacingXS: 2
     readonly property int spacingS: 4
@@ -29,6 +30,15 @@ QtObject {
     readonly property int spacingXXL: 12
     readonly property int pageMargin: 32
     readonly property int chipPadding: 14
+    readonly property int badgePaddingH: 12
+    readonly property int badgePaddingV: 4
+    // The Fusion style's defaults, which is what the controls had before they were named here.
+    // Its tool bars have a 1 px line on the side facing the content.
+    readonly property int delegatePadding: 6
+    readonly property int dialogPadding: 6
+    readonly property int toolBarPaddingH: 6
+    readonly property int toolBarPaddingV: 0
+    readonly property int toolBarLinePadding: 1
 
     // Shapes
     readonly property real avatarRadiusRatio: 0.25
@@ -45,19 +55,21 @@ QtObject {
     readonly property int attachmentMaxHeight: 480
     readonly property int attachmentMaxWidth: 360
     readonly property int avatarSize: 32
+    readonly property int busyIndicatorLargeSize: 40
     readonly property int busyIndicatorSize: 32
     readonly property int chipAddWidth: 32
     readonly property int chipEmojiSize: 18
     readonly property int chipHeight: 24
     readonly property int composerMaxHeight: 120
     readonly property int dialogWidth: 360
-    readonly property int emojiButtonSize: 28
     readonly property int emojiCellSize: 40
+    readonly property int emojiImageSize: 28
     readonly property int emojiPickerHeight: 340
     readonly property int emojiPickerWidth: 360
     readonly property int historyFooterHeight: 40
     readonly property int loginFormWidth: 360
     readonly property int menuButtonHeight: 22
+    readonly property int menuButtonPadding: 0
     readonly property int menuButtonWidth: 28
     readonly property int roomIconSize: 24
     readonly property int roomIconSourceSize: 16

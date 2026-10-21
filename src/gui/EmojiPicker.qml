@@ -77,10 +77,10 @@ Popup {
                     anchors.centerIn: parent
                     asynchronous: true
                     fillMode: Image.PreserveAspectFit
-                    height: Theme.emojiButtonSize
+                    height: Theme.emojiImageSize
                     source: pick.image
                     visible: pick.image !== ""
-                    width: Theme.emojiButtonSize
+                    width: Theme.emojiImageSize
                 }
 
                 // Not a TapHandler, which Spix clicks don't trigger.
