@@ -82,7 +82,7 @@ ItemDelegate {
         parent: Overlay.overlay
         title: qsTr("Leave room")
         // A width of its own: the wrapping label can't size the dialog it is sized by.
-        width: 360
+        width: Theme.dialogWidth
 
         footer: DialogButtonBox {
             Button {
@@ -110,11 +110,11 @@ ItemDelegate {
     }
 
     contentItem: RowLayout {
-        spacing: 12
+        spacing: Theme.spacingXXL
 
         Avatar {
-            Layout.preferredWidth: 24
-            Layout.preferredHeight: 24
+            Layout.preferredWidth: Theme.roomIconSize
+            Layout.preferredHeight: Theme.roomIconSize
             url: root.avatar
             initials: root.avatarInitials
             fillColor: root.avatarColor
@@ -127,10 +127,10 @@ ItemDelegate {
         // until it has loaded, so that a missing SVG plugin shows in the GUI tests.
         Image {
             objectName: "roomKind_" + root.kind
-            Layout.preferredWidth: 24
+            Layout.preferredWidth: Theme.roomIconSize
             fillMode: Image.Pad
             source: "icons/" + root.kind + ".svg"
-            sourceSize: Qt.size(16, 16)
+            sourceSize: Qt.size(Theme.roomIconSourceSize, Theme.roomIconSourceSize)
             visible: status === Image.Ready
 
             onStatusChanged: {
@@ -156,8 +156,8 @@ ItemDelegate {
         // Mentions of the user.
         Rectangle {
             visible: root.userMentions > 0
-            implicitWidth: mentionRow.implicitWidth + 12
-            implicitHeight: mentionRow.implicitHeight + 4
+            implicitWidth: mentionRow.implicitWidth + Theme.spacingXXL
+            implicitHeight: mentionRow.implicitHeight + Theme.spacingS
             radius: height / 2
             color: root.palette.highlight
 
@@ -181,8 +181,8 @@ ItemDelegate {
 
         Rectangle {
             visible: root.unread > 0
-            implicitWidth: Math.max(unreadLabel.implicitWidth + 12, height)
-            implicitHeight: unreadLabel.implicitHeight + 4
+            implicitWidth: Math.max(unreadLabel.implicitWidth + Theme.spacingXXL, height)
+            implicitHeight: unreadLabel.implicitHeight + Theme.spacingS
             radius: height / 2
             color: root.palette.mid
 

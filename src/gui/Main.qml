@@ -9,8 +9,8 @@ ApplicationWindow {
     id: root
 
     objectName: "mainWindow"
-    width: 900
-    height: 600
+    width: Theme.windowWidth
+    height: Theme.windowHeight
     visible: true
     title: qsTr("RocketChatQml")
 
@@ -37,7 +37,7 @@ ApplicationWindow {
         Label {
             objectName: "versionLabel"
             anchors.verticalCenter: parent.verticalCenter
-            leftPadding: 12
+            leftPadding: Theme.spacingXXL
             text: qsTr("Rocket.Chat %1").arg(AppInfo.version)
         }
     }

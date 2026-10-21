@@ -33,7 +33,7 @@ ColumnLayout {
     property string quotedText: ""
     readonly property bool quoting: quotingId !== ""
 
-    spacing: 4
+    spacing: Theme.spacingS
 
     function send() {
         if (Room.send(field.text, quotingId)) {
@@ -132,17 +132,17 @@ ColumnLayout {
         Layout.fillHeight: false
         Layout.fillWidth: true
         visible: root.quoting
-        spacing: 8
+        spacing: Theme.spacingL
 
         Rectangle {
             Layout.fillHeight: true
             color: root.palette.mid
-            implicitWidth: 3
+            implicitWidth: Theme.accentBarWidth
         }
 
         ColumnLayout {
             Layout.fillWidth: true
-            spacing: 1
+            spacing: Theme.spacingXXS
 
             Label {
                 objectName: "composerQuoteAuthor"
@@ -173,7 +173,7 @@ ColumnLayout {
         objectName: "composerEditBar"
         Layout.fillWidth: true
         visible: root.editing
-        spacing: 8
+        spacing: Theme.spacingL
 
         Label {
             Layout.fillWidth: true
@@ -191,11 +191,11 @@ ColumnLayout {
 
     RowLayout {
         Layout.fillWidth: true
-        spacing: 8
+        spacing: Theme.spacingL
 
         ScrollView {
             Layout.fillWidth: true
-            Layout.maximumHeight: 120
+            Layout.maximumHeight: Theme.composerMaxHeight
 
             TextArea {
                 id: field
