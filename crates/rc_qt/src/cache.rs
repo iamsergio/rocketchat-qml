@@ -15,7 +15,7 @@ use rc_core::{Connection, Event};
 
 use crate::attachment_view::ImageUrls;
 use crate::avatar_view::AvatarUrls;
-use crate::message_view::{body, can_edit};
+use crate::message_view::{author_name, body, can_edit};
 use crate::rich_html::Viewer;
 use crate::room_view::{RoomState, room_state};
 use crate::session_view::{SessionView, session_view};
@@ -171,6 +171,15 @@ impl Cache {
             .iter()
             .find(|message| message.id.as_str() == id)
             .map(body)
+    }
+
+    /// Who wrote a message of the open room, by display name else username, if it is held.
+    #[must_use]
+    pub fn message_author(&self, id: &str) -> Option<&str> {
+        self.messages
+            .iter()
+            .find(|message| message.id.as_str() == id)
+            .map(|message| author_name(&message.author))
     }
 
     /// The avatar files known now, as URLs.
@@ -462,6 +471,14 @@ mod tests {
         let cache = cache_with_four_messages();
         assert_eq!(cache.message_text("c"), Some("c"));
         assert_eq!(cache.message_text("nope"), None);
+    }
+
+    // ACT-005
+    #[test]
+    fn the_author_of_a_held_message_is_given_by_name() {
+        let cache = cache_with_four_messages();
+        assert_eq!(cache.message_author("c"), Some("u"));
+        assert_eq!(cache.message_author("nope"), None);
     }
 
     // ACT-001, ACT-002

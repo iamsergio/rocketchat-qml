@@ -68,6 +68,12 @@ pub fn can_delete(message: &Message, viewer: &Viewer, now: Timestamp) -> bool {
         .is_some_and(|me| viewer.policy.can_delete(message, me, now))
 }
 
+/// Whether the message can be quoted: it says something and the server has it, whoever wrote it.
+#[must_use]
+pub fn can_quote(message: &Message) -> bool {
+    matches!(message.kind, MessageKind::Text(_)) && !message.is_unsent()
+}
+
 /// How QML sees the delivery state of a message: a string, as for the kind of a room.
 #[must_use]
 pub fn delivery_name(delivery: Delivery) -> &'static str {
@@ -297,12 +303,33 @@ mod tests {
             edit_minutes: 5,
             deleting_allowed: false,
             delete_minutes: 0,
-            site_url: None,
         });
         let viewer = editor(policy);
         assert!(can_edit(&own, &viewer, at("2026-10-20T10:05:00Z")));
         assert!(!can_edit(&own, &viewer, at("2026-10-20T10:05:01Z")));
         assert!(!can_delete(&own, &viewer, at("2026-10-20T10:00:01Z")));
+    }
+
+    // ACT-005
+    #[test]
+    fn a_sent_text_message_can_be_quoted_whoever_wrote_it() {
+        let own = text("2026-10-20T10:00:00Z");
+        let mut others = own.clone();
+        others.author.id = "other".to_owned().into();
+        assert!(can_quote(&own));
+        assert!(can_quote(&others));
+    }
+
+    // ACT-005
+    #[test]
+    fn an_unsent_message_and_a_system_message_cannot_be_quoted() {
+        let mut pending = text("2026-10-20T10:00:00Z");
+        pending.delivery = Delivery::Pending;
+        let mut failed = pending.clone();
+        failed.delivery = Delivery::Failed;
+        for message in [pending, failed, system(SystemEvent::Joined)] {
+            assert!(!can_quote(&message), "{message:?}");
+        }
     }
 
     // SEND-001, SEND-002

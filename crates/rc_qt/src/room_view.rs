@@ -4,7 +4,7 @@
 //! What the `RoomList` model and the `Room` view model show for a room. Plain Rust, so it can be
 //! unit-tested without Qt.
 
-use rc_core::domain::{Room, RoomId, RoomKind};
+use rc_core::domain::{MessageId, Room, RoomId, RoomKind};
 use rc_core::policy::MessageAction;
 use rc_core::timeline::TimelineStatus;
 
@@ -26,14 +26,20 @@ pub fn action_name(action: MessageAction) -> &'static str {
     }
 }
 
-/// What sending `text` from the composer hands to the core: the open room and the text, or `None`
-/// if there is nothing to send, because no room is open or the text is blank.
+/// What sending `text` from the composer hands to the core: the open room, the text and the
+/// message it quotes (`quoted_id` is empty for none), or `None` if there is nothing to send,
+/// because no room is open or the text is blank.
 #[must_use]
-pub fn outgoing(room_id: &str, text: &str) -> Option<(RoomId, String)> {
+pub fn outgoing(
+    room_id: &str,
+    text: &str,
+    quoted_id: &str,
+) -> Option<(RoomId, String, Option<MessageId>)> {
     if room_id.is_empty() || text.trim().is_empty() {
         return None;
     }
-    Some((RoomId::from(room_id.to_owned()), text.to_owned()))
+    let quoted = (!quoted_id.is_empty()).then(|| MessageId::from(quoted_id.to_owned()));
+    Some((RoomId::from(room_id.to_owned()), text.to_owned(), quoted))
 }
 
 /// The values of the `Room` properties: the open room, and how loading its messages is going.
@@ -112,11 +118,22 @@ mod tests {
     // SEND-001
     #[test]
     fn only_text_with_something_in_it_is_sent_to_an_open_room() {
-        let (room, text) = outgoing("r1", "hello\n").unwrap();
+        let (room, text, quoted) = outgoing("r1", "hello\n", "").unwrap();
         assert_eq!((room.as_str(), text.as_str()), ("r1", "hello\n"));
-        assert!(outgoing("", "hello").is_none());
-        assert!(outgoing("r1", "").is_none());
-        assert!(outgoing("r1", " \n\t").is_none());
+        assert_eq!(quoted, None);
+        assert!(outgoing("", "hello", "").is_none());
+        assert!(outgoing("r1", "", "").is_none());
+        assert!(outgoing("r1", " \n\t", "").is_none());
+    }
+
+    // ACT-005
+    #[test]
+    fn a_message_to_quote_goes_along_with_the_text() {
+        let (_, text, quoted) = outgoing("r1", "hello", "m7").unwrap();
+        assert_eq!(text, "hello");
+        assert_eq!(quoted, Some(MessageId::from("m7".to_owned())));
+        // The quote doesn't make blank text worth sending.
+        assert!(outgoing("r1", " ", "m7").is_none());
     }
 
     // MSG-001

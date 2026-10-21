@@ -162,3 +162,16 @@ fn percent_decode(text: &str) -> String {
     }
     String::from_utf8(out).unwrap()
 }
+
+/// Waits until the message is shown as sent, which is when the server's copy has replaced the one
+/// the app showed at once.
+pub fn wait_until_sent(gui: &Gui) {
+    gui.wait_until_hidden(main_window::UNSENT_PENDING, TIMEOUT)
+        .unwrap();
+}
+
+/// Presses Escape in the composer.
+pub fn escape(gui: &Gui) {
+    gui.enter_key(main_window::COMPOSER_FIELD, Key::ESCAPE, Modifiers::NONE)
+        .unwrap();
+}
