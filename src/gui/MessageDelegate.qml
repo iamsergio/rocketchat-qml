@@ -35,10 +35,85 @@ Item {
     // image (the URL of a custom emoji, or empty), count, mine (the user reacted) and users (who
     // reacted, for a tooltip).
     required property var reactions
+    // Whether the user may change the message now: it is theirs, the server has it, and the
+    // server's settings allow it.
+    required property bool canEdit
+    required property bool canDelete
+
+    // The user chose to edit the message: the composer takes over.
+    signal editRequested(string messageId)
 
     objectName: "msg_" + messageId
     width: ListView.view.width
     implicitHeight: column.implicitHeight + 8
+
+    HoverHandler {
+        id: rowHover
+    }
+
+    // Right-click opens the same menu as the button.
+    MouseArea {
+        acceptedButtons: Qt.RightButton
+        anchors.fill: parent
+        enabled: root.canEdit || root.canDelete
+        onClicked: mouse => menu.popup(root, mouse.x, mouse.y)
+    }
+
+    // The popups are parented to the window's overlay while open, so Spix finds the items inside
+    // them by name from the window (mainWindow/msgEditAction), and only while they are open.
+    Menu {
+        id: menu
+
+        MenuItem {
+            objectName: "msgEditAction"
+            enabled: root.canEdit
+            height: visible ? implicitHeight : 0
+            text: qsTr("Edit")
+            visible: root.canEdit
+            onTriggered: root.editRequested(root.messageId)
+        }
+
+        MenuItem {
+            objectName: "msgDeleteAction"
+            enabled: root.canDelete
+            height: visible ? implicitHeight : 0
+            text: qsTr("Delete")
+            visible: root.canDelete
+            onTriggered: deleteDialog.open()
+        }
+    }
+
+    Dialog {
+        id: deleteDialog
+
+        anchors.centerIn: Overlay.overlay
+        modal: true
+        parent: Overlay.overlay
+        title: qsTr("Delete message")
+
+        footer: DialogButtonBox {
+            Button {
+                objectName: "deleteConfirm"
+                DialogButtonBox.buttonRole: DialogButtonBox.AcceptRole
+                text: qsTr("Delete")
+            }
+
+            Button {
+                objectName: "deleteCancel"
+                DialogButtonBox.buttonRole: DialogButtonBox.RejectRole
+                text: qsTr("Cancel")
+            }
+        }
+
+        onAccepted: Room.remove(root.messageId)
+
+        // Named, because Spix finds items and a Dialog is not one.
+        contentItem: Label {
+            objectName: "deleteDialog"
+            text: qsTr("Delete this message for everyone? This can't be undone.")
+            wrapMode: Text.Wrap
+        }
+    }
 
     // Marks a message that mentions the user.
     Rectangle {
@@ -135,6 +210,23 @@ Item {
                         font.pointSize: timeLabel.font.pointSize * 0.85
                         text: qsTr("(edited)")
                         visible: root.edited
+                    }
+
+                    Item {
+                        Layout.fillWidth: true
+                    }
+
+                    // Shown when the pointer is over the message, if there is anything to do with it.
+                    // It keeps its place the rest of the time, so the rows don't change height.
+                    ToolButton {
+                        objectName: "msgMenuButton"
+                        Layout.preferredHeight: 22
+                        Layout.preferredWidth: 28
+                        opacity: rowHover.hovered || menu.opened ? 1 : 0
+                        padding: 0
+                        text: "\u22EF"
+                        visible: root.canEdit || root.canDelete
+                        onClicked: menu.popup(this, 0, height)
                     }
 
                     // These exist only while the message is in that state, so that a test can find the one

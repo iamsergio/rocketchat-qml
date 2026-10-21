@@ -106,6 +106,7 @@ mod tests {
                     extension: "gif".into(),
                 }],
             ),
+            ..Viewer::default()
         }
     }
 

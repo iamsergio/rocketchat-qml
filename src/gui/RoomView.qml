@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Sergio Martins
 // SPDX-License-Identifier: MIT
 
+pragma ComponentBehavior: Bound
+
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
@@ -61,7 +63,9 @@ ColumnLayout {
         clip: true
         focus: true
         model: MessageList
-        delegate: MessageDelegate {}
+        delegate: MessageDelegate {
+            onEditRequested: messageId => composer.beginEdit(messageId)
+        }
         verticalLayoutDirection: ListView.BottomToTop
         boundsBehavior: Flickable.StopAtBounds
 
@@ -132,7 +136,32 @@ ColumnLayout {
         }
     }
 
+    // Why the last edit or deletion failed, until it is dismissed or the user tries again.
+    RowLayout {
+        objectName: "roomActionError"
+        Layout.fillWidth: true
+        Layout.margins: 8
+        visible: Room.actionError !== ""
+
+        Label {
+            objectName: "roomActionErrorText"
+            Layout.fillWidth: true
+            color: "#c62828"
+            text: Room.actionError
+            textFormat: Text.PlainText
+            wrapMode: Text.Wrap
+        }
+
+        ToolButton {
+            objectName: "roomActionErrorDismiss"
+            text: qsTr("Dismiss")
+            onClicked: Room.dismissActionError()
+        }
+    }
+
     Composer {
+        id: composer
+
         Layout.fillWidth: true
         Layout.margins: 8
         visible: Room.roomId !== ""

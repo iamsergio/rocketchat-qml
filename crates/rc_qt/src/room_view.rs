@@ -5,6 +5,7 @@
 //! unit-tested without Qt.
 
 use rc_core::domain::{Room, RoomId, RoomKind};
+use rc_core::policy::MessageAction;
 use rc_core::timeline::TimelineStatus;
 
 /// How QML sees the kind of a room. A string rather than another Qt enum, which keeps the role a
@@ -14,6 +15,14 @@ pub fn kind_name(kind: RoomKind) -> &'static str {
         RoomKind::Channel => "channel",
         RoomKind::Private => "private",
         RoomKind::Direct => "direct",
+    }
+}
+
+/// How QML sees what was done to a message, in the answer to an edit or a deletion.
+pub fn action_name(action: MessageAction) -> &'static str {
+    match action {
+        MessageAction::Edit => "edit",
+        MessageAction::Delete => "delete",
     }
 }
 
@@ -91,6 +100,13 @@ mod tests {
             alert: false,
             last_activity: jiff::Timestamp::UNIX_EPOCH,
         }
+    }
+
+    // ACT-001, ACT-002
+    #[test]
+    fn each_action_has_its_own_name() {
+        let actions = [MessageAction::Edit, MessageAction::Delete];
+        assert_eq!(actions.map(action_name), ["edit", "delete"]);
     }
 
     // SEND-001

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 //! The `Room` view model: the open room, how loading its messages is going, and the commands to
-//! open a room, to load older messages and to send.
+//! open a room, to load older messages, to send, and to edit and delete the user's messages.
 
 #[cxx_qt::bridge]
 pub mod qobject {
@@ -23,6 +23,10 @@ pub mod qobject {
         #[qproperty(bool, loading_older, cxx_name = "loadingOlder", READ, NOTIFY)]
         #[qproperty(bool, reached_start, cxx_name = "reachedStart", READ, NOTIFY)]
         #[qproperty(QString, error_text, cxx_name = "errorText", READ, NOTIFY)]
+        // `actionError`: why the last edit or deletion failed, to show until it is dismissed.
+        // Cleared by the next edit or deletion, by `dismissActionError` and by opening another
+        // room.
+        #[qproperty(QString, action_error, cxx_name = "actionError", READ, NOTIFY)]
         type RoomVm = super::RoomVmRust;
 
         /// Shows the room's messages; the outcome shows in the properties and in `MessageList`.
@@ -43,6 +47,45 @@ pub mod qobject {
         /// Sends a message of the open room that failed again.
         #[qinvokable]
         fn retry(self: Pin<&mut RoomVm>, message_id: &QString);
+
+        /// Replaces the text of a message of the user's in the open room. Always answered by
+        /// `actionDone`, also when the core refuses it at once (not the user's message, blank
+        /// text...). The message changes in `MessageList` before the answer comes.
+        #[qinvokable]
+        fn edit(self: Pin<&mut RoomVm>, message_id: &QString, text: &QString);
+
+        /// Deletes a message of the user's in the open room. Answered by `actionDone`, as `edit`
+        /// is. The row leaves `MessageList` before the answer comes.
+        #[qinvokable]
+        fn remove(self: Pin<&mut RoomVm>, message_id: &QString);
+
+        /// The id of the newest message of the open room that the user can edit now, or empty.
+        #[qinvokable]
+        #[cxx_name = "lastEditable"]
+        fn last_editable(self: Pin<&mut RoomVm>) -> QString;
+
+        /// The text of a message of the open room as its author wrote it, for the composer to
+        /// edit. Empty if the message isn't there.
+        #[qinvokable]
+        #[cxx_name = "messageText"]
+        fn message_text(self: Pin<&mut RoomVm>, message_id: &QString) -> QString;
+
+        /// Clears `actionError`.
+        #[qinvokable]
+        #[cxx_name = "dismissActionError"]
+        fn dismiss_action_error(self: Pin<&mut RoomVm>);
+
+        /// An edit or a deletion ended. `action` is `"edit"` or `"delete"`; `errorText` is empty
+        /// if `ok`. A failure is in `actionError` too.
+        #[qsignal]
+        #[cxx_name = "actionDone"]
+        fn action_done(
+            self: Pin<&mut RoomVm>,
+            message_id: &QString,
+            action: &QString,
+            ok: bool,
+            error_text: &QString,
+        );
     }
 
     impl cxx_qt::Threading for RoomVm {}
@@ -53,9 +96,10 @@ use core::pin::Pin;
 
 use cxx_qt::{CxxQtType, Threading};
 use cxx_qt_lib::QString;
+use rc_core::policy::{ActionError, MessageAction};
 
 use crate::hub;
-use crate::room_view::{RoomState, outgoing};
+use crate::room_view::{RoomState, action_name, outgoing};
 
 /// Backing data of [`qobject::RoomVm`].
 pub struct RoomVmRust {
@@ -66,6 +110,7 @@ pub struct RoomVmRust {
     loading_older: bool,
     reached_start: bool,
     error_text: QString,
+    action_error: QString,
 }
 
 impl Default for RoomVmRust {
@@ -84,6 +129,7 @@ impl From<&RoomState> for RoomVmRust {
             loading_older: state.loading_older,
             reached_start: state.reached_start,
             error_text: QString::from(&state.error_text),
+            action_error: QString::default(),
         }
     }
 }
@@ -99,7 +145,7 @@ impl qobject::RoomVm {
     /// Copies `state` into the properties, then emits the change signal of each one that changed,
     /// so a handler sees the new values of all of them.
     pub fn show(mut self: Pin<&mut Self>, state: &RoomState) {
-        let new = RoomVmRust::from(state);
+        let mut new = RoomVmRust::from(state);
         let room_id = self.room_id != new.room_id;
         let name = self.name != new.name;
         let kind = self.kind != new.kind;
@@ -107,6 +153,11 @@ impl qobject::RoomVm {
         let loading_older = self.loading_older != new.loading_older;
         let reached_start = self.reached_start != new.reached_start;
         let error_text = self.error_text != new.error_text;
+        // What failed in one room means nothing in another. The state doesn't know of it.
+        if !room_id {
+            new.action_error.clone_from(&self.action_error);
+        }
+        let action_error = self.action_error != new.action_error;
         *self.as_mut().rust_mut() = new;
         if room_id {
             self.as_mut().room_id_changed();
@@ -128,6 +179,38 @@ impl qobject::RoomVm {
         }
         if error_text {
             self.as_mut().error_text_changed();
+        }
+        if action_error {
+            self.as_mut().action_error_changed();
+        }
+    }
+
+    /// Takes the core's answer to an edit or a deletion in: a failure becomes `actionError`.
+    pub fn finish_action(
+        mut self: Pin<&mut Self>,
+        message_id: &str,
+        action: MessageAction,
+        outcome: &Result<(), ActionError>,
+    ) {
+        let error_text = outcome
+            .as_ref()
+            .err()
+            .map_or_else(String::new, ToString::to_string);
+        self.as_mut().set_action_error_text(&error_text);
+        self.action_done(
+            &QString::from(message_id),
+            &QString::from(action_name(action)),
+            outcome.is_ok(),
+            &QString::from(&error_text),
+        );
+    }
+
+    /// Sets `actionError`, announcing it if it changed.
+    fn set_action_error_text(mut self: Pin<&mut Self>, text: &str) {
+        let text = QString::from(text);
+        if self.action_error != text {
+            self.as_mut().rust_mut().action_error = text;
+            self.action_error_changed();
         }
     }
 
@@ -152,5 +235,29 @@ impl qobject::RoomVm {
     #[allow(clippy::unused_self)]
     fn retry(self: Pin<&mut Self>, message_id: &QString) {
         hub::retry_message(message_id.to_string());
+    }
+
+    fn edit(mut self: Pin<&mut Self>, message_id: &QString, text: &QString) {
+        self.as_mut().set_action_error_text("");
+        hub::edit_message(message_id.to_string(), &text.to_string());
+    }
+
+    fn remove(mut self: Pin<&mut Self>, message_id: &QString) {
+        self.as_mut().set_action_error_text("");
+        hub::delete_message(message_id.to_string());
+    }
+
+    #[allow(clippy::unused_self)]
+    fn last_editable(self: Pin<&mut Self>) -> QString {
+        QString::from(&hub::last_editable())
+    }
+
+    #[allow(clippy::unused_self)]
+    fn message_text(self: Pin<&mut Self>, message_id: &QString) -> QString {
+        QString::from(&hub::message_text(&message_id.to_string()))
+    }
+
+    fn dismiss_action_error(self: Pin<&mut Self>) {
+        self.set_action_error_text("");
     }
 }
