@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 //! Client for the running app's Spix server, limited to the calls both frontends' servers support
-//! (ARCHITECTURE.md, GUI testing contract).
+//! (docs/design/gui-testing.md).
 
 use std::cell::Cell;
 use std::ops::BitOr;

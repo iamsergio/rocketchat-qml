@@ -21,6 +21,7 @@ path = [
     "TRACEABILITY.md",
     "CXX-QT.md",
     "CLAUDE.md",
+    "docs/design/*.md",
     "Cargo.lock",
     "vcpkg.json",
     ".mcp.json"
