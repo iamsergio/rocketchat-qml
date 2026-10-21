@@ -177,6 +177,21 @@ pub trait ServerApi: Clone + Send + Sync + 'static {
         id: &MessageId,
     ) -> impl Future<Output = Result<(), ApiError>> + Send;
 
+    /// Adds the user's reaction to a message, or takes it back. `emoji` is the shortcode with its
+    /// colons. Asking for what is already so succeeds.
+    ///
+    /// # Errors
+    ///
+    /// [`ApiError::Unauthorized`] if the credentials have expired or were revoked,
+    /// [`ApiError::Server`] if the server refuses the reaction (an emoji it doesn't know...).
+    fn react(
+        &self,
+        credentials: &Credentials,
+        id: &MessageId,
+        emoji: &str,
+        react: bool,
+    ) -> impl Future<Output = Result<(), ApiError>> + Send;
+
     /// Tells the server the user has seen everything in the room: it zeroes the room's unread and
     /// mention counts and pushes the changed subscription.
     ///

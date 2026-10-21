@@ -1468,6 +1468,53 @@ async fn a_user_cannot_edit_or_delete_the_message_of_somebody_else() {
     assert_eq!(found.text, "not yours");
 }
 
+// ACT-003
+#[tokio::test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+async fn a_user_reacts_and_takes_the_reaction_back_and_the_history_follows() {
+    let fixture = Fixture::new();
+    let (room_id, _) = fixture.create_channel();
+    let session = fixture.client.session(fixture.login().await.credentials);
+    let theirs = fixture.admin.post_message(&room_id, "react to me");
+
+    session.react(&theirs.id, ":tada:", true).await.unwrap();
+    let history = channel_history(&session, &room_id).await;
+    let found = history.iter().find(|m| m.id == theirs.id).unwrap();
+    assert_eq!(found.reactions.len(), 1);
+    assert_eq!(found.reactions[0].emoji, ":tada:");
+    assert_eq!(
+        found.reactions[0].usernames,
+        std::slice::from_ref(&fixture.user.username)
+    );
+
+    session.react(&theirs.id, ":tada:", false).await.unwrap();
+    let history = channel_history(&session, &room_id).await;
+    let found = history.iter().find(|m| m.id == theirs.id).unwrap();
+    assert!(found.reactions.is_empty());
+}
+
+// ACT-003
+#[tokio::test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+async fn reacting_twice_leaves_one_user_and_an_unknown_emoji_is_refused() {
+    let fixture = Fixture::new();
+    let (room_id, _) = fixture.create_channel();
+    let session = fixture.client.session(fixture.login().await.credentials);
+    let posted = fixture.admin.post_message(&room_id, "react to me");
+
+    session.react(&posted.id, ":tada:", true).await.unwrap();
+    session.react(&posted.id, ":tada:", true).await.unwrap();
+    let refused = session
+        .react(&posted.id, ":no_such_emoji_here:", true)
+        .await;
+
+    assert!(matches!(refused, Err(Error::Server { .. })), "{refused:?}");
+    let history = channel_history(&session, &room_id).await;
+    let found = history.iter().find(|m| m.id == posted.id).unwrap();
+    assert_eq!(found.reactions.len(), 1);
+    assert_eq!(found.reactions[0].usernames.len(), 1);
+}
+
 // ACT-001, ACT-002
 #[tokio::test]
 #[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]

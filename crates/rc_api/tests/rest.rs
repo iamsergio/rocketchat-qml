@@ -941,6 +941,74 @@ async fn a_refused_deletion_is_a_server_error_and_an_expired_token_unauthorized(
     assert!(matches!(result, Err(Error::Unauthorized)), "{result:?}");
 }
 
+// ACT-003
+#[tokio::test]
+async fn react_posts_the_id_the_emoji_and_the_wish() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/api/v1/chat.react"))
+        .and(header("X-User-Id", USER_ID))
+        .and(header("X-Auth-Token", TOKEN))
+        .and(body_json(
+            json!({ "messageId": "m1", "emoji": ":smile:", "shouldReact": true }),
+        ))
+        .respond_with(json_response(200, r#"{"success":true}"#))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/api/v1/chat.react"))
+        .and(body_json(
+            json!({ "messageId": "m1", "emoji": ":smile:", "shouldReact": false }),
+        ))
+        .respond_with(json_response(200, r#"{"success":true}"#))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = RestClient::new(&server.uri()).unwrap();
+    session(&client).react("m1", ":smile:", true).await.unwrap();
+    session(&client)
+        .react("m1", ":smile:", false)
+        .await
+        .unwrap();
+}
+
+// ACT-003
+#[tokio::test]
+async fn a_refused_reaction_is_a_server_error_and_an_expired_token_unauthorized() {
+    let server = MockServer::start().await;
+    mount(
+        &server,
+        "POST",
+        "/api/v1/chat.react",
+        json_response(
+            400,
+            r#"{"success":false,"error":"Invalid emoji provided. [error-not-allowed]"}"#,
+        ),
+    )
+    .await;
+    let client = RestClient::new(&server.uri()).unwrap();
+    let result = session(&client).react("m1", ":nope:", true).await;
+    assert!(
+        matches!(result, Err(Error::Server { status: 400, ref message }) if message.contains("Invalid emoji")),
+        "{result:?}"
+    );
+
+    let server = MockServer::start().await;
+    mount(
+        &server,
+        "POST",
+        "/api/v1/chat.react",
+        json_response(401, NOT_LOGGED_IN),
+    )
+    .await;
+    let result = session(&RestClient::new(&server.uri()).unwrap())
+        .react("m1", ":smile:", true)
+        .await;
+    assert!(matches!(result, Err(Error::Unauthorized)), "{result:?}");
+}
+
 // ACT-001, ACT-002
 #[tokio::test]
 async fn message_settings_asks_for_the_four_settings() {

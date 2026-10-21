@@ -177,6 +177,17 @@ impl ServerApi for RestApi {
         Ok(session.delete_message(room.as_str(), id.as_str()).await?)
     }
 
+    async fn react(
+        &self,
+        credentials: &Credentials,
+        id: &MessageId,
+        emoji: &str,
+        react: bool,
+    ) -> Result<(), ApiError> {
+        let session = self.client.session(api_credentials(credentials));
+        Ok(session.react(id.as_str(), emoji, react).await?)
+    }
+
     async fn mark_read(&self, credentials: &Credentials, room: &RoomId) -> Result<(), ApiError> {
         let session = self.client.session(api_credentials(credentials));
         Ok(session.mark_read(room.as_str()).await?)
