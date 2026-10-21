@@ -57,7 +57,7 @@ pub mod main_window {
     /// In the bar: stops quoting.
     pub const COMPOSER_QUOTE_CANCEL: &str = "mainWindow/composerQuoteCancel";
 
-    /// Why the last edit or deletion failed. Visible only then.
+    /// Why the last edit, deletion or reaction failed. Visible only then.
     pub const ROOM_ACTION_ERROR: &str = "mainWindow/roomActionError";
     /// The reason, as its `text`.
     pub const ROOM_ACTION_ERROR_TEXT: &str = "mainWindow/roomActionErrorText";
@@ -70,6 +70,9 @@ pub mod main_window {
     /// An item of the open message menu: quotes the message in the composer. Visible for every
     /// sent text message.
     pub const MESSAGE_QUOTE_ACTION: &str = "mainWindow/msgQuoteAction";
+    /// An item of the open message menu: opens the emoji picker to add a reaction. Visible for
+    /// every sent text message.
+    pub const MESSAGE_REACT_ACTION: &str = "mainWindow/msgReactAction";
     /// An item of the open message menu: edits the message. Visible for the user's own messages.
     pub const MESSAGE_EDIT_ACTION: &str = "mainWindow/msgEditAction";
     /// An item of the open message menu: asks for a confirmation to delete the message.
@@ -80,6 +83,14 @@ pub mod main_window {
     pub const DELETE_CONFIRM: &str = "mainWindow/deleteConfirm";
     /// In the confirmation: keeps the message.
     pub const DELETE_CANCEL: &str = "mainWindow/deleteCancel";
+
+    // The emoji picker is a popup as well, addressed from the window while it is open. Its emoji
+    // are found by name with [`emoji_pick`](super::emoji_pick).
+    /// In the open emoji picker: the search box, which has the focus. Its `text` is the query.
+    pub const EMOJI_SEARCH: &str = "mainWindow/emojiSearch";
+    /// In the open emoji picker: the grid of the emoji that match the query. Only those in view
+    /// exist.
+    pub const EMOJI_GRID: &str = "mainWindow/emojiGrid";
 
     // The indicators of a message the server hasn't confirmed, for a test that can't know its id
     // (the client picks it). They exist only while a message is in that state, so the name alone
@@ -141,9 +152,12 @@ pub mod message_row {
     /// The chips of the reactions, visible if there are any. Each is a
     /// [`reaction`](super::reaction).
     pub const REACTIONS: &str = "msgReactions";
-    /// Opens the message's menu (quote, edit, delete). Visible only for a message that can be
-    /// quoted or that the user can change; it is clear until the pointer is over the message, but
-    /// a click gets to it all the same.
+    /// The "+" after the chips: opens the emoji picker. Visible when the message has reactions and
+    /// can be reacted to.
+    pub const REACTION_ADD: &str = "reactionAdd";
+    /// Opens the message's menu (quote, add reaction, edit, delete). Visible only for a message
+    /// that can be quoted or reacted to or that the user can change; it is clear until the pointer
+    /// is over the message, but a click gets to it all the same.
     pub const MENU_BUTTON: &str = "msgMenuButton";
     /// Exists while the message is being sent.
     pub const PENDING: &str = "msgPending";
@@ -213,6 +227,13 @@ pub fn quote(message_id: &str, index: usize, part: &str) -> String {
     }
 }
 
+/// An emoji of the open emoji picker, by its shortcode without the colons (`tada` for `:tada:`).
+/// It exists while the grid shows it.
+#[must_use]
+pub fn emoji_pick(name: &str) -> String {
+    format!("{}/emojiPick_{name}", main_window::WINDOW)
+}
+
 /// The parts of a reaction of a message, for [`reaction`].
 pub mod reaction_row {
     /// The emoji: its `text` is the Unicode character, else the address of the custom emoji's
@@ -278,6 +299,12 @@ mod tests {
             "mainWindow/msg_m7/quote0/quoteAuthor"
         );
         assert_eq!(quote("m7", 1, ""), "mainWindow/msg_m7/quote1");
+    }
+
+    // INFRA-002
+    #[test]
+    fn an_emoji_of_the_picker_is_addressed_by_its_name_from_the_window() {
+        assert_eq!(emoji_pick("tada"), "mainWindow/emojiPick_tada");
     }
 
     // INFRA-002

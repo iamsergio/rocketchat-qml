@@ -12,7 +12,7 @@ use std::path::PathBuf;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use rc_gui_tests::paths::{main_window, message, message_row, room, room_row};
+use rc_gui_tests::paths::{emoji_pick, main_window, message, message_row, room, room_row};
 use rc_gui_tests::{App, Gui, Key, Modifiers};
 use rc_test_server::{Admin, Posted, TestUser, server_url};
 
@@ -94,6 +94,18 @@ pub fn choose(gui: &Gui, message_id: &str, action: &str) {
         .unwrap();
     gui.wait_until_visible(action, TIMEOUT).unwrap();
     gui.mouse_click(action).unwrap();
+}
+
+/// In the open emoji picker, searches for `name` and clicks the emoji of that shortcode (without
+/// colons), which closes the picker.
+pub fn pick_emoji(gui: &Gui, name: &str) {
+    gui.wait_until_visible(main_window::EMOJI_SEARCH, TIMEOUT)
+        .unwrap();
+    gui.set_text(main_window::EMOJI_SEARCH, name).unwrap();
+    gui.wait_until_visible(&emoji_pick(name), TIMEOUT).unwrap();
+    gui.mouse_click(&emoji_pick(name)).unwrap();
+    gui.wait_until_hidden(main_window::EMOJI_SEARCH, TIMEOUT)
+        .unwrap();
 }
 
 /// Types `text` over what the composer holds and presses Enter.
