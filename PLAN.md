@@ -113,7 +113,7 @@ Done when: you can be signed in to several servers at once, switch between them 
 
 One session actor per account under a thin accounts layer: the actor already holds exactly one session, so it barely changes. One account is on screen at a time.
 
-- [ ] `rc_core`: split `client.rs` into the handle and the account actor (its `impl` blocks by concern), and the actor tests into a harness plus one file per topic. No behaviour change
+- [x] `rc_core`: split `client.rs` into the handle and the account actor (its `impl` blocks by concern), and the actor tests into a harness plus one file per topic. No behaviour change
 - [ ] `rc_core`: one shared core (runtime, connector, file cache, store worker) separate from the account actor. Still one account
 - [ ] `rc_core`: the `SecretStore` port keeps a list of accounts (`AccountId`, server, user, token or none), with memory, file and keyring adapters (one keyring entry per account plus an index). The session stored by earlier builds is dropped: log in again
 - [ ] `rc_core`: accounts layer. Add, log in, remove; events tagged with the account; unread and mention totals per account; all accounts resumed at startup, independently; logging out removes the account; an expired one stays listed without a token, for a prefilled login; the same server and user can't be added twice. Two users on one server are fine

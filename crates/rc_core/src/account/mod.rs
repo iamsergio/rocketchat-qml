@@ -1,0 +1,673 @@
+// SPDX-FileCopyrightText: 2026 Sergio Martins
+// SPDX-License-Identifier: MIT
+
+//! The session actor: owns the session state, and the tasks that report back to it.
+
+use std::collections::HashSet;
+use std::sync::Arc;
+use std::sync::mpsc as std_mpsc;
+use std::time::Duration;
+
+use secrecy::SecretString;
+use tokio::runtime::Runtime;
+use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
+use tokio::task::{JoinHandle, JoinSet};
+use tokio::time::Instant;
+
+use crate::adapters::MemoryMessageStore;
+use crate::avatars::{Avatars, Fetched};
+use crate::backoff::Backoff;
+use crate::client::{Command, Connection, Event};
+use crate::domain::{
+    AvatarOwner, Credentials, Message, MessageId, RoomId, RoomKind, StoredSession, User,
+};
+use crate::emoji::CustomEmojis;
+use crate::images::{self, Images};
+use crate::policy::{MessageAction, MessagePolicy};
+use crate::ports::{
+    ApiError, Changes, Connector, FileCache, MessageStore, Page, Pushed, SecretStore, ServerApi,
+};
+use crate::rooms::{RoomAction, RoomList};
+use crate::session::{Established, LoginFailure, SessionState, log_in, resume};
+use crate::store_worker::{StoreHandle, run_store_worker};
+use crate::timeline::{Timeline, TimelineError};
+
+mod media;
+mod message_actions;
+mod open_room;
+mod room_actions;
+mod sending;
+mod sync;
+mod thread;
+
+use thread::OpenThread;
+
+/// How long the actor waits, when stopping, for queued store writes and token revocations.
+const DRAIN_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// A login or resume task's answer.
+struct LoginDone<A> {
+    attempt: u64,
+    /// Whether to remember the session: logins do, resumes already have it stored.
+    persist: bool,
+    outcome: Result<Established<A>, LoginFailure>,
+}
+
+/// A room fetch's answer.
+struct RoomsDone {
+    /// The sync cycle the fetch belongs to: the answer is stale if another has begun since.
+    cycle: u64,
+    outcome: Result<Vec<rc_api::Subscription>, ApiError>,
+}
+
+/// A custom emoji fetch's answer.
+struct EmojiDone {
+    /// The sync cycle the fetch belongs to: the answer is stale if another has begun since.
+    cycle: u64,
+    outcome: Result<Vec<rc_api::CustomEmoji>, ApiError>,
+}
+
+/// A message settings fetch's answer.
+struct PolicyDone {
+    /// The sync cycle the fetch belongs to: the answer is stale if another has begun since.
+    cycle: u64,
+    outcome: Result<rc_api::MessageSettings, ApiError>,
+}
+
+/// What the realtime task tells the actor, in this order: the connection opens or fails, events
+/// follow, the connection ends.
+enum RealtimeDone {
+    /// Opened, with the way to tell the connection which room is open.
+    Opened(Result<UnboundedSender<Option<RoomId>>, ApiError>),
+    Pushed(Box<Pushed>),
+    Ended,
+}
+
+/// The realtime task's report, tagged with the sync cycle it belongs to: stale if another has begun
+/// since.
+struct RealtimeReport {
+    cycle: u64,
+    done: RealtimeDone,
+}
+
+/// A catch-up's answer.
+struct ChangesDone {
+    /// Identifies the request: the answer is stale if the room was closed or another began.
+    attempt: u64,
+    room: RoomId,
+    /// The client's clock when the request was sent.
+    started: jiff::Timestamp,
+    outcome: Result<Changes, ApiError>,
+}
+
+/// An avatar download's answer.
+struct AvatarDone {
+    /// The login attempt the download belongs to: the answer is stale if another has begun since.
+    attempt: u64,
+    owner: AvatarOwner,
+    outcome: Fetched,
+}
+
+/// An attachment image download's answer.
+struct ImageDone {
+    /// The login attempt the download belongs to: the answer is stale if another has begun since.
+    attempt: u64,
+    path: String,
+    outcome: images::Fetched,
+}
+
+/// A thread fetch's answer.
+struct ThreadDone {
+    /// Identifies the fetch: the answer is stale if the thread was closed or another fetch began.
+    attempt: u64,
+    parent: MessageId,
+    outcome: Result<Page, ApiError>,
+}
+
+/// A history fetch's answer.
+struct HistoryDone {
+    /// Identifies the fetch: the answer is stale if the room was closed or another fetch began.
+    attempt: u64,
+    room: RoomId,
+    outcome: Result<Page, ApiError>,
+}
+
+/// A send's answer.
+struct SendDone {
+    /// The login attempt the send belongs to: the answer is stale if another has begun since.
+    attempt: u64,
+    room: RoomId,
+    id: MessageId,
+    outcome: Result<Message, ApiError>,
+}
+
+/// A mark-as-read call's answer.
+struct MarkReadDone {
+    /// The login attempt the call belongs to: the answer is stale if the session has changed.
+    attempt: u64,
+    room: RoomId,
+    outcome: Result<(), ApiError>,
+}
+
+/// A command on a room's answer.
+struct RoomActionDone {
+    /// The login attempt the call belongs to: the answer is stale if the session has changed.
+    attempt: u64,
+    room: RoomId,
+    action: RoomAction,
+    outcome: Result<(), ApiError>,
+}
+
+/// What an edit, a deletion or a reaction did on the server.
+enum Applied {
+    /// The message as the server stored it.
+    Edited(Box<Message>),
+    Deleted,
+    Reacted {
+        emoji: String,
+        react: bool,
+    },
+}
+
+/// An edit's, a deletion's or a reaction's answer.
+struct ActionDone {
+    /// The login attempt the call belongs to: the answer is stale if the session has changed.
+    attempt: u64,
+    room: RoomId,
+    id: MessageId,
+    action: MessageAction,
+    outcome: Result<Applied, ApiError>,
+}
+
+/// What the tasks tell the actor.
+enum Done<A> {
+    Login(LoginDone<A>),
+    Rooms(RoomsDone),
+    Emoji(EmojiDone),
+    Policy(PolicyDone),
+    Avatar(AvatarDone),
+    Image(ImageDone),
+    Realtime(RealtimeReport),
+    /// The wait after a lost connection is over; the cycle is the one that was lost.
+    Reconnect {
+        cycle: u64,
+    },
+    History(HistoryDone),
+    Thread(ThreadDone),
+    Changes(ChangesDone),
+    Send(SendDone),
+    MarkRead(MarkReadDone),
+    Action(ActionDone),
+    RoomAction(RoomActionDone),
+}
+
+/// A history fetch in flight.
+struct Fetch {
+    attempt: u64,
+    /// Older messages, not the newest.
+    older: bool,
+    /// The client's clock when the request was sent.
+    started: jiff::Timestamp,
+    /// A catch-up goes with it (see [`Actor::fetch_changes`]), which is what brings the held
+    /// messages up to date, not the page.
+    with_changes: bool,
+}
+
+/// The room whose messages the frontend shows.
+struct OpenRoom {
+    timeline: Timeline,
+    kind: RoomKind,
+    fetch: Option<Fetch>,
+    /// Why the last fetch failed.
+    error: Option<TimelineError>,
+    /// Messages pushed while the newest messages were still to come: the page may predate them,
+    /// and merging one first could make the page drop it. They join the page when it arrives.
+    live: Vec<Message>,
+    /// The attempt id of the catch-up in flight.
+    changes: Option<u64>,
+    /// The messages deleted while the room was open. An answer to a request sent before the
+    /// deletion may still hold them.
+    deleted: HashSet<MessageId>,
+}
+
+/// What the actor keeps while logged in; the next features need both.
+struct Session<A> {
+    api: A,
+    credentials: Credentials,
+    /// What the links of quotes must begin with (see [`Established::site_url`]).
+    site_url: String,
+}
+
+/// Owns the session state and handles one message at a time. Network calls run in spawned tasks
+/// that report back through `done_tx`; secret-store calls are queued for the store worker.
+struct Actor<C: Connector> {
+    connector: Arc<C>,
+    state: SessionState,
+    session: Option<Session<C::Api>>,
+    /// The stored session being resumed while `Resuming`.
+    resuming: Option<StoredSession>,
+    /// Identifies the current attempt, so that the answer of a cancelled one is dropped.
+    attempt: u64,
+    login_task: Option<JoinHandle<()>>,
+    /// The room fetch of the current session, while it runs.
+    rooms_task: Option<JoinHandle<()>>,
+    /// The realtime connection of the current session, while it is open or opening. The task owns
+    /// the receiver of the pushed events: ending it closes the connection.
+    realtime_task: Option<JoinHandle<()>>,
+    /// The connection of the current cycle is open.
+    realtime_open: bool,
+    /// Tells the open connection which room is open, so that it follows its deletions. `None`
+    /// while there is no connection.
+    realtime_watch: Option<UnboundedSender<Option<RoomId>>>,
+    /// Counts sync cycles (see [`open_realtime`](Self::open_realtime)), to tell the reports of the
+    /// current one from stale ones.
+    cycle: u64,
+    /// The wait before the next cycle, while it runs.
+    reconnect_task: Option<JoinHandle<()>>,
+    /// How long to wait before the next cycle.
+    backoff: Backoff,
+    /// What the frontend was last told about the connection.
+    connection: Connection,
+    /// When the current cycle had the connection open and the rooms listed. The wait starts over
+    /// only if it lasted: see [`Backoff::lasted`].
+    succeeded_at: Option<Instant>,
+    /// The room list of the session holds a server snapshot: later snapshots are merged into it,
+    /// not reset onto it.
+    rooms_listed: bool,
+    /// What the server pushed since the realtime connection opened, until the rooms are listed:
+    /// they are replayed on top of the list then. `None` once they are, and outside a session.
+    backlog: Option<Vec<Pushed>>,
+    /// The rooms in display order, as the frontend has them.
+    rooms: RoomList,
+    /// The custom emoji the frontend was last told about.
+    emoji: CustomEmojis,
+    /// The custom emoji fetch of the current cycle, while it runs.
+    emoji_task: Option<JoinHandle<()>>,
+    /// What the frontend was last told users may do with their messages.
+    policy: MessagePolicy,
+    /// The message settings fetch of the current cycle, while it runs.
+    policy_task: Option<JoinHandle<()>>,
+    cache: Arc<dyn FileCache>,
+    /// Which avatars are wanted, queued and shown.
+    avatars: Avatars,
+    /// The avatar downloads in flight.
+    avatar_tasks: JoinSet<()>,
+    /// Which attachment images are wanted, queued and shown.
+    images: Images,
+    /// The attachment image downloads in flight.
+    image_tasks: JoinSet<()>,
+    /// The messages of the rooms opened so far. Cleared on logout.
+    messages: Box<dyn MessageStore>,
+    open: Option<OpenRoom>,
+    /// The thread beside the open room: always one of its messages, and closed with it.
+    open_thread: Option<OpenThread>,
+    /// Counts history and thread fetches, to tell the answer of the current one from a stale one.
+    history_attempt: u64,
+    /// The history fetch of the open room, while it runs.
+    history_task: Option<JoinHandle<()>>,
+    /// The thread fetch of the open thread, while it runs.
+    thread_task: Option<JoinHandle<()>>,
+    /// The catch-up of the open room (changes since it was last up to date), while it runs.
+    changes_task: Option<JoinHandle<()>>,
+    /// Token revocations in flight, so that stopping can wait for them.
+    revokes: JoinSet<()>,
+    /// `None` once stopping.
+    store: Option<StoreHandle>,
+    store_worker: JoinHandle<()>,
+    done_tx: UnboundedSender<Done<C::Api>>,
+    on_event: Arc<dyn Fn(Event) + Send + Sync>,
+}
+
+/// Starts the actor on the runtime and returns the receiver that is signalled when it has drained
+/// and is about to end.
+pub(crate) fn spawn<C: Connector, S: SecretStore>(
+    runtime: &Runtime,
+    connector: C,
+    store: S,
+    cache: impl FileCache,
+    on_event: impl Fn(Event) + Send + Sync + 'static,
+    backoff: Backoff,
+    commands: UnboundedReceiver<Command>,
+) -> std_mpsc::Receiver<()> {
+    let (done_tx, done_rx) = mpsc::unbounded_channel();
+    let (finished_tx, finished) = std_mpsc::channel();
+    let (store_tx, store_rx) = mpsc::unbounded_channel();
+    let store_worker = runtime.spawn(run_store_worker(Arc::new(store), store_rx));
+    let actor = Actor {
+        connector: Arc::new(connector),
+        state: SessionState::LoggedOut { failure: None },
+        session: None,
+        resuming: None,
+        attempt: 0,
+        login_task: None,
+        rooms_task: None,
+        realtime_task: None,
+        realtime_open: false,
+        realtime_watch: None,
+        cycle: 0,
+        reconnect_task: None,
+        backoff,
+        connection: Connection::Connected,
+        succeeded_at: None,
+        rooms_listed: false,
+        backlog: None,
+        rooms: RoomList::default(),
+        emoji: CustomEmojis::default(),
+        emoji_task: None,
+        policy: MessagePolicy::default(),
+        policy_task: None,
+        cache: Arc::new(cache),
+        avatars: Avatars::default(),
+        avatar_tasks: JoinSet::new(),
+        images: Images::default(),
+        image_tasks: JoinSet::new(),
+        messages: Box::new(MemoryMessageStore::default()),
+        open: None,
+        open_thread: None,
+        history_attempt: 0,
+        history_task: None,
+        thread_task: None,
+        changes_task: None,
+        revokes: JoinSet::new(),
+        store: Some(StoreHandle(store_tx)),
+        store_worker,
+        done_tx,
+        on_event: Arc::new(on_event),
+    };
+    runtime.spawn(async move {
+        actor.run(commands, done_rx).await;
+        // Fails only if the client is gone already.
+        let _ = finished_tx.send(());
+    });
+    finished
+}
+
+impl<C: Connector> Actor<C> {
+    async fn run(
+        mut self,
+        mut commands: UnboundedReceiver<Command>,
+        mut done: UnboundedReceiver<Done<C::Api>>,
+    ) {
+        self.start().await;
+        loop {
+            tokio::select! {
+                biased;
+                command = commands.recv() => match command {
+                    Some(command) => self.handle_command(command),
+                    None => break,
+                },
+                Some(done) = done.recv() => match done {
+                    Done::Login(done) => self.handle_login_done(done),
+                    Done::Rooms(done) => self.handle_rooms_done(done),
+                    Done::Emoji(done) => self.handle_emoji_done(done),
+                    Done::Policy(done) => self.handle_policy_done(done),
+                    Done::Avatar(done) => self.handle_avatar_done(done),
+                    Done::Image(done) => self.handle_image_done(done),
+                    Done::Realtime(report) => self.handle_realtime_done(report),
+                    Done::Reconnect { cycle } => self.handle_reconnect(cycle),
+                    Done::History(done) => self.handle_history_done(done),
+                    Done::Thread(done) => self.handle_thread_done(done),
+                    Done::Changes(done) => self.handle_changes_done(done),
+                    Done::Send(done) => self.handle_send_done(done),
+                    Done::MarkRead(done) => self.handle_mark_read_done(done),
+                    Done::Action(done) => self.handle_action_done(done),
+                    Done::RoomAction(done) => self.handle_room_action_done(done),
+                },
+            }
+        }
+        self.stop().await;
+    }
+
+    /// Looks for a stored session, before any command is handled.
+    async fn start(&mut self) {
+        let loaded = match &self.store {
+            Some(store) => store.load().await,
+            None => Ok(None),
+        };
+        let stored = loaded.unwrap_or_else(|error| {
+            tracing::warn!(%error, "can't read the stored session");
+            None
+        });
+        match stored {
+            Some(stored) => self.resume(stored),
+            None => self.set_state(SessionState::LoggedOut { failure: None }),
+        }
+    }
+
+    /// Ends the attempt in flight, then waits, for a bounded time, for what the user asked
+    /// already: store writes and token revocations.
+    async fn stop(&mut self) {
+        if let Some(task) = self.login_task.take() {
+            task.abort();
+        }
+        if let Some(task) = self.rooms_task.take() {
+            task.abort();
+        }
+        if let Some(task) = self.emoji_task.take() {
+            task.abort();
+        }
+        if let Some(task) = self.policy_task.take() {
+            task.abort();
+        }
+        self.abort_realtime_task();
+        self.avatar_tasks.abort_all();
+        self.image_tasks.abort_all();
+        self.abort_history_task();
+        if let Some(task) = self.thread_task.take() {
+            task.abort();
+        }
+        drop(self.store.take());
+        let revokes = &mut self.revokes;
+        let worker = &mut self.store_worker;
+        let drain = async {
+            while revokes.join_next().await.is_some() {}
+            let _ = worker.await;
+        };
+        if tokio::time::timeout(DRAIN_TIMEOUT, drain).await.is_err() {
+            tracing::warn!("pending logout work didn't finish in time");
+        }
+    }
+
+    fn handle_command(&mut self, command: Command) {
+        match command {
+            Command::Login {
+                server,
+                username,
+                password,
+            } => self.login(server, username, password),
+            Command::Logout => self.logout(),
+            Command::OpenRoom(room) => self.open_room(room),
+            Command::LoadOlder => self.load_older(),
+            Command::OpenThread(parent) => self.open_thread(&parent),
+            Command::CloseThread => self.close_thread(),
+            Command::LoadOlderThread => self.load_older_thread(),
+            Command::SendMessage {
+                room,
+                text,
+                quote,
+                thread,
+                also_to_channel,
+            } => self.send_message(room, &text, quote, thread, also_to_channel),
+            Command::RetryMessage(id) => self.retry_message(&id),
+            Command::EditMessage { id, text } => self.edit_own_message(id, &text),
+            Command::DeleteMessage(id) => self.delete_own_message(id),
+            Command::React { id, emoji, react } => self.react_to_message(id, emoji, react),
+            Command::RoomAction { room, action } => self.act_on_room(room, action),
+        }
+    }
+
+    fn login(&mut self, server: String, username: String, password: SecretString) {
+        if !matches!(self.state, SessionState::LoggedOut { .. }) {
+            tracing::debug!("login ignored: not logged out");
+            return;
+        }
+        let connector = Arc::clone(&self.connector);
+        // The password lives and dies in this task.
+        self.begin_attempt(SessionState::Connecting, true, async move {
+            log_in(&*connector, &server, &username, &password).await
+        });
+    }
+
+    fn resume(&mut self, stored: StoredSession) {
+        let connector = Arc::clone(&self.connector);
+        self.resuming = Some(stored.clone());
+        self.begin_attempt(SessionState::Resuming, false, async move {
+            resume(&*connector, &stored).await
+        });
+    }
+
+    /// Goes to `state`, `Connecting` or `Resuming`, and runs `attempt` in a task that reports back.
+    fn begin_attempt(
+        &mut self,
+        state: SessionState,
+        persist: bool,
+        attempt: impl Future<Output = Result<Established<C::Api>, LoginFailure>> + Send + 'static,
+    ) {
+        self.attempt += 1;
+        let id = self.attempt;
+        self.set_state(state);
+        let done = self.done_tx.clone();
+        self.login_task = Some(tokio::spawn(async move {
+            let outcome = attempt.await;
+            // Fails only if the actor is gone.
+            let _ = done.send(Done::Login(LoginDone {
+                attempt: id,
+                persist,
+                outcome,
+            }));
+        }));
+    }
+
+    fn handle_login_done(&mut self, done: LoginDone<C::Api>) {
+        if done.attempt != self.attempt || !self.state.attempting() {
+            tracing::debug!("answer of a cancelled login dropped");
+            return;
+        }
+        self.login_task = None;
+        self.resuming = None;
+        match done.outcome {
+            Ok(established) => {
+                if done.persist
+                    && let Some(store) = &self.store
+                {
+                    store.save(StoredSession {
+                        server: established.account.server.clone(),
+                        credentials: established.credentials.clone(),
+                    });
+                }
+                self.session = Some(Session {
+                    api: established.api,
+                    credentials: established.credentials,
+                    site_url: established.site_url,
+                });
+                self.backoff.reset();
+                self.set_state(SessionState::LoggedIn(established.account));
+                self.open_realtime();
+            }
+            Err(failure) => {
+                // The server refused the stored token for good; other failures may pass.
+                if failure == LoginFailure::SessionExpired {
+                    self.clear_store();
+                }
+                self.set_state(SessionState::LoggedOut {
+                    failure: Some(failure),
+                });
+            }
+        }
+    }
+
+    fn logout(&mut self) {
+        if self.state.attempting() {
+            if let Some(task) = self.login_task.take() {
+                task.abort();
+            }
+            // Whatever the aborted task still sends is stale.
+            self.attempt += 1;
+            self.set_state(SessionState::LoggedOut { failure: None });
+            // Cancelling a resume is a logout of the stored session.
+            if let Some(stored) = self.resuming.take() {
+                self.clear_store();
+                if let Ok(api) = self.connector.connect(&stored.server) {
+                    self.revoke(api, stored.credentials);
+                }
+            }
+            return;
+        }
+        if matches!(self.state, SessionState::LoggedIn(_)) {
+            self.abort_rooms_task();
+            self.abort_realtime_task();
+            self.set_state(SessionState::LoggedOut { failure: None });
+            self.clear_rooms();
+            self.clear_emoji();
+            self.clear_policy();
+            self.clear_avatars();
+            self.clear_images();
+            self.clear_timeline();
+            self.clear_store();
+            if let Some(session) = self.session.take() {
+                self.revoke(session.api, session.credentials);
+            }
+        } else {
+            tracing::debug!("logout ignored: not logged in");
+        }
+    }
+
+    /// The server refused the token of a logged-in session: forget it, and everything it showed.
+    /// It's dead already, so there's nothing to revoke.
+    fn expire_session(&mut self) {
+        self.abort_rooms_task();
+        self.abort_realtime_task();
+        self.session = None;
+        self.clear_store();
+        self.set_state(SessionState::LoggedOut {
+            failure: Some(LoginFailure::SessionExpired),
+        });
+        self.clear_rooms();
+        self.clear_emoji();
+        self.clear_policy();
+        self.clear_avatars();
+        self.clear_images();
+        self.clear_timeline();
+    }
+
+    /// The logged-in user.
+    fn own_user(&self) -> Option<&User> {
+        match &self.state {
+            SessionState::LoggedIn(account) => Some(&account.user),
+            _ => None,
+        }
+    }
+
+    fn clear_store(&self) {
+        if let Some(store) = &self.store {
+            store.clear();
+        }
+    }
+
+    /// Revokes the token on the server. Best effort: we're logged out locally either way.
+    fn revoke(&mut self, api: C::Api, credentials: Credentials) {
+        self.revokes.spawn(async move {
+            if let Err(error) = api.logout(&credentials).await {
+                tracing::warn!(%error, "couldn't revoke the session on the server");
+            }
+        });
+    }
+
+    fn set_state(&mut self, state: SessionState) {
+        match &state {
+            SessionState::LoggedOut { failure } => {
+                tracing::info!(?failure, "session: logged out");
+            }
+            SessionState::Connecting => tracing::info!("session: connecting"),
+            SessionState::Resuming => tracing::info!("session: resuming"),
+            SessionState::LoggedIn(account) => tracing::info!(
+                server = %account.server,
+                user = %account.user.username,
+                "session: logged in"
+            ),
+        }
+        self.connection = Connection::Connected;
+        self.state = state.clone();
+        (self.on_event)(Event::Session(state));
+    }
+}
