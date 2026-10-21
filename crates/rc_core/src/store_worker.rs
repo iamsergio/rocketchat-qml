@@ -17,7 +17,9 @@ pub(crate) enum StoreOp {
     Clear,
 }
 
-/// Queues secret-store calls for the store worker.
+/// Queues secret-store calls for the store worker. The worker ends when the last clone is dropped
+/// and its queue is empty.
+#[derive(Clone)]
 pub(crate) struct StoreHandle(pub(crate) UnboundedSender<StoreOp>);
 
 impl StoreHandle {
