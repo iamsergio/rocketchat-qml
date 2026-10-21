@@ -18,11 +18,12 @@ pub fn kind_name(kind: RoomKind) -> &'static str {
     }
 }
 
-/// How QML sees what was done to a message, in the answer to an edit or a deletion.
+/// How QML sees what was done to a message, in the answer to an edit, a deletion or a reaction.
 pub fn action_name(action: MessageAction) -> &'static str {
     match action {
         MessageAction::Edit => "edit",
         MessageAction::Delete => "delete",
+        MessageAction::React => "react",
     }
 }
 
@@ -108,11 +109,15 @@ mod tests {
         }
     }
 
-    // ACT-001, ACT-002
+    // ACT-001, ACT-002, ACT-003
     #[test]
     fn each_action_has_its_own_name() {
-        let actions = [MessageAction::Edit, MessageAction::Delete];
-        assert_eq!(actions.map(action_name), ["edit", "delete"]);
+        let actions = [
+            MessageAction::Edit,
+            MessageAction::Delete,
+            MessageAction::React,
+        ];
+        assert_eq!(actions.map(action_name), ["edit", "delete", "react"]);
     }
 
     // SEND-001
