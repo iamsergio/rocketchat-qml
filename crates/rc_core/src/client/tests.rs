@@ -3698,11 +3698,11 @@ fn cached_avatars_of_the_rooms_are_sent_at_once() {
         harness.next_avatars(),
         [update(room_owner("1"), "/cache/h/room/1.png")]
     );
-    // Nothing for the room that has none.
-    assert_eq!(
-        fake.wait_for_avatar_calls(2),
-        [room_owner("1"), room_owner("2")]
-    );
+    // Nothing for the room that has none. The downloads run at once, in any order.
+    let calls = fake.wait_for_avatar_calls(2);
+    assert_eq!(calls.len(), 2, "{calls:?}");
+    assert!(calls.contains(&room_owner("1")), "{calls:?}");
+    assert!(calls.contains(&room_owner("2")), "{calls:?}");
 }
 
 /// Like [`logged_in_with_cache`], for a cache that makes `Avatars` events come in between.
