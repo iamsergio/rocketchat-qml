@@ -85,6 +85,10 @@ mod tests {
             quotes: Vec::new(),
             edited: false,
             reactions,
+            thread_id: None,
+            thread_shown: false,
+            thread_replies: 0,
+            thread_last_reply: None,
         }
     }
 

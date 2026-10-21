@@ -117,6 +117,9 @@ impl Cache {
                 }
             }
             Event::TimelineStatus(status) => self.status = status.clone(),
+            // The thread pane will use these.
+            #[allow(clippy::match_same_arms)]
+            Event::ThreadTimeline(_) | Event::ThreadStatus(_) => {}
             _ => {}
         }
     }
@@ -402,6 +405,10 @@ mod tests {
             quotes: Vec::new(),
             edited: false,
             reactions: Vec::new(),
+            thread_id: None,
+            thread_shown: false,
+            thread_replies: 0,
+            thread_last_reply: None,
         }
     }
 

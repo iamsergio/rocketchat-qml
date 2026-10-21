@@ -305,6 +305,34 @@ impl Admin {
         }
     }
 
+    /// Posts `text` as a reply in the thread of `thread_id`, and in the channel too if
+    /// `also_to_channel` (`chat.sendMessage` with `tmid` and `tshow`). The first reply makes the
+    /// message a thread's parent.
+    ///
+    /// # Panics
+    ///
+    /// If the server refuses.
+    // Most callers only need the message to exist, so the result may be ignored.
+    #[allow(clippy::must_use_candidate)]
+    pub fn post_in_thread(
+        &self,
+        room_id: &str,
+        thread_id: &str,
+        text: &str,
+        also_to_channel: bool,
+    ) -> Posted {
+        let json = self.post(
+            "chat.sendMessage",
+            &json!({ "message": {
+                "rid": room_id, "msg": text, "tmid": thread_id, "tshow": also_to_channel,
+            } }),
+        );
+        Posted {
+            id: json["message"]["_id"].as_str().unwrap().to_owned(),
+            ts: json["message"]["ts"].as_str().unwrap().to_owned(),
+        }
+    }
+
     /// The server's own URL (`Site_Url`), which the links of quotes must begin with: the server
     /// makes no quote from a link to it by any other name (`localhost` for `127.0.0.1`, the
     /// container's name in CI).

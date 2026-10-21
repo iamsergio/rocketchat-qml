@@ -205,7 +205,7 @@ pub fn load_older() {
 
 pub fn send_message(room: RoomId, text: &str, quote: Option<MessageId>) {
     if let Some(client) = &lock().client {
-        client.send_message(room, text, quote);
+        client.send_message(room, text, quote, None, false);
     } else {
         tracing::warn!("send_message ignored: the core isn't running");
     }
@@ -372,6 +372,9 @@ fn dispatch(event: Event) {
             }
         }
         Event::TimelineStatus(_) => show_room(hub),
+        // The thread pane will use these.
+        #[allow(clippy::match_same_arms)]
+        Event::ThreadTimeline(_) | Event::ThreadStatus(_) => {}
         Event::Avatars(updates) => {
             let changes = hub.cache.avatar_changes(&updates);
             show_avatars(hub, &changes);

@@ -126,6 +126,21 @@ pub struct TimelineStatus {
     pub error: Option<TimelineError>,
 }
 
+/// What the frontend shows next to the messages of the open thread.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ThreadStatus {
+    /// The message the open thread belongs to; `None` when no thread is open.
+    pub parent: Option<MessageId>,
+    /// The newest replies are being fetched.
+    pub loading: bool,
+    /// Older replies are being fetched.
+    pub loading_older: bool,
+    /// Nothing exists before the first row, which is the parent.
+    pub reached_start: bool,
+    /// Why the last request failed; cleared when the next one starts.
+    pub error: Option<TimelineError>,
+}
+
 /// The display order: by time, and by id between messages sent in the same millisecond, so that
 /// the order is the same whichever page a message arrived in. Messages the server hasn't confirmed
 /// come after all that it has, in the order they were written: their time is the user's clock,
@@ -460,6 +475,10 @@ mod tests {
             quotes: Vec::new(),
             edited: false,
             reactions: Vec::new(),
+            thread_id: None,
+            thread_shown: false,
+            thread_replies: 0,
+            thread_last_reply: None,
         }
     }
 

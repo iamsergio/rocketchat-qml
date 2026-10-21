@@ -20,6 +20,7 @@ const ME: &str = include_str!("fixtures/me.json");
 const NOT_LOGGED_IN: &str = include_str!("fixtures/not_logged_in.json");
 const ROOMS: &str = include_str!("fixtures/rooms.json");
 const SUBSCRIPTIONS: &str = include_str!("fixtures/subscriptions.json");
+const THREAD_MESSAGES: &str = include_str!("fixtures/thread_messages.json");
 
 const USER_ID: &str = "u8paxsGQXMH9vSnSc";
 const TOKEN: &str = "fake-token";
@@ -763,6 +764,146 @@ async fn history_of_a_missing_room_is_a_server_error_with_the_message() {
         matches!(result, Err(Error::Server { status: 400, ref message }) if message.contains("error-room-not-found")),
         "{result:?}"
     );
+}
+
+// ACT-004
+#[tokio::test]
+async fn thread_messages_asks_for_the_newest_replies_at_an_offset() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/chat.getThreadMessages"))
+        .and(header("X-User-Id", USER_ID))
+        .and(header("X-Auth-Token", TOKEN))
+        .and(query_param("tmid", "parent"))
+        .and(query_param("count", "2"))
+        .and(query_param("offset", "0"))
+        .and(query_param("sort", r#"{"ts":-1}"#))
+        .respond_with(json_response(200, THREAD_MESSAGES))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let page = session(&RestClient::new(&server.uri()).unwrap())
+        .thread_messages("parent", 2, 0)
+        .await
+        .unwrap();
+
+    let texts: Vec<_> = page.messages.iter().map(|m| m.text.as_str()).collect();
+    assert_eq!(texts, ["reply 3", "reply 2"]);
+    assert_eq!(page.total, 3);
+    assert!(!page.reached_start);
+}
+
+// ACT-004
+#[tokio::test]
+async fn the_last_page_of_a_thread_reaches_the_start() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/chat.getThreadMessages"))
+        .and(query_param("offset", "1"))
+        .respond_with(json_response(200, THREAD_MESSAGES))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let page = session(&RestClient::new(&server.uri()).unwrap())
+        .thread_messages("parent", 2, 1)
+        .await
+        .unwrap();
+
+    assert!(page.reached_start);
+}
+
+// ACT-004
+#[tokio::test]
+async fn thread_messages_of_a_missing_thread_is_a_server_error_with_the_message() {
+    let server = MockServer::start().await;
+    let body = r#"{"success":false,"error":"Invalid Message [error-invalid-message]","errorType":"error-invalid-message"}"#;
+    mount(
+        &server,
+        "GET",
+        "/api/v1/chat.getThreadMessages",
+        json_response(400, body),
+    )
+    .await;
+    let result = session(&RestClient::new(&server.uri()).unwrap())
+        .thread_messages("nope", 50, 0)
+        .await;
+    assert!(
+        matches!(result, Err(Error::Server { status: 400, ref message }) if message.contains("error-invalid-message")),
+        "{result:?}"
+    );
+}
+
+// ACT-004
+#[tokio::test]
+async fn thread_messages_with_an_expired_token_is_unauthorized() {
+    let server = MockServer::start().await;
+    mount(
+        &server,
+        "GET",
+        "/api/v1/chat.getThreadMessages",
+        json_response(401, NOT_LOGGED_IN),
+    )
+    .await;
+    let result = session(&RestClient::new(&server.uri()).unwrap())
+        .thread_messages("parent", 50, 0)
+        .await;
+    assert!(matches!(result, Err(Error::Unauthorized)), "{result:?}");
+}
+
+// ACT-004
+#[tokio::test]
+async fn a_thread_reply_posts_the_thread_and_whether_it_is_shown_in_the_channel() {
+    let server = MockServer::start().await;
+    for shown in [false, true] {
+        Mock::given(method("POST"))
+            .and(path("/api/v1/chat.sendMessage"))
+            .and(header("X-User-Id", USER_ID))
+            .and(header("X-Auth-Token", TOKEN))
+            .and(body_json(json!({ "message": {
+                "_id": "m1", "rid": "rid", "msg": "hello", "tmid": "parent", "tshow": shown,
+            } })))
+            .respond_with(json_response(200, SENT))
+            .expect(1)
+            .mount(&server)
+            .await;
+    }
+    let session = session(&RestClient::new(&server.uri()).unwrap());
+    for shown in [false, true] {
+        let message = session
+            .send_thread_reply("rid", "m1", "hello", "parent", shown)
+            .await
+            .unwrap();
+        assert_eq!(message.id, "m1");
+    }
+}
+
+// ACT-004
+#[tokio::test]
+async fn a_refused_duplicate_thread_reply_is_a_success_when_the_stored_message_is_ours() {
+    let server = MockServer::start().await;
+    mount(
+        &server,
+        "POST",
+        "/api/v1/chat.sendMessage",
+        json_response(400, DUPLICATE),
+    )
+    .await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/chat.getMessage"))
+        .and(query_param("msgId", "m1"))
+        .respond_with(json_response(200, SENT))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let message = session(&RestClient::new(&server.uri()).unwrap())
+        .send_thread_reply("rid", "m1", "hello again", "parent", false)
+        .await
+        .unwrap();
+
+    assert_eq!(message.text, "hello");
 }
 
 // AUTH-004

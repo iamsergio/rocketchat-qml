@@ -1863,3 +1863,383 @@ async fn a_permalink_with_another_host_makes_no_quote() {
     let history = channel_history(&session, &room_id).await;
     assert!(history.iter().all(|m| m.quotes.is_empty()));
 }
+
+/// A thread in a new channel: the parent, and replies `r1`, `r2`... posted by admin in that order,
+/// every other one also to the channel (`r2`, `r4`...).
+struct Thread {
+    room_id: String,
+    parent: rc_test_server::Posted,
+    replies: Vec<rc_test_server::Posted>,
+}
+
+fn thread_of(fixture: &Fixture, replies: usize) -> Thread {
+    let (room_id, _) = fixture.create_channel();
+    let parent = fixture.admin.post_message(&room_id, "parent");
+    let replies = (1..=replies)
+        .map(|n| {
+            fixture
+                .admin
+                .post_in_thread(&room_id, &parent.id, &format!("r{n}"), n % 2 == 0)
+        })
+        .collect();
+    Thread {
+        room_id,
+        parent,
+        replies,
+    }
+}
+
+// ACT-004
+#[tokio::test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+async fn thread_messages_are_the_replies_newest_first_without_the_parent() {
+    let fixture = Fixture::new();
+    let thread = thread_of(&fixture, 3);
+    let session = fixture.client.session(fixture.login().await.credentials);
+
+    let page = session
+        .thread_messages(&thread.parent.id, 50, 0)
+        .await
+        .unwrap();
+
+    let texts: Vec<_> = page.messages.iter().map(|m| m.text.as_str()).collect();
+    assert_eq!(texts, ["r3", "r2", "r1"]);
+    assert_eq!(page.total, 3);
+    assert!(page.reached_start);
+    for message in &page.messages {
+        assert_eq!(message.thread_id.as_ref(), Some(&thread.parent.id));
+        assert_eq!(message.room_id, thread.room_id);
+    }
+    let shown: Vec<_> = page.messages.iter().map(|m| m.thread_shown).collect();
+    assert_eq!(shown, [false, true, false]);
+}
+
+// ACT-004
+#[tokio::test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+async fn thread_messages_page_back_by_offset_until_the_start() {
+    let fixture = Fixture::new();
+    let thread = thread_of(&fixture, 5);
+    let session = fixture.client.session(fixture.login().await.credentials);
+
+    let first = session
+        .thread_messages(&thread.parent.id, 2, 0)
+        .await
+        .unwrap();
+    let second = session
+        .thread_messages(&thread.parent.id, 2, 2)
+        .await
+        .unwrap();
+    let third = session
+        .thread_messages(&thread.parent.id, 2, 4)
+        .await
+        .unwrap();
+
+    let texts = |page: &rc_api::ThreadPage| -> Vec<String> {
+        page.messages.iter().map(|m| m.text.clone()).collect()
+    };
+    assert_eq!(texts(&first), ["r5", "r4"]);
+    assert_eq!(texts(&second), ["r3", "r2"]);
+    assert_eq!(texts(&third), ["r1"]);
+    assert_eq!(
+        [
+            first.reached_start,
+            second.reached_start,
+            third.reached_start
+        ],
+        [false, false, true]
+    );
+    assert_eq!(first.total, 5);
+    // A page that ends exactly at the start knows it, without a further request.
+    let exact = session
+        .thread_messages(&thread.parent.id, 3, 2)
+        .await
+        .unwrap();
+    assert_eq!(texts(&exact), ["r3", "r2", "r1"]);
+    assert!(exact.reached_start);
+}
+
+// ACT-004
+#[tokio::test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+async fn thread_messages_of_something_that_is_not_a_message_is_a_server_error() {
+    let fixture = Fixture::new();
+    let (room_id, _) = fixture.create_channel();
+    let session = fixture.client.session(fixture.login().await.credentials);
+
+    for id in ["noSuchMessage", room_id.as_str()] {
+        let result = session.thread_messages(id, 50, 0).await;
+        assert!(matches!(result, Err(Error::Server { .. })), "{result:?}");
+    }
+}
+
+// ACT-004
+#[tokio::test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+async fn a_thread_without_replies_is_empty() {
+    let fixture = Fixture::new();
+    let thread = thread_of(&fixture, 0);
+    let session = fixture.client.session(fixture.login().await.credentials);
+
+    let page = session
+        .thread_messages(&thread.parent.id, 50, 0)
+        .await
+        .unwrap();
+
+    assert_eq!((page.messages.len(), page.total), (0, 0));
+    assert!(page.reached_start);
+}
+
+// ACT-004
+#[tokio::test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+async fn a_thread_reply_is_stored_in_the_thread_and_the_parent_counts_it() {
+    let fixture = Fixture::new();
+    let (room_id, _) = fixture.create_channel();
+    let session = fixture.client.session(fixture.login().await.credentials);
+    let parent = fixture.admin.post_message(&room_id, "parent");
+    let id = unique().replace('-', "");
+
+    let sent = session
+        .send_thread_reply(&room_id, &id, "in the thread", &parent.id, false)
+        .await
+        .unwrap();
+
+    assert_eq!(sent.id, id);
+    assert_eq!(sent.thread_id.as_ref(), Some(&parent.id));
+    assert!(!sent.thread_shown);
+    let page = session.thread_messages(&parent.id, 50, 0).await.unwrap();
+    assert_eq!(page.messages, std::slice::from_ref(&sent));
+    let history = channel_history(&session, &room_id).await;
+    let held = history.iter().find(|m| m.id == parent.id).unwrap();
+    assert_eq!(held.thread_replies, 1);
+    assert_eq!(held.thread_last_reply, Some(sent.ts));
+    // Not sent to the channel, the reply is not in its history.
+    assert!(history.iter().all(|m| m.id != id));
+}
+
+// ACT-004
+#[tokio::test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+async fn a_thread_reply_also_sent_to_the_channel_is_in_its_history_too() {
+    let fixture = Fixture::new();
+    let (room_id, _) = fixture.create_channel();
+    let session = fixture.client.session(fixture.login().await.credentials);
+    let parent = fixture.admin.post_message(&room_id, "parent");
+    let id = unique().replace('-', "");
+
+    session
+        .send_thread_reply(&room_id, &id, "for everybody", &parent.id, true)
+        .await
+        .unwrap();
+
+    let history = channel_history(&session, &room_id).await;
+    let shown = history.iter().find(|m| m.id == id).unwrap();
+    assert_eq!(shown.thread_id.as_ref(), Some(&parent.id));
+    assert!(shown.thread_shown);
+    let page = session.thread_messages(&parent.id, 50, 0).await.unwrap();
+    assert_eq!(page.messages.len(), 1);
+    assert_eq!(page.messages[0].id, id);
+}
+
+// ACT-004
+#[tokio::test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+async fn a_retried_thread_reply_is_stored_once() {
+    let fixture = Fixture::new();
+    let (room_id, _) = fixture.create_channel();
+    let session = fixture.client.session(fixture.login().await.credentials);
+    let parent = fixture.admin.post_message(&room_id, "parent");
+    let id = unique().replace('-', "");
+
+    let first = session
+        .send_thread_reply(&room_id, &id, "once", &parent.id, false)
+        .await
+        .unwrap();
+    let second = session
+        .send_thread_reply(&room_id, &id, "twice", &parent.id, false)
+        .await
+        .unwrap();
+
+    assert_eq!(second, first);
+    let page = session.thread_messages(&parent.id, 50, 0).await.unwrap();
+    assert_eq!(page.total, 1);
+}
+
+// ACT-004
+#[tokio::test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+async fn live_thread_replies_arrive_as_events_with_their_thread() {
+    let fixture = Fixture::new();
+    let (room_id, _) = fixture.create_channel();
+    let login = fixture.login().await;
+    let (client, mut events) = connect_and_login(&login.credentials).await;
+    client.subscribe_my_messages().await.unwrap();
+    let parent = fixture.admin.post_message(&room_id, "parent");
+
+    let hidden = fixture
+        .admin
+        .post_in_thread(&room_id, &parent.id, "in the thread", false);
+    let shown = fixture
+        .admin
+        .post_in_thread(&room_id, &parent.id, "and the channel", true);
+
+    // Replies are pushed whether they are shown in the channel or not.
+    let hidden = message_event(&mut events, &hidden.id).await;
+    assert_eq!(hidden.thread_id.as_ref(), Some(&parent.id));
+    assert!(!hidden.thread_shown);
+    assert_eq!(hidden.room_id, room_id);
+    let shown = message_event(&mut events, &shown.id).await;
+    assert_eq!(shown.thread_id.as_ref(), Some(&parent.id));
+    assert!(shown.thread_shown);
+}
+
+// ACT-004
+#[tokio::test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+async fn the_server_pushes_the_parent_again_with_its_new_reply_count_when_a_reply_is_posted() {
+    let fixture = Fixture::new();
+    let (room_id, _) = fixture.create_channel();
+    let login = fixture.login().await;
+    let (client, mut events) = connect_and_login(&login.credentials).await;
+    client.subscribe_my_messages().await.unwrap();
+    let parent = fixture.admin.post_message(&room_id, "parent");
+    let original = message_event(&mut events, &parent.id).await;
+    assert_eq!(original.thread_replies, 0);
+    assert_eq!(original.thread_last_reply, None);
+
+    let first = fixture
+        .admin
+        .post_in_thread(&room_id, &parent.id, "first", false);
+    let counted = message_event_where(&mut events, &parent.id, |m| m.thread_replies == 1).await;
+    assert_eq!(counted.thread_last_reply, Some(first.ts.parse().unwrap()));
+    assert_eq!(counted.text, "parent");
+    assert!(!counted.edited, "a reply is not an edit");
+
+    let second = fixture
+        .admin
+        .post_in_thread(&room_id, &parent.id, "second", false);
+    let counted = message_event_where(&mut events, &parent.id, |m| m.thread_replies == 2).await;
+    assert_eq!(counted.thread_last_reply, Some(second.ts.parse().unwrap()));
+}
+
+// ACT-004
+#[tokio::test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+async fn the_server_does_not_push_the_parent_when_a_reply_is_deleted() {
+    let fixture = Fixture::new();
+    let thread = thread_of(&fixture, 2);
+    let login = fixture.login().await;
+    let session = fixture.client.session(login.credentials.clone());
+    let (client, mut events) = connect_and_login(&login.credentials).await;
+    client.subscribe_my_messages().await.unwrap();
+    client
+        .subscribe_room_deletions(&thread.room_id)
+        .await
+        .unwrap();
+
+    fixture
+        .admin
+        .delete_message(&thread.room_id, &thread.replies[1].id);
+    // Events come in the order the server made them, so once the marker has arrived a push of the
+    // parent that the deletion caused would have too.
+    let marker = fixture.admin.post_message(&thread.room_id, "marker");
+    let mut seen = Vec::new();
+    loop {
+        let event = event_where(&mut events, |_| true).await;
+        if matches!(&event, DdpEvent::Message(m) if m.id == marker.id) {
+            break;
+        }
+        seen.push(event);
+    }
+
+    let deleted = DdpEvent::MessageDeleted {
+        room_id: thread.room_id.clone(),
+        message_id: thread.replies[1].id.clone(),
+    };
+    assert!(seen.contains(&deleted), "{seen:?}");
+    assert!(
+        !seen
+            .iter()
+            .any(|e| matches!(e, DdpEvent::Message(m) if m.id == thread.parent.id)),
+        "{seen:?}"
+    );
+    // The server did count it, and left the time of the last reply alone.
+    let history = channel_history(&session, &thread.room_id).await;
+    let parent = history.iter().find(|m| m.id == thread.parent.id).unwrap();
+    assert_eq!(parent.thread_replies, 1);
+    assert_eq!(
+        parent.thread_last_reply,
+        Some(thread.replies[1].ts.parse().unwrap())
+    );
+}
+
+// ACT-004
+#[tokio::test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+async fn sync_messages_reports_the_changed_and_the_deleted_thread_replies_and_the_parent() {
+    let fixture = Fixture::new();
+    let thread = thread_of(&fixture, 3);
+    let session = fixture.client.session(fixture.login().await.credentials);
+    let since = jiff::Timestamp::now() - Duration::from_secs(60);
+    fixture
+        .admin
+        .edit_message(&thread.room_id, &thread.replies[0].id, "r1 edited");
+    fixture
+        .admin
+        .delete_message(&thread.room_id, &thread.replies[2].id);
+
+    let changes = session.sync_messages(&thread.room_id, since).await.unwrap();
+
+    // Replies are in the catch-up like any message, shown in the channel or not.
+    let edited = changes
+        .updated
+        .iter()
+        .find(|m| m.id == thread.replies[0].id)
+        .expect("the edited reply is in `updated`");
+    assert_eq!(edited.text, "r1 edited");
+    assert_eq!(edited.thread_id.as_ref(), Some(&thread.parent.id));
+    assert!(!edited.thread_shown);
+    assert_eq!(changes.deleted, std::slice::from_ref(&thread.replies[2].id));
+    // The parent comes with the count the server has now.
+    let parent = changes
+        .updated
+        .iter()
+        .find(|m| m.id == thread.parent.id)
+        .expect("the parent is in `updated`");
+    assert_eq!(parent.thread_replies, 2);
+}
+
+// ACT-004
+#[tokio::test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+async fn a_deleted_parent_is_pushed_as_a_removed_message_and_not_as_a_deletion() {
+    let fixture = Fixture::new();
+    let thread = thread_of(&fixture, 1);
+    let login = fixture.login().await;
+    let (client, mut events) = connect_and_login(&login.credentials).await;
+    client.subscribe_my_messages().await.unwrap();
+    client
+        .subscribe_room_deletions(&thread.room_id)
+        .await
+        .unwrap();
+
+    fixture
+        .admin
+        .delete_message(&thread.room_id, &thread.parent.id);
+
+    // The server keeps a parent that has replies, as a message of the removed kind without text.
+    let removed = message_event_where(&mut events, &thread.parent.id, |m| {
+        m.kind.as_deref() == Some("rm")
+    })
+    .await;
+    assert_eq!(removed.text, "");
+    assert_eq!(removed.thread_replies, 1);
+    // Its reply is still there.
+    let session = fixture.client.session(login.credentials);
+    let page = session
+        .thread_messages(&thread.parent.id, 50, 0)
+        .await
+        .unwrap();
+    assert_eq!(page.messages.len(), 1);
+}
