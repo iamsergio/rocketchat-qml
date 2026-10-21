@@ -204,9 +204,9 @@ struct MessageBody {
 }
 
 /// The `reactions` of a message: an object from shortcode to who reacted. Anything else means no
-/// reactions. It must keep the server's order, which going through `serde_json::Value` would
-/// lose, so the map is read by a visitor. Untagged, so that the visitor works on buffered input
-/// and the odd entry can be skipped without upsetting the parser.
+/// reactions. It must keep the server's order, so the map is read by a visitor (a `Value` keeps it
+/// too, with the `preserve_order` feature of `serde_json`). Untagged, so that the visitor works on
+/// buffered input and the odd entry can be skipped without upsetting the parser.
 #[derive(Deserialize)]
 #[serde(untagged)]
 enum ReactionsBody {
@@ -1764,6 +1764,36 @@ mod tests {
                 reaction(":apple:", &["b", "c"]),
                 reaction(":+1:", &["d"]),
             ]
+        );
+    }
+
+    // ACT-003
+    #[test]
+    fn a_pushed_message_keeps_the_order_of_the_reactions_too() {
+        let fixture = serde_json::from_str(
+            r#"{
+                "eventName": "r",
+                "args": [{
+                    "_id": "m",
+                    "rid": "r",
+                    "msg": "hi",
+                    "ts": { "$date": 1792511428626 },
+                    "u": { "_id": "u", "username": "bob" },
+                    "reactions": {
+                        ":zebra:": { "usernames": ["a"] },
+                        ":apple:": { "usernames": ["b"] }
+                    }
+                }]
+            }"#,
+        )
+        .unwrap();
+        let event = parse_stream_event("stream-room-messages", fixture).unwrap();
+        let Some(DdpEvent::Message(message)) = event else {
+            panic!("expected a message, got {event:?}");
+        };
+        assert_eq!(
+            message.reactions,
+            [reaction(":zebra:", &["a"]), reaction(":apple:", &["b"])]
         );
     }
 

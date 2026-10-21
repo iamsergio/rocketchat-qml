@@ -413,6 +413,42 @@ impl Message {
             MessageKind::System(_) => false,
         }
     }
+
+    /// Adds `username` to the users who reacted with `emoji`, or takes them out of it: a new
+    /// reaction goes at the end, and one left without users is dropped. Returns whether anything
+    /// changed. The users of a reaction are a set, so doing the same twice, or after the server's
+    /// copy already says so, changes nothing.
+    pub fn set_reaction(&mut self, emoji: &str, username: &str, react: bool) -> bool {
+        let position = self.reactions.iter().position(|r| r.emoji == emoji);
+        match (position, react) {
+            (Some(at), true) => {
+                let users = &mut self.reactions[at].usernames;
+                let missing = !users.iter().any(|u| u == username);
+                if missing {
+                    users.push(username.to_owned());
+                }
+                missing
+            }
+            (None, true) => {
+                self.reactions.push(Reaction {
+                    emoji: emoji.to_owned(),
+                    usernames: vec![username.to_owned()],
+                });
+                true
+            }
+            (Some(at), false) => {
+                let users = &mut self.reactions[at].usernames;
+                let before = users.len();
+                users.retain(|u| u != username);
+                let changed = users.len() != before;
+                if users.is_empty() {
+                    self.reactions.remove(at);
+                }
+                changed
+            }
+            (None, false) => false,
+        }
+    }
 }
 
 /// The message a history entry stands for, or `None` if the timeline doesn't show it: replies in a
@@ -648,6 +684,49 @@ mod tests {
         let plain = message_from(self::entry(None, "hi")).unwrap();
         assert!(!plain.edited);
         assert_eq!(plain.reactions, []);
+    }
+
+    fn reacted(reactions: &[(&str, &[&str])]) -> Message {
+        let mut message = message_from(entry(None, "hi")).unwrap();
+        message.reactions = reactions
+            .iter()
+            .map(|(emoji, users)| Reaction {
+                emoji: (*emoji).to_owned(),
+                usernames: users.iter().map(|u| (*u).to_owned()).collect(),
+            })
+            .collect();
+        message
+    }
+
+    // ACT-003
+    #[test]
+    fn a_reaction_adds_the_user_to_its_emoji_or_starts_one_at_the_end() {
+        let mut message = reacted(&[(":a:", &["x"]), (":b:", &["y"])]);
+        assert!(message.set_reaction(":a:", "z", true));
+        assert!(message.set_reaction(":c:", "z", true));
+        assert_eq!(
+            message,
+            reacted(&[(":a:", &["x", "z"]), (":b:", &["y"]), (":c:", &["z"])])
+        );
+    }
+
+    // ACT-003
+    #[test]
+    fn taking_a_reaction_back_drops_the_emoji_once_nobody_is_left() {
+        let mut message = reacted(&[(":a:", &["x", "z"]), (":b:", &["z"])]);
+        assert!(message.set_reaction(":a:", "z", false));
+        assert!(message.set_reaction(":b:", "z", false));
+        assert_eq!(message, reacted(&[(":a:", &["x"])]));
+    }
+
+    // ACT-003
+    #[test]
+    fn reacting_is_a_set_so_repeating_it_changes_nothing() {
+        let mut message = reacted(&[(":a:", &["x"])]);
+        assert!(!message.set_reaction(":a:", "x", true));
+        assert!(!message.set_reaction(":a:", "nobody", false));
+        assert!(!message.set_reaction(":other:", "x", false));
+        assert_eq!(message, reacted(&[(":a:", &["x"])]));
     }
 
     // RICH-005
