@@ -167,6 +167,7 @@ mod tests {
             kind,
             delivery: Delivery::Sent,
             attachments: Vec::new(),
+            quotes: Vec::new(),
             edited: false,
             reactions: Vec::new(),
         }
@@ -296,6 +297,7 @@ mod tests {
             edit_minutes: 5,
             deleting_allowed: false,
             delete_minutes: 0,
+            site_url: None,
         });
         let viewer = editor(policy);
         assert!(can_edit(&own, &viewer, at("2026-10-20T10:05:00Z")));

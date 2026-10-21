@@ -47,6 +47,10 @@ pub trait Connector: Send + Sync + 'static {
 pub trait ServerApi: Clone + Send + Sync + 'static {
     fn version(&self) -> impl Future<Output = Result<ServerVersion, ApiError>> + Send;
 
+    /// The server's own URL (its `Site_Url` setting), without a trailing slash: `None` if it has
+    /// none. Needs no login.
+    fn site_url(&self) -> impl Future<Output = Result<Option<String>, ApiError>> + Send;
+
     fn login(
         &self,
         username: &str,

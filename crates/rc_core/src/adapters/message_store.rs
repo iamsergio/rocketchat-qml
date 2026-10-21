@@ -44,6 +44,7 @@ mod tests {
                 kind: MessageKind::Text("hi".into()),
                 delivery: Delivery::Sent,
                 attachments: Vec::new(),
+                quotes: Vec::new(),
                 edited: false,
                 reactions: Vec::new(),
             }],

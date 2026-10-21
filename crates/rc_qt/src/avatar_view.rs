@@ -260,6 +260,7 @@ mod tests {
             },
             delivery: Delivery::Sent,
             attachments: Vec::new(),
+            quotes: Vec::new(),
             edited: false,
             reactions: Vec::new(),
         }

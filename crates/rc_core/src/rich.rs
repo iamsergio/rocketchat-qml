@@ -132,6 +132,92 @@ impl RichText {
 }
 
 impl RichText {
+    /// The body without the links that start it and stand for the messages it quotes: an
+    /// empty-label link (`[ ](url)`, or its `Link` node in the first paragraph) to one of `links`,
+    /// with the whitespace after it. The server wants them in the text to make a quote, and a
+    /// reader doesn't want to see them. Only links that match are dropped, so one the server
+    /// didn't make a quote of stays.
+    #[must_use]
+    pub fn without_quote_links(self, links: &[String]) -> Self {
+        if links.is_empty() {
+            return self;
+        }
+        let text = strip_quote_links_from_text(&self.text, links);
+        let changed = text.len() != self.text.len();
+        let text = text.to_owned();
+        let mut blocks = self.blocks;
+        let blocks_changed = strip_quote_links_from_blocks(&mut blocks, links);
+        if !changed && !blocks_changed {
+            return Self {
+                text: self.text,
+                blocks,
+            };
+        }
+        // Without markdown the blocks were made from the text, links included.
+        if !blocks_changed || blocks.is_empty() || text.is_empty() {
+            return Self::plain(text);
+        }
+        Self { text, blocks }
+    }
+}
+
+/// The text after the quote links it starts with, or all of it if it doesn't start with one.
+fn strip_quote_links_from_text<'a>(text: &'a str, links: &[String]) -> &'a str {
+    let mut rest = text;
+    let mut stripped = false;
+    while let Some(after) = strip_quote_link(rest, links) {
+        rest = after.trim_start();
+        stripped = true;
+    }
+    if stripped { rest } else { text }
+}
+
+/// What follows a leading `[ ](url)` with a url in `links`.
+fn strip_quote_link<'a>(text: &'a str, links: &[String]) -> Option<&'a str> {
+    let (label, rest) = text.strip_prefix('[')?.split_once("](")?;
+    if !label.trim().is_empty() {
+        return None;
+    }
+    let (url, rest) = rest.split_once(')')?;
+    links.iter().any(|link| link == url).then_some(rest)
+}
+
+/// Drops the quote links that start the first paragraph, and the paragraph if nothing else is in
+/// it. Returns whether there were any.
+fn strip_quote_links_from_blocks(blocks: &mut Vec<Block>, links: &[String]) -> bool {
+    let Some(Block::Paragraph(inlines)) = blocks.first_mut() else {
+        return false;
+    };
+    let mut dropped = false;
+    loop {
+        match inlines.first() {
+            Some(Inline::Link { url, label })
+                if links.contains(url) && label.iter().all(is_blank) =>
+            {
+                dropped = true;
+            }
+            Some(inline) if dropped && is_blank(inline) => {}
+            _ => break,
+        }
+        inlines.remove(0);
+    }
+    if !dropped {
+        return false;
+    }
+    if let Some(Inline::Text(text)) = inlines.first_mut() {
+        *text = text.trim_start().to_owned();
+    }
+    if inlines.is_empty() {
+        blocks.remove(0);
+    }
+    true
+}
+
+fn is_blank(inline: &Inline) -> bool {
+    matches!(inline, Inline::Text(text) if text.trim().is_empty())
+}
+
+impl RichText {
     /// Whether the body calls `username` (`@username`, any case) or everybody (`@all`, `@here`).
     #[must_use]
     pub fn mentions(&self, username: &str) -> bool {
@@ -870,5 +956,152 @@ mod tests {
             assert_eq!(body.text, text);
             assert!(!body.blocks.is_empty(), "{text:?}");
         }
+    }
+
+    fn quote_link(url: &str) -> Inline {
+        Inline::Link {
+            url: url.into(),
+            label: vec![t(" ")],
+        }
+    }
+
+    fn links(urls: &[&str]) -> Vec<String> {
+        urls.iter().map(|&url| url.to_owned()).collect()
+    }
+
+    // ACT-005
+    #[test]
+    fn the_quote_link_of_a_recorded_message_leaves_its_text_and_paragraph() {
+        let history: Value = serde_json::from_str(include_str!(
+            "../../rc_api/tests/fixtures/history_quotes.json"
+        ))
+        .unwrap();
+        let message = history["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|m| {
+                m["msg"]
+                    .as_str()
+                    .is_some_and(|text| text.ends_with(") first reply"))
+            })
+            .unwrap();
+        let text = message["msg"].as_str().unwrap();
+        let link = message["attachments"][0]["message_link"].as_str().unwrap();
+        let body = from_json(text, &message["md"]);
+        assert_eq!(body.blocks.len(), 1);
+
+        let stripped = body.without_quote_links(&links(&[link]));
+
+        assert_eq!(stripped.text, "first reply");
+        assert_eq!(stripped.blocks, [para(vec![t("first reply")])]);
+    }
+
+    // ACT-005
+    #[test]
+    fn several_quote_links_go_with_the_whitespace_between_them() {
+        let md = json!([{"type":"PARAGRAPH","value":[
+            {"type":"LINK","value":{"src":t_json("http://s/a"),"label":[t_json(" ")]}},
+            t_json(" "),
+            {"type":"LINK","value":{"src":t_json("http://s/b"),"label":[t_json(" ")]}},
+            t_json("  hello"),
+            {"type":"BOLD","value":[t_json("there")]}
+        ]}]);
+        let body = from_json("[ ](http://s/a) [ ](http://s/b)  hello**there**", &md);
+
+        let stripped = body.without_quote_links(&links(&["http://s/a", "http://s/b"]));
+
+        assert_eq!(stripped.text, "hello**there**");
+        assert_eq!(
+            stripped.blocks,
+            [para(vec![t("hello"), Inline::Bold(vec![t("there")])])]
+        );
+    }
+
+    // ACT-005
+    #[test]
+    fn a_link_that_is_not_a_quote_stays() {
+        let md = json!([{"type":"PARAGRAPH","value":[
+            {"type":"LINK","value":{"src":t_json("http://s/other"),"label":[t_json(" ")]}},
+            t_json(" hello")
+        ]}]);
+        let text = "[ ](http://s/other) hello";
+        let body = from_json(text, &md);
+
+        let stripped = body.clone().without_quote_links(&links(&["http://s/a"]));
+
+        assert_eq!(stripped, body);
+        assert_eq!(body.clone().without_quote_links(&[]), body);
+    }
+
+    // ACT-005
+    #[test]
+    fn a_link_with_a_label_or_not_at_the_start_stays() {
+        let labelled = RichText {
+            text: "[see](http://s/a) hi".into(),
+            blocks: vec![para(vec![
+                Inline::Link {
+                    url: "http://s/a".into(),
+                    label: vec![t("see")],
+                },
+                t(" hi"),
+            ])],
+        };
+        assert_eq!(
+            labelled
+                .clone()
+                .without_quote_links(&links(&["http://s/a"])),
+            labelled
+        );
+        let later = RichText {
+            text: "hi [ ](http://s/a)".into(),
+            blocks: vec![para(vec![t("hi "), quote_link("http://s/a")])],
+        };
+        assert_eq!(
+            later.clone().without_quote_links(&links(&["http://s/a"])),
+            later
+        );
+    }
+
+    // ACT-005
+    #[test]
+    fn a_body_of_only_quote_links_ends_up_empty() {
+        let body = RichText {
+            text: "[ ](http://s/a) ".into(),
+            blocks: vec![para(vec![quote_link("http://s/a"), t(" ")])],
+        };
+
+        let stripped = body.without_quote_links(&links(&["http://s/a"]));
+
+        assert_eq!(stripped, RichText::plain(""));
+        assert!(stripped.blocks.is_empty());
+    }
+
+    // ACT-005
+    #[test]
+    fn a_body_without_markdown_loses_the_link_from_its_text_too() {
+        let body = RichText::plain("[ ](http://s/a) hello\nthere");
+
+        let stripped = body.without_quote_links(&links(&["http://s/a"]));
+
+        assert_eq!(stripped, RichText::plain("hello\nthere"));
+    }
+
+    // ACT-005
+    #[test]
+    fn later_paragraphs_keep_their_links() {
+        let body = RichText {
+            text: "[ ](http://s/a) one\n[ ](http://s/a) two".into(),
+            blocks: vec![
+                para(vec![quote_link("http://s/a"), t(" one")]),
+                para(vec![quote_link("http://s/a"), t(" two")]),
+            ],
+        };
+
+        let stripped = body.without_quote_links(&links(&["http://s/a"]));
+
+        assert_eq!(stripped.text, "one\n[ ](http://s/a) two");
+        assert_eq!(stripped.blocks[0], para(vec![t("one")]));
+        assert_eq!(stripped.blocks.len(), 2);
     }
 }

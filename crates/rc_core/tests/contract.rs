@@ -554,7 +554,7 @@ fn the_avatars_that_users_and_rooms_have_are_downloaded_and_kept_for_the_next_se
     assert_cached_image(&first[&channel], &cache.0);
     // The author of a message, once the room is open: the user's own message is one.
     client.open_room(channel_id.clone().into());
-    client.send_message(channel_id.into(), "hello");
+    client.send_message(channel_id.into(), "hello", None);
     let mine = avatars_until(&events, std::slice::from_ref(&me));
     assert_cached_image(&mine[&me], &cache.0);
     drop(client);
@@ -582,7 +582,7 @@ fn rooms_and_users_with_the_generated_avatar_get_none() {
         matches!(event, Event::Rooms(_)).then_some(())
     });
     client.open_room(channel_id.clone().into());
-    client.send_message(channel_id.into(), "who am I");
+    client.send_message(channel_id.into(), "who am I", None);
     wait_for(&events, |event| match event {
         Event::Timeline(changes) => changes
             .iter()
@@ -1041,7 +1041,7 @@ fn a_sent_message_is_stored_under_the_id_it_was_shown_with() {
     let mut mirror = Vec::new();
     settle(&events, &mut mirror);
 
-    client.send_message(room.clone().into(), "hello from the client");
+    client.send_message(room.clone().into(), "hello from the client", None);
 
     // Shown at once, as pending, then confirmed, with nothing else in between.
     let mut pending = None;
@@ -1073,7 +1073,7 @@ fn a_message_sent_to_a_room_that_is_not_open_any_more_is_sent_all_the_same() {
     settle(&events, &mut mirror);
 
     let before = admin.last_message(&room).id;
-    client.send_message(room.clone().into(), "sent and left");
+    client.send_message(room.clone().into(), "sent and left", None);
     client.open_room(other.clone().into());
     settle(&events, &mut mirror);
     // Nothing is shown of it here; it arrives on the server all the same.
@@ -1138,7 +1138,7 @@ fn a_message_that_fails_while_the_server_is_out_of_reach_is_retried_under_its_id
 
     proxy.set_accepting(false);
     proxy.drop_connections();
-    client.send_message(room.clone().into(), "sent in the dark");
+    client.send_message(room.clone().into(), "sent in the dark", None);
     follow_until(&events, &mut mirror, |mirror| {
         mirror.iter().any(|m| m.delivery == Delivery::Failed)
     });
@@ -1370,6 +1370,7 @@ fn a_client_catches_up_with_edits_reactions_and_deletions_after_the_connection_w
 struct OwnMessages {
     admin: Admin,
     room: String,
+    room_name: String,
     /// The ids of the messages in `texts`' order.
     ids: Vec<String>,
     client: Client,
@@ -1381,7 +1382,7 @@ fn open_channel_with_own_and_others(texts: &[&str]) -> OwnMessages {
     let admin = Admin::login();
     let user = admin.create_user();
     let own = Admin::login_as(&user.username, &user.password);
-    let (room, _) = admin.create_channel(&[&user.username]);
+    let (room, room_name) = admin.create_channel(&[&user.username]);
     let ids = texts
         .iter()
         .enumerate()
@@ -1397,6 +1398,7 @@ fn open_channel_with_own_and_others(texts: &[&str]) -> OwnMessages {
     OwnMessages {
         admin,
         room,
+        room_name,
         ids,
         client,
         events,
@@ -1477,4 +1479,128 @@ fn the_message_of_somebody_else_is_refused_without_a_request_and_stays() {
     assert_eq!(edit, Err(ActionError::NotAllowed(MessageAction::Edit)));
     assert_eq!(delete, Err(ActionError::NotAllowed(MessageAction::Delete)));
     assert_eq!(texts(&open.mirror), ["mine", "theirs"]);
+}
+
+/// The message of the mirror that says `text`.
+fn message_saying<'a>(mirror: &'a [Message], text: &str) -> Option<&'a Message> {
+    mirror
+        .iter()
+        .find(|m| matches!(&m.kind, MessageKind::Text(body) if body.text == text))
+}
+
+// ACT-005
+#[test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+fn a_reply_that_quotes_a_message_shows_the_quote_and_not_the_link() {
+    let mut open = open_channel_with_own_and_others(&["mine", "theirs"]);
+    let theirs = open.ids[1].clone();
+
+    open.client.send_message(
+        open.room.clone().into(),
+        "my reply",
+        Some(theirs.clone().into()),
+    );
+
+    // The local copy has the quote already, and the server's copy, which replaces it, has it too.
+    follow_until(&open.events, &mut open.mirror, |mirror| {
+        message_saying(mirror, "my reply").is_some_and(|m| !m.is_unsent())
+    });
+    let reply = message_saying(&open.mirror, "my reply").unwrap();
+    let [quote] = reply.quotes.as_slice() else {
+        panic!("expected one quote, got {:?}", reply.quotes);
+    };
+    assert_eq!(quote.message, Some(MessageId::from(theirs.clone())));
+    assert_eq!(quote.author, open.admin.username);
+    assert_eq!(quote.text.text, "theirs");
+    assert!(
+        quote.link.contains(&format!("?msg={theirs}")),
+        "{}",
+        quote.link
+    );
+    assert!(quote.ts.is_some());
+    // Nobody else's message and no other reply made a quote.
+    assert_eq!(
+        open.mirror.iter().filter(|m| !m.quotes.is_empty()).count(),
+        1
+    );
+    assert_eq!(texts(&open.mirror), ["mine", "theirs", "my reply"]);
+}
+
+// ACT-005
+#[test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+fn a_quote_made_by_somebody_else_arrives_live_and_editing_the_reply_keeps_it() {
+    let mut open = open_channel_with_own_and_others(&["mine", "theirs"]);
+    let mine = open.ids[0].clone();
+    // The admin quotes the user's message, as another client would.
+    let path = format!("channel/{}", open.room_name);
+    let posted = open
+        .admin
+        .post_quote(&open.room, &path, &mine, "admin replies");
+    follow_until(&open.events, &mut open.mirror, |mirror| {
+        message_saying(mirror, "admin replies").is_some()
+    });
+    let reply = message_saying(&open.mirror, "admin replies").unwrap();
+    assert_eq!(reply.id.as_str(), posted.id);
+    assert_eq!(reply.quotes.len(), 1);
+    assert_eq!(reply.quotes[0].message, Some(MessageId::from(mine.clone())));
+    assert_eq!(reply.quotes[0].text.text, "mine");
+
+    // The user replies to the admin's reply and then edits their own reply.
+    open.client.send_message(
+        open.room.clone().into(),
+        "quoting a quote",
+        Some(posted.id.clone().into()),
+    );
+    follow_until(&open.events, &mut open.mirror, |mirror| {
+        message_saying(mirror, "quoting a quote").is_some_and(|m| !m.is_unsent())
+    });
+    let own = message_saying(&open.mirror, "quoting a quote").unwrap();
+    // What the server shows of the quoted reply is its text, without the link it quotes.
+    assert_eq!(own.quotes[0].text.text, "admin replies");
+    let own_id = own.id.to_string();
+
+    open.client
+        .edit_message(own_id.clone().into(), "quoting a quote, edited");
+
+    assert_eq!(
+        action_outcome(&open.events, &mut open.mirror, &own_id),
+        Ok(())
+    );
+    let edited = message_saying(&open.mirror, "quoting a quote, edited").unwrap();
+    assert!(edited.edited);
+    assert_eq!(edited.quotes.len(), 1);
+    assert_eq!(edited.quotes[0].text.text, "admin replies");
+}
+
+// ACT-005
+#[test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+fn a_quote_sent_right_away_works_when_the_server_is_reached_by_another_address() {
+    let admin = Admin::login();
+    let user = admin.create_user();
+    let (room, _) = admin.create_channel(&[&user.username]);
+    let theirs = admin.post_message(&room, "theirs");
+    // The proxy's address is not the server's `Site_Url`, as the container's name is not in CI.
+    let proxy = Proxy::start();
+    let (client, events) = logged_in_at(&proxy.url(), &user);
+    client.open_room(room.clone().into());
+    let mut mirror = Vec::new();
+    settle(&events, &mut mirror);
+
+    client.send_message(
+        room.clone().into(),
+        "right away",
+        Some(theirs.id.clone().into()),
+    );
+
+    follow_until(&events, &mut mirror, |mirror| {
+        message_saying(mirror, "right away").is_some_and(|m| !m.is_unsent())
+    });
+    // The server's copy, which replaced the local one, has the quote.
+    let reply = message_saying(&mirror, "right away").unwrap();
+    assert_eq!(reply.quotes.len(), 1, "{:?}", reply.quotes);
+    assert_eq!(reply.quotes[0].text.text, "theirs");
+    assert_eq!(reply.quotes[0].message, Some(MessageId::from(theirs.id)));
+    drop(client);
 }

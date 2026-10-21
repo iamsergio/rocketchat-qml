@@ -16,6 +16,7 @@ mod images;
 pub mod logging;
 pub mod policy;
 pub mod ports;
+mod quote;
 mod random;
 pub mod rich;
 pub mod rooms;

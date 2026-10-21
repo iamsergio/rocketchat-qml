@@ -154,6 +154,7 @@ mod tests {
             kind,
             delivery,
             attachments: Vec::new(),
+            quotes: Vec::new(),
             edited: false,
             reactions: Vec::new(),
         }

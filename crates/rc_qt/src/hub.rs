@@ -201,7 +201,7 @@ pub fn load_older() {
 
 pub fn send_message(room: RoomId, text: &str) {
     if let Some(client) = &lock().client {
-        client.send_message(room, text);
+        client.send_message(room, text, None);
     } else {
         tracing::warn!("send_message ignored: the core isn't running");
     }

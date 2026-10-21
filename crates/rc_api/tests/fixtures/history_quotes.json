@@ -1,0 +1,250 @@
+{
+  "messages": [
+    {
+      "_id": "LS2FfwHN6SYFjubjv",
+      "alias": "",
+      "msg": "[ ](http://127.0.0.1:3000/channel/quoteprobe22373?msg=tBg7rohZbDv5MG2oq) second reply",
+      "attachments": [
+        {
+          "text": "[ ](http://127.0.0.1:3000/channel/quoteprobe22373?msg=RxkWobnKNN752j9Am) first reply",
+          "md": [
+            {
+              "type": "PARAGRAPH",
+              "value": [
+                {
+                  "type": "LINK",
+                  "value": {
+                    "src": {
+                      "type": "PLAIN_TEXT",
+                      "value": "http://127.0.0.1:3000/channel/quoteprobe22373?msg=RxkWobnKNN752j9Am"
+                    },
+                    "label": [
+                      {
+                        "type": "PLAIN_TEXT",
+                        "value": " "
+                      }
+                    ]
+                  }
+                },
+                {
+                  "type": "PLAIN_TEXT",
+                  "value": " first reply"
+                }
+              ]
+            }
+          ],
+          "message_link": "http://127.0.0.1:3000/channel/quoteprobe22373?msg=tBg7rohZbDv5MG2oq",
+          "author_name": "admin",
+          "author_icon": "/avatar/admin",
+          "attachments": [
+            {
+              "text": "original **bold** text",
+              "md": [
+                {
+                  "type": "PARAGRAPH",
+                  "value": [
+                    {
+                      "type": "PLAIN_TEXT",
+                      "value": "original "
+                    },
+                    {
+                      "type": "BOLD",
+                      "value": [
+                        {
+                          "type": "PLAIN_TEXT",
+                          "value": "bold"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "PLAIN_TEXT",
+                      "value": " text"
+                    }
+                  ]
+                }
+              ],
+              "message_link": "http://127.0.0.1:3000/channel/quoteprobe22373?msg=RxkWobnKNN752j9Am",
+              "author_name": "admin",
+              "author_icon": "/avatar/admin",
+              "ts": "2026-10-21T09:45:45.877Z"
+            }
+          ],
+          "ts": "2026-10-21T09:45:45.913Z"
+        }
+      ],
+      "parseUrls": true,
+      "groupable": false,
+      "ts": "2026-10-21T09:45:45.945Z",
+      "u": {
+        "_id": "6ad7ec7031e8972175108184",
+        "username": "admin",
+        "name": "Administrator"
+      },
+      "rid": "6ad889c931e8972175110f7f",
+      "_updatedAt": "2026-10-21T09:45:45.955Z",
+      "urls": [
+        {
+          "url": "http://127.0.0.1:3000/channel/quoteprobe22373?msg=tBg7rohZbDv5MG2oq",
+          "meta": {},
+          "ignoreParse": true
+        }
+      ],
+      "mentions": [],
+      "channels": [],
+      "md": [
+        {
+          "type": "PARAGRAPH",
+          "value": [
+            {
+              "type": "LINK",
+              "value": {
+                "src": {
+                  "type": "PLAIN_TEXT",
+                  "value": "http://127.0.0.1:3000/channel/quoteprobe22373?msg=tBg7rohZbDv5MG2oq"
+                },
+                "label": [
+                  {
+                    "type": "PLAIN_TEXT",
+                    "value": " "
+                  }
+                ]
+              }
+            },
+            {
+              "type": "PLAIN_TEXT",
+              "value": " second reply"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "_id": "tBg7rohZbDv5MG2oq",
+      "alias": "",
+      "msg": "[ ](http://127.0.0.1:3000/channel/quoteprobe22373?msg=RxkWobnKNN752j9Am) first reply",
+      "attachments": [
+        {
+          "text": "original **bold** text",
+          "md": [
+            {
+              "type": "PARAGRAPH",
+              "value": [
+                {
+                  "type": "PLAIN_TEXT",
+                  "value": "original "
+                },
+                {
+                  "type": "BOLD",
+                  "value": [
+                    {
+                      "type": "PLAIN_TEXT",
+                      "value": "bold"
+                    }
+                  ]
+                },
+                {
+                  "type": "PLAIN_TEXT",
+                  "value": " text"
+                }
+              ]
+            }
+          ],
+          "message_link": "http://127.0.0.1:3000/channel/quoteprobe22373?msg=RxkWobnKNN752j9Am",
+          "author_name": "admin",
+          "author_icon": "/avatar/admin",
+          "attachments": [],
+          "ts": "2026-10-21T09:45:45.877Z"
+        }
+      ],
+      "parseUrls": true,
+      "groupable": false,
+      "ts": "2026-10-21T09:45:45.913Z",
+      "u": {
+        "_id": "6ad7ec7031e8972175108184",
+        "username": "admin",
+        "name": "Administrator"
+      },
+      "rid": "6ad889c931e8972175110f7f",
+      "_updatedAt": "2026-10-21T09:45:45.923Z",
+      "urls": [
+        {
+          "url": "http://127.0.0.1:3000/channel/quoteprobe22373?msg=RxkWobnKNN752j9Am",
+          "meta": {},
+          "ignoreParse": true
+        }
+      ],
+      "mentions": [],
+      "channels": [],
+      "md": [
+        {
+          "type": "PARAGRAPH",
+          "value": [
+            {
+              "type": "LINK",
+              "value": {
+                "src": {
+                  "type": "PLAIN_TEXT",
+                  "value": "http://127.0.0.1:3000/channel/quoteprobe22373?msg=RxkWobnKNN752j9Am"
+                },
+                "label": [
+                  {
+                    "type": "PLAIN_TEXT",
+                    "value": " "
+                  }
+                ]
+              }
+            },
+            {
+              "type": "PLAIN_TEXT",
+              "value": " first reply"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "_id": "RxkWobnKNN752j9Am",
+      "alias": "",
+      "msg": "original **bold** text",
+      "attachments": [],
+      "parseUrls": true,
+      "groupable": false,
+      "ts": "2026-10-21T09:45:45.877Z",
+      "u": {
+        "_id": "6ad7ec7031e8972175108184",
+        "username": "admin",
+        "name": "Administrator"
+      },
+      "rid": "6ad889c931e8972175110f7f",
+      "_updatedAt": "2026-10-21T09:45:45.886Z",
+      "urls": [],
+      "mentions": [],
+      "channels": [],
+      "md": [
+        {
+          "type": "PARAGRAPH",
+          "value": [
+            {
+              "type": "PLAIN_TEXT",
+              "value": "original "
+            },
+            {
+              "type": "BOLD",
+              "value": [
+                {
+                  "type": "PLAIN_TEXT",
+                  "value": "bold"
+                }
+              ]
+            },
+            {
+              "type": "PLAIN_TEXT",
+              "value": " text"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "success": true
+}

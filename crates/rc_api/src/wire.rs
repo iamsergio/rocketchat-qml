@@ -13,7 +13,7 @@ use serde::{Deserialize, Deserializer};
 use crate::md;
 use crate::types::{
     Attachment, AttachmentImage, Author, AvatarOwner, Credentials, CustomEmoji, DdpEvent,
-    HistoryPage, LoginResult, Message, MessageChanges, MessageSettings, Reaction, RoomType,
+    HistoryPage, LoginResult, Message, MessageChanges, MessageSettings, Quote, Reaction, RoomType,
     ServerInfo, ServerVersion, Subscription, User,
 };
 
@@ -193,7 +193,8 @@ struct MessageBody {
     tshow: bool,
     #[serde(default)]
     md: Option<serde_json::Value>,
-    /// Read entry by entry (see [`parse_attachments`]), so one odd entry doesn't fail the message.
+    /// Read entry by entry (see [`parse_attachments`] and [`parse_quotes`]), so one odd entry
+    /// doesn't fail the message.
     #[serde(default)]
     attachments: Option<serde_json::Value>,
     #[serde(default, rename = "editedAt", deserialize_with = "optional_timestamp")]
@@ -278,6 +279,23 @@ struct AttachmentBody {
     image_type: Option<String>,
     #[serde(default)]
     image_dimensions: Option<DimensionsBody>,
+}
+
+/// A quote: an attachment with the `message_link` of the quoted message. The fields are the quoted
+/// message's, and its own quotes are in `attachments`.
+#[derive(Deserialize)]
+struct QuoteBody {
+    message_link: String,
+    #[serde(default)]
+    author_name: String,
+    #[serde(default)]
+    text: String,
+    #[serde(default)]
+    md: Option<serde_json::Value>,
+    #[serde(default)]
+    ts: Option<Lenient<Time>>,
+    #[serde(default)]
+    attachments: Option<serde_json::Value>,
 }
 
 #[derive(Deserialize)]
@@ -409,6 +427,7 @@ impl From<MessageBody> for Message {
             thread_shown: body.tshow,
             md: body.md.as_ref().and_then(md::parse),
             attachments: parse_attachments(body.attachments.as_ref()),
+            quotes: parse_quotes(body.attachments.as_ref()),
             edited: body.edited_at.is_some(),
             reactions: match body.reactions {
                 Some(ReactionsBody::Map(list)) => list.0,
@@ -438,6 +457,33 @@ fn parse_attachments(value: Option<&serde_json::Value>) -> Vec<Attachment> {
                 content_type: body.image_type,
                 dimensions: body.image_dimensions.map(|d| (d.width, d.height)),
             }),
+        })
+        .collect()
+}
+
+/// The quotes of a message: the attachments that have a `message_link` and aren't files. Entries
+/// that are malformed are skipped. What the quoted message quotes in turn is reduced to its links.
+fn parse_quotes(value: Option<&serde_json::Value>) -> Vec<Quote> {
+    let Some(entries) = value.and_then(serde_json::Value::as_array) else {
+        return Vec::new();
+    };
+    entries
+        .iter()
+        .filter(|entry| entry.get("type").and_then(serde_json::Value::as_str) != Some("file"))
+        .filter_map(|entry| QuoteBody::deserialize(entry).ok())
+        .map(|body| Quote {
+            link: body.message_link,
+            author: body.author_name,
+            text: body.text,
+            md: body.md.as_ref().and_then(md::parse),
+            ts: body
+                .ts
+                .and_then(|time| time.0)
+                .and_then(|time| time.into_timestamp::<serde_json::Error>().ok()),
+            quoted_links: parse_quotes(body.attachments.as_ref())
+                .into_iter()
+                .map(|quote| quote.link)
+                .collect(),
         })
         .collect()
 }
@@ -509,6 +555,20 @@ pub(crate) fn parse_message_settings(bytes: &[u8]) -> Result<MessageSettings, se
         }
     }
     Ok(settings)
+}
+
+/// The answer of `settings.public` for `Site_Url`: the URL without a trailing slash. `None` if it
+/// is absent, empty or not a text.
+pub(crate) fn parse_site_url(bytes: &[u8]) -> Result<Option<String>, serde_json::Error> {
+    let body: SettingsBody = serde_json::from_slice(bytes)?;
+    Ok(body
+        .settings
+        .iter()
+        .find(|entry| entry.id == "Site_Url")
+        .and_then(|entry| entry.value.as_str())
+        .map(|url| url.trim_end_matches('/'))
+        .filter(|url| !url.is_empty())
+        .map(str::to_owned))
 }
 
 /// The time of each room's last message, by room id, for the rooms that have messages.
@@ -646,6 +706,7 @@ mod tests {
     const HISTORY: &str = include_str!("../tests/fixtures/history.json");
 
     const HISTORY_ATTACHMENTS: &str = include_str!("../tests/fixtures/history_attachments.json");
+    const HISTORY_QUOTES: &str = include_str!("../tests/fixtures/history_quotes.json");
     const HISTORY_RICH: &str = include_str!("../tests/fixtures/history_rich.json");
     const EMOJI_CUSTOM: &str = include_str!("../tests/fixtures/emoji_custom.json");
 
@@ -767,6 +828,117 @@ mod tests {
         assert_eq!(image.dimensions, Some((2, 1)));
     }
 
+    fn quoted(text: &str) -> Message {
+        parse_history(HISTORY_QUOTES.as_bytes(), 50)
+            .unwrap()
+            .messages
+            .into_iter()
+            .find(|m| m.text.ends_with(text))
+            .unwrap_or_else(|| panic!("no message {text:?} in the fixture"))
+    }
+
+    // ACT-005
+    #[test]
+    fn reads_the_quote_of_a_message() {
+        let original = quoted("original **bold** text");
+        let message = quoted(") first reply");
+        let [quote] = message.quotes.as_slice() else {
+            panic!("expected one quote, got {:?}", message.quotes);
+        };
+        assert_eq!(
+            quote.link,
+            format!(
+                "http://127.0.0.1:3000/channel/quoteprobe22373?msg={}",
+                original.id
+            )
+        );
+        assert_eq!(quote.author, "admin");
+        assert_eq!(quote.text, "original **bold** text");
+        assert_eq!(quote.ts, Some(original.ts));
+        assert_eq!(quote.quoted_links, Vec::<String>::new());
+        let md = quote.md.as_ref().unwrap();
+        assert!(matches!(md.as_slice(), [md::Block::Paragraph(inlines)] if inlines.len() == 3));
+        // The reply's own text and markdown keep the link.
+        assert_eq!(message.text, format!("[ ]({}) first reply", quote.link));
+        assert!(matches!(
+            message.md.as_deref(),
+            Some([md::Block::Paragraph(inlines)])
+                if matches!(&inlines[0], md::Inline::Link { url, .. } if *url == quote.link)
+        ));
+        assert!(message.attachments.is_empty());
+    }
+
+    // ACT-005
+    #[test]
+    fn a_quote_of_a_quote_keeps_the_links_of_what_it_quotes() {
+        let first = quoted(") first reply");
+        let message = quoted(") second reply");
+        let [outer] = message.quotes.as_slice() else {
+            panic!("expected one quote, got {:?}", message.quotes);
+        };
+        assert_eq!(outer.text, first.text);
+        assert_eq!(outer.quoted_links, [first.quotes[0].link.clone()]);
+        assert!(outer.link.ends_with(&first.id));
+    }
+
+    // ACT-005
+    #[test]
+    fn a_message_without_quotes_has_none() {
+        assert_eq!(quoted("original **bold** text").quotes, []);
+        assert_eq!(attached("msgtext").quotes, []);
+        assert_eq!(attached("msgimage").quotes, []);
+    }
+
+    // ACT-005
+    #[test]
+    fn a_malformed_quote_is_skipped_and_the_message_stays() {
+        let json = serde_json::json!({ "messages": [{
+            "_id": "m", "rid": "r", "ts": "2026-10-20T14:00:00.000Z", "u": { "_id": "u" },
+            "msg": "x",
+            "attachments": [
+                { "message_link": 3 },
+                { "text": "no link" },
+                "not an object",
+                { "type": "file", "title_link": "/f", "message_link": "http://a/b?msg=file" },
+                { "message_link": "http://a/b?msg=odd", "ts": "yesterday", "text": 4 },
+                { "message_link": "http://a/b?msg=fine", "ts": "yesterday" }
+            ]
+        }]});
+        let page = parse_history(json.to_string().as_bytes(), 50).unwrap();
+        let quotes = &page.messages[0].quotes;
+        assert_eq!(quotes.len(), 1, "{quotes:?}");
+        assert_eq!(quotes[0].link, "http://a/b?msg=fine");
+        // The time is odd, the quote stays.
+        assert_eq!((quotes[0].author.as_str(), quotes[0].ts), ("", None));
+    }
+
+    // ACT-005
+    #[test]
+    fn a_live_message_carries_its_quotes() {
+        let fixture = serde_json::json!({
+            "eventName": "r",
+            "args": [{
+                "_id": "m",
+                "rid": "r",
+                "msg": "[ ](http://s/channel/c?msg=q) hi",
+                "ts": { "$date": 1_792_511_428_626_i64 },
+                "u": { "_id": "u", "username": "bob" },
+                "attachments": [{
+                    "text": "quoted",
+                    "message_link": "http://s/channel/c?msg=q",
+                    "author_name": "alice",
+                    "ts": "2026-10-21T09:00:00.000Z"
+                }]
+            }]
+        });
+        let event = parse_stream_event("stream-room-messages", fixture).unwrap();
+        let Some(DdpEvent::Message(message)) = event else {
+            panic!("expected a message, got {event:?}");
+        };
+        assert_eq!(message.quotes[0].author, "alice");
+        assert_eq!(message.quotes[0].text, "quoted");
+    }
+
     // RICH-003
     #[test]
     fn reads_the_custom_emoji_of_the_server() {
@@ -824,6 +996,22 @@ mod tests {
             parse_message_settings(empty).unwrap(),
             MessageSettings::default()
         );
+    }
+
+    // ACT-005
+    #[test]
+    fn the_site_url_is_a_non_empty_text_or_nothing() {
+        let site_url = |value: &str| {
+            let body = format!(r#"{{"settings":[{{"_id":"Site_Url","value":{value}}}]}}"#);
+            parse_site_url(body.as_bytes()).unwrap()
+        };
+        assert_eq!(site_url("\"https://a.b\""), Some("https://a.b".into()));
+        assert_eq!(site_url("\"https://a.b//\""), Some("https://a.b".into()));
+        for odd in ["\"\"", "\"/\"", "null", "3", "true", "[]"] {
+            assert_eq!(site_url(odd), None, "{odd}");
+        }
+        let absent = br#"{"settings":[],"success":true}"#;
+        assert_eq!(parse_site_url(absent).unwrap(), None);
     }
 
     // RICH-001

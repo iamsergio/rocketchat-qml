@@ -20,7 +20,7 @@ use crate::adapters::MemoryStore;
 use crate::backoff::Backoff;
 use crate::domain::{
     Account, Attachment, Author, Delivery, ImageAttachment, Message, MessageKind, Room, RoomKind,
-    User,
+    SystemEvent, User,
 };
 use crate::policy::{ActionError, MessageAction, MessagePolicy};
 use crate::ports::{
@@ -166,6 +166,8 @@ struct FakeState {
     send_calls: Vec<SendCall>,
     /// Sends that got past their gate.
     sends_returned: usize,
+    /// What `site_url` answers: the server has none if unset.
+    site_url: Option<Result<Option<String>, ApiError>>,
     /// What `message_settings` answers: the defaults if unset.
     settings: Option<Result<rc_api::MessageSettings, ApiError>>,
     /// One per edit, with the server's time of the stored message as for the sends; refused as
@@ -468,6 +470,10 @@ impl Connector for Fake {
 impl ServerApi for Fake {
     fn version(&self) -> impl Future<Output = Result<ServerVersion, ApiError>> + Send {
         std::future::ready(self.state().version.clone().unwrap())
+    }
+
+    fn site_url(&self) -> impl Future<Output = Result<Option<String>, ApiError>> + Send {
+        std::future::ready(self.state().site_url.clone().unwrap_or(Ok(None)))
     }
 
     async fn login(
@@ -1823,6 +1829,7 @@ fn message(id: &str, secs: i64) -> Message {
         kind: MessageKind::Text(id.into()),
         delivery: Delivery::Sent,
         attachments: Vec::new(),
+        quotes: Vec::new(),
         edited: false,
         reactions: Vec::new(),
     }
@@ -2944,7 +2951,7 @@ fn a_sent_message_shows_as_pending_and_becomes_sent_when_the_server_answers() {
 
     harness
         .client
-        .send_message("1".to_owned().into(), "  hello\n");
+        .send_message("1".to_owned().into(), "  hello\n", None);
 
     let pending = expect_pending(&harness);
     assert_eq!(pending.kind, MessageKind::Text("hello".into()));
@@ -2974,7 +2981,9 @@ fn blank_text_unknown_rooms_and_logged_out_clients_send_nothing() {
     fake.script_login(None, Ok(()));
     let harness = Harness::new(&fake);
     // Logged out.
-    harness.client.send_message("1".to_owned().into(), "hi");
+    harness
+        .client
+        .send_message("1".to_owned().into(), "hi", None);
     harness.login("http://h", "alice");
     harness.expect_events(vec![
         session_event(SessionState::Connecting),
@@ -2982,15 +2991,19 @@ fn blank_text_unknown_rooms_and_logged_out_clients_send_nothing() {
         rooms_event(vec![]),
     ]);
     // Not in the room list.
-    harness.client.send_message("1".to_owned().into(), "hi");
+    harness
+        .client
+        .send_message("1".to_owned().into(), "hi", None);
     harness.client.logout();
     harness.expect_events(vec![session_event(logged_out(None))]);
     drop(harness);
 
     let fake = Fake::new();
     let harness = logged_in_harness(&fake);
-    harness.client.send_message("1".to_owned().into(), " \n\t ");
-    harness.client.send_message("1".to_owned().into(), "");
+    harness
+        .client
+        .send_message("1".to_owned().into(), " \n\t ", None);
+    harness.client.send_message("1".to_owned().into(), "", None);
     drop(harness);
     assert!(fake.state().send_calls.is_empty());
 }
@@ -3003,7 +3016,9 @@ fn the_echo_that_comes_first_settles_the_message_and_the_answer_is_ignored() {
     open_first_room(&fake, &harness, false);
     let gate = Arc::new(Notify::new());
     fake.script_send(Some(Arc::clone(&gate)), Ok(7));
-    harness.client.send_message("1".to_owned().into(), "hello");
+    harness
+        .client
+        .send_message("1".to_owned().into(), "hello", None);
     let pending = expect_pending(&harness);
     fake.wait_for_send_calls(1);
 
@@ -3031,7 +3046,9 @@ fn a_refused_message_fails_and_retrying_sends_it_under_the_same_id() {
             message: "no".into(),
         }),
     );
-    harness.client.send_message("1".to_owned().into(), "hello");
+    harness
+        .client
+        .send_message("1".to_owned().into(), "hello", None);
     let pending = expect_pending(&harness);
     harness.expect_events(vec![updated(2, with_delivery(&pending, Delivery::Failed))]);
 
@@ -3053,7 +3070,9 @@ fn an_unreachable_server_fails_the_message_too() {
     let harness = logged_in_harness(&fake);
     open_first_room(&fake, &harness, false);
     fake.script_send(None, Err(ApiError::Unreachable("refused".into())));
-    harness.client.send_message("1".to_owned().into(), "hello");
+    harness
+        .client
+        .send_message("1".to_owned().into(), "hello", None);
     let pending = expect_pending(&harness);
     harness.expect_events(vec![updated(2, with_delivery(&pending, Delivery::Failed))]);
 }
@@ -3066,7 +3085,9 @@ fn only_a_failed_message_of_the_open_room_is_retried() {
     open_first_room(&fake, &harness, false);
     let gate = Arc::new(Notify::new());
     fake.script_send(Some(Arc::clone(&gate)), Ok(7));
-    harness.client.send_message("1".to_owned().into(), "hello");
+    harness
+        .client
+        .send_message("1".to_owned().into(), "hello", None);
     let pending = expect_pending(&harness);
 
     // Sent already, pending, and unknown.
@@ -3090,7 +3111,9 @@ fn a_message_confirmed_after_the_room_was_switched_is_sent_when_the_room_opens_a
     open_first_room(&fake, &harness, false);
     let gate = Arc::new(Notify::new());
     fake.script_send(Some(Arc::clone(&gate)), Ok(7));
-    harness.client.send_message("1".to_owned().into(), "hello");
+    harness
+        .client
+        .send_message("1".to_owned().into(), "hello", None);
     let pending = expect_pending(&harness);
     fake.wait_for_send_calls(1);
     open_the_other_room(&harness);
@@ -3126,7 +3149,9 @@ fn a_message_that_fails_after_the_room_was_switched_shows_as_failed_when_it_open
         Some(Arc::clone(&gate)),
         Err(ApiError::Unreachable("down".into())),
     );
-    harness.client.send_message("1".to_owned().into(), "hello");
+    harness
+        .client
+        .send_message("1".to_owned().into(), "hello", None);
     let pending = expect_pending(&harness);
     fake.wait_for_send_calls(1);
     open_the_other_room(&harness);
@@ -3153,7 +3178,9 @@ fn a_failed_message_is_retried_from_the_room_it_was_shown_in_after_switching_bac
     let harness = logged_in_harness(&fake);
     open_first_room(&fake, &harness, false);
     fake.script_send(None, Err(ApiError::Unreachable("down".into())));
-    harness.client.send_message("1".to_owned().into(), "hello");
+    harness
+        .client
+        .send_message("1".to_owned().into(), "hello", None);
     let pending = expect_pending(&harness);
     harness.expect_events(vec![updated(2, with_delivery(&pending, Delivery::Failed))]);
     open_the_other_room(&harness);
@@ -3197,7 +3224,9 @@ fn the_echo_of_a_message_sent_from_a_room_that_is_not_open_settles_it() {
     open_first_room(&fake, &harness, false);
     let gate = Arc::new(Notify::new());
     fake.script_send(Some(Arc::clone(&gate)), Ok(7));
-    harness.client.send_message("1".to_owned().into(), "hello");
+    harness
+        .client
+        .send_message("1".to_owned().into(), "hello", None);
     let pending = expect_pending(&harness);
     fake.wait_for_send_calls(1);
     open_the_other_room(&harness);
@@ -3235,7 +3264,9 @@ fn a_confirmed_message_moves_to_where_the_servers_time_puts_it() {
     open_first_room(&fake, &harness, false);
     let gate = Arc::new(Notify::new());
     fake.script_send(Some(Arc::clone(&gate)), Ok(50));
-    harness.client.send_message("1".to_owned().into(), "hello");
+    harness
+        .client
+        .send_message("1".to_owned().into(), "hello", None);
     let pending = expect_pending(&harness);
     fake.wait_for_send_calls(1);
 
@@ -3261,7 +3292,9 @@ fn an_unsent_message_survives_the_catch_up_after_a_reconnect() {
     let fake = Fake::new();
     let harness = open_room_then_lose_the_connection(&fake);
     fake.script_send(None, Err(ApiError::Unreachable("down".into())));
-    harness.client.send_message("1".to_owned().into(), "hello");
+    harness
+        .client
+        .send_message("1".to_owned().into(), "hello", None);
     let pending = expect_pending(&harness);
     let failed = with_delivery(&pending, Delivery::Failed);
     harness.expect_events(vec![updated(2, failed.clone())]);
@@ -3293,7 +3326,9 @@ fn an_unsent_message_survives_a_gap_longer_than_a_page() {
     let fake = Fake::new();
     let harness = open_room_then_lose_the_connection(&fake);
     fake.script_send(None, Err(ApiError::Unreachable("down".into())));
-    harness.client.send_message("1".to_owned().into(), "hello");
+    harness
+        .client
+        .send_message("1".to_owned().into(), "hello", None);
     let pending = expect_pending(&harness);
     let failed = with_delivery(&pending, Delivery::Failed);
     harness.expect_events(vec![updated(2, failed.clone())]);
@@ -3322,7 +3357,9 @@ fn the_catch_up_settles_a_message_whose_echo_and_answer_were_lost() {
     let harness = open_room_then_lose_the_connection(&fake);
     let gate = Arc::new(Notify::new());
     fake.script_send(Some(Arc::clone(&gate)), Ok(7));
-    harness.client.send_message("1".to_owned().into(), "hello");
+    harness
+        .client
+        .send_message("1".to_owned().into(), "hello", None);
     let pending = expect_pending(&harness);
     fake.wait_for_send_calls(1);
 
@@ -3351,7 +3388,9 @@ fn a_refused_token_on_a_send_expires_the_session() {
     let harness = logged_in_harness(&fake);
     open_first_room(&fake, &harness, false);
     fake.script_send(None, Err(ApiError::Unauthorized));
-    harness.client.send_message("1".to_owned().into(), "hello");
+    harness
+        .client
+        .send_message("1".to_owned().into(), "hello", None);
     expect_pending(&harness);
     harness.expect_events(vec![
         session_event(logged_out(Some(LoginFailure::SessionExpired))),
@@ -3378,7 +3417,9 @@ fn a_message_confirmed_while_the_room_loads_is_not_lost_to_the_page() {
             reset_event(Some("1"), Vec::new()),
             status("1", true, false, false, None),
         ]);
-        harness.client.send_message("1".to_owned().into(), "hello");
+        harness
+            .client
+            .send_message("1".to_owned().into(), "hello", None);
         let pending = expect_pending(&harness);
         fake.wait_for_send_calls(1);
         let copy = server_copy("1", pending.id.as_str(), "hello", 7);
@@ -3419,7 +3460,9 @@ fn a_message_sent_while_the_room_loads_waits_for_the_page_behind_it() {
     ]);
     let send_gate = Arc::new(Notify::new());
     fake.script_send(Some(Arc::clone(&send_gate)), Ok(7));
-    harness.client.send_message("1".to_owned().into(), "hello");
+    harness
+        .client
+        .send_message("1".to_owned().into(), "hello", None);
     expect_pending(&harness);
 
     gate.notify_one();
@@ -5396,7 +5439,9 @@ fn only_sent_text_messages_of_the_user_in_the_open_room_are_edited() {
     ])])]);
     let gate = Arc::new(Notify::new());
     fake.script_send(Some(gate), Ok(7));
-    harness.client.send_message("1".to_owned().into(), "unsent");
+    harness
+        .client
+        .send_message("1".to_owned().into(), "unsent", None);
     let pending = expect_pending(&harness);
 
     for id in ["c", pending.id.as_str(), "nope"] {
@@ -5559,7 +5604,9 @@ fn only_sent_messages_of_the_user_in_the_open_room_are_deleted() {
     ])])]);
     let gate = Arc::new(Notify::new());
     fake.script_send(Some(gate), Ok(7));
-    harness.client.send_message("1".to_owned().into(), "unsent");
+    harness
+        .client
+        .send_message("1".to_owned().into(), "unsent", None);
     let pending = expect_pending(&harness);
 
     for id in ["c", pending.id.as_str(), "nope"] {
@@ -5664,4 +5711,369 @@ fn a_dead_token_on_an_edit_or_a_deletion_expires_the_session() {
         ]);
         harness.expect_events(closed_events());
     }
+}
+
+/// A server whose `Site_Url` is not the address that the tests log in with.
+const SITE: &str = "http://site:3000";
+
+/// What quoting message `id` of the first room, which `alice` wrote at `secs`, gives. `room_path`
+/// is the room's part of the link.
+fn quote_of(site: &str, room_path: &str, id: &str, secs: i64) -> Quote {
+    Quote {
+        message: Some(id.to_owned().into()),
+        link: format!("{site}/{room_path}?msg={id}"),
+        author: "alice".to_owned(),
+        text: id.into(),
+        ts: Some(jiff::Timestamp::from_second(secs).unwrap()),
+    }
+}
+
+/// Logged in to a server that says its `Site_Url`, which is not the address of the login.
+fn logged_in_with_site_url(fake: &Fake) -> Harness {
+    fake.state().site_url = Some(Ok(Some(SITE.to_owned())));
+    logged_in_harness(fake)
+}
+
+fn quote_send(harness: &Harness, room: &str, text: &str, quoted: &str) {
+    harness
+        .client
+        .send_message(room.to_owned().into(), text, Some(quoted.to_owned().into()));
+}
+
+// ACT-005
+#[test]
+fn a_quote_shows_at_once_and_goes_out_as_a_link_made_from_the_site_url() {
+    let fake = Fake::new();
+    let harness = logged_in_with_site_url(&fake);
+    open_first_room(&fake, &harness, false);
+    fake.script_send(None, Ok(7));
+
+    quote_send(&harness, "1", "  hello\n", "b");
+
+    let pending = expect_pending(&harness);
+    assert_eq!(pending.kind, MessageKind::Text("hello".into()));
+    assert_eq!(pending.quotes, [quote_of(SITE, "channel/general", "b", 2)]);
+    // The host is the site's, not the login's (`h`), or the server makes no quote.
+    assert_eq!(
+        fake.wait_for_send_calls(1),
+        [SendCall {
+            room: "1".into(),
+            id: pending.id.to_string(),
+            text: "[ ](http://site:3000/channel/general?msg=b) hello".into()
+        }]
+    );
+    // The server's copy replaces the local one.
+    let Event::Timeline(changes) = harness.next_event() else {
+        panic!("not a timeline event");
+    };
+    let [TimelineChange::Updated { index: 2, message }] = changes.as_slice() else {
+        panic!("not the update of the pending message: {changes:?}");
+    };
+    assert_eq!(message.id, pending.id);
+    assert_eq!(message.delivery, Delivery::Sent);
+}
+
+// ACT-005
+#[test]
+fn a_quote_in_a_private_group_is_linked_by_the_name_of_the_group() {
+    let fake = Fake::new();
+    let harness = logged_in_with_site_url(&fake);
+    let held = Message {
+        room_id: "2".to_owned().into(),
+        ..message("g", 1)
+    };
+    fake.script_history(None, page(vec![held.clone()], true));
+    harness.client.open_room("2".to_owned().into());
+    harness.expect_events(vec![
+        reset_event(Some("2"), Vec::new()),
+        status("2", true, false, false, None),
+        reset_event(Some("2"), vec![held]),
+        status("2", false, false, true, None),
+    ]);
+
+    quote_send(&harness, "2", "hello", "g");
+
+    let pending = expect_pending(&harness);
+    assert_eq!(pending.quotes, [quote_of(SITE, "group/secret", "g", 1)]);
+}
+
+// ACT-005
+#[test]
+fn a_quote_in_a_direct_message_is_linked_by_the_id_of_the_room() {
+    let fake = Fake::new();
+    fake.script_login(None, Ok(()));
+    fake.script_fetch(
+        None,
+        Ok(vec![subscription("3", "bob", rc_api::RoomType::Direct)]),
+    );
+    let harness = Harness::with_backoff(
+        &fake,
+        MemoryStore::default(),
+        Backoff::new(NEVER, NEVER, NEVER),
+    );
+    harness.login("http://h", "alice");
+    harness.expect_events(vec![
+        session_event(SessionState::Connecting),
+        session_event(logged_in("http://h", "alice")),
+        rooms_event(vec![room("3", "bob", RoomKind::Direct)]),
+    ]);
+    let held = Message {
+        room_id: "3".to_owned().into(),
+        ..message("d", 1)
+    };
+    fake.script_history(None, page(vec![held.clone()], true));
+    harness.client.open_room("3".to_owned().into());
+    harness.expect_events(vec![
+        reset_event(Some("3"), Vec::new()),
+        status("3", true, false, false, None),
+        reset_event(Some("3"), vec![held]),
+        status("3", false, false, true, None),
+    ]);
+
+    quote_send(&harness, "3", "hello", "d");
+
+    let pending = expect_pending(&harness);
+    // The server says no site URL: the login's address does.
+    assert_eq!(pending.quotes, [quote_of("http://h", "direct/3", "d", 1)]);
+}
+
+// ACT-005
+#[test]
+fn without_a_site_url_the_link_is_made_from_the_address_of_the_login() {
+    let fake = Fake::new();
+    let harness = logged_in_harness(&fake);
+    open_first_room(&fake, &harness, false);
+
+    quote_send(&harness, "1", "hello", "a");
+
+    let pending = expect_pending(&harness);
+    assert_eq!(
+        pending.quotes,
+        [quote_of("http://h", "channel/general", "a", 1)]
+    );
+    assert_eq!(
+        fake.wait_for_send_calls(1)[0].text,
+        "[ ](http://h/channel/general?msg=a) hello"
+    );
+}
+
+// ACT-005
+#[test]
+fn a_server_that_has_no_site_url_or_fails_to_say_falls_back_to_the_address_of_the_login() {
+    for answer in [Ok(None), Err(ApiError::Unreachable("reset".into()))] {
+        let fake = Fake::new();
+        fake.state().site_url = Some(answer);
+        // The login succeeds all the same: it is logged_in_harness that expects it to.
+        let harness = logged_in_harness(&fake);
+        open_first_room(&fake, &harness, false);
+
+        quote_send(&harness, "1", "hello", "a");
+
+        let pending = expect_pending(&harness);
+        assert_eq!(pending.quotes[0].link, "http://h/channel/general?msg=a");
+    }
+}
+
+// ACT-005
+#[test]
+fn each_login_asks_the_server_for_its_site_url() {
+    let fake = Fake::new();
+    fake.state().site_url = Some(Ok(Some(SITE.to_owned())));
+    for _ in 0..2 {
+        fake.script_login(None, Ok(()));
+        fake.script_fetch(
+            None,
+            Ok(vec![subscription(
+                "1",
+                "general",
+                rc_api::RoomType::Channel,
+            )]),
+        );
+    }
+    let harness = Harness::with_backoff(
+        &fake,
+        MemoryStore::default(),
+        Backoff::new(NEVER, NEVER, NEVER),
+    );
+    harness.login("http://h", "alice");
+    harness.expect_events(vec![
+        session_event(SessionState::Connecting),
+        session_event(logged_in("http://h", "alice")),
+        rooms_event(vec![room("1", "general", RoomKind::Channel)]),
+    ]);
+    harness.client.logout();
+    harness.expect_events(vec![session_event(logged_out(None)), rooms_event(vec![])]);
+    // The next server has none to tell.
+    fake.state().site_url = None;
+    harness.login("http://h2", "alice");
+    harness.expect_events(vec![
+        session_event(SessionState::Connecting),
+        session_event(logged_in("http://h2", "alice")),
+        rooms_event(vec![room("1", "general", RoomKind::Channel)]),
+    ]);
+    open_first_room(&fake, &harness, false);
+
+    quote_send(&harness, "1", "hello", "a");
+
+    let pending = expect_pending(&harness);
+    assert_eq!(pending.quotes[0].link, "http://h2/channel/general?msg=a");
+}
+
+// ACT-005
+#[test]
+fn a_resumed_session_knows_the_site_url_too() {
+    let fake = Fake::new();
+    fake.state().site_url = Some(Ok(Some(SITE.to_owned())));
+    fake.script_fetch(
+        None,
+        Ok(vec![subscription(
+            "1",
+            "general",
+            rc_api::RoomType::Channel,
+        )]),
+    );
+    let harness = Harness::with_store(&fake, store_with("http://h"));
+    harness.expect_events(vec![
+        session_event(logged_in("http://h", "alice")),
+        rooms_event(vec![room("1", "general", RoomKind::Channel)]),
+    ]);
+    open_first_room(&fake, &harness, false);
+
+    quote_send(&harness, "1", "hello", "a");
+
+    let pending = expect_pending(&harness);
+    assert_eq!(pending.quotes, [quote_of(SITE, "channel/general", "a", 1)]);
+}
+
+// ACT-005
+#[test]
+fn only_a_sent_text_message_of_the_open_room_can_be_quoted() {
+    let fake = Fake::new();
+    let harness = logged_in_with_site_url(&fake);
+    open_first_room(&fake, &harness, false);
+    // None of the sends is answered, so that the messages stay as they were shown.
+    let gate = Arc::new(Notify::new());
+    for _ in 0..5 {
+        fake.script_send(Some(Arc::clone(&gate)), Ok(7));
+    }
+    harness
+        .client
+        .send_message("1".to_owned().into(), "unsent", None);
+    let unsent = expect_pending(&harness);
+    let joined = Message {
+        kind: MessageKind::System(SystemEvent::Joined),
+        ..message("j", 3)
+    };
+    assert!(fake.push(0, Pushed::Message(joined.clone())));
+    // It sorts before the unsent message.
+    harness.expect_events(vec![Event::Timeline(vec![TimelineChange::Inserted {
+        index: 2,
+        messages: vec![joined],
+    }])]);
+
+    // An unsent message, a system message, one that isn't held, and one of another room.
+    for quoted in [unsent.id.as_str(), "j", "nope"] {
+        quote_send(&harness, "1", "hello", quoted);
+        let pending = expect_pending(&harness);
+        assert_eq!(pending.quotes, [], "{quoted}");
+    }
+    quote_send(&harness, "2", "hello", "b");
+
+    // Nothing but the text went out, in each case (the last is for the room that is not open,
+    // which shows nothing).
+    let calls = fake.wait_for_send_calls(5);
+    assert_eq!(calls[0].text, "unsent");
+    for call in &calls[1..] {
+        assert_eq!(call.text, "hello");
+    }
+}
+
+// ACT-005
+#[test]
+fn a_retry_sends_the_link_of_the_quote_again() {
+    let fake = Fake::new();
+    let harness = logged_in_with_site_url(&fake);
+    open_first_room(&fake, &harness, false);
+    fake.script_send(
+        None,
+        Err(ApiError::Server {
+            status: 400,
+            message: "no".into(),
+        }),
+    );
+    quote_send(&harness, "1", "hello", "a");
+    let pending = expect_pending(&harness);
+    harness.expect_events(vec![updated(2, with_delivery(&pending, Delivery::Failed))]);
+
+    fake.script_send(None, Ok(9));
+    harness.client.retry_message(pending.id.clone());
+    harness.expect_events(vec![updated(2, pending.clone())]);
+
+    let calls = fake.wait_for_send_calls(2);
+    assert_eq!(calls[0], calls[1]);
+    assert_eq!(
+        calls[1].text,
+        "[ ](http://site:3000/channel/general?msg=a) hello"
+    );
+}
+
+/// A message of the user's in the first room, from the server, that quotes `a` and says `text`.
+fn reply_to_a(id: &str, text: &str, secs: i64) -> Message {
+    Message {
+        quotes: vec![quote_of(SITE, "channel/general", "a", 1)],
+        ..server_copy("1", id, text, secs)
+    }
+}
+
+/// The room's history with a reply to `a` in it, opened.
+fn open_with_reply(fake: &Fake, harness: &Harness) {
+    let reply = reply_to_a("r", "reply", 3);
+    fake.script_history(None, page(vec![reply.clone(), message("a", 1)], true));
+    harness.client.open_room("1".to_owned().into());
+    harness.expect_events(vec![
+        reset_event(Some("1"), Vec::new()),
+        status("1", true, false, false, None),
+        reset_event(Some("1"), vec![message("a", 1), reply]),
+        status("1", false, false, true, None),
+    ]);
+}
+
+// ACT-005
+#[test]
+fn an_edit_sends_the_links_of_the_quotes_with_the_new_text() {
+    let fake = Fake::new();
+    let harness = logged_in_harness(&fake);
+    open_with_reply(&fake, &harness);
+    fake.script_edit(None, Ok(5));
+
+    harness
+        .client
+        .edit_message("r".to_owned().into(), "  changed\n");
+
+    // The server keeps the quote only if the link stays in the text.
+    let Event::Timeline(_) = harness.next_event() else {
+        panic!("not a timeline event");
+    };
+    harness.expect_events(vec![action_event("r", MessageAction::Edit, Ok(()))]);
+    assert_eq!(
+        fake.state().edit_calls,
+        [EditCall {
+            room: "1".into(),
+            id: "r".into(),
+            text: "[ ](http://site:3000/channel/general?msg=a) changed".into()
+        }]
+    );
+}
+
+// ACT-005
+#[test]
+fn an_edit_to_the_text_that_is_shown_asks_nothing_though_the_server_text_has_links() {
+    let fake = Fake::new();
+    let harness = logged_in_harness(&fake);
+    open_with_reply(&fake, &harness);
+
+    harness.client.edit_message("r".to_owned().into(), "reply");
+
+    harness.expect_events(vec![action_event("r", MessageAction::Edit, Ok(()))]);
+    assert!(fake.state().edit_calls.is_empty());
 }

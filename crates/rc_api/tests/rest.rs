@@ -967,6 +967,54 @@ async fn message_settings_asks_for_the_four_settings() {
     assert_eq!((settings.edit_minutes, settings.delete_minutes), (0, 30));
 }
 
+// ACT-005
+#[tokio::test]
+async fn site_url_asks_for_the_setting_without_the_login_and_trims_it() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/settings.public"))
+        .and(query_param("_id", "Site_Url"))
+        .respond_with(json_response(
+            200,
+            r#"{"settings":[{"_id":"Site_Url","value":"http://chat.test:3000/"}],"success":true}"#,
+        ))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let url = RestClient::new(&server.uri()).unwrap().site_url().await;
+
+    assert_eq!(url.unwrap().as_deref(), Some("http://chat.test:3000"));
+    let requests = server.received_requests().await.unwrap();
+    assert!(requests[0].headers.get("X-Auth-Token").is_none());
+}
+
+// ACT-005
+#[tokio::test]
+async fn a_server_without_a_site_url_has_none_and_an_error_status_is_an_error() {
+    let server = MockServer::start().await;
+    mount(
+        &server,
+        "GET",
+        "/api/v1/settings.public",
+        json_response(200, r#"{"settings":[],"success":true}"#),
+    )
+    .await;
+    let client = RestClient::new(&server.uri()).unwrap();
+    assert_eq!(client.site_url().await.unwrap(), None);
+
+    let failing = MockServer::start().await;
+    mount(
+        &failing,
+        "GET",
+        "/api/v1/settings.public",
+        json_response(500, r#"{"success":false}"#),
+    )
+    .await;
+    let result = RestClient::new(&failing.uri()).unwrap().site_url().await;
+    assert!(matches!(result, Err(Error::Server { .. })), "{result:?}");
+}
+
 const SVG: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200"></svg>"#;
 
 fn svg_response() -> ResponseTemplate {

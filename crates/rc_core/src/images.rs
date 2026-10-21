@@ -159,6 +159,7 @@ mod tests {
                     }),
                 })
                 .collect(),
+            quotes: Vec::new(),
             edited: false,
             reactions: Vec::new(),
         }
