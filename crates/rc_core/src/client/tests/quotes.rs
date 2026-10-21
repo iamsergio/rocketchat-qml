@@ -274,12 +274,11 @@ fn only_a_sent_text_message_of_the_open_room_can_be_quoted() {
     quote_send(&harness, "2", "hello", "b");
 
     // Nothing but the text went out, in each case (the last is for the room that is not open,
-    // which shows nothing).
+    // which shows nothing). The sends run as tasks of their own, so they may come in any order.
     let calls = fake.wait_for_send_calls(5);
-    assert_eq!(calls[0].text, "unsent");
-    for call in &calls[1..] {
-        assert_eq!(call.text, "hello");
-    }
+    let mut texts: Vec<&str> = calls.iter().map(|call| call.text.as_str()).collect();
+    texts.sort_unstable();
+    assert_eq!(texts, ["hello", "hello", "hello", "hello", "unsent"]);
 }
 
 // ACT-005
