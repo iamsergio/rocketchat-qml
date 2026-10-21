@@ -1329,9 +1329,11 @@ async fn a_user_and_a_room_with_an_avatar_of_their_own_have_an_etag() {
     assert!(user.is_some_and(|etag| !etag.is_empty()));
     assert!(room.is_some());
     assert_eq!(find(&rooms, &room_id).avatar_etag, room);
-    // The download still answers, with what the server draws or serves.
+    // The download is the uploaded image, not the drawn one.
     let avatar = session.user_avatar(&fixture.user.username).await.unwrap();
-    assert!(avatar.content_type.is_some_and(|t| t.starts_with("image/")));
+    assert_eq!(avatar.content_type.as_deref(), Some("image/png"));
+    let avatar = session.room_avatar(&room_id).await.unwrap();
+    assert_eq!(avatar.content_type.as_deref(), Some("image/png"));
 }
 
 /// Uploads a one-pixel PNG with text and a description, and a text file, to the channel as admin.

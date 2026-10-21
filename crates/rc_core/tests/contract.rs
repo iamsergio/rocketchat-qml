@@ -524,10 +524,10 @@ fn avatars_until(
     found
 }
 
-/// What the server sends for an avatar: it serves the generated one for any, whatever was uploaded.
+/// The uploaded one-pixel PNG, kept in the cache under `root`.
 fn assert_cached_image(path: &Path, root: &Path) {
     assert!(path.starts_with(root), "{}", path.display());
-    assert!(path.extension().is_some(), "{}", path.display());
+    assert_eq!(path.extension().unwrap(), "png", "{}", path.display());
     assert!(
         std::fs::metadata(path).unwrap().len() > 0,
         "{}",

@@ -6,8 +6,8 @@
 //! avatar's `text` is the `file://` URL of the image it shows; without an avatar of its own a user
 //! or room shows the initials of its name instead.
 //!
-//! The test server accepts uploaded avatars and says who has one, but serves the generated avatar
-//! whatever was uploaded, so what the image shows is not looked at, only that it is loaded.
+//! The test server accepts uploaded avatars (a one-pixel PNG) and says who has one, so the file in
+//! the cache is that PNG; what the image shows is not looked at, only that it is loaded.
 
 // Helpers outside the tests: a failed step should just fail the test.
 #![allow(clippy::unwrap_used, clippy::panic)]
@@ -36,6 +36,7 @@ fn assert_cached_image(file: &Path, app: &App, name: &str) {
         app.cache_dir().display()
     );
     assert_eq!(file.file_stem().unwrap().to_str().unwrap(), name);
+    assert_eq!(file.extension().unwrap(), "png");
     assert!(std::fs::metadata(file).unwrap().len() > 0);
 }
 
