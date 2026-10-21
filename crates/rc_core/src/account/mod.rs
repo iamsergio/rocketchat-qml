@@ -5,11 +5,9 @@
 
 use std::collections::HashSet;
 use std::sync::Arc;
-use std::sync::mpsc as std_mpsc;
 use std::time::Duration;
 
 use secrecy::SecretString;
-use tokio::runtime::Runtime;
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use tokio::task::{JoinHandle, JoinSet};
 use tokio::time::Instant;
@@ -18,6 +16,7 @@ use crate::adapters::MemoryMessageStore;
 use crate::avatars::{Avatars, Fetched};
 use crate::backoff::Backoff;
 use crate::client::{Command, Connection, Event};
+use crate::core::Shared;
 use crate::domain::{
     AvatarOwner, Credentials, Message, MessageId, RoomId, RoomKind, StoredSession, User,
 };
@@ -25,11 +24,11 @@ use crate::emoji::CustomEmojis;
 use crate::images::{self, Images};
 use crate::policy::{MessageAction, MessagePolicy};
 use crate::ports::{
-    ApiError, Changes, Connector, FileCache, MessageStore, Page, Pushed, SecretStore, ServerApi,
+    ApiError, Changes, Connector, FileCache, MessageStore, Page, Pushed, ServerApi,
 };
 use crate::rooms::{RoomAction, RoomList};
 use crate::session::{Established, LoginFailure, SessionState, log_in, resume};
-use crate::store_worker::{StoreHandle, run_store_worker};
+use crate::store_worker::StoreHandle;
 use crate::timeline::{Timeline, TimelineError};
 
 mod media;
@@ -42,8 +41,10 @@ mod thread;
 
 use thread::OpenThread;
 
-/// How long the actor waits, when stopping, for queued store writes and token revocations.
-const DRAIN_TIMEOUT: Duration = Duration::from_secs(2);
+/// How long, once the actor is told to end, it and the store worker may take to finish what the
+/// user asked already: the token revocations and the queued store writes. One bound for both: the
+/// actor's deadline is also the store worker's (see [`crate::core::spawn`]).
+pub(crate) const DRAIN_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// A login or resume task's answer.
 struct LoginDone<A> {
@@ -239,7 +240,8 @@ struct Session<A> {
 }
 
 /// Owns the session state and handles one message at a time. Network calls run in spawned tasks
-/// that report back through `done_tx`; secret-store calls are queued for the store worker.
+/// that report back through `done_tx`; secret-store calls are queued for the store worker, which the
+/// core shares between accounts.
 struct Actor<C: Connector> {
     connector: Arc<C>,
     state: SessionState,
@@ -313,81 +315,77 @@ struct Actor<C: Connector> {
     revokes: JoinSet<()>,
     /// `None` once stopping.
     store: Option<StoreHandle>,
-    store_worker: JoinHandle<()>,
     done_tx: UnboundedSender<Done<C::Api>>,
     on_event: Arc<dyn Fn(Event) + Send + Sync>,
 }
 
-/// Starts the actor on the runtime and returns the receiver that is signalled when it has drained
-/// and is about to end.
-pub(crate) fn spawn<C: Connector, S: SecretStore>(
-    runtime: &Runtime,
-    connector: C,
-    store: S,
-    cache: impl FileCache,
+/// An account actor that uses the services of `shared`: the future handles commands and reports
+/// until the commands end, then stops, and returns the deadline by which the store worker must be
+/// done too (see [`Actor::stop`]).
+pub(crate) fn run<C: Connector>(
+    shared: &Shared<C>,
     on_event: impl Fn(Event) + Send + Sync + 'static,
     backoff: Backoff,
     commands: UnboundedReceiver<Command>,
-) -> std_mpsc::Receiver<()> {
+) -> impl Future<Output = Instant> + Send + 'static {
     let (done_tx, done_rx) = mpsc::unbounded_channel();
-    let (finished_tx, finished) = std_mpsc::channel();
-    let (store_tx, store_rx) = mpsc::unbounded_channel();
-    let store_worker = runtime.spawn(run_store_worker(Arc::new(store), store_rx));
-    let actor = Actor {
-        connector: Arc::new(connector),
-        state: SessionState::LoggedOut { failure: None },
-        session: None,
-        resuming: None,
-        attempt: 0,
-        login_task: None,
-        rooms_task: None,
-        realtime_task: None,
-        realtime_open: false,
-        realtime_watch: None,
-        cycle: 0,
-        reconnect_task: None,
-        backoff,
-        connection: Connection::Connected,
-        succeeded_at: None,
-        rooms_listed: false,
-        backlog: None,
-        rooms: RoomList::default(),
-        emoji: CustomEmojis::default(),
-        emoji_task: None,
-        policy: MessagePolicy::default(),
-        policy_task: None,
-        cache: Arc::new(cache),
-        avatars: Avatars::default(),
-        avatar_tasks: JoinSet::new(),
-        images: Images::default(),
-        image_tasks: JoinSet::new(),
-        messages: Box::new(MemoryMessageStore::default()),
-        open: None,
-        open_thread: None,
-        history_attempt: 0,
-        history_task: None,
-        thread_task: None,
-        changes_task: None,
-        revokes: JoinSet::new(),
-        store: Some(StoreHandle(store_tx)),
-        store_worker,
-        done_tx,
-        on_event: Arc::new(on_event),
-    };
-    runtime.spawn(async move {
-        actor.run(commands, done_rx).await;
-        // Fails only if the client is gone already.
-        let _ = finished_tx.send(());
-    });
-    finished
+    Actor::new(shared, on_event, backoff, done_tx).run(commands, done_rx)
 }
 
 impl<C: Connector> Actor<C> {
+    fn new(
+        shared: &Shared<C>,
+        on_event: impl Fn(Event) + Send + Sync + 'static,
+        backoff: Backoff,
+        done_tx: UnboundedSender<Done<C::Api>>,
+    ) -> Self {
+        Self {
+            connector: Arc::clone(&shared.connector),
+            state: SessionState::LoggedOut { failure: None },
+            session: None,
+            resuming: None,
+            attempt: 0,
+            login_task: None,
+            rooms_task: None,
+            realtime_task: None,
+            realtime_open: false,
+            realtime_watch: None,
+            cycle: 0,
+            reconnect_task: None,
+            backoff,
+            connection: Connection::Connected,
+            succeeded_at: None,
+            rooms_listed: false,
+            backlog: None,
+            rooms: RoomList::default(),
+            emoji: CustomEmojis::default(),
+            emoji_task: None,
+            policy: MessagePolicy::default(),
+            policy_task: None,
+            cache: Arc::clone(&shared.cache),
+            avatars: Avatars::default(),
+            avatar_tasks: JoinSet::new(),
+            images: Images::default(),
+            image_tasks: JoinSet::new(),
+            messages: Box::new(MemoryMessageStore::default()),
+            open: None,
+            open_thread: None,
+            history_attempt: 0,
+            history_task: None,
+            thread_task: None,
+            changes_task: None,
+            revokes: JoinSet::new(),
+            store: Some(shared.store.clone()),
+            done_tx,
+            on_event: Arc::new(on_event),
+        }
+    }
+
     async fn run(
         mut self,
         mut commands: UnboundedReceiver<Command>,
         mut done: UnboundedReceiver<Done<C::Api>>,
-    ) {
+    ) -> Instant {
         self.start().await;
         loop {
             tokio::select! {
@@ -415,7 +413,7 @@ impl<C: Connector> Actor<C> {
                 },
             }
         }
-        self.stop().await;
+        self.stop().await
     }
 
     /// Looks for a stored session, before any command is handled.
@@ -434,9 +432,10 @@ impl<C: Connector> Actor<C> {
         }
     }
 
-    /// Ends the attempt in flight, then waits, for a bounded time, for what the user asked
-    /// already: store writes and token revocations.
-    async fn stop(&mut self) {
+    /// Ends the attempt in flight, drops its handle on the store worker, and waits for the token
+    /// revocations the user asked for already. Returns the deadline of that wait, [`DRAIN_TIMEOUT`]
+    /// from now: the store worker has until then to empty its queue.
+    async fn stop(&mut self) -> Instant {
         if let Some(task) = self.login_task.take() {
             task.abort();
         }
@@ -457,15 +456,13 @@ impl<C: Connector> Actor<C> {
             task.abort();
         }
         drop(self.store.take());
+        let deadline = Instant::now() + DRAIN_TIMEOUT;
         let revokes = &mut self.revokes;
-        let worker = &mut self.store_worker;
-        let drain = async {
-            while revokes.join_next().await.is_some() {}
-            let _ = worker.await;
-        };
-        if tokio::time::timeout(DRAIN_TIMEOUT, drain).await.is_err() {
-            tracing::warn!("pending logout work didn't finish in time");
+        let drain = async { while revokes.join_next().await.is_some() {} };
+        if tokio::time::timeout_at(deadline, drain).await.is_err() {
+            tracing::warn!("pending token revocations didn't finish in time");
         }
+        deadline
     }
 
     fn handle_command(&mut self, command: Command) {

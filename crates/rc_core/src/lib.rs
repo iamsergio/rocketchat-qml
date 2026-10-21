@@ -10,6 +10,7 @@ pub mod adapters;
 mod avatars;
 mod backoff;
 mod client;
+mod core;
 pub mod domain;
 pub mod emoji;
 mod error;

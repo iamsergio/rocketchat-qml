@@ -10,10 +10,10 @@ use secrecy::SecretString;
 use tokio::runtime::{Builder, Runtime};
 use tokio::sync::mpsc::{self, UnboundedSender};
 
-use crate::account;
 use crate::adapters::RestConnector;
 use crate::avatars::AvatarUpdate;
 use crate::backoff::Backoff;
+use crate::core;
 use crate::domain::{MessageId, RoomId};
 use crate::emoji::{self, CustomEmojis};
 use crate::error::Error;
@@ -202,7 +202,7 @@ impl Client {
             .build()
             .map_err(Error::Runtime)?;
         let (commands, commands_rx) = mpsc::unbounded_channel();
-        let finished = account::spawn(
+        let finished = core::spawn(
             &runtime,
             connector,
             store,
