@@ -10,10 +10,14 @@ import RocketChat.Bridge
 
 // The open room: its name, its messages, oldest at the top, and the box to write in.
 ColumnLayout {
-    spacing: 0
+    spacing: Theme.spacingNone
 
     ToolBar {
         Layout.fillWidth: true
+        bottomPadding: Theme.toolBarLinePadding
+        leftPadding: Theme.toolBarPaddingH
+        rightPadding: Theme.toolBarPaddingH
+        topPadding: Theme.toolBarPaddingV
         visible: Room.roomId !== ""
 
         Label {
@@ -133,6 +137,8 @@ ColumnLayout {
         BusyIndicator {
             objectName: "roomLoading"
             anchors.centerIn: parent
+            implicitHeight: Theme.busyIndicatorLargeSize
+            implicitWidth: Theme.busyIndicatorLargeSize
             visible: Room.loading
             running: visible
         }
@@ -144,6 +150,7 @@ ColumnLayout {
         objectName: "roomActionError"
         Layout.fillWidth: true
         Layout.margins: Theme.spacingL
+        spacing: Theme.spacingL
         visible: Room.actionError !== ""
 
         Label {

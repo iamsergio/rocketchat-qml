@@ -7,15 +7,20 @@ import QtQuick.Layouts
 import RocketChat.Bridge
 
 ColumnLayout {
-    spacing: 0
+    spacing: Theme.spacingNone
 
     ToolBar {
         Layout.fillWidth: true
+        bottomPadding: Theme.toolBarLinePadding
+        leftPadding: Theme.toolBarPaddingH
+        rightPadding: Theme.toolBarPaddingH
+        topPadding: Theme.toolBarPaddingV
 
         RowLayout {
             anchors.fill: parent
             anchors.leftMargin: Theme.spacingXXL
             anchors.rightMargin: Theme.spacingXXL
+            spacing: Theme.spacingL
 
             Label {
                 objectName: "currentUser"
@@ -48,14 +53,14 @@ ColumnLayout {
     RowLayout {
         Layout.fillWidth: true
         Layout.fillHeight: true
-        spacing: 0
+        spacing: Theme.spacingNone
 
         ColumnLayout {
             Layout.fillHeight: true
             Layout.maximumWidth: Theme.sidebarWidth
             Layout.minimumWidth: Theme.sidebarWidth
             Layout.preferredWidth: Theme.sidebarWidth
-            spacing: 0
+            spacing: Theme.spacingNone
 
             // One list, so that everything scrolls together. The favorites come first, and the
             // sections show only while there are any.
@@ -105,6 +110,7 @@ ColumnLayout {
                 objectName: "roomListError"
                 Layout.fillWidth: true
                 Layout.margins: Theme.spacingL
+                spacing: Theme.spacingL
                 visible: RoomList.roomActionError !== ""
 
                 Label {

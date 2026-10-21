@@ -26,6 +26,7 @@ ItemDelegate {
     objectName: "room_" + roomId
     width: ListView.view.width
     highlighted: Room.roomId === roomId
+    padding: Theme.delegatePadding
     onClicked: Room.open(roomId)
 
     // Right-click opens the menu of the room. A MouseArea, as Spix clicks don't reach a TapHandler.
@@ -79,6 +80,7 @@ ItemDelegate {
 
         anchors.centerIn: Overlay.overlay
         modal: true
+        padding: Theme.dialogPadding
         parent: Overlay.overlay
         title: qsTr("Leave room")
         // A width of its own: the wrapping label can't size the dialog it is sized by.
@@ -156,8 +158,8 @@ ItemDelegate {
         // Mentions of the user.
         Rectangle {
             visible: root.userMentions > 0
-            implicitWidth: mentionRow.implicitWidth + Theme.spacingXXL
-            implicitHeight: mentionRow.implicitHeight + Theme.spacingS
+            implicitWidth: mentionRow.implicitWidth + Theme.badgePaddingH
+            implicitHeight: mentionRow.implicitHeight + Theme.badgePaddingV
             radius: height / 2
             color: root.palette.highlight
 
@@ -165,6 +167,7 @@ ItemDelegate {
                 id: mentionRow
 
                 anchors.centerIn: parent
+                spacing: Theme.spacingNone
 
                 Label {
                     text: "@"
@@ -181,8 +184,8 @@ ItemDelegate {
 
         Rectangle {
             visible: root.unread > 0
-            implicitWidth: Math.max(unreadLabel.implicitWidth + Theme.spacingXXL, height)
-            implicitHeight: unreadLabel.implicitHeight + Theme.spacingS
+            implicitWidth: Math.max(unreadLabel.implicitWidth + Theme.badgePaddingH, height)
+            implicitHeight: unreadLabel.implicitHeight + Theme.badgePaddingV
             radius: height / 2
             color: root.palette.mid
 

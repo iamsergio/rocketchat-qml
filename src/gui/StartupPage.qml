@@ -10,6 +10,8 @@ Item {
     BusyIndicator {
         objectName: "startupBusy"
         anchors.centerIn: parent
+        implicitHeight: Theme.busyIndicatorLargeSize
+        implicitWidth: Theme.busyIndicatorLargeSize
         running: visible
     }
 }

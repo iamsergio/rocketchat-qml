@@ -118,6 +118,7 @@ Item {
 
         anchors.centerIn: Overlay.overlay
         modal: true
+        padding: Theme.dialogPadding
         parent: Overlay.overlay
         title: qsTr("Delete message")
         // A width of its own: the wrapping label can't size the dialog it is sized by.
@@ -255,7 +256,7 @@ Item {
                         Layout.preferredHeight: Theme.menuButtonHeight
                         Layout.preferredWidth: Theme.menuButtonWidth
                         opacity: rowHover.hovered || menu.opened ? 1 : 0
-                        padding: 0
+                        padding: Theme.menuButtonPadding
                         text: "\u22EF"
                         visible: root.canQuote || root.canReact || root.canEdit || root.canDelete
                         onClicked: menu.popup(this, 0, height)
