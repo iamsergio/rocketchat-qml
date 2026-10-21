@@ -1260,6 +1260,37 @@ async fn a_user_avatar_is_downloaded_with_the_login_headers() {
 
 // RICH-004
 #[tokio::test]
+async fn the_avatar_routes_get_the_login_as_cookies_too() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/avatar/alice"))
+        .and(header(
+            "Cookie",
+            format!("rc_uid={USER_ID}; rc_token={TOKEN}").as_str(),
+        ))
+        .respond_with(svg_response())
+        .expect(1)
+        .mount(&server)
+        .await;
+    session(&RestClient::new(&server.uri()).unwrap())
+        .user_avatar("alice")
+        .await
+        .unwrap();
+}
+
+// RICH-004
+#[tokio::test]
+async fn the_api_routes_get_no_cookie() {
+    let server = MockServer::start().await;
+    mount_authenticated(&server, "GET", "/api/v1/me", ResponseTemplate::new(404)).await;
+    let _ = session(&RestClient::new(&server.uri()).unwrap()).me().await;
+    let requests = server.received_requests().await.unwrap();
+    assert_eq!(requests.len(), 1);
+    assert!(!requests[0].headers.contains_key("cookie"));
+}
+
+// RICH-004
+#[tokio::test]
 async fn a_room_avatar_is_downloaded_from_the_room_path() {
     let server = MockServer::start().await;
     mount_authenticated(&server, "GET", "/avatar/room/rid1", svg_response()).await;

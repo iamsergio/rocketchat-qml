@@ -493,8 +493,8 @@ impl Admin {
 
     /// Sets the avatar of the user to a one-pixel PNG (`users.setAvatar`) and waits until the
     /// server says the user has one (`avatarETag` of `users.info`), which it does a moment later.
-    /// The server announces it on its stream of avatar changes, but this server keeps serving the
-    /// generated avatar from `/avatar/<username>` anyway.
+    /// The server announces it on its stream of avatar changes, and serves the image from
+    /// `/avatar/<username>` to a request that carries the login as cookies.
     ///
     /// # Panics
     ///
@@ -510,8 +510,8 @@ impl Admin {
     }
 
     /// Sets the avatar of the room to a one-pixel PNG (`rooms.saveRoomSettings`) and waits until
-    /// the server says the room has one (`avatarETag` of `rooms.info`). The server keeps serving
-    /// the generated avatar from `/avatar/room/<id>` anyway.
+    /// the server says the room has one (`avatarETag` of `rooms.info`). The server serves the image
+    /// from `/avatar/room/<id>` to a request that carries the login as cookies.
     ///
     /// # Panics
     ///

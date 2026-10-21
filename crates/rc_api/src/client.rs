@@ -127,16 +127,21 @@ impl RestClient {
             .base
             .join(path)
             .map_err(|e| Error::InvalidUrl(format!("{path}: {e}")))?;
-        let (status, _, body) = self.send_to(method, url, credentials, payload).await?;
+        let (status, _, body) = self
+            .send_to(method, url, credentials, false, payload)
+            .await?;
         Ok((status, body))
     }
 
-    /// [`send`](Self::send) to a URL, which also returns the `Content-Type` of the answer.
+    /// [`send`](Self::send) to a URL, which also returns the `Content-Type` of the answer. With
+    /// `cookie` the login also goes as the cookies the web client has, for the routes that read it
+    /// from there.
     async fn send_to(
         &self,
         method: Method,
         url: Url,
         credentials: Option<&Credentials>,
+        cookie: bool,
         payload: Option<&serde_json::Value>,
     ) -> Result<(StatusCode, Option<String>, Vec<u8>), Error> {
         let path = url.path().to_owned();
@@ -149,6 +154,14 @@ impl RestClient {
                     AUTH_TOKEN_HEADER,
                     sensitive(credentials.token.expose_secret())?,
                 );
+            if cookie {
+                let login = format!(
+                    "rc_uid={}; rc_token={}",
+                    credentials.user_id,
+                    credentials.token.expose_secret()
+                );
+                request = request.header(reqwest::header::COOKIE, sensitive(&login)?);
+            }
         }
         if let Some(payload) = payload {
             request = request.json(payload);
@@ -266,6 +279,8 @@ impl RestSession {
 
     /// The avatar of a user (`GET /avatar/<username>`), an image the server generates from the
     /// initials when the user has none. Not under `/api/v1`, and answered with the image itself.
+    /// The route reads the login from the cookies, not the headers, and without them answers with
+    /// the generated avatar even for a user who has uploaded one, so the login goes as both.
     /// The server answers for any name, so there is no 404 for an unknown user.
     ///
     /// # Errors
@@ -314,7 +329,7 @@ impl RestSession {
             .extend(segments);
         let (status, content_type, body) = self
             .client
-            .send_to(Method::GET, url, Some(&self.credentials), None)
+            .send_to(Method::GET, url, Some(&self.credentials), true, None)
             .await?;
         if !status.is_success() {
             return Err(server_error(status, &body));
