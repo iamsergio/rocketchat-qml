@@ -19,8 +19,8 @@ use super::*;
 use crate::adapters::MemoryStore;
 use crate::backoff::Backoff;
 use crate::domain::{
-    Account, Attachment, Author, Delivery, ImageAttachment, Message, MessageKind, Room, RoomKind,
-    SystemEvent, User,
+    Account, Attachment, Author, Delivery, ImageAttachment, Message, MessageKind, Reaction, Room,
+    RoomKind, SystemEvent, User,
 };
 use crate::policy::{ActionError, MessageAction, MessagePolicy};
 use crate::ports::{
@@ -107,6 +107,14 @@ struct EditCall {
     text: String,
 }
 
+/// What `react` was asked.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ReactCall {
+    id: String,
+    emoji: String,
+    react: bool,
+}
+
 /// What `changes_since` was asked.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct ChangesCall {
@@ -182,6 +190,11 @@ struct FakeState {
     delete_calls: Vec<(String, String)>,
     /// Deletions that got past their gate.
     deletes_returned: usize,
+    /// One per reaction; a success once they run out.
+    reacts: VecDeque<DeleteScript>,
+    react_calls: Vec<ReactCall>,
+    /// Reactions that got past their gate.
+    reacts_returned: usize,
     /// One per mark-as-read call; a success once they run out.
     mark_reads: VecDeque<Result<(), ApiError>>,
     /// The rooms `mark_read` was asked for.
@@ -326,6 +339,16 @@ impl Fake {
         self.state()
             .deletes
             .push_back(DeleteScript { gate, result });
+    }
+
+    fn script_react(&self, gate: Option<Arc<Notify>>, result: Result<(), ApiError>) {
+        self.state().reacts.push_back(DeleteScript { gate, result });
+    }
+
+    /// The reaction tasks are done with the server and about to report.
+    fn wait_for_reacts_returned(&self, count: usize) {
+        wait_until(|| (self.state().reacts_returned >= count).then_some(()));
+        std::thread::sleep(Duration::from_millis(20));
     }
 
     /// The edit tasks are done with the server and about to report.
@@ -740,6 +763,30 @@ impl ServerApi for Fake {
             gate.notified().await;
         }
         self.state().deletes_returned += 1;
+        result
+    }
+
+    async fn react(
+        &self,
+        _credentials: &Credentials,
+        id: &MessageId,
+        emoji: &str,
+        react: bool,
+    ) -> Result<(), ApiError> {
+        let script = {
+            let mut state = self.state();
+            state.react_calls.push(ReactCall {
+                id: id.to_string(),
+                emoji: emoji.to_owned(),
+                react,
+            });
+            state.reacts.pop_front()
+        };
+        let (gate, result) = script.map_or((None, Ok(())), |s| (s.gate, s.result));
+        if let Some(gate) = gate {
+            gate.notified().await;
+        }
+        self.state().reacts_returned += 1;
         result
     }
 
@@ -5711,6 +5758,356 @@ fn a_dead_token_on_an_edit_or_a_deletion_expires_the_session() {
         ]);
         harness.expect_events(closed_events());
     }
+}
+
+/// The message `id` of the first room as it is with these reactions, `(emoji, users)`.
+fn with_reactions(id: &str, secs: i64, reactions: &[(&str, &[&str])]) -> Message {
+    Message {
+        reactions: reactions
+            .iter()
+            .map(|(emoji, users)| Reaction {
+                emoji: (*emoji).to_owned(),
+                usernames: users.iter().map(|u| (*u).to_owned()).collect(),
+            })
+            .collect(),
+        ..message(id, secs)
+    }
+}
+
+fn react_call(id: &str, emoji: &str, react: bool) -> ReactCall {
+    ReactCall {
+        id: id.to_owned(),
+        emoji: emoji.to_owned(),
+        react,
+    }
+}
+
+// ACT-003
+#[test]
+fn a_reaction_shows_in_the_message_at_once_and_is_answered() {
+    let fake = Fake::new();
+    let harness = logged_in_harness(&fake);
+    open_first_room(&fake, &harness, false);
+
+    // Colons or not, the request has them. Reacting to a message of somebody else works too.
+    harness.client.react("b".to_owned().into(), "tada", true);
+
+    harness.expect_events(vec![
+        updated(1, with_reactions("b", 2, &[(":tada:", &["alice"])])),
+        action_event("b", MessageAction::React, Ok(())),
+    ]);
+    assert_eq!(fake.state().react_calls, [react_call("b", ":tada:", true)]);
+}
+
+// ACT-003
+#[test]
+fn a_reaction_joins_the_users_of_the_emoji_and_starts_new_ones_at_the_end() {
+    let fake = Fake::new();
+    let harness = logged_in_harness(&fake);
+    open_first_room(&fake, &harness, false);
+    let held = with_reactions("b", 2, &[(":a:", &["bob"]), (":b:", &["bob"])]);
+    assert!(fake.push(0, Pushed::Message(held.clone())));
+    harness.expect_events(vec![updated(1, held)]);
+
+    harness.client.react("b".to_owned().into(), ":a:", true);
+    harness.expect_events(vec![
+        updated(
+            1,
+            with_reactions("b", 2, &[(":a:", &["bob", "alice"]), (":b:", &["bob"])]),
+        ),
+        action_event("b", MessageAction::React, Ok(())),
+    ]);
+    harness.client.react("b".to_owned().into(), ":c:", true);
+    harness.expect_events(vec![
+        updated(
+            1,
+            with_reactions(
+                "b",
+                2,
+                &[
+                    (":a:", &["bob", "alice"]),
+                    (":b:", &["bob"]),
+                    (":c:", &["alice"]),
+                ],
+            ),
+        ),
+        action_event("b", MessageAction::React, Ok(())),
+    ]);
+}
+
+// ACT-003
+#[test]
+fn taking_a_reaction_back_removes_the_user_and_drops_an_emoji_nobody_is_left_with() {
+    let fake = Fake::new();
+    let harness = logged_in_harness(&fake);
+    open_first_room(&fake, &harness, false);
+    let held = with_reactions("b", 2, &[(":a:", &["bob", "alice"]), (":b:", &["alice"])]);
+    assert!(fake.push(0, Pushed::Message(held.clone())));
+    harness.expect_events(vec![updated(1, held)]);
+
+    harness.client.react("b".to_owned().into(), ":a:", false);
+    harness.expect_events(vec![
+        updated(
+            1,
+            with_reactions("b", 2, &[(":a:", &["bob"]), (":b:", &["alice"])]),
+        ),
+        action_event("b", MessageAction::React, Ok(())),
+    ]);
+    harness.client.react("b".to_owned().into(), ":b:", false);
+    harness.expect_events(vec![
+        updated(1, with_reactions("b", 2, &[(":a:", &["bob"])])),
+        action_event("b", MessageAction::React, Ok(())),
+    ]);
+    assert_eq!(
+        fake.state().react_calls,
+        [react_call("b", ":a:", false), react_call("b", ":b:", false)]
+    );
+}
+
+// ACT-003
+#[test]
+fn the_push_of_a_reaction_after_the_answer_changes_nothing() {
+    let fake = Fake::new();
+    let harness = logged_in_harness(&fake);
+    open_first_room(&fake, &harness, false);
+    harness.client.react("b".to_owned().into(), ":tada:", true);
+    harness.expect_events(vec![
+        updated(1, with_reactions("b", 2, &[(":tada:", &["alice"])])),
+        action_event("b", MessageAction::React, Ok(())),
+    ]);
+
+    assert!(fake.push(
+        0,
+        Pushed::Message(with_reactions("b", 2, &[(":tada:", &["alice"])]))
+    ));
+
+    flush_pushed(&fake, &harness, "1");
+}
+
+// ACT-003
+#[test]
+fn the_push_of_a_reaction_before_the_answer_leaves_nothing_for_the_answer_to_change() {
+    let fake = Fake::new();
+    let harness = logged_in_harness(&fake);
+    open_first_room(&fake, &harness, false);
+    let gate = Arc::new(Notify::new());
+    fake.script_react(Some(Arc::clone(&gate)), Ok(()));
+    harness.client.react("b".to_owned().into(), ":tada:", true);
+    wait_until(|| (!fake.state().react_calls.is_empty()).then_some(()));
+
+    let pushed = with_reactions("b", 2, &[(":tada:", &["alice"])]);
+    assert!(fake.push(0, Pushed::Message(pushed.clone())));
+    harness.expect_events(vec![updated(1, pushed)]);
+    gate.notify_one();
+
+    harness.expect_events(vec![action_event("b", MessageAction::React, Ok(()))]);
+    flush_pushed(&fake, &harness, "1");
+}
+
+// ACT-003
+#[test]
+fn an_answer_applies_to_the_message_as_it_is_by_then() {
+    let fake = Fake::new();
+    let harness = logged_in_harness(&fake);
+    open_first_room(&fake, &harness, false);
+    let gate = Arc::new(Notify::new());
+    fake.script_react(Some(Arc::clone(&gate)), Ok(()));
+    harness.client.react("b".to_owned().into(), ":tada:", true);
+    wait_until(|| (!fake.state().react_calls.is_empty()).then_some(()));
+
+    // Somebody else reacted meanwhile.
+    let pushed = with_reactions("b", 2, &[(":a:", &["bob"])]);
+    assert!(fake.push(0, Pushed::Message(pushed.clone())));
+    harness.expect_events(vec![updated(1, pushed)]);
+    gate.notify_one();
+
+    harness.expect_events(vec![
+        updated(
+            1,
+            with_reactions("b", 2, &[(":a:", &["bob"]), (":tada:", &["alice"])]),
+        ),
+        action_event("b", MessageAction::React, Ok(())),
+    ]);
+}
+
+// ACT-003
+#[test]
+fn a_reaction_to_a_message_deleted_meanwhile_is_answered_and_changes_nothing() {
+    let fake = Fake::new();
+    let harness = logged_in_harness(&fake);
+    open_first_room(&fake, &harness, false);
+    let gate = Arc::new(Notify::new());
+    fake.script_react(Some(Arc::clone(&gate)), Ok(()));
+    harness.client.react("b".to_owned().into(), ":tada:", true);
+    wait_until(|| (!fake.state().react_calls.is_empty()).then_some(()));
+    assert!(fake.push(0, deleted("1", "b")));
+    harness.expect_events(vec![removal(1)]);
+    gate.notify_one();
+
+    harness.expect_events(vec![action_event("b", MessageAction::React, Ok(()))]);
+}
+
+// ACT-003
+#[test]
+fn a_refused_reaction_is_reported_and_changes_nothing() {
+    let fake = Fake::new();
+    let harness = logged_in_harness(&fake);
+    open_first_room(&fake, &harness, false);
+    fake.script_react(None, Err(refused()));
+    fake.script_react(None, Err(ApiError::Unreachable("refused".into())));
+
+    harness.client.react("b".to_owned().into(), ":nope:", true);
+    harness.expect_events(vec![action_event(
+        "b",
+        MessageAction::React,
+        Err(ActionError::Server(refused().to_string())),
+    )]);
+    harness.client.react("b".to_owned().into(), ":nope:", true);
+    harness.expect_events(vec![action_event(
+        "b",
+        MessageAction::React,
+        Err(ActionError::Unreachable),
+    )]);
+    flush_pushed(&fake, &harness, "1");
+}
+
+// ACT-003
+#[test]
+fn only_sent_text_messages_of_the_open_room_are_reacted_to() {
+    let fake = Fake::new();
+    let harness = logged_in_harness(&fake);
+    open_first_room(&fake, &harness, false);
+    let system = Message {
+        kind: MessageKind::System(SystemEvent::Joined),
+        ..message_of_bob("s", 3)
+    };
+    assert!(fake.push(0, Pushed::Message(system.clone())));
+    harness.expect_events(vec![Event::Timeline(vec![TimelineChange::Appended(vec![
+        system,
+    ])])]);
+    let gate = Arc::new(Notify::new());
+    fake.script_send(Some(gate), Ok(7));
+    harness
+        .client
+        .send_message("1".to_owned().into(), "unsent", None);
+    let pending = expect_pending(&harness);
+
+    for id in ["s", pending.id.as_str(), "nope"] {
+        harness.client.react(id.to_owned().into(), ":tada:", true);
+        harness.expect_events(vec![action_event(
+            id,
+            MessageAction::React,
+            Err(ActionError::NotAllowed(MessageAction::React)),
+        )]);
+    }
+    harness.client.react("b".to_owned().into(), " : ", true);
+    harness.expect_events(vec![action_event(
+        "b",
+        MessageAction::React,
+        Err(ActionError::NotAllowed(MessageAction::React)),
+    )]);
+    assert!(fake.state().react_calls.is_empty());
+}
+
+// ACT-003
+#[test]
+fn a_failed_message_is_not_reacted_to() {
+    let fake = Fake::new();
+    let harness = logged_in_harness(&fake);
+    open_first_room(&fake, &harness, false);
+    fake.script_send(None, Err(ApiError::Unreachable("refused".into())));
+    harness
+        .client
+        .send_message("1".to_owned().into(), "unsent", None);
+    let pending = expect_pending(&harness);
+    harness.expect_events(vec![updated(2, with_delivery(&pending, Delivery::Failed))]);
+
+    harness.client.react(pending.id.clone(), ":tada:", true);
+
+    harness.expect_events(vec![action_event(
+        pending.id.as_str(),
+        MessageAction::React,
+        Err(ActionError::NotAllowed(MessageAction::React)),
+    )]);
+    assert!(fake.state().react_calls.is_empty());
+}
+
+// ACT-003
+#[test]
+fn a_message_of_a_room_that_is_not_open_is_not_reacted_to() {
+    let fake = Fake::new();
+    let harness = logged_in_harness(&fake);
+    open_first_room(&fake, &harness, false);
+    open_the_other_room(&harness);
+
+    harness.client.react("b".to_owned().into(), ":tada:", true);
+
+    harness.expect_events(vec![action_event(
+        "b",
+        MessageAction::React,
+        Err(ActionError::NotAllowed(MessageAction::React)),
+    )]);
+    assert!(fake.state().react_calls.is_empty());
+}
+
+// ACT-003
+#[test]
+fn nothing_is_reacted_to_when_logged_out() {
+    let fake = Fake::new();
+    let harness = Harness::new(&fake);
+
+    harness.client.react("b".to_owned().into(), ":tada:", true);
+
+    // The first event after this is the login's.
+    fake.script_login(None, Ok(()));
+    harness.login("http://h", "alice");
+    harness.expect_events(vec![
+        session_event(SessionState::Connecting),
+        session_event(logged_in("http://h", "alice")),
+    ]);
+    assert!(fake.state().react_calls.is_empty());
+}
+
+// ACT-003
+#[test]
+fn a_reaction_answered_after_logout_is_dropped() {
+    let fake = Fake::new();
+    let harness = logged_in_harness(&fake);
+    open_first_room(&fake, &harness, false);
+    let gate = Arc::new(Notify::new());
+    fake.script_react(Some(Arc::clone(&gate)), Ok(()));
+    harness.client.react("b".to_owned().into(), ":tada:", true);
+    wait_until(|| (!fake.state().react_calls.is_empty()).then_some(()));
+
+    harness.client.logout();
+    harness.expect_events(vec![session_event(logged_out(None)), rooms_event(vec![])]);
+    harness.expect_events(closed_events());
+    gate.notify_one();
+    fake.wait_for_reacts_returned(1);
+
+    fake.script_login(None, Ok(()));
+    harness.login("http://h", "alice");
+    harness.expect_events(vec![
+        session_event(SessionState::Connecting),
+        session_event(logged_in("http://h", "alice")),
+    ]);
+}
+
+// ACT-003
+#[test]
+fn a_dead_token_on_a_reaction_expires_the_session() {
+    let fake = Fake::new();
+    let harness = logged_in_harness(&fake);
+    open_first_room(&fake, &harness, false);
+    fake.script_react(None, Err(ApiError::Unauthorized));
+
+    harness.client.react("b".to_owned().into(), ":tada:", true);
+
+    harness.expect_events(vec![
+        session_event(logged_out(Some(LoginFailure::SessionExpired))),
+        rooms_event(vec![]),
+    ]);
+    harness.expect_events(closed_events());
 }
 
 /// A server whose `Site_Url` is not the address that the tests log in with.

@@ -1,28 +1,31 @@
 // SPDX-FileCopyrightText: 2026 Sergio Martins
 // SPDX-License-Identifier: MIT
 
-//! What users may do with their own messages: the server's settings and the rules built on them.
+//! What users may do with messages: the server's settings and the rules built on them.
 
 use std::time::Duration;
 
 use crate::domain::{Message, MessageKind, UserId};
 use crate::ports::ApiError;
 
-/// A change the user makes to one of their messages.
+/// Something the user does to a message: change or delete one of their own, or react to any.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MessageAction {
     Edit,
     Delete,
+    React,
 }
 
 /// Why a [`MessageAction`] didn't happen. The texts are meant to be shown as they are.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum ActionError {
-    /// Refused without asking the server: the message isn't the user's, isn't sent, isn't in the
-    /// open room, or the settings don't allow it (any more).
+    /// Refused without asking the server: the message isn't the user's (for an edit or a
+    /// deletion), isn't sent, isn't text, isn't in the open room, or the settings don't allow it
+    /// (any more).
     #[error("This message can't be {}", match .0 {
         MessageAction::Edit => "edited",
         MessageAction::Delete => "deleted",
+        MessageAction::React => "reacted to",
     })]
     NotAllowed(MessageAction),
     #[error("A message can't be empty")]
@@ -128,6 +131,13 @@ impl MessagePolicy {
     }
 }
 
+/// Whether users can react to the message: the server has it and it says something (not a system
+/// message). Whoever wrote it; the server refuses a reaction the user has no right to.
+#[must_use]
+pub fn can_react(message: &Message) -> bool {
+    matches!(message.kind, MessageKind::Text(_)) && !message.is_unsent()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -198,6 +208,30 @@ mod tests {
                 !policy.can_delete(&message, &me(), at(2_000)),
                 "{message:?}"
             );
+        }
+    }
+
+    // ACT-003
+    #[test]
+    fn sent_text_messages_can_be_reacted_to_whoever_wrote_them() {
+        let text = || MessageKind::Text("hi".into());
+        assert!(can_react(&own()));
+        assert!(can_react(&message("bob", Delivery::Sent, text())));
+    }
+
+    // ACT-003
+    #[test]
+    fn unsent_messages_and_system_messages_cannot_be_reacted_to() {
+        let text = || MessageKind::Text("hi".into());
+        let pending = message("me", Delivery::Pending, text());
+        let failed = message("bob", Delivery::Failed, text());
+        let system = message(
+            "bob",
+            Delivery::Sent,
+            MessageKind::System(SystemEvent::Joined),
+        );
+        for message in [pending, failed, system] {
+            assert!(!can_react(&message), "{message:?}");
         }
     }
 
@@ -280,6 +314,10 @@ mod tests {
         assert_eq!(
             ActionError::NotAllowed(MessageAction::Delete).to_string(),
             "This message can't be deleted"
+        );
+        assert_eq!(
+            ActionError::NotAllowed(MessageAction::React).to_string(),
+            "This message can't be reacted to"
         );
         assert_eq!(
             ActionError::from(&ApiError::Unreachable("refused".into())).to_string(),

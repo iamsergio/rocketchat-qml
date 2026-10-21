@@ -471,6 +471,22 @@ impl RestSession {
         Ok(())
     }
 
+    /// Adds the user's reaction to a message, or takes it back (`POST /api/v1/chat.react`).
+    /// `emoji` is the shortcode with its colons (`:smile:`). The request always says which of the
+    /// two is wanted, never the server's toggle, so repeating it changes nothing.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Unauthorized`] if the token is expired or revoked, [`Error::Server`] if the server
+    /// refuses the reaction (unknown emoji, no such message, no access to the room...), or any of
+    /// the other errors.
+    pub async fn react(&self, id: &str, emoji: &str, should_react: bool) -> Result<(), Error> {
+        let payload = json!({ "messageId": id, "emoji": emoji, "shouldReact": should_react });
+        self.call_json(Method::POST, "api/v1/chat.react", &payload)
+            .await?;
+        Ok(())
+    }
+
     /// The message with this id, or `None` if there is none or it can't be fetched.
     async fn stored_message(&self, id: &str) -> Option<Message> {
         let mut escaped = Url::parse("http://unused/").ok()?;

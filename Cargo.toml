@@ -39,7 +39,9 @@ rustls = { version = "0.23.46", default-features = false, features = ["aws-lc-rs
 rustls-platform-verifier = "0.7.1"
 secrecy = "0.10.3"
 serde = { version = "1.0.229", features = ["derive"] }
-serde_json = "1.0.151"
+# preserve_order: a message pushed over DDP goes through `Value` first, and its reactions must keep
+# the order the server lists them in.
+serde_json = { version = "1.0.151", features = ["preserve_order"] }
 thiserror = "2.0.21"
 tokio = "1.53.2"
 # TLS through the rustls config rc_api builds, with the same verifier as reqwest.

@@ -22,10 +22,10 @@ use crate::domain::{
     Author, AvatarOwner, Credentials, Delivery, Message, MessageId, MessageKind, Quote, Room,
     RoomId, RoomKind, StoredSession, User, room_from,
 };
-use crate::emoji::CustomEmojis;
+use crate::emoji::{self, CustomEmojis};
 use crate::error::Error;
 use crate::images::{self, ImageUpdate, Images, images_of};
-use crate::policy::{ActionError, MessageAction, MessagePolicy};
+use crate::policy::{ActionError, MessageAction, MessagePolicy, can_react};
 use crate::ports::{
     ApiError, CacheError, CacheKey, Changes, Connector, FileCache, MessageStore, Page, Pushed,
     Realtime, SecretStore, ServerApi, StoreError,
@@ -80,9 +80,9 @@ pub enum Event {
     /// What the server lets users do with their own messages, whenever it changes. Logging out
     /// resets it to the default (everything allowed), if it differed.
     MessagePolicy(MessagePolicy),
-    /// How an edit or a deletion the frontend asked for ended. A refusal that needs no request
-    /// (not the user's message, past the time limit...) is answered at once. Nothing comes if the
-    /// session ends first.
+    /// How an edit, a deletion or a reaction the frontend asked for ended. A refusal that needs no
+    /// request (not the user's message, past the time limit...) is answered at once. Nothing comes
+    /// if the session ends first.
     MessageAction {
         id: MessageId,
         action: MessageAction,
@@ -122,6 +122,12 @@ enum Command {
         text: String,
     },
     DeleteMessage(MessageId),
+    React {
+        id: MessageId,
+        /// The shortcode with its colons.
+        emoji: String,
+        react: bool,
+    },
 }
 
 /// The core, as seen from a frontend: commands go in, events come out through the callback given
@@ -318,6 +324,20 @@ impl Client {
     /// logged in.
     pub fn delete_message(&self, id: MessageId) {
         self.send(Command::DeleteMessage(id));
+    }
+
+    /// Adds the user's reaction with `emoji` to a message of the open room, or takes it back. The
+    /// emoji is a shortcode, with or without colons. The answer comes as [`Event::MessageAction`],
+    /// and the reaction shows in the message with it, without waiting for the server's push.
+    /// Asking for what is so already succeeds. Refused at once, without a request, if the message
+    /// isn't in the open room, isn't sent or isn't text, or the emoji is blank. Ignored unless
+    /// logged in.
+    pub fn react(&self, id: MessageId, emoji: &str, react: bool) {
+        self.send(Command::React {
+            id,
+            emoji: emoji::shortcode(emoji),
+            react,
+        });
     }
 
     fn send(&self, command: Command) {
@@ -594,14 +614,18 @@ struct MarkReadDone {
     outcome: Result<(), ApiError>,
 }
 
-/// What an edit or a deletion did on the server.
+/// What an edit, a deletion or a reaction did on the server.
 enum Applied {
     /// The message as the server stored it.
     Edited(Box<Message>),
     Deleted,
+    Reacted {
+        emoji: String,
+        react: bool,
+    },
 }
 
-/// An edit's or a deletion's answer.
+/// An edit's, a deletion's or a reaction's answer.
 struct ActionDone {
     /// The login attempt the call belongs to: the answer is stale if the session has changed.
     attempt: u64,
@@ -839,6 +863,7 @@ impl<C: Connector> Actor<C> {
             Command::RetryMessage(id) => self.retry_message(&id),
             Command::EditMessage { id, text } => self.edit_own_message(id, &text),
             Command::DeleteMessage(id) => self.delete_own_message(id),
+            Command::React { id, emoji, react } => self.react_to_message(id, emoji, react),
         }
     }
 
@@ -2054,8 +2079,8 @@ impl<C: Connector> Actor<C> {
         });
     }
 
-    /// The message of the open room, if it is one the user may change as `action` says. Answers
-    /// with a refusal otherwise.
+    /// The message of the open room, if it is one the user may do `action` to. Answers with a
+    /// refusal otherwise.
     fn changeable(&self, id: &MessageId, action: MessageAction) -> Option<&Message> {
         let me = self.own_user()?;
         let message = self
@@ -2067,6 +2092,7 @@ impl<C: Connector> Actor<C> {
                 match action {
                     MessageAction::Edit => self.policy.can_edit(message, &me.id, now),
                     MessageAction::Delete => self.policy.can_delete(message, &me.id, now),
+                    MessageAction::React => can_react(message),
                 }
             });
         if message.is_none() {
@@ -2109,6 +2135,47 @@ impl<C: Connector> Actor<C> {
             let room = message.room_id.clone();
             self.request_action(room, id, action, None);
         }
+    }
+
+    fn react_to_message(&mut self, id: MessageId, emoji: String, react: bool) {
+        let action = MessageAction::React;
+        if self.own_user().is_none() {
+            tracing::debug!("react ignored: not logged in");
+            return;
+        }
+        if emoji.is_empty() {
+            self.answer(id, action, Err(ActionError::NotAllowed(action)));
+            return;
+        }
+        if let Some(message) = self.changeable(&id, action) {
+            let room = message.room_id.clone();
+            self.request_reaction(room, id, emoji, react);
+        }
+    }
+
+    /// Asks the server for the reaction, in a task that reports the outcome.
+    fn request_reaction(&self, room: RoomId, id: MessageId, emoji: String, react: bool) {
+        let Some(session) = &self.session else {
+            return;
+        };
+        let api = session.api.clone();
+        let credentials = session.credentials.clone();
+        let attempt = self.attempt;
+        let done = self.done_tx.clone();
+        tokio::spawn(async move {
+            let outcome = api
+                .react(&credentials, &id, &emoji, react)
+                .await
+                .map(|()| Applied::Reacted { emoji, react });
+            // Fails only if the actor is gone.
+            let _ = done.send(Done::Action(ActionDone {
+                attempt,
+                room,
+                id,
+                action: MessageAction::React,
+                outcome,
+            }));
+        });
     }
 
     /// Edits the message to `text`, or deletes it without one, in a task that reports the outcome.
@@ -2173,12 +2240,47 @@ impl<C: Connector> Actor<C> {
                 self.delete_message(&done.room, &done.id);
                 self.answer(done.id, done.action, Ok(()));
             }
+            Ok(Applied::Reacted { emoji, react }) => {
+                self.apply_reaction(&done.room, &done.id, &emoji, react);
+                self.answer(done.id, done.action, Ok(()));
+            }
             Err(ApiError::Unauthorized) => self.expire_session(),
             Err(error) => {
                 tracing::warn!(%error, message = %done.id, action = ?done.action, "refused");
                 self.answer(done.id, done.action, Err(ActionError::from(&error)));
             }
         }
+    }
+
+    /// Puts the user's reaction in the held message without waiting for the server's push, which
+    /// then changes nothing. The message is taken as it is now, not as it was when the reaction was
+    /// asked for. Nothing if it has gone meanwhile.
+    fn apply_reaction(&mut self, room: &RoomId, id: &MessageId, emoji: &str, react: bool) {
+        let Some(username) = self.own_user().map(|user| user.username.clone()) else {
+            return;
+        };
+        let reacted = self
+            .open
+            .as_ref()
+            .filter(|open| open.timeline.room() == room)
+            .and_then(|open| open.timeline.message(id))
+            .and_then(|held| {
+                let mut copy = held.clone();
+                copy.set_reaction(emoji, &username, react).then_some(copy)
+            });
+        let Some(message) = reacted else {
+            return;
+        };
+        // A page that is on its way may predate the reaction, so the copy joins it, as for an edit.
+        if let Some(open) = self.open.as_mut().filter(|open| {
+            open.timeline.room() == room && open.fetch.as_ref().is_some_and(|fetch| !fetch.older)
+        }) {
+            open.live.retain(|m| m.id != message.id);
+            open.live.push(message.clone());
+        }
+        self.change_timeline(room, |timeline| {
+            timeline.replace(message).into_iter().collect()
+        });
     }
 
     fn abort_history_task(&mut self) {

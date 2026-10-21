@@ -19,6 +19,7 @@ use rc_core::adapters::{DiskFileCache, MemoryStore, RestConnector};
 use rc_core::domain::{
     AvatarOwner, Delivery, Message, MessageId, MessageKind, Room, RoomId, RoomKind,
 };
+use rc_core::emoji::{CustomEmojis, catalog};
 use rc_core::policy::{ActionError, MessageAction};
 use rc_core::ports::{CacheError, CacheKey, Connector, FileCache, SecretStore, ServerApi, Stored};
 use rc_core::rich::{Block, Emoji, Inline, Mention, TaskItem};
@@ -1123,6 +1124,51 @@ async fn sending_an_id_the_server_stored_already_answers_with_the_stored_message
     assert_eq!(page.messages.iter().filter(|m| m.id == id).count(), 1);
 }
 
+// ACT-003
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+async fn the_server_accepts_every_emoji_the_picker_offers() {
+    use std::sync::Arc;
+    use tokio::sync::Semaphore;
+
+    let admin = Admin::login();
+    let user = admin.create_user();
+    let (room, _) = admin.create_channel(&[&user.username]);
+    let posted = admin.post_message(&room, "react with everything");
+    let api = Arc::new(RestConnector.connect(&server_url()).unwrap());
+    let (credentials, _) = api.login(&user.username, &password(&user)).await.unwrap();
+    let credentials = Arc::new(credentials);
+    let id = MessageId::from(posted.id);
+    let limit = Arc::new(Semaphore::new(8));
+
+    let mut tasks = Vec::new();
+    for emoji in catalog(&CustomEmojis::default()) {
+        let (api, credentials, id, limit) = (
+            Arc::clone(&api),
+            Arc::clone(&credentials),
+            id.clone(),
+            Arc::clone(&limit),
+        );
+        tasks.push(tokio::spawn(async move {
+            let _turn = limit.acquire().await.unwrap();
+            let result = api.react(&credentials, &id, &emoji.shortcode, true).await;
+            (emoji.shortcode, result)
+        }));
+    }
+    let mut asked = 0;
+    let mut refused = Vec::new();
+    for task in tasks {
+        let (shortcode, result) = task.await.unwrap();
+        asked += 1;
+        if let Err(error) = result {
+            refused.push(format!("{shortcode} ({error})"));
+        }
+    }
+
+    assert!(asked > 1000, "only {asked} emoji in the catalog");
+    assert!(refused.is_empty(), "refused: {}", refused.join(", "));
+}
+
 // SEND-002
 #[test]
 #[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
@@ -1369,6 +1415,8 @@ fn a_client_catches_up_with_edits_reactions_and_deletions_after_the_connection_w
 /// (the user first), and the user logged in with the channel open and loaded.
 struct OwnMessages {
     admin: Admin,
+    /// The username of the user.
+    username: String,
     room: String,
     room_name: String,
     /// The ids of the messages in `texts`' order.
@@ -1397,6 +1445,7 @@ fn open_channel_with_own_and_others(texts: &[&str]) -> OwnMessages {
     settle(&events, &mut mirror);
     OwnMessages {
         admin,
+        username: user.username,
         room,
         room_name,
         ids,
@@ -1479,6 +1528,55 @@ fn the_message_of_somebody_else_is_refused_without_a_request_and_stays() {
     assert_eq!(edit, Err(ActionError::NotAllowed(MessageAction::Edit)));
     assert_eq!(delete, Err(ActionError::NotAllowed(MessageAction::Delete)));
     assert_eq!(texts(&open.mirror), ["mine", "theirs"]);
+}
+
+// ACT-003
+#[test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+fn a_user_reacts_to_a_message_of_somebody_else_and_takes_the_reaction_back() {
+    let mut open = open_channel_with_own_and_others(&["mine", "theirs"]);
+    let id = open.ids[1].clone();
+
+    open.client.react(id.clone().into(), "tada", true);
+
+    let outcome = action_outcome(&open.events, &mut open.mirror, &id);
+    assert_eq!(outcome, Ok(()));
+    let reactions = &open.mirror[1].reactions;
+    assert_eq!(reactions.len(), 1);
+    assert_eq!(reactions[0].emoji, ":tada:");
+    assert_eq!(reactions[0].usernames, [open.username.clone()]);
+    // The server's push of the same reaction leaves it so.
+    open.admin.post_message(&open.room, "flush");
+    follow_until(&open.events, &mut open.mirror, |mirror| mirror.len() == 3);
+    assert_eq!(open.mirror[1].reactions.len(), 1);
+    assert_eq!(open.mirror[1].reactions[0].usernames.len(), 1);
+
+    open.client.react(id.clone().into(), ":tada:", false);
+
+    let outcome = action_outcome(&open.events, &mut open.mirror, &id);
+    assert_eq!(outcome, Ok(()));
+    assert!(open.mirror[1].reactions.is_empty());
+    open.admin.post_message(&open.room, "flush again");
+    follow_until(&open.events, &mut open.mirror, |mirror| mirror.len() == 4);
+    assert!(open.mirror[1].reactions.is_empty());
+}
+
+// ACT-003
+#[test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+fn an_unknown_emoji_is_refused_by_the_server_and_leaves_no_reaction() {
+    let mut open = open_channel_with_own_and_others(&["mine", "theirs"]);
+    let id = open.ids[1].clone();
+
+    open.client
+        .react(id.clone().into(), "no_such_emoji_here", true);
+
+    let outcome = action_outcome(&open.events, &mut open.mirror, &id);
+    assert!(
+        matches!(outcome, Err(ActionError::Server(_))),
+        "{outcome:?}"
+    );
+    assert!(open.mirror[1].reactions.is_empty());
 }
 
 /// The message of the mirror that says `text`.
