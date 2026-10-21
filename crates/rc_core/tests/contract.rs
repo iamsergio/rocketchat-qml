@@ -187,9 +187,9 @@ fn a_new_client_resumes_the_stored_session() {
 
     second.logout();
     assert_eq!(next(&events), SessionState::LoggedOut { failure: None });
-    // Dropping flushes the queued clear.
+    // Dropping flushes the queued removal.
     drop(second);
-    assert!(store.load().unwrap().is_none());
+    assert!(store.load().unwrap().is_empty());
 }
 
 // ROOM-001, ROOM-002

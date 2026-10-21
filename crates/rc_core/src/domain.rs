@@ -113,12 +113,56 @@ pub struct Account {
     pub user: User,
 }
 
-/// What is kept between runs to resume a session.
+/// Local name of an account, opaque and never derived from the server: the key of the secret store.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct AccountId(String);
+
+impl AccountId {
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// An id for an account that isn't stored yet.
+    #[must_use]
+    pub(crate) fn generate() -> Self {
+        Self(format!("{:016x}{:016x}", random::bits(), random::bits()))
+    }
+}
+
+impl From<String> for AccountId {
+    fn from(id: String) -> Self {
+        Self(id)
+    }
+}
+
+impl fmt::Display for AccountId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+/// What is kept between runs about an account.
 #[derive(Clone, Debug)]
-pub struct StoredSession {
+pub struct StoredAccount {
+    pub id: AccountId,
     /// The normalized URL that was used to log in.
     pub server: String,
-    pub credentials: Credentials,
+    pub username: String,
+    pub user_id: UserId,
+    /// `None` once signed out: the account stays listed so that the login can be prefilled.
+    pub token: Option<SecretString>,
+}
+
+impl StoredAccount {
+    /// What resumes the session, if the account is signed in.
+    #[must_use]
+    pub fn credentials(&self) -> Option<Credentials> {
+        self.token.as_ref().map(|token| Credentials {
+            user_id: self.user_id.clone(),
+            token: token.clone(),
+        })
+    }
 }
 
 /// Whose avatar it is.

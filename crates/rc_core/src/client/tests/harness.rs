@@ -88,17 +88,25 @@ pub(super) fn logged_in(server: &str, username: &str) -> SessionState {
     })
 }
 
-pub(super) fn stored(server: &str) -> StoredSession {
-    StoredSession {
+/// A signed-in account stored under `id`.
+pub(super) fn stored_as(id: &str, server: &str) -> StoredAccount {
+    StoredAccount {
+        id: id.to_owned().into(),
         server: server.to_owned(),
-        credentials: Credentials {
-            user_id: "uid".to_owned().into(),
-            token: SecretString::from("stored-tok"),
-        },
+        username: "alice".to_owned(),
+        user_id: "uid".to_owned().into(),
+        token: Some(SecretString::from("stored-tok")),
     }
 }
 
-/// A store that already holds a session.
+pub(super) fn stored(server: &str) -> StoredAccount {
+    stored_as(STORED_ID, server)
+}
+
+/// The id of the account `stored` makes.
+pub(super) const STORED_ID: &str = "stored-id";
+
+/// A store that already holds an account.
 pub(super) fn store_with(server: &str) -> MemoryStore {
     let store = MemoryStore::default();
     store.save(&stored(server)).unwrap();
@@ -106,7 +114,7 @@ pub(super) fn store_with(server: &str) -> MemoryStore {
 }
 
 pub(super) fn wait_for_empty(store: &MemoryStore) {
-    wait_until(|| store.load().unwrap().is_none().then_some(()));
+    wait_until(|| store.load().unwrap().is_empty().then_some(()));
 }
 
 pub(super) struct Harness {

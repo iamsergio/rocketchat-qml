@@ -11,7 +11,7 @@ use secrecy::SecretString;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 
 use crate::domain::{
-    AvatarOwner, Credentials, Message, MessageId, RoomId, RoomKind, StoredSession, User,
+    AccountId, AvatarOwner, Credentials, Message, MessageId, RoomId, RoomKind, StoredAccount, User,
 };
 
 /// Why a server call failed. Owned strings only, so that fakes can build and compare them.
@@ -401,44 +401,46 @@ pub enum StoreError {
     #[error("the secret store isn't available: {0}")]
     Unavailable(String),
     /// An entry that can't be read back.
-    #[error("the stored session is unreadable: {0}")]
+    #[error("the stored accounts are unreadable: {0}")]
     Corrupt(String),
 }
 
-/// Where the session survives restarts. The calls block: the core runs them off the async threads,
+/// Where the accounts survive restarts. The calls block: the core runs them off the async threads,
 /// one at a time and in order.
 pub trait SecretStore: Send + Sync + 'static {
-    /// `None` if nothing is stored.
+    /// The stored accounts, in the order they were first saved. Empty if nothing is stored.
     ///
     /// # Errors
     ///
     /// [`StoreError`] if the store can't be read.
-    fn load(&self) -> Result<Option<StoredSession>, StoreError>;
+    fn load(&self) -> Result<Vec<StoredAccount>, StoreError>;
 
-    /// # Errors
-    ///
-    /// [`StoreError`] if the store can't be written.
-    fn save(&self, session: &StoredSession) -> Result<(), StoreError>;
-
-    /// Succeeds if nothing was stored.
+    /// Stores the account: replaces the one with the same id, in place, or adds it at the end.
     ///
     /// # Errors
     ///
     /// [`StoreError`] if the store can't be written.
-    fn clear(&self) -> Result<(), StoreError>;
+    fn save(&self, account: &StoredAccount) -> Result<(), StoreError>;
+
+    /// Forgets the account. Succeeds if it wasn't stored.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError`] if the store can't be written.
+    fn remove(&self, id: &AccountId) -> Result<(), StoreError>;
 }
 
 impl SecretStore for Box<dyn SecretStore> {
-    fn load(&self) -> Result<Option<StoredSession>, StoreError> {
+    fn load(&self) -> Result<Vec<StoredAccount>, StoreError> {
         (**self).load()
     }
 
-    fn save(&self, session: &StoredSession) -> Result<(), StoreError> {
-        (**self).save(session)
+    fn save(&self, account: &StoredAccount) -> Result<(), StoreError> {
+        (**self).save(account)
     }
 
-    fn clear(&self) -> Result<(), StoreError> {
-        (**self).clear()
+    fn remove(&self, id: &AccountId) -> Result<(), StoreError> {
+        (**self).remove(id)
     }
 }
 

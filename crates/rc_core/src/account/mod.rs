@@ -18,7 +18,7 @@ use crate::backoff::Backoff;
 use crate::client::{Command, Connection, Event};
 use crate::core::Shared;
 use crate::domain::{
-    AvatarOwner, Credentials, Message, MessageId, RoomId, RoomKind, StoredSession, User,
+    AccountId, AvatarOwner, Credentials, Message, MessageId, RoomId, RoomKind, StoredAccount, User,
 };
 use crate::emoji::CustomEmojis;
 use crate::images::{self, Images};
@@ -243,11 +243,13 @@ struct Session<A> {
 /// that report back through `done_tx`; secret-store calls are queued for the store worker, which the
 /// core shares between accounts.
 struct Actor<C: Connector> {
+    /// The key of this account in the secret store.
+    id: AccountId,
     connector: Arc<C>,
     state: SessionState,
     session: Option<Session<C::Api>>,
-    /// The stored session being resumed while `Resuming`.
-    resuming: Option<StoredSession>,
+    /// The stored account being resumed while `Resuming`.
+    resuming: Option<StoredAccount>,
     /// Identifies the current attempt, so that the answer of a cancelled one is dropped.
     attempt: u64,
     login_task: Option<JoinHandle<()>>,
@@ -324,22 +326,26 @@ struct Actor<C: Connector> {
 /// done too (see [`Actor::stop`]).
 pub(crate) fn run<C: Connector>(
     shared: &Shared<C>,
+    id: AccountId,
+    stored: Option<StoredAccount>,
     on_event: impl Fn(Event) + Send + Sync + 'static,
     backoff: Backoff,
     commands: UnboundedReceiver<Command>,
 ) -> impl Future<Output = Instant> + Send + 'static {
     let (done_tx, done_rx) = mpsc::unbounded_channel();
-    Actor::new(shared, on_event, backoff, done_tx).run(commands, done_rx)
+    Actor::new(shared, id, on_event, backoff, done_tx).run(stored, commands, done_rx)
 }
 
 impl<C: Connector> Actor<C> {
     fn new(
         shared: &Shared<C>,
+        id: AccountId,
         on_event: impl Fn(Event) + Send + Sync + 'static,
         backoff: Backoff,
         done_tx: UnboundedSender<Done<C::Api>>,
     ) -> Self {
         Self {
+            id,
             connector: Arc::clone(&shared.connector),
             state: SessionState::LoggedOut { failure: None },
             session: None,
@@ -383,10 +389,11 @@ impl<C: Connector> Actor<C> {
 
     async fn run(
         mut self,
+        stored: Option<StoredAccount>,
         mut commands: UnboundedReceiver<Command>,
         mut done: UnboundedReceiver<Done<C::Api>>,
     ) -> Instant {
-        self.start().await;
+        self.start(stored);
         loop {
             tokio::select! {
                 biased;
@@ -416,18 +423,10 @@ impl<C: Connector> Actor<C> {
         self.stop().await
     }
 
-    /// Looks for a stored session, before any command is handled.
-    async fn start(&mut self) {
-        let loaded = match &self.store {
-            Some(store) => store.load().await,
-            None => Ok(None),
-        };
-        let stored = loaded.unwrap_or_else(|error| {
-            tracing::warn!(%error, "can't read the stored session");
-            None
-        });
-        match stored {
-            Some(stored) => self.resume(stored),
+    /// Resumes the stored account, if there is one, before any command is handled.
+    fn start(&mut self, stored: Option<StoredAccount>) {
+        match stored.and_then(|account| Some((account.credentials()?, account))) {
+            Some((credentials, account)) => self.resume(account, credentials),
             None => self.set_state(SessionState::LoggedOut { failure: None }),
         }
     }
@@ -505,11 +504,12 @@ impl<C: Connector> Actor<C> {
         });
     }
 
-    fn resume(&mut self, stored: StoredSession) {
+    fn resume(&mut self, stored: StoredAccount, credentials: Credentials) {
         let connector = Arc::clone(&self.connector);
-        self.resuming = Some(stored.clone());
+        let server = stored.server.clone();
+        self.resuming = Some(stored);
         self.begin_attempt(SessionState::Resuming, false, async move {
-            resume(&*connector, &stored).await
+            resume(&*connector, &server, &credentials).await
         });
     }
 
@@ -547,9 +547,12 @@ impl<C: Connector> Actor<C> {
                 if done.persist
                     && let Some(store) = &self.store
                 {
-                    store.save(StoredSession {
+                    store.save(StoredAccount {
+                        id: self.id.clone(),
                         server: established.account.server.clone(),
-                        credentials: established.credentials.clone(),
+                        username: established.account.user.username.clone(),
+                        user_id: established.credentials.user_id.clone(),
+                        token: Some(established.credentials.token.clone()),
                     });
                 }
                 self.session = Some(Session {
@@ -564,7 +567,7 @@ impl<C: Connector> Actor<C> {
             Err(failure) => {
                 // The server refused the stored token for good; other failures may pass.
                 if failure == LoginFailure::SessionExpired {
-                    self.clear_store();
+                    self.remove_from_store();
                 }
                 self.set_state(SessionState::LoggedOut {
                     failure: Some(failure),
@@ -583,9 +586,11 @@ impl<C: Connector> Actor<C> {
             self.set_state(SessionState::LoggedOut { failure: None });
             // Cancelling a resume is a logout of the stored session.
             if let Some(stored) = self.resuming.take() {
-                self.clear_store();
-                if let Ok(api) = self.connector.connect(&stored.server) {
-                    self.revoke(api, stored.credentials);
+                self.remove_from_store();
+                if let (Some(credentials), Ok(api)) =
+                    (stored.credentials(), self.connector.connect(&stored.server))
+                {
+                    self.revoke(api, credentials);
                 }
             }
             return;
@@ -600,7 +605,7 @@ impl<C: Connector> Actor<C> {
             self.clear_avatars();
             self.clear_images();
             self.clear_timeline();
-            self.clear_store();
+            self.remove_from_store();
             if let Some(session) = self.session.take() {
                 self.revoke(session.api, session.credentials);
             }
@@ -615,7 +620,7 @@ impl<C: Connector> Actor<C> {
         self.abort_rooms_task();
         self.abort_realtime_task();
         self.session = None;
-        self.clear_store();
+        self.remove_from_store();
         self.set_state(SessionState::LoggedOut {
             failure: Some(LoginFailure::SessionExpired),
         });
@@ -635,9 +640,9 @@ impl<C: Connector> Actor<C> {
         }
     }
 
-    fn clear_store(&self) {
+    fn remove_from_store(&self) {
         if let Some(store) = &self.store {
-            store.clear();
+            store.remove(self.id.clone());
         }
     }
 

@@ -1060,21 +1060,21 @@ pub(super) struct FakeStore {
 }
 
 impl SecretStore for FakeStore {
-    fn load(&self) -> Result<Option<StoredSession>, StoreError> {
+    fn load(&self) -> Result<Vec<StoredAccount>, StoreError> {
         if self.fail_load {
             return Err(StoreError::Unavailable("locked".into()));
         }
         self.inner.load()
     }
 
-    fn save(&self, session: &StoredSession) -> Result<(), StoreError> {
+    fn save(&self, account: &StoredAccount) -> Result<(), StoreError> {
         if self.fail_save {
             return Err(StoreError::Unavailable("locked".into()));
         }
-        self.inner.save(session)
+        self.inner.save(account)
     }
 
-    fn clear(&self) -> Result<(), StoreError> {
-        self.inner.clear()
+    fn remove(&self, id: &AccountId) -> Result<(), StoreError> {
+        self.inner.remove(id)
     }
 }
