@@ -14,7 +14,7 @@ use crate::md;
 use crate::types::{
     Attachment, AttachmentImage, Author, AvatarOwner, Credentials, CustomEmoji, DdpEvent,
     HistoryPage, LoginResult, Message, MessageChanges, MessageSettings, Quote, Reaction, RoomType,
-    ServerInfo, ServerVersion, Subscription, User,
+    ServerInfo, ServerVersion, Subscription, ThreadPage, User,
 };
 
 #[derive(Deserialize)]
@@ -154,6 +154,14 @@ struct HistoryBody {
 }
 
 #[derive(Deserialize)]
+struct ThreadBody {
+    #[serde(default)]
+    messages: Vec<MessageBody>,
+    #[serde(default)]
+    total: u32,
+}
+
+#[derive(Deserialize)]
 struct SyncBody {
     result: SyncResult,
 }
@@ -193,6 +201,11 @@ struct MessageBody {
     tmid: Option<String>,
     #[serde(default)]
     tshow: bool,
+    /// Only on the parent of a thread, and only once it has replies.
+    #[serde(default)]
+    tcount: u32,
+    #[serde(default, deserialize_with = "optional_timestamp")]
+    tlm: Option<jiff::Timestamp>,
     #[serde(default)]
     md: Option<serde_json::Value>,
     /// Read entry by entry (see [`parse_attachments`] and [`parse_quotes`]), so one odd entry
@@ -428,6 +441,8 @@ impl From<MessageBody> for Message {
             kind: body.t,
             thread_id: body.tmid,
             thread_shown: body.tshow,
+            thread_replies: body.tcount,
+            thread_last_reply: body.tlm,
             md: body.md.as_ref().and_then(md::parse),
             attachments: parse_attachments(body.attachments.as_ref()),
             quotes: parse_quotes(body.attachments.as_ref()),
@@ -621,6 +636,21 @@ pub(crate) fn parse_history(bytes: &[u8], count: usize) -> Result<HistoryPage, s
     })
 }
 
+/// The answer of `chat.getThreadMessages`. `offset` is what was asked for: the page ends the
+/// thread if it reaches `total`.
+pub(crate) fn parse_thread_messages(
+    bytes: &[u8],
+    offset: usize,
+) -> Result<ThreadPage, serde_json::Error> {
+    let body: ThreadBody = serde_json::from_slice(bytes)?;
+    let total = usize::try_from(body.total).unwrap_or(usize::MAX);
+    Ok(ThreadPage {
+        reached_start: offset.saturating_add(body.messages.len()) >= total,
+        total: body.total,
+        messages: body.messages.into_iter().map(Message::from).collect(),
+    })
+}
+
 /// The answer of `chat.syncMessages`.
 pub(crate) fn parse_changes(bytes: &[u8]) -> Result<MessageChanges, serde_json::Error> {
     let body: SyncBody = serde_json::from_slice(bytes)?;
@@ -707,6 +737,7 @@ mod tests {
     const ME: &str = include_str!("../tests/fixtures/me.json");
     const SUBSCRIPTIONS: &str = include_str!("../tests/fixtures/subscriptions.json");
     const HISTORY: &str = include_str!("../tests/fixtures/history.json");
+    const THREAD_MESSAGES: &str = include_str!("../tests/fixtures/thread_messages.json");
 
     const HISTORY_ATTACHMENTS: &str = include_str!("../tests/fixtures/history_attachments.json");
     const HISTORY_QUOTES: &str = include_str!("../tests/fixtures/history_quotes.json");
@@ -1542,6 +1573,76 @@ mod tests {
         let reply = &page.messages[0];
         assert_eq!(reply.thread_id.as_deref(), Some("PgCoLuN95ZJTxpBTQ"));
         assert!(reply.thread_shown);
+    }
+
+    // ACT-004
+    #[test]
+    fn the_parent_of_a_thread_has_its_reply_count_and_last_reply_time() {
+        let page = parse_history(HISTORY.as_bytes(), 50).unwrap();
+        let parent = &page.messages[1];
+        assert_eq!(parent.thread_replies, 2);
+        assert_eq!(
+            parent.thread_last_reply,
+            Some(ts("2026-10-20T14:13:08.250Z"))
+        );
+        let reply = &page.messages[0];
+        assert_eq!(reply.thread_replies, 0);
+        assert_eq!(reply.thread_last_reply, None);
+        assert_eq!(page.messages[2].thread_replies, 0);
+    }
+
+    // ACT-004
+    #[test]
+    fn a_pushed_parent_carries_its_new_reply_count() {
+        let fixture = DDP_MESSAGE.replacen(
+            r#""msg": "#,
+            r#""tcount": 4, "tlm": {"$date": 1792511428650}, "msg": "#,
+            1,
+        );
+        let event = stream_event("stream-room-messages", &fixture).unwrap();
+        let Some(DdpEvent::Message(message)) = event else {
+            panic!("expected a message, got {event:?}");
+        };
+        assert_eq!(message.thread_replies, 4);
+        assert_eq!(
+            message.thread_last_reply,
+            jiff::Timestamp::from_millisecond(1_792_511_428_650).ok()
+        );
+    }
+
+    // ACT-004
+    #[test]
+    fn thread_messages_are_the_replies_with_the_thread_they_belong_to() {
+        let page = parse_thread_messages(THREAD_MESSAGES.as_bytes(), 0).unwrap();
+        let texts: Vec<_> = page.messages.iter().map(|m| m.text.as_str()).collect();
+        assert_eq!(texts, ["reply 3", "reply 2"]);
+        assert_eq!(page.total, 3);
+        assert!(page.messages.iter().all(|m| m.thread_id.is_some()));
+        assert!(!page.messages[0].thread_shown);
+        assert!(page.messages[1].thread_shown);
+    }
+
+    // ACT-004
+    #[test]
+    fn a_thread_page_reaches_the_start_when_the_offset_and_the_page_cover_the_total() {
+        // The fixture holds 2 of 3 replies.
+        let reached = |offset| {
+            parse_thread_messages(THREAD_MESSAGES.as_bytes(), offset)
+                .unwrap()
+                .reached_start
+        };
+        assert!(!reached(0));
+        assert!(reached(1));
+        assert!(reached(5));
+    }
+
+    // ACT-004
+    #[test]
+    fn a_thread_without_replies_is_an_empty_page_at_the_start() {
+        let page =
+            parse_thread_messages(br#"{"messages":[],"count":0,"offset":0,"total":0}"#, 0).unwrap();
+        assert_eq!((page.messages.len(), page.total), (0, 0));
+        assert!(page.reached_start);
     }
 
     // MSG-001

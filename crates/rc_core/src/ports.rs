@@ -134,9 +134,10 @@ pub trait ServerApi: Clone + Send + Sync + 'static {
     ) -> impl Future<Output = Result<Page, ApiError>> + Send;
 
     /// Posts a text message under the id the caller picked and returns it as the server stored it,
-    /// with the server's time. The server stores a message once per id, and sending an id it holds
-    /// already (a retry whose first attempt got through) succeeds with the stored message, so a
-    /// caller that doesn't know whether an attempt arrived may always send again.
+    /// with the server's time. With `thread` it is a reply in that thread. The server stores a
+    /// message once per id, and sending an id it holds already (a retry whose first attempt got
+    /// through) succeeds with the stored message, so a caller that doesn't know whether an
+    /// attempt arrived may always send again.
     ///
     /// # Errors
     ///
@@ -148,7 +149,24 @@ pub trait ServerApi: Clone + Send + Sync + 'static {
         room: &RoomId,
         id: &MessageId,
         text: &str,
+        thread: Option<&ThreadTarget>,
     ) -> impl Future<Output = Result<Message, ApiError>> + Send;
+
+    /// A page of the replies of a thread: the newest ones after skipping the `offset` newest, at
+    /// most `count`. The parent is not among them. The caller de-duplicates: a reply that arrives
+    /// meanwhile shifts the later pages.
+    ///
+    /// # Errors
+    ///
+    /// [`ApiError::Unauthorized`] if the credentials have expired or were revoked,
+    /// [`ApiError::Server`] if the thread doesn't exist or isn't visible to the user.
+    fn thread_messages(
+        &self,
+        credentials: &Credentials,
+        thread: &MessageId,
+        offset: usize,
+        count: usize,
+    ) -> impl Future<Output = Result<Page, ApiError>> + Send;
 
     /// Replaces the text of a message of the user's and returns it as the server stored it.
     ///
@@ -292,8 +310,10 @@ pub struct Image {
 /// What the server pushes over the realtime connection, as the core understands it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Pushed {
-    /// A new or changed message (edited, reacted to...), whole. Not only of the user's rooms: the
-    /// server also pushes the messages of public channels the user isn't in, so check the room.
+    /// A new or changed message (edited, reacted to...), whole, a reply in a thread included.
+    /// A parent comes again, with its new reply count, before a reply to it. Not only of the
+    /// user's rooms: the server also pushes the messages of public channels the user isn't in, so
+    /// check the room.
     Message(Message),
     /// The user joined a room, or one of their rooms changed: its unread count, its name...
     Subscription(rc_api::Subscription),
@@ -325,14 +345,22 @@ pub struct Realtime {
 /// What [`ServerApi::changes_since`] returns.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Changes {
-    /// Messages sent or changed since then, whole. The timeline shows only those of the room's
-    /// own messages, as in a page.
+    /// Messages sent or changed since then, whole, the replies of threads included: the caller
+    /// sorts them out.
     pub updated: Vec<Message>,
     /// Messages deleted since then.
     pub deleted: Vec<MessageId>,
 }
 
-/// What [`ServerApi::history`] returns.
+/// Where a reply is posted: the thread, and whether the room shows it too.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ThreadTarget {
+    /// The message the thread belongs to.
+    pub parent: MessageId,
+    pub also_to_channel: bool,
+}
+
+/// What [`ServerApi::history`] and [`ServerApi::thread_messages`] return.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Page {
     /// The messages the timeline shows, in any order.

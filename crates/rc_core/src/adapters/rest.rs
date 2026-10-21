@@ -10,7 +10,9 @@ use tokio::sync::mpsc;
 use crate::domain::{
     AvatarOwner, Credentials, Message, MessageId, RoomId, RoomKind, User, message_from,
 };
-use crate::ports::{ApiError, Changes, Connector, Image, Page, Pushed, Realtime, ServerApi};
+use crate::ports::{
+    ApiError, Changes, Connector, Image, Page, Pushed, Realtime, ServerApi, ThreadTarget,
+};
 
 pub struct RestConnector;
 
@@ -132,7 +134,12 @@ impl ServerApi for RestApi {
             .history(room.as_str(), &room_type, before, count)
             .await?;
         Ok(Page {
-            messages: page.messages.into_iter().filter_map(message_from).collect(),
+            messages: page
+                .messages
+                .into_iter()
+                .map(message_from)
+                .filter(Message::shows_in_room)
+                .collect(),
             reached_start: page.reached_start,
         })
     }
@@ -143,13 +150,45 @@ impl ServerApi for RestApi {
         room: &RoomId,
         id: &MessageId,
         text: &str,
+        thread: Option<&ThreadTarget>,
     ) -> Result<Message, ApiError> {
         let session = self.client.session(api_credentials(credentials));
-        let stored = session
-            .send_message(room.as_str(), id.as_str(), text)
+        let stored = match thread {
+            Some(target) => {
+                session
+                    .send_thread_reply(
+                        room.as_str(),
+                        id.as_str(),
+                        text,
+                        target.parent.as_str(),
+                        target.also_to_channel,
+                    )
+                    .await?
+            }
+            None => {
+                session
+                    .send_message(room.as_str(), id.as_str(), text)
+                    .await?
+            }
+        };
+        Ok(message_from(stored))
+    }
+
+    async fn thread_messages(
+        &self,
+        credentials: &Credentials,
+        thread: &MessageId,
+        offset: usize,
+        count: usize,
+    ) -> Result<Page, ApiError> {
+        let session = self.client.session(api_credentials(credentials));
+        let page = session
+            .thread_messages(thread.as_str(), count, offset)
             .await?;
-        message_from(stored)
-            .ok_or_else(|| ApiError::Unexpected("the server stored the message as a reply".into()))
+        Ok(Page {
+            messages: page.messages.into_iter().map(message_from).collect(),
+            reached_start: page.reached_start,
+        })
     }
 
     async fn edit_message(
@@ -163,8 +202,7 @@ impl ServerApi for RestApi {
         let stored = session
             .edit_message(room.as_str(), id.as_str(), text)
             .await?;
-        message_from(stored)
-            .ok_or_else(|| ApiError::Unexpected("the server stored the message as a reply".into()))
+        Ok(message_from(stored))
     }
 
     async fn delete_message(
@@ -232,11 +270,7 @@ impl ServerApi for RestApi {
         let session = self.client.session(api_credentials(credentials));
         let changes = session.sync_messages(room.as_str(), since).await?;
         Ok(Changes {
-            updated: changes
-                .updated
-                .into_iter()
-                .filter_map(message_from)
-                .collect(),
+            updated: changes.updated.into_iter().map(message_from).collect(),
             deleted: changes.deleted.into_iter().map(Into::into).collect(),
         })
     }
@@ -301,9 +335,7 @@ async fn forward(
             }
             event = events.recv() => {
                 let Some(event) = event else { break };
-                if let Some(event) = pushed_from(event)
-                    && pushed.send(event).is_err()
-                {
+                if pushed.send(pushed_from(event)).is_err() {
                     break;
                 }
             }
@@ -313,10 +345,9 @@ async fn forward(
     drop(ddp);
 }
 
-/// `None` for a message the timeline doesn't show, as in the history.
-fn pushed_from(event: DdpEvent) -> Option<Pushed> {
-    Some(match event {
-        DdpEvent::Message(message) => Pushed::Message(message_from(message)?),
+fn pushed_from(event: DdpEvent) -> Pushed {
+    match event {
+        DdpEvent::Message(message) => Pushed::Message(message_from(message)),
         DdpEvent::SubscriptionChanged(subscription) => Pushed::Subscription(subscription),
         DdpEvent::SubscriptionRemoved { room_id } => Pushed::SubscriptionRemoved(room_id.into()),
         DdpEvent::RoomActivity {
@@ -339,7 +370,7 @@ fn pushed_from(event: DdpEvent) -> Option<Pushed> {
             room: room_id.into(),
             id: message_id.into(),
         },
-    })
+    }
 }
 
 fn api_credentials(credentials: &Credentials) -> rc_api::Credentials {
@@ -414,6 +445,8 @@ mod tests {
             kind: None,
             thread_id: thread_id.map(str::to_owned),
             thread_shown: false,
+            thread_replies: 0,
+            thread_last_reply: None,
             md: None,
             attachments: Vec::new(),
             quotes: Vec::new(),
@@ -431,19 +464,20 @@ mod tests {
         });
         assert_eq!(
             deleted,
-            Some(Pushed::MessageDeleted {
+            Pushed::MessageDeleted {
                 room: "r1".to_owned().into(),
                 id: "m1".to_owned().into(),
-            })
+            }
         );
     }
 
     // RT-001
     #[test]
-    fn pushed_messages_are_filtered_like_the_history() {
+    fn pushed_messages_include_the_thread_replies_the_room_does_not_show() {
         let shown = pushed_from(DdpEvent::Message(entry(None)));
-        assert!(matches!(shown, Some(Pushed::Message(m)) if m.id.as_str() == "m1"));
-        assert_eq!(pushed_from(DdpEvent::Message(entry(Some("t")))), None);
+        assert!(matches!(shown, Pushed::Message(m) if m.id.as_str() == "m1"));
+        let reply = pushed_from(DdpEvent::Message(entry(Some("t"))));
+        assert!(matches!(reply, Pushed::Message(m) if !m.shows_in_room()));
     }
 
     // ROOM-005
@@ -456,10 +490,10 @@ mod tests {
         });
         assert_eq!(
             activity,
-            Some(Pushed::Activity {
+            Pushed::Activity {
                 room: "r1".to_owned().into(),
                 at
-            })
+            }
         );
     }
 
@@ -471,16 +505,14 @@ mod tests {
         }));
         assert_eq!(
             user,
-            Some(Pushed::AvatarChanged(AvatarOwner::User("alice".into())))
+            Pushed::AvatarChanged(AvatarOwner::User("alice".into()))
         );
         let room = pushed_from(DdpEvent::AvatarChanged(rc_api::AvatarOwner::Room {
             room_id: "r1".into(),
         }));
         assert_eq!(
             room,
-            Some(Pushed::AvatarChanged(AvatarOwner::Room(
-                "r1".to_owned().into()
-            )))
+            Pushed::AvatarChanged(AvatarOwner::Room("r1".to_owned().into()))
         );
     }
 
@@ -490,9 +522,6 @@ mod tests {
         let removed = pushed_from(DdpEvent::SubscriptionRemoved {
             room_id: "r1".into(),
         });
-        assert_eq!(
-            removed,
-            Some(Pushed::SubscriptionRemoved("r1".to_owned().into()))
-        );
+        assert_eq!(removed, Pushed::SubscriptionRemoved("r1".to_owned().into()));
     }
 }

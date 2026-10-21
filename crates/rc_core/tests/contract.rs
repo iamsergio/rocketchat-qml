@@ -25,7 +25,7 @@ use rc_core::ports::{CacheError, CacheKey, Connector, FileCache, SecretStore, Se
 use rc_core::rich::{Block, Emoji, Inline, Mention, TaskItem};
 use rc_core::rooms::{RoomAction, RoomActionError, RoomChange};
 use rc_core::session::{LoginFailure, SessionState};
-use rc_core::timeline::{PAGE_SIZE, TimelineChange, TimelineStatus};
+use rc_core::timeline::{PAGE_SIZE, ThreadStatus, TimelineChange, TimelineStatus};
 use rc_core::{Client, Event};
 use rc_test_server::{Admin, PIXEL_PNG, Proxy, TestUser, server_url, unique};
 use secrecy::SecretString;
@@ -555,7 +555,7 @@ fn the_avatars_that_users_and_rooms_have_are_downloaded_and_kept_for_the_next_se
     assert_cached_image(&first[&channel], &cache.0);
     // The author of a message, once the room is open: the user's own message is one.
     client.open_room(channel_id.clone().into());
-    client.send_message(channel_id.into(), "hello", None);
+    client.send_message(channel_id.into(), "hello", None, None, false);
     let mine = avatars_until(&events, std::slice::from_ref(&me));
     assert_cached_image(&mine[&me], &cache.0);
     drop(client);
@@ -583,7 +583,7 @@ fn rooms_and_users_with_the_generated_avatar_get_none() {
         matches!(event, Event::Rooms(_)).then_some(())
     });
     client.open_room(channel_id.clone().into());
-    client.send_message(channel_id.into(), "who am I", None);
+    client.send_message(channel_id.into(), "who am I", None, None, false);
     wait_for(&events, |event| match event {
         Event::Timeline(changes) => changes
             .iter()
@@ -1270,7 +1270,13 @@ fn a_sent_message_is_stored_under_the_id_it_was_shown_with() {
     let mut mirror = Vec::new();
     settle(&events, &mut mirror);
 
-    client.send_message(room.clone().into(), "hello from the client", None);
+    client.send_message(
+        room.clone().into(),
+        "hello from the client",
+        None,
+        None,
+        false,
+    );
 
     // Shown at once, as pending, then confirmed, with nothing else in between.
     let mut pending = None;
@@ -1302,7 +1308,7 @@ fn a_message_sent_to_a_room_that_is_not_open_any_more_is_sent_all_the_same() {
     settle(&events, &mut mirror);
 
     let before = admin.last_message(&room).id;
-    client.send_message(room.clone().into(), "sent and left", None);
+    client.send_message(room.clone().into(), "sent and left", None, None, false);
     client.open_room(other.clone().into());
     settle(&events, &mut mirror);
     // Nothing is shown of it here; it arrives on the server all the same.
@@ -1335,11 +1341,11 @@ async fn sending_an_id_the_server_stored_already_answers_with_the_stored_message
     let id = MessageId::from(unique().replace('-', ""));
 
     let first = api
-        .send_message(&credentials, &room_id, &id, "once")
+        .send_message(&credentials, &room_id, &id, "once", None)
         .await
         .unwrap();
     let second = api
-        .send_message(&credentials, &room_id, &id, "once")
+        .send_message(&credentials, &room_id, &id, "once", None)
         .await
         .unwrap();
 
@@ -1412,7 +1418,7 @@ fn a_message_that_fails_while_the_server_is_out_of_reach_is_retried_under_its_id
 
     proxy.set_accepting(false);
     proxy.drop_connections();
-    client.send_message(room.clone().into(), "sent in the dark", None);
+    client.send_message(room.clone().into(), "sent in the dark", None, None, false);
     follow_until(&events, &mut mirror, |mirror| {
         mirror.iter().any(|m| m.delivery == Delivery::Failed)
     });
@@ -1825,6 +1831,8 @@ fn a_reply_that_quotes_a_message_shows_the_quote_and_not_the_link() {
         open.room.clone().into(),
         "my reply",
         Some(theirs.clone().into()),
+        None,
+        false,
     );
 
     // The local copy has the quote already, and the server's copy, which replaces it, has it too.
@@ -1877,6 +1885,8 @@ fn a_quote_made_by_somebody_else_arrives_live_and_editing_the_reply_keeps_it() {
         open.room.clone().into(),
         "quoting a quote",
         Some(posted.id.clone().into()),
+        None,
+        false,
     );
     follow_until(&open.events, &mut open.mirror, |mirror| {
         message_saying(mirror, "quoting a quote").is_some_and(|m| !m.is_unsent())
@@ -1918,6 +1928,8 @@ fn a_quote_sent_right_away_works_when_the_server_is_reached_by_another_address()
         room.clone().into(),
         "right away",
         Some(theirs.id.clone().into()),
+        None,
+        false,
     );
 
     follow_until(&events, &mut mirror, |mirror| {
@@ -1929,4 +1941,249 @@ fn a_quote_sent_right_away_works_when_the_server_is_reached_by_another_address()
     assert_eq!(reply.quotes[0].text.text, "theirs");
     assert_eq!(reply.quotes[0].message, Some(MessageId::from(theirs.id)));
     drop(client);
+}
+
+/// What a frontend shows of the open room and the open thread.
+#[derive(Default)]
+struct Mirrors {
+    room: Vec<Message>,
+    thread: Vec<Message>,
+    status: ThreadStatus,
+}
+
+/// Follows the events like a frontend until `done` accepts what is shown.
+fn follow_both(
+    events: &Receiver<Event>,
+    mirrors: &mut Mirrors,
+    mut done: impl FnMut(&Mirrors) -> bool,
+) {
+    wait_for(events, |event| {
+        match event {
+            Event::Timeline(changes) => changes
+                .iter()
+                .for_each(|change| change.apply(&mut mirrors.room)),
+            Event::ThreadTimeline(changes) => changes
+                .iter()
+                .for_each(|change| change.apply(&mut mirrors.thread)),
+            Event::ThreadStatus(status) => mirrors.status = status.clone(),
+            _ => {}
+        }
+        done(mirrors).then_some(())
+    });
+}
+
+/// The mirrors of an open channel whose message `theirs` has the thread open, with `replies`
+/// (admin's) in it, `r1` first.
+fn open_thread_with_replies(replies: usize) -> (OwnMessages, Mirrors) {
+    let mut open = open_channel_with_own_and_others(&["mine", "theirs"]);
+    let parent = open.ids[1].clone();
+    for n in 1..=replies {
+        open.admin
+            .post_in_thread(&open.room, &parent, &format!("r{n}"), false);
+    }
+    open.client.open_thread(parent.into());
+    let mut mirrors = Mirrors {
+        room: std::mem::take(&mut open.mirror),
+        ..Mirrors::default()
+    };
+    follow_both(&open.events, &mut mirrors, |m| {
+        !m.status.loading && !m.status.loading_older && m.status.parent.is_some()
+    });
+    (open, mirrors)
+}
+
+// ACT-004
+#[test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+fn a_thread_loads_page_by_page_with_the_parent_first() {
+    let replies = PAGE_SIZE + 5;
+    let (open, mut mirrors) = open_thread_with_replies(replies);
+    assert!(!mirrors.status.reached_start);
+    assert_eq!(texts(&mirrors.thread).len(), PAGE_SIZE);
+
+    open.client.load_older_thread();
+    follow_both(&open.events, &mut mirrors, |m| m.status.reached_start);
+
+    let expected: Vec<String> = std::iter::once("theirs".to_owned())
+        .chain((1..=replies).map(|n| format!("r{n}")))
+        .collect();
+    assert_eq!(texts(&mirrors.thread), expected);
+    // The replies are not in the room.
+    assert_eq!(texts(&mirrors.room), ["mine", "theirs"]);
+    // The parent knows how many they are.
+    let parent = message_saying(&mirrors.room, "theirs").unwrap();
+    assert_eq!(parent.thread_replies as usize, replies);
+    assert!(parent.thread_last_reply.is_some());
+    assert!(parent.thread_id.is_none());
+    assert!(mirrors.thread[1..].iter().all(|m| m.thread_id.is_some()));
+}
+
+// ACT-004
+#[test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+fn a_reply_sent_from_the_client_settles_in_the_thread_and_counts_in_the_parent() {
+    let (open, mut mirrors) = open_thread_with_replies(1);
+    let parent = open.ids[1].clone();
+
+    open.client.send_message(
+        open.room.clone().into(),
+        "my reply",
+        None,
+        Some(parent.clone().into()),
+        false,
+    );
+
+    follow_both(&open.events, &mut mirrors, |m| {
+        message_saying(&m.thread, "my reply").is_some_and(|r| !r.is_unsent())
+            && message_saying(&m.room, "theirs").is_some_and(|p| p.thread_replies == 2)
+            && m.thread[0].thread_replies == 2
+    });
+    assert_eq!(texts(&mirrors.thread), ["theirs", "r1", "my reply"]);
+    let reply = message_saying(&mirrors.thread, "my reply").unwrap();
+    assert_eq!(reply.thread_id, Some(MessageId::from(parent)));
+    // Not sent to the channel, it is not in the room.
+    assert_eq!(texts(&mirrors.room), ["mine", "theirs"]);
+}
+
+// ACT-004
+#[test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+fn a_reply_also_sent_to_the_channel_settles_in_the_thread_and_in_the_room() {
+    let (open, mut mirrors) = open_thread_with_replies(0);
+    let parent = open.ids[1].clone();
+
+    open.client.send_message(
+        open.room.clone().into(),
+        "for everybody",
+        None,
+        Some(parent.into()),
+        true,
+    );
+
+    follow_both(&open.events, &mut mirrors, |m| {
+        let settled = |mirror: &[Message]| {
+            message_saying(mirror, "for everybody").is_some_and(|r| !r.is_unsent())
+        };
+        settled(&m.room) && settled(&m.thread)
+    });
+    assert_eq!(texts(&mirrors.room), ["mine", "theirs", "for everybody"]);
+    assert_eq!(texts(&mirrors.thread), ["theirs", "for everybody"]);
+}
+
+// ACT-004
+#[test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+fn live_replies_arrive_in_the_thread_and_the_parent_follows_their_count() {
+    let (open, mut mirrors) = open_thread_with_replies(0);
+    let parent = open.ids[1].clone();
+
+    open.admin
+        .post_in_thread(&open.room, &parent, "quietly", false);
+    let loud = open
+        .admin
+        .post_in_thread(&open.room, &parent, "loudly", true);
+
+    follow_both(&open.events, &mut mirrors, |m| {
+        message_saying(&m.thread, "loudly").is_some()
+            && message_saying(&m.room, "loudly").is_some()
+            && m.thread[0].thread_replies == 2
+    });
+    assert_eq!(texts(&mirrors.thread), ["theirs", "quietly", "loudly"]);
+    // Only the one sent to the channel is in the room.
+    assert_eq!(texts(&mirrors.room), ["mine", "theirs", "loudly"]);
+    assert_eq!(
+        message_saying(&mirrors.room, "theirs")
+            .unwrap()
+            .thread_replies,
+        2
+    );
+    assert_eq!(mirrors.room[2].id.as_str(), loud.id);
+}
+
+// ACT-004
+#[test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+fn a_deleted_reply_leaves_the_thread_and_the_parent_counts_one_less() {
+    let (open, mut mirrors) = open_thread_with_replies(0);
+    let parent = open.ids[1].clone();
+    let first = open
+        .admin
+        .post_in_thread(&open.room, &parent, "first", true);
+    open.admin
+        .post_in_thread(&open.room, &parent, "second", false);
+    follow_both(&open.events, &mut mirrors, |m| {
+        message_saying(&m.thread, "second").is_some() && m.thread[0].thread_replies == 2
+    });
+
+    open.admin.delete_message(&open.room, &first.id);
+
+    follow_both(&open.events, &mut mirrors, |m| {
+        message_saying(&m.thread, "first").is_none()
+            && message_saying(&m.room, "first").is_none()
+            && m.thread[0].thread_replies == 1
+            && message_saying(&m.room, "theirs").is_some_and(|p| p.thread_replies == 1)
+    });
+    assert_eq!(texts(&mirrors.thread), ["theirs", "second"]);
+}
+
+// ACT-004
+#[test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+fn deleting_the_parent_closes_the_thread_and_so_does_another_room() {
+    // The server keeps a deleted parent with replies as a removed message, which closes it.
+    let (open, mut mirrors) = open_thread_with_replies(1);
+    open.admin.delete_message(&open.room, &open.ids[1]);
+    follow_both(&open.events, &mut mirrors, |m| {
+        m.status.parent.is_none() && m.thread.is_empty()
+    });
+
+    let parent = open.admin.post_message(&open.room, "another parent");
+    follow_both(&open.events, &mut mirrors, |m| {
+        message_saying(&m.room, "another parent").is_some()
+    });
+    open.client.open_thread(parent.id.into());
+    follow_both(&open.events, &mut mirrors, |m| m.status.parent.is_some());
+    let (other, _) = open.admin.create_channel(&[&open.username]);
+    wait_for(&open.events, |event| match event {
+        Event::Rooms(changes) => changes
+            .iter()
+            .any(|change| changed_room(change).is_some_and(|room| room.id.as_str() == other))
+            .then_some(()),
+        _ => None,
+    });
+    open.client.open_room(other.into());
+    follow_both(&open.events, &mut mirrors, |m| {
+        m.status.parent.is_none() && m.thread.is_empty()
+    });
+}
+
+// ACT-004
+#[test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+fn a_thread_is_fetched_again_after_the_connection_comes_back() {
+    let admin = Admin::login();
+    let user = admin.create_user();
+    let (room, _) = admin.create_channel(&[&user.username]);
+    let parent = admin.post_message(&room, "parent");
+    admin.post_in_thread(&room, &parent.id, "before", false);
+    let proxy = Proxy::start();
+    let (client, events) = logged_in_at(&proxy.url(), &user);
+    client.open_room(room.clone().into());
+    let mut mirrors = Mirrors::default();
+    follow_both(&events, &mut mirrors, |m| {
+        message_saying(&m.room, "parent").is_some()
+    });
+    client.open_thread(parent.id.clone().into());
+    follow_both(&events, &mut mirrors, |m| {
+        message_saying(&m.thread, "before").is_some()
+    });
+
+    proxy.set_accepting(false);
+    proxy.drop_connections();
+    admin.post_in_thread(&room, &parent.id, "while away", false);
+    proxy.set_accepting(true);
+
+    follow_both(&events, &mut mirrors, |m| {
+        texts(&m.thread) == ["parent", "before", "while away"]
+    });
 }

@@ -125,6 +125,11 @@ pub struct Message {
     pub thread_id: Option<String>,
     /// Whether a thread reply is also shown in the channel (`tshow`).
     pub thread_shown: bool,
+    /// How many replies the message has as the parent of a thread (`tcount`); 0 for a message
+    /// with no thread, and for a reply.
+    pub thread_replies: u32,
+    /// When the last reply of the thread was sent (`tlm`); `None` for a message with no thread.
+    pub thread_last_reply: Option<jiff::Timestamp>,
     /// The server's parsed markdown of the text. `None` if it sent none or it isn't a list of
     /// nodes. Some old messages and some system messages have no `md`.
     pub md: Option<Vec<crate::md::Block>>,
@@ -238,6 +243,18 @@ pub struct HistoryPage {
     /// Newest first, as the server sends them.
     pub messages: Vec<Message>,
     /// The server had fewer messages than asked for, so there is nothing before them.
+    pub reached_start: bool,
+}
+
+/// One page of the replies of a thread.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ThreadPage {
+    /// The replies, newest first, as the server sends them. The parent is not among them.
+    pub messages: Vec<Message>,
+    /// How many replies the thread has, whatever the page holds (`total`).
+    pub total: u32,
+    /// The page ends at the thread's first reply: the replies before the page's offset and the
+    /// page itself are all of them.
     pub reached_start: bool,
 }
 

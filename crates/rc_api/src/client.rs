@@ -11,7 +11,7 @@ use serde_json::json;
 use crate::error::Error;
 use crate::types::{
     Credentials, CustomEmoji, Download, HistoryPage, LoginResult, Message, MessageChanges,
-    MessageSettings, RoomType, ServerInfo, Subscription, User,
+    MessageSettings, RoomType, ServerInfo, Subscription, ThreadPage, User,
 };
 use crate::wire;
 
@@ -433,8 +433,40 @@ impl RestSession {
         text: &str,
     ) -> Result<Message, Error> {
         let payload = json!({ "message": { "_id": id, "rid": room_id, "msg": text } });
+        self.post_message(room_id, id, &payload).await
+    }
+
+    /// Posts a text message as a reply in the thread of `thread_id` (`tmid`), and in the channel
+    /// too if `also_to_channel` (`tshow`). Otherwise as [`send_message`](Self::send_message). The
+    /// server raises the parent's reply count and last reply time.
+    ///
+    /// # Errors
+    ///
+    /// As [`send_message`](Self::send_message). The server doesn't check that `thread_id` is a
+    /// message of the room, so that is for the caller to see to.
+    pub async fn send_thread_reply(
+        &self,
+        room_id: &str,
+        id: &str,
+        text: &str,
+        thread_id: &str,
+        also_to_channel: bool,
+    ) -> Result<Message, Error> {
+        let payload = json!({ "message": {
+            "_id": id, "rid": room_id, "msg": text, "tmid": thread_id, "tshow": also_to_channel,
+        } });
+        self.post_message(room_id, id, &payload).await
+    }
+
+    /// The request of [`send_message`](Self::send_message) and its safety net after a 400.
+    async fn post_message(
+        &self,
+        room_id: &str,
+        id: &str,
+        payload: &serde_json::Value,
+    ) -> Result<Message, Error> {
         let sent = self
-            .call_json(Method::POST, "api/v1/chat.sendMessage", &payload)
+            .call_json(Method::POST, "api/v1/chat.sendMessage", payload)
             .await
             .and_then(|body| wire::parse_message(&body).map_err(Error::Decode));
         match sent {
@@ -449,6 +481,41 @@ impl RestSession {
             },
             other => other,
         }
+    }
+
+    /// A page of the replies of a thread, newest first (`GET /api/v1/chat.getThreadMessages`),
+    /// starting `offset` replies from the newest. The parent is not among them. The page has at
+    /// most `count` replies; [`ThreadPage::reached_start`] says when there are no more. A reply
+    /// that arrives meanwhile shifts the later pages by one, which is for the caller to
+    /// de-duplicate.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Unauthorized`] if the token is expired or revoked, [`Error::Server`] if the thread
+    /// doesn't exist or isn't visible to the user, or any of the other errors.
+    pub async fn thread_messages(
+        &self,
+        thread_id: &str,
+        count: usize,
+        offset: usize,
+    ) -> Result<ThreadPage, Error> {
+        // Only a URL to escape the query with; the host is never used.
+        let mut escaped =
+            Url::parse("http://unused/").map_err(|e| Error::InvalidUrl(e.to_string()))?;
+        {
+            let mut pairs = escaped.query_pairs_mut();
+            pairs.append_pair("tmid", thread_id);
+            pairs.append_pair("count", &count.to_string());
+            pairs.append_pair("offset", &offset.to_string());
+            // Without it the server sends the oldest reply first.
+            pairs.append_pair("sort", r#"{"ts":-1}"#);
+        }
+        let path = format!(
+            "api/v1/chat.getThreadMessages?{}",
+            escaped.query().unwrap_or_default()
+        );
+        let body = self.call(Method::GET, &path).await?;
+        wire::parse_thread_messages(&body, offset).map_err(Error::Decode)
     }
 
     /// Replaces the text of a message (`POST /api/v1/chat.update`) and returns the message as the

@@ -28,12 +28,14 @@ use crate::images::{self, ImageUpdate, Images, images_of};
 use crate::policy::{ActionError, MessageAction, MessagePolicy, can_react};
 use crate::ports::{
     ApiError, CacheError, CacheKey, Changes, Connector, FileCache, MessageStore, Page, Pushed,
-    Realtime, SecretStore, ServerApi, StoreError,
+    Realtime, RoomHistory, SecretStore, ServerApi, StoreError, ThreadTarget,
 };
 use crate::quote::{permalink, wire_text};
 use crate::rooms::{RoomAction, RoomActionError, RoomChange, RoomList};
 use crate::session::{Established, LoginFailure, SessionState, log_in, resume};
-use crate::timeline::{PAGE_SIZE, Timeline, TimelineChange, TimelineError, TimelineStatus};
+use crate::timeline::{
+    PAGE_SIZE, ThreadStatus, Timeline, TimelineChange, TimelineError, TimelineStatus,
+};
 
 #[cfg(test)]
 mod tests;
@@ -64,6 +66,14 @@ pub enum Event {
     Timeline(Vec<TimelineChange>),
     /// What the frontend shows about the message list. Comes after the changes it goes with.
     TimelineStatus(TimelineStatus),
+    /// Changes to the message list of the open thread, to apply in order: the parent first, then
+    /// its replies, oldest first. Opening a thread starts with a reset to nothing, as does
+    /// closing it, and so does anything that closes it: another room, a logout, the room or the
+    /// parent going away.
+    ThreadTimeline(Vec<TimelineChange>),
+    /// What the frontend shows about the thread's message list. Comes after the changes it goes
+    /// with.
+    ThreadStatus(ThreadStatus),
     /// The state of the realtime connection of a logged-in session, when it changes. A session
     /// starts `Connected`, and so does the frontend until told otherwise: nothing is sent at login,
     /// and a logout or an expiry resets it without an event.
@@ -118,10 +128,15 @@ enum Command {
     Logout,
     OpenRoom(RoomId),
     LoadOlder,
+    OpenThread(MessageId),
+    CloseThread,
+    LoadOlderThread,
     SendMessage {
         room: RoomId,
         text: String,
         quote: Option<MessageId>,
+        thread: Option<MessageId>,
+        also_to_channel: bool,
     },
     RetryMessage(MessageId),
     EditMessage {
@@ -239,8 +254,10 @@ impl Client {
             image_tasks: JoinSet::new(),
             messages: Box::new(MemoryMessageStore::default()),
             open: None,
+            open_thread: None,
             history_attempt: 0,
             history_task: None,
+            thread_task: None,
             changes_task: None,
             revokes: JoinSet::new(),
             store: Some(StoreHandle(store_tx)),
@@ -291,6 +308,29 @@ impl Client {
         self.send(Command::LoadOlder);
     }
 
+    /// Shows the replies of a message of the open room, in a thread beside the room: a reset to
+    /// nothing at once, then the parent and its newest replies as they arrive. Replaces the
+    /// thread that was open. The parent must be a sent text message that the open room holds and
+    /// that isn't a reply itself; anything else is logged at debug and ignored. So is a thread
+    /// that is open already, unless its last load failed: then it tries again. Ignored unless
+    /// logged in. The thread closes with the room (see [`close_thread`](Self::close_thread)).
+    pub fn open_thread(&self, parent: MessageId) {
+        self.send(Command::OpenThread(parent));
+    }
+
+    /// Closes the open thread, and tells the frontend with a reset to nothing. It closes by itself
+    /// when another room is opened, the room is closed or leaves the list, the parent is deleted
+    /// and on logout. Ignored when no thread is open.
+    pub fn close_thread(&self) {
+        self.send(Command::CloseThread);
+    }
+
+    /// Fetches the replies before the oldest one the open thread holds. Ignored when no thread is
+    /// open, when a fetch is in flight, or when the start of the thread is reached.
+    pub fn load_older_thread(&self) {
+        self.send(Command::LoadOlderThread);
+    }
+
     /// Sends a text message to the room. It shows in the room's messages at once, as pending (see
     /// [`Delivery`]), and becomes sent when the server confirms it, or failed if it can't. It
     /// goes out whichever room is open by then. Ignored unless logged in, if the room isn't in the
@@ -301,17 +341,31 @@ impl Client {
     /// makes the quote from a link in the text, but only when the link begins with its own
     /// `Site_Url`, so that is what the links are built from (it is read at login; the address of the
     /// login stands in for a server that has none).
-    pub fn send_message(&self, room: RoomId, text: &str, quote: Option<MessageId>) {
+    ///
+    /// With `thread`, the message is a reply in that thread, which must be the open one (else the
+    /// message is not sent). It shows in the thread's messages at once, as pending, and also in
+    /// the room's if `also_to_channel`, which asks the server to show it there too. Without a
+    /// thread, `also_to_channel` does nothing.
+    pub fn send_message(
+        &self,
+        room: RoomId,
+        text: &str,
+        quote: Option<MessageId>,
+        thread: Option<MessageId>,
+        also_to_channel: bool,
+    ) {
         self.send(Command::SendMessage {
             room,
             text: text.to_owned(),
             quote,
+            thread,
+            also_to_channel,
         });
     }
 
-    /// Sends a message of the open room that failed again, under the same id, so that it can't
-    /// appear twice if the first attempt got through after all. Ignored unless it is a failed
-    /// message of the open room.
+    /// Sends a message of the open room or thread that failed again, under the same id, so that it
+    /// can't appear twice if the first attempt got through after all. Ignored unless it is a
+    /// failed message of the open room or thread.
     pub fn retry_message(&self, id: MessageId) {
         self.send(Command::RetryMessage(id));
     }
@@ -645,6 +699,14 @@ struct ImageDone {
     outcome: images::Fetched,
 }
 
+/// A thread fetch's answer.
+struct ThreadDone {
+    /// Identifies the fetch: the answer is stale if the thread was closed or another fetch began.
+    attempt: u64,
+    parent: MessageId,
+    outcome: Result<Page, ApiError>,
+}
+
 /// A history fetch's answer.
 struct HistoryDone {
     /// Identifies the fetch: the answer is stale if the room was closed or another fetch began.
@@ -714,6 +776,7 @@ enum Done<A> {
         cycle: u64,
     },
     History(HistoryDone),
+    Thread(ThreadDone),
     Changes(ChangesDone),
     Send(SendDone),
     MarkRead(MarkReadDone),
@@ -748,6 +811,38 @@ struct OpenRoom {
     /// The messages deleted while the room was open. An answer to a request sent before the
     /// deletion may still hold them.
     deleted: HashSet<MessageId>,
+}
+
+/// The thread whose messages the frontend shows beside the open room.
+struct OpenThread {
+    /// The latest copy of the parent, which joins the timeline with the page that reaches the
+    /// start, and follows edits, reactions and reply counts meanwhile.
+    parent: Message,
+    /// The parent first, then the replies. Never kept: a thread is fetched on every open.
+    timeline: Timeline,
+    fetch: Option<Fetch>,
+    /// Why the last fetch failed.
+    error: Option<TimelineError>,
+    /// Replies pushed while the newest ones were still to come, as for the room's.
+    live: Vec<Message>,
+    /// The messages deleted while the thread was open.
+    deleted: HashSet<MessageId>,
+}
+
+impl OpenThread {
+    /// Whether the message is the parent or one of the replies.
+    fn concerns(&self, message: &Message) -> bool {
+        message.id == self.parent.id || message.thread_id.as_ref() == Some(&self.parent.id)
+    }
+
+    /// The replies the server confirmed that are held: where the next page starts.
+    fn replies_held(&self) -> usize {
+        self.timeline
+            .messages()
+            .iter()
+            .filter(|m| !m.is_unsent() && m.id != self.parent.id)
+            .count()
+    }
 }
 
 /// What the actor keeps while logged in; the next features need both.
@@ -819,10 +914,14 @@ struct Actor<C: Connector> {
     /// The messages of the rooms opened so far. Cleared on logout.
     messages: Box<dyn MessageStore>,
     open: Option<OpenRoom>,
-    /// Counts history fetches, to tell the answer of the current one from a stale one.
+    /// The thread beside the open room: always one of its messages, and closed with it.
+    open_thread: Option<OpenThread>,
+    /// Counts history and thread fetches, to tell the answer of the current one from a stale one.
     history_attempt: u64,
     /// The history fetch of the open room, while it runs.
     history_task: Option<JoinHandle<()>>,
+    /// The thread fetch of the open thread, while it runs.
+    thread_task: Option<JoinHandle<()>>,
     /// The catch-up of the open room (changes since it was last up to date), while it runs.
     changes_task: Option<JoinHandle<()>>,
     /// Token revocations in flight, so that stopping can wait for them.
@@ -858,6 +957,7 @@ impl<C: Connector> Actor<C> {
                     Done::Realtime(report) => self.handle_realtime_done(report),
                     Done::Reconnect { cycle } => self.handle_reconnect(cycle),
                     Done::History(done) => self.handle_history_done(done),
+                    Done::Thread(done) => self.handle_thread_done(done),
                     Done::Changes(done) => self.handle_changes_done(done),
                     Done::Send(done) => self.handle_send_done(done),
                     Done::MarkRead(done) => self.handle_mark_read_done(done),
@@ -904,6 +1004,9 @@ impl<C: Connector> Actor<C> {
         self.avatar_tasks.abort_all();
         self.image_tasks.abort_all();
         self.abort_history_task();
+        if let Some(task) = self.thread_task.take() {
+            task.abort();
+        }
         drop(self.store.take());
         let revokes = &mut self.revokes;
         let worker = &mut self.store_worker;
@@ -926,7 +1029,16 @@ impl<C: Connector> Actor<C> {
             Command::Logout => self.logout(),
             Command::OpenRoom(room) => self.open_room(room),
             Command::LoadOlder => self.load_older(),
-            Command::SendMessage { room, text, quote } => self.send_message(room, &text, quote),
+            Command::OpenThread(parent) => self.open_thread(&parent),
+            Command::CloseThread => self.close_thread(),
+            Command::LoadOlderThread => self.load_older_thread(),
+            Command::SendMessage {
+                room,
+                text,
+                quote,
+                thread,
+                also_to_channel,
+            } => self.send_message(room, &text, quote, thread, also_to_channel),
             Command::RetryMessage(id) => self.retry_message(&id),
             Command::EditMessage { id, text } => self.edit_own_message(id, &text),
             Command::DeleteMessage(id) => self.delete_own_message(id),
@@ -1409,8 +1521,14 @@ impl<C: Connector> Actor<C> {
         }
     }
 
-    /// Takes a deleted message out of the room's messages, open or not.
+    /// Takes a deleted message out of the room's messages, open or not, and out of the open
+    /// thread. A reply that was held counts one less in its parent, as the server's does: it
+    /// doesn't push the parent for a deletion. Deleting the parent closes the thread.
     fn delete_message(&mut self, room: &RoomId, id: &MessageId) {
+        let reply_of = self
+            .find_message(id)
+            .filter(|held| &held.room_id == room)
+            .and_then(|held| held.thread_id.clone());
         if let Some(open) = self
             .open
             .as_mut()
@@ -1420,11 +1538,113 @@ impl<C: Connector> Actor<C> {
             open.deleted.insert(id.clone());
         }
         self.change_timeline(room, |timeline| timeline.remove(id).into_iter().collect());
+        if self
+            .open_thread
+            .as_ref()
+            .is_some_and(|thread| &thread.parent.id == id)
+        {
+            self.close_thread();
+        } else if let Some(thread) = self
+            .open_thread
+            .as_mut()
+            .filter(|thread| thread.timeline.room() == room)
+        {
+            thread.live.retain(|m| &m.id != id);
+            thread.deleted.insert(id.clone());
+            self.change_thread_timeline(|timeline| timeline.remove(id).into_iter().collect());
+        }
+        if let Some(parent) = reply_of {
+            self.reply_removed(room, &parent);
+        }
     }
 
-    /// Adds a pushed message to the open room. Other rooms aren't held: they load their history
-    /// when opened, and their unread counts arrive as subscription changes.
+    /// Counts one reply less in the held copies of the parent. The time of the last reply stays,
+    /// as the server's does.
+    fn reply_removed(&mut self, room: &RoomId, parent: &MessageId) {
+        let Some(mut copy) = self.find_message(parent).cloned() else {
+            return;
+        };
+        if let Some(thread) = self.open_thread.as_ref().filter(|t| &t.parent.id == parent) {
+            copy = thread.parent.clone();
+        }
+        copy.thread_replies = copy.thread_replies.saturating_sub(1);
+        self.replace_everywhere(room, &copy);
+    }
+
+    /// The held message with this id, in the open room or in the open thread.
+    fn find_message(&self, id: &MessageId) -> Option<&Message> {
+        self.open
+            .as_ref()
+            .and_then(|open| open.timeline.message(id))
+            .or_else(|| (self.open_thread.as_ref()).and_then(|thread| thread.timeline.message(id)))
+    }
+
+    /// Takes in the server's newer copy of a message that is held as confirmed, wherever it is
+    /// held: in the room, in the thread, and as the thread's parent.
+    fn replace_everywhere(&mut self, room: &RoomId, message: &Message) {
+        if let Some(thread) = self
+            .open_thread
+            .as_mut()
+            .filter(|thread| thread.parent.id == message.id)
+        {
+            thread.parent.clone_from(message);
+        }
+        self.change_timelines(room, |timeline| {
+            timeline.replace(message.clone()).into_iter().collect()
+        });
+    }
+
+    /// Adds a pushed message to the open room, or to the open thread, or both. Other rooms aren't
+    /// held: they load their history when opened, and their unread counts arrive as subscription
+    /// changes.
     fn add_live_message(&mut self, message: Message) {
+        self.add_live_thread_message(&message);
+        if message.shows_in_room() {
+            self.add_live_room_message(message);
+        }
+    }
+
+    /// Adds a pushed message to the open thread: a reply, or a new copy of the parent.
+    fn add_live_thread_message(&mut self, message: &Message) {
+        let Some(thread) = self
+            .open_thread
+            .as_mut()
+            .filter(|thread| thread.concerns(message))
+        else {
+            return;
+        };
+        if message.id == thread.parent.id {
+            // A parent with replies isn't deleted but left as a placeholder, and nothing is
+            // announced as deleted: the thread has no parent any more.
+            if message.is_deleted_parent() {
+                self.close_thread();
+                return;
+            }
+            // The room takes its copy as it takes any message's.
+            thread.parent.clone_from(message);
+            self.change_thread_timeline(|timeline| {
+                timeline.replace(message.clone()).into_iter().collect()
+            });
+            return;
+        }
+        let confirms = thread
+            .timeline
+            .message(&message.id)
+            .is_some_and(Message::is_unsent);
+        let newest_to_come = thread.fetch.as_ref().is_some_and(|fetch| !fetch.older)
+            || (!thread.timeline.has_sent() && !thread.timeline.reached_start());
+        if newest_to_come {
+            thread.live.retain(|m| m.id != message.id);
+            thread.live.push(message.clone());
+            if !confirms {
+                return;
+            }
+        }
+        self.change_thread_timeline(|timeline| timeline.merge_live(message.clone()));
+    }
+
+    /// Adds a pushed message to the open room.
+    fn add_live_room_message(&mut self, message: Message) {
         let room = message.room_id.clone();
         let echo = self.own_user().is_some_and(|me| me.id == message.author.id);
         let Some(open) = self
@@ -1786,6 +2006,9 @@ impl<C: Connector> Actor<C> {
         if self.rooms.rooms().iter().any(|room| room.id == id) {
             self.abort_history_task();
             self.fetch_history(false);
+            if self.open_thread.is_some() {
+                self.fetch_thread(false);
+            }
         } else {
             self.close_room();
         }
@@ -1832,6 +2055,7 @@ impl<C: Connector> Actor<C> {
             tracing::debug!(room = %id, "open_room ignored: not in the room list");
             return;
         };
+        self.close_thread();
         self.abort_history_task();
         let history = self.messages.load(&id);
         let timeline = Timeline::new(id.clone(), history);
@@ -1986,9 +2210,10 @@ impl<C: Connector> Actor<C> {
         open.deleted.extend(changes.deleted.iter().cloned());
         let timeline = &mut open.timeline;
         let mut applied = Vec::new();
+        let for_thread = self.open_thread.is_some().then(|| changes.clone());
         // Messages that aren't held come with the newest page.
         for message in changes.updated {
-            if !open.deleted.contains(&message.id) {
+            if message.shows_in_room() && !open.deleted.contains(&message.id) {
                 applied.extend(timeline.replace(message));
             }
         }
@@ -2004,6 +2229,37 @@ impl<C: Connector> Actor<C> {
             self.want_avatars(authors);
             self.want_images(images);
         }
+        if let Some(changes) = for_thread {
+            self.apply_changes_to_thread(&done.room, changes);
+        }
+    }
+
+    /// Puts what the catch-up found into the open thread: the new copies of the parent and of the
+    /// replies it holds, and the replies deleted. The parent's copy has the count the server has
+    /// now, so a deleted reply is not counted again.
+    fn apply_changes_to_thread(&mut self, room: &RoomId, changes: Changes) {
+        let Some(thread) = self
+            .open_thread
+            .as_mut()
+            .filter(|thread| thread.timeline.room() == room)
+        else {
+            return;
+        };
+        thread.deleted.extend(changes.deleted.iter().cloned());
+        let mut applied = Vec::new();
+        for message in changes.updated {
+            if !thread.concerns(&message) || thread.deleted.contains(&message.id) {
+                continue;
+            }
+            if message.id == thread.parent.id {
+                thread.parent = message.clone();
+            }
+            applied.extend(thread.timeline.replace(message));
+        }
+        for id in &changes.deleted {
+            applied.extend(thread.timeline.remove(id));
+        }
+        self.emit_thread_changes(applied);
     }
 
     fn handle_history_done(&mut self, done: HistoryDone) {
@@ -2057,6 +2313,233 @@ impl<C: Connector> Actor<C> {
         self.emit_timeline_status();
     }
 
+    /// Shows the replies of a message of the open room in a thread, and fetches the newest.
+    fn open_thread(&mut self, parent: &MessageId) {
+        if !matches!(self.state, SessionState::LoggedIn(_)) {
+            tracing::debug!("open_thread ignored: not logged in");
+            return;
+        }
+        if self
+            .open_thread
+            .as_ref()
+            .is_some_and(|thread| &thread.parent.id == parent && thread.error.is_none())
+        {
+            return;
+        }
+        let held = self
+            .open
+            .as_ref()
+            .and_then(|open| open.timeline.message(parent))
+            .filter(|message| {
+                !message.is_unsent()
+                    && message.thread_id.is_none()
+                    && matches!(message.kind, MessageKind::Text(_))
+            })
+            .cloned();
+        let Some(message) = held else {
+            tracing::debug!(%parent, "open_thread ignored: not a sent text message of the open room");
+            return;
+        };
+        // The reset below tells the frontend; the thread that was open has nothing more to say.
+        if let Some(task) = self.thread_task.take() {
+            task.abort();
+        }
+        let timeline = Timeline::new(message.room_id.clone(), RoomHistory::default());
+        (self.on_event)(Event::ThreadTimeline(vec![timeline.reset()]));
+        self.open_thread = Some(OpenThread {
+            parent: message,
+            timeline,
+            fetch: None,
+            error: None,
+            live: Vec::new(),
+            deleted: HashSet::new(),
+        });
+        self.fetch_thread(false);
+    }
+
+    fn load_older_thread(&mut self) {
+        let Some(thread) = &self.open_thread else {
+            tracing::debug!("load_older_thread ignored: no thread is open");
+            return;
+        };
+        // Nothing is held when the first fetch failed: opening the thread again retries that.
+        if thread.fetch.is_some() || thread.timeline.reached_start() || thread.replies_held() == 0 {
+            return;
+        }
+        self.fetch_thread(true);
+    }
+
+    /// Fetches a page of the open thread's replies: the newest, or the one after the replies held.
+    /// The server counts from the newest, and the replies that arrived since shift it, which the
+    /// timeline absorbs by de-duplicating.
+    fn fetch_thread(&mut self, older: bool) {
+        let (Some(session), Some(thread)) = (&self.session, &mut self.open_thread) else {
+            return;
+        };
+        self.history_attempt += 1;
+        let attempt = self.history_attempt;
+        thread.fetch = Some(Fetch {
+            attempt,
+            older,
+            started: jiff::Timestamp::now(),
+            with_changes: false,
+        });
+        thread.error = None;
+        let offset = if older { thread.replies_held() } else { 0 };
+        let parent = thread.parent.id.clone();
+        let api = session.api.clone();
+        let credentials = session.credentials.clone();
+        let done = self.done_tx.clone();
+        if let Some(task) = self.thread_task.take() {
+            task.abort();
+        }
+        self.thread_task = Some(tokio::spawn(async move {
+            let outcome = api
+                .thread_messages(&credentials, &parent, offset, PAGE_SIZE)
+                .await;
+            // Fails only if the actor is gone.
+            let _ = done.send(Done::Thread(ThreadDone {
+                attempt,
+                parent,
+                outcome,
+            }));
+        }));
+        self.emit_thread_status();
+    }
+
+    fn handle_thread_done(&mut self, done: ThreadDone) {
+        let Some(thread) = &mut self.open_thread else {
+            tracing::debug!("answer of a thread fetch for a closed thread dropped");
+            return;
+        };
+        let Some(fetch) = thread.fetch.take_if(|fetch| fetch.attempt == done.attempt) else {
+            tracing::debug!("answer of a stale thread fetch dropped");
+            return;
+        };
+        self.thread_task = None;
+        let changes = match done.outcome {
+            Ok(page) => {
+                let mut messages = page.messages;
+                messages.retain(|m| !thread.deleted.contains(&m.id));
+                // The parent is the first row, and comes with the page that reaches the start.
+                if page.reached_start {
+                    messages.push(thread.parent.clone());
+                }
+                if fetch.older {
+                    thread.timeline.merge_older(messages, page.reached_start)
+                } else {
+                    // What was pushed meanwhile is newer than the page's copy of a message.
+                    messages.retain(|m| thread.live.iter().all(|live| live.id != m.id));
+                    messages.append(&mut thread.live);
+                    thread.timeline.merge_latest(messages, page.reached_start)
+                }
+            }
+            Err(ApiError::Unauthorized) => {
+                self.expire_session();
+                return;
+            }
+            Err(error) => {
+                tracing::warn!(%error, thread = %done.parent, "can't load the thread");
+                thread.error = Some(TimelineError::from(&error));
+                Vec::new()
+            }
+        };
+        self.emit_thread_changes(changes);
+        self.emit_thread_status();
+    }
+
+    /// Changes the open thread's messages, which the frontend hears about. Nothing is kept: a
+    /// thread is fetched on every open.
+    fn change_thread_timeline(
+        &mut self,
+        change: impl FnOnce(&mut Timeline) -> Vec<TimelineChange>,
+    ) {
+        let Some(thread) = &mut self.open_thread else {
+            return;
+        };
+        let changes = change(&mut thread.timeline);
+        self.emit_thread_changes(changes);
+    }
+
+    fn emit_thread_changes(&mut self, changes: Vec<TimelineChange>) {
+        if changes.is_empty() {
+            return;
+        }
+        let authors = authors_of(&changes);
+        let images = images_of(&changes);
+        (self.on_event)(Event::ThreadTimeline(changes));
+        self.want_avatars(authors);
+        self.want_images(images);
+    }
+
+    /// Changes the held copies of messages of `room`, in the open room (or what the store holds
+    /// of it) and in the open thread, if it is that room's. For changes to messages that are held
+    /// already: a message that isn't is left alone.
+    fn change_timelines(
+        &mut self,
+        room: &RoomId,
+        change: impl Fn(&mut Timeline) -> Vec<TimelineChange>,
+    ) {
+        self.change_timeline(room, &change);
+        if self
+            .open_thread
+            .as_ref()
+            .is_some_and(|thread| thread.timeline.room() == room)
+        {
+            self.change_thread_timeline(&change);
+        }
+    }
+
+    /// A page of the newest messages may be on its way and predate `message`, which would make it
+    /// drop the message: the open room's and the open thread's pages take it in with them.
+    fn hold_for_page(&mut self, message: &Message) {
+        if message.shows_in_room()
+            && let Some(open) = self.open.as_mut().filter(|open| {
+                open.timeline.room() == &message.room_id
+                    && open.fetch.as_ref().is_some_and(|fetch| !fetch.older)
+            })
+        {
+            open.live.retain(|m| m.id != message.id);
+            open.live.push(message.clone());
+        }
+        if let Some(thread) = self.open_thread.as_mut().filter(|thread| {
+            thread.concerns(message)
+                && thread.parent.id != message.id
+                && thread.fetch.as_ref().is_some_and(|fetch| !fetch.older)
+        }) {
+            thread.live.retain(|m| m.id != message.id);
+            thread.live.push(message.clone());
+        }
+    }
+
+    fn emit_thread_status(&self) {
+        let status = match &self.open_thread {
+            Some(thread) => ThreadStatus {
+                parent: Some(thread.parent.id.clone()),
+                loading: thread.fetch.as_ref().is_some_and(|f| !f.older),
+                loading_older: thread.fetch.as_ref().is_some_and(|f| f.older),
+                reached_start: thread.timeline.reached_start(),
+                error: thread.error.clone(),
+            },
+            None => ThreadStatus::default(),
+        };
+        (self.on_event)(Event::ThreadStatus(status));
+    }
+
+    /// Closes the open thread and tells the frontend, unless no thread was open.
+    fn close_thread(&mut self) {
+        if let Some(task) = self.thread_task.take() {
+            task.abort();
+        }
+        if self.open_thread.take().is_some() {
+            (self.on_event)(Event::ThreadTimeline(vec![TimelineChange::Reset {
+                room: None,
+                messages: Vec::new(),
+            }]));
+            self.emit_thread_status();
+        }
+    }
+
     /// The logged-in user.
     fn own_user(&self) -> Option<&User> {
         match &self.state {
@@ -2095,7 +2578,14 @@ impl<C: Connector> Actor<C> {
         }
     }
 
-    fn send_message(&mut self, room: RoomId, text: &str, quote: Option<MessageId>) {
+    fn send_message(
+        &mut self,
+        room: RoomId,
+        text: &str,
+        quote: Option<MessageId>,
+        thread: Option<MessageId>,
+        also_to_channel: bool,
+    ) {
         let Some(me) = self.own_user() else {
             tracing::debug!("send_message ignored: not logged in");
             return;
@@ -2108,6 +2598,23 @@ impl<C: Connector> Actor<C> {
             tracing::debug!(%room, "send_message ignored: not in the room list");
             return;
         }
+        // A reply goes only to the thread that is open.
+        let target = match thread {
+            Some(parent) => {
+                let open = self.open_thread.as_ref().is_some_and(|thread| {
+                    thread.parent.id == parent && thread.timeline.room() == &room
+                });
+                if !open {
+                    tracing::debug!(%parent, "send_message ignored: not the open thread");
+                    return;
+                }
+                Some(ThreadTarget {
+                    parent,
+                    also_to_channel,
+                })
+            }
+            None => None,
+        };
         let quotes: Vec<Quote> = quote
             .and_then(|quoted| self.quote_of(&room, &quoted))
             .into_iter()
@@ -2127,23 +2634,29 @@ impl<C: Connector> Actor<C> {
             quotes,
             edited: false,
             reactions: Vec::new(),
+            thread_id: target.as_ref().map(|target| target.parent.clone()),
+            thread_shown: target.as_ref().is_some_and(|target| target.also_to_channel),
+            thread_replies: 0,
+            thread_last_reply: None,
         };
         let id = message.id.clone();
         let wire = wire_text(&message.quotes, text);
-        self.change_timeline(&room, |timeline| vec![timeline.add_unsent(message)]);
-        self.post(room, id, wire);
+        if target.is_some() {
+            self.change_thread_timeline(|timeline| vec![timeline.add_unsent(message.clone())]);
+        }
+        if message.shows_in_room() {
+            self.change_timeline(&room, |timeline| vec![timeline.add_unsent(message)]);
+        }
+        self.post(room, id, wire, target);
     }
 
-    /// The quote of a message of the open room, as a copy to show until the server's comes. `None`
-    /// if the room isn't the open one, doesn't hold the message, or the message isn't sent text:
+    /// The quote of a message of the open room or thread, as a copy to show until the server's
+    /// comes. `None` if the room doesn't hold the message, or the message isn't sent text:
     /// the server can't quote what it doesn't have, and a system message says nothing.
     fn quote_of(&self, room: &RoomId, quoted: &MessageId) -> Option<Quote> {
         let message = self
-            .open
-            .as_ref()
-            .filter(|open| open.timeline.room() == room)
-            .and_then(|open| open.timeline.message(quoted))
-            .filter(|message| !message.is_unsent());
+            .find_message(quoted)
+            .filter(|message| &message.room_id == room && !message.is_unsent());
         let Some(Message {
             kind: MessageKind::Text(text),
             author,
@@ -2177,33 +2690,36 @@ impl<C: Connector> Actor<C> {
     }
 
     fn retry_message(&mut self, id: &MessageId) {
-        let Some(open) = &self.open else {
-            tracing::debug!("retry_message ignored: no room is open");
-            return;
-        };
-        let room = open.timeline.room().clone();
         let Some(Message {
             kind: MessageKind::Text(text),
             delivery: Delivery::Failed,
             quotes,
+            room_id,
+            thread_id,
+            thread_shown,
             ..
-        }) = open.timeline.message(id)
+        }) = self.find_message(id)
         else {
             tracing::debug!(message = %id, "retry_message ignored: not a failed message");
             return;
         };
+        let room = room_id.clone();
         let text = wire_text(quotes, &text.text);
-        self.change_timeline(&room, |timeline| {
+        let target = thread_id.clone().map(|parent| ThreadTarget {
+            parent,
+            also_to_channel: *thread_shown,
+        });
+        self.change_timelines(&room, |timeline| {
             timeline
                 .set_delivery(id, Delivery::Pending)
                 .into_iter()
                 .collect()
         });
-        self.post(room, id.clone(), text);
+        self.post(room, id.clone(), text, target);
     }
 
     /// Sends the message in a task, which reports the outcome.
-    fn post(&mut self, room: RoomId, id: MessageId, text: String) {
+    fn post(&mut self, room: RoomId, id: MessageId, text: String, thread: Option<ThreadTarget>) {
         let Some(session) = &self.session else {
             return;
         };
@@ -2212,7 +2728,9 @@ impl<C: Connector> Actor<C> {
         let attempt = self.attempt;
         let done = self.done_tx.clone();
         tokio::spawn(async move {
-            let outcome = api.send_message(&credentials, &room, &id, &text).await;
+            let outcome = api
+                .send_message(&credentials, &room, &id, &text, thread.as_ref())
+                .await;
             // Fails only if the actor is gone.
             let _ = done.send(Done::Send(SendDone {
                 attempt,
@@ -2231,20 +2749,15 @@ impl<C: Connector> Actor<C> {
         match done.outcome {
             Ok(message) => {
                 // A page that is on its way may predate the message, and would drop it.
-                if let Some(open) = self.open.as_mut().filter(|open| {
-                    open.timeline.room() == &done.room
-                        && open.fetch.as_ref().is_some_and(|fetch| !fetch.older)
-                }) {
-                    open.live.push(message.clone());
-                }
-                self.change_timeline(&done.room, |timeline| {
-                    timeline.settle(message).into_iter().collect()
+                self.hold_for_page(&message);
+                self.change_timelines(&done.room, |timeline| {
+                    timeline.settle(message.clone()).into_iter().collect()
                 });
             }
             Err(ApiError::Unauthorized) => self.expire_session(),
             Err(error) => {
                 tracing::warn!(%error, room = %done.room, "can't send the message");
-                self.change_timeline(&done.room, |timeline| {
+                self.change_timelines(&done.room, |timeline| {
                     timeline
                         .set_delivery(&done.id, Delivery::Failed)
                         .into_iter()
@@ -2263,22 +2776,18 @@ impl<C: Connector> Actor<C> {
         });
     }
 
-    /// The message of the open room, if it is one the user may do `action` to. Answers with a
-    /// refusal otherwise.
+    /// The message of the open room or thread, if it is one the user may do `action` to. Answers
+    /// with a refusal otherwise.
     fn changeable(&self, id: &MessageId, action: MessageAction) -> Option<&Message> {
         let me = self.own_user()?;
-        let message = self
-            .open
-            .as_ref()
-            .and_then(|open| open.timeline.message(id))
-            .filter(|message| {
-                let now = jiff::Timestamp::now();
-                match action {
-                    MessageAction::Edit => self.policy.can_edit(message, &me.id, now),
-                    MessageAction::Delete => self.policy.can_delete(message, &me.id, now),
-                    MessageAction::React => can_react(message),
-                }
-            });
+        let message = self.find_message(id).filter(|message| {
+            let now = jiff::Timestamp::now();
+            match action {
+                MessageAction::Edit => self.policy.can_edit(message, &me.id, now),
+                MessageAction::Delete => self.policy.can_delete(message, &me.id, now),
+                MessageAction::React => can_react(message),
+            }
+        });
         if message.is_none() {
             tracing::debug!(message = %id, ?action, "refused: not a message the user can change");
             self.answer(id.clone(), action, Err(ActionError::NotAllowed(action)));
@@ -2408,16 +2917,8 @@ impl<C: Connector> Actor<C> {
             Ok(Applied::Edited(message)) => {
                 // The push of the same copy follows, which changes nothing. A page that is on its
                 // way may predate the edit, so the copy joins it, as a sent message does.
-                if let Some(open) = self.open.as_mut().filter(|open| {
-                    open.timeline.room() == &done.room
-                        && open.fetch.as_ref().is_some_and(|fetch| !fetch.older)
-                }) {
-                    open.live.retain(|m| m.id != message.id);
-                    open.live.push((*message).clone());
-                }
-                self.change_timeline(&done.room, |timeline| {
-                    timeline.replace(*message).into_iter().collect()
-                });
+                self.hold_for_page(&message);
+                self.replace_everywhere(&done.room, &message);
                 self.answer(done.id, done.action, Ok(()));
             }
             Ok(Applied::Deleted) => {
@@ -2444,10 +2945,8 @@ impl<C: Connector> Actor<C> {
             return;
         };
         let reacted = self
-            .open
-            .as_ref()
-            .filter(|open| open.timeline.room() == room)
-            .and_then(|open| open.timeline.message(id))
+            .find_message(id)
+            .filter(|held| &held.room_id == room)
             .and_then(|held| {
                 let mut copy = held.clone();
                 copy.set_reaction(emoji, &username, react).then_some(copy)
@@ -2456,15 +2955,8 @@ impl<C: Connector> Actor<C> {
             return;
         };
         // A page that is on its way may predate the reaction, so the copy joins it, as for an edit.
-        if let Some(open) = self.open.as_mut().filter(|open| {
-            open.timeline.room() == room && open.fetch.as_ref().is_some_and(|fetch| !fetch.older)
-        }) {
-            open.live.retain(|m| m.id != message.id);
-            open.live.push(message.clone());
-        }
-        self.change_timeline(room, |timeline| {
-            timeline.replace(message).into_iter().collect()
-        });
+        self.hold_for_page(&message);
+        self.replace_everywhere(room, &message);
     }
 
     fn abort_history_task(&mut self) {
@@ -2503,6 +2995,7 @@ impl<C: Connector> Actor<C> {
     /// Closes the open room, keeping what is held of it, and tells the frontend, unless no room was
     /// open.
     fn close_room(&mut self) {
+        self.close_thread();
         self.abort_history_task();
         if self.open.take().is_some() {
             self.watch_room(None);

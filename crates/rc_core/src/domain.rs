@@ -320,6 +320,15 @@ pub struct Message {
     pub edited: bool,
     /// What users reacted with, in the order the server lists it. An unsent message has none.
     pub reactions: Vec<Reaction>,
+    /// The thread this message replies to, if it is a reply.
+    pub thread_id: Option<MessageId>,
+    /// A reply that is also shown in the room's own messages, not only in its thread.
+    pub thread_shown: bool,
+    /// How many replies the message has, as the parent of a thread; 0 if it has no thread.
+    pub thread_replies: u32,
+    /// When the last reply of the thread was sent, as the server last said. A deleted reply
+    /// doesn't change it.
+    pub thread_last_reply: Option<jiff::Timestamp>,
 }
 
 /// A message that another one quotes, as a copy taken when the quote was made: it doesn't follow
@@ -409,6 +418,20 @@ impl From<rc_api::Attachment> for Attachment {
 }
 
 impl Message {
+    /// Whether the room's own messages show it: everything but the replies in a thread that
+    /// weren't also sent to the room (Rocket.Chat's own view leaves them out too).
+    #[must_use]
+    pub fn shows_in_room(&self) -> bool {
+        self.thread_id.is_none() || self.thread_shown
+    }
+
+    /// What the server leaves of a thread's parent that was deleted while it had replies: a
+    /// system message of the removed kind (`rm`), pushed like an edit. Other messages vanish.
+    #[must_use]
+    pub fn is_deleted_parent(&self) -> bool {
+        matches!(&self.kind, MessageKind::System(SystemEvent::Other(code)) if code == "rm")
+    }
+
     /// Not confirmed by the server yet: `Pending` or `Failed`.
     #[must_use]
     pub fn is_unsent(&self) -> bool {
@@ -461,13 +484,10 @@ impl Message {
     }
 }
 
-/// The message a history entry stands for, or `None` if the timeline doesn't show it: replies in a
-/// thread that weren't also sent to the channel (Rocket.Chat's own view leaves them out too).
+/// The message an entry of the server stands for. Replies that the room doesn't show are kept
+/// (see [`Message::shows_in_room`]): their thread does.
 #[must_use]
-pub(crate) fn message_from(message: rc_api::Message) -> Option<Message> {
-    if message.thread_id.is_some() && !message.thread_shown {
-        return None;
-    }
+pub(crate) fn message_from(message: rc_api::Message) -> Message {
     let quote_links: Vec<String> = message.quotes.iter().map(|q| q.link.clone()).collect();
     let kind = match message.kind.as_deref() {
         None => MessageKind::Text(
@@ -490,7 +510,7 @@ pub(crate) fn message_from(message: rc_api::Message) -> Option<Message> {
             MessageKind::System(SystemEvent::Other(code.to_owned()))
         }
     };
-    Some(Message {
+    Message {
         id: message.id.into(),
         room_id: message.room_id.into(),
         author: Author {
@@ -505,7 +525,11 @@ pub(crate) fn message_from(message: rc_api::Message) -> Option<Message> {
         quotes: message.quotes.into_iter().map(Into::into).collect(),
         edited: message.edited,
         reactions: message.reactions.into_iter().map(Into::into).collect(),
-    })
+        thread_id: message.thread_id.map(Into::into),
+        thread_shown: message.thread_shown,
+        thread_replies: message.thread_replies,
+        thread_last_reply: message.thread_last_reply,
+    }
 }
 
 #[cfg(test)]
@@ -676,6 +700,8 @@ mod tests {
             kind: kind.map(str::to_owned),
             thread_id: None,
             thread_shown: false,
+            thread_replies: 0,
+            thread_last_reply: None,
             md: None,
             attachments: Vec::new(),
             quotes: Vec::new(),
@@ -699,7 +725,7 @@ mod tests {
                 usernames: vec!["z".into()],
             },
         ];
-        let message = message_from(entry).unwrap();
+        let message = message_from(entry);
         assert!(message.edited);
         assert_eq!(
             message.reactions,
@@ -714,13 +740,13 @@ mod tests {
                 },
             ]
         );
-        let plain = message_from(self::entry(None, "hi")).unwrap();
+        let plain = message_from(self::entry(None, "hi"));
         assert!(!plain.edited);
         assert_eq!(plain.reactions, []);
     }
 
     fn reacted(reactions: &[(&str, &[&str])]) -> Message {
-        let mut message = message_from(entry(None, "hi")).unwrap();
+        let mut message = message_from(entry(None, "hi"));
         message.reactions = reactions
             .iter()
             .map(|(emoji, users)| Reaction {
@@ -786,7 +812,7 @@ mod tests {
                 image: None,
             },
         ];
-        let message = message_from(entry).unwrap();
+        let message = message_from(entry);
         assert_eq!(
             message.attachments,
             [
@@ -815,7 +841,7 @@ mod tests {
     // MSG-001, MSG-003
     #[test]
     fn maps_a_text_message() {
-        let message = message_from(entry(None, "hello")).unwrap();
+        let message = message_from(entry(None, "hello"));
         assert_eq!(message.id.as_str(), "m1");
         assert_eq!(message.room_id.as_str(), "r1");
         assert_eq!(message.ts.to_string(), "2026-10-20T14:12:48.587Z");
@@ -833,7 +859,7 @@ mod tests {
         message.md = Some(vec![rc_api::md::Block::Paragraph(vec![
             rc_api::md::Inline::Bold(vec![rc_api::md::Inline::Text("hi".into())]),
         ])]);
-        let MessageKind::Text(body) = message_from(message).unwrap().kind else {
+        let MessageKind::Text(body) = message_from(message).kind else {
             panic!()
         };
         assert_eq!(body.text, "**hi**");
@@ -877,7 +903,7 @@ mod tests {
             quoted_links: vec![inner_link.into()],
         }];
 
-        let message = message_from(entry).unwrap();
+        let message = message_from(entry);
 
         let MessageKind::Text(body) = &message.kind else {
             panic!("not text");
@@ -905,7 +931,7 @@ mod tests {
     #[test]
     fn a_link_that_the_server_made_no_quote_of_stays_in_the_text() {
         let text = "[ ](http://elsewhere/channel/c?msg=x) hi";
-        let message = message_from(entry(None, text)).unwrap();
+        let message = message_from(entry(None, text));
         assert_eq!(message.kind, MessageKind::Text(RichText::plain(text)));
         assert_eq!(message.quotes, []);
     }
@@ -924,7 +950,7 @@ mod tests {
             quoted_links: Vec::new(),
         }];
 
-        let message = message_from(entry).unwrap();
+        let message = message_from(entry);
 
         assert_eq!(message.kind, MessageKind::Text(RichText::plain("")));
         assert_eq!(message.quotes[0].text, RichText::plain("x"));
@@ -933,7 +959,7 @@ mod tests {
     // RICH-001
     #[test]
     fn a_text_message_without_markdown_is_its_plain_text() {
-        let message = message_from(entry(None, "*hi*")).unwrap();
+        let message = message_from(entry(None, "*hi*"));
         assert_eq!(message.kind, MessageKind::Text(RichText::plain("*hi*")));
     }
 
@@ -965,7 +991,7 @@ mod tests {
                 },
             ),
         ] {
-            let message = message_from(entry(Some(code), text)).unwrap();
+            let message = message_from(entry(Some(code), text));
             assert_eq!(message.kind, MessageKind::System(event), "{code}");
         }
     }
@@ -973,7 +999,7 @@ mod tests {
     // MSG-005
     #[test]
     fn an_unknown_system_message_keeps_its_code() {
-        let message = message_from(entry(Some("room_changed_description"), "d")).unwrap();
+        let message = message_from(entry(Some("room_changed_description"), "d"));
         assert_eq!(
             message.kind,
             MessageKind::System(SystemEvent::Other("room_changed_description".into()))
@@ -995,7 +1021,7 @@ mod tests {
     // SEND-001
     #[test]
     fn server_messages_are_sent() {
-        let message = message_from(entry(None, "hello")).unwrap();
+        let message = message_from(entry(None, "hello"));
         assert_eq!(message.delivery, Delivery::Sent);
         assert!(!message.is_unsent());
         assert!(
@@ -1017,7 +1043,7 @@ mod tests {
     // RICH-002
     #[test]
     fn only_a_text_message_can_mention_the_user() {
-        let mut message = message_from(entry(None, "hello")).unwrap();
+        let mut message = message_from(entry(None, "hello"));
         message.kind = MessageKind::Text(RichText {
             text: "hi @me".into(),
             blocks: vec![crate::rich::Block::Paragraph(vec![
@@ -1032,11 +1058,41 @@ mod tests {
 
     // MSG-001
     #[test]
-    fn thread_replies_are_only_shown_when_sent_to_the_channel() {
+    fn thread_replies_are_only_shown_in_the_room_when_sent_to_the_channel() {
         let mut reply = entry(None, "in the thread");
         reply.thread_id = Some("parent".into());
-        assert!(message_from(reply.clone()).is_none());
+        let reply_in_thread = message_from(reply.clone());
+        assert!(!reply_in_thread.shows_in_room());
         reply.thread_shown = true;
-        assert!(message_from(reply).is_some());
+        assert!(message_from(reply).shows_in_room());
+        assert!(message_from(entry(None, "plain")).shows_in_room());
+    }
+
+    // ACT-004
+    #[test]
+    fn a_deleted_parent_is_the_removed_kind_of_system_message() {
+        assert!(message_from(entry(Some("rm"), "")).is_deleted_parent());
+        assert!(!message_from(entry(Some("uj"), "")).is_deleted_parent());
+        assert!(!message_from(entry(None, "hello")).is_deleted_parent());
+    }
+
+    // ACT-004
+    #[test]
+    fn a_reply_keeps_its_thread_and_a_parent_its_summary() {
+        let mut reply = entry(None, "in the thread");
+        reply.thread_id = Some("parent".into());
+        let reply = message_from(reply);
+        assert_eq!(reply.thread_id, Some("parent".to_owned().into()));
+        assert!(!reply.thread_shown);
+        let at: jiff::Timestamp = "2026-10-20T15:00:00Z".parse().unwrap();
+        let mut parent = entry(None, "parent");
+        parent.thread_replies = 3;
+        parent.thread_last_reply = Some(at);
+        let parent = message_from(parent);
+        assert_eq!(
+            (parent.thread_replies, parent.thread_last_reply),
+            (3, Some(at))
+        );
+        assert_eq!(parent.thread_id, None);
     }
 }
