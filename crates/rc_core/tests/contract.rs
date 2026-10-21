@@ -19,6 +19,7 @@ use rc_core::adapters::{DiskFileCache, MemoryStore, RestConnector};
 use rc_core::domain::{
     AvatarOwner, Delivery, Message, MessageId, MessageKind, Room, RoomId, RoomKind,
 };
+use rc_core::policy::{ActionError, MessageAction};
 use rc_core::ports::{CacheError, CacheKey, Connector, FileCache, SecretStore, ServerApi, Stored};
 use rc_core::rich::{Block, Emoji, Inline, Mention, TaskItem};
 use rc_core::rooms::RoomChange;
@@ -1362,4 +1363,118 @@ fn a_client_catches_up_with_edits_reactions_and_deletions_after_the_connection_w
                 .any(|m| m.id.as_str() == reacted.id && !m.reactions.is_empty())
     });
     drop(client);
+}
+
+/// A channel with the user, where the user (as themselves) and admin posted `texts` in turns
+/// (the user first), and the user logged in with the channel open and loaded.
+struct OwnMessages {
+    admin: Admin,
+    room: String,
+    /// The ids of the messages in `texts`' order.
+    ids: Vec<String>,
+    client: Client,
+    events: Receiver<Event>,
+    mirror: Vec<Message>,
+}
+
+fn open_channel_with_own_and_others(texts: &[&str]) -> OwnMessages {
+    let admin = Admin::login();
+    let user = admin.create_user();
+    let own = Admin::login_as(&user.username, &user.password);
+    let (room, _) = admin.create_channel(&[&user.username]);
+    let ids = texts
+        .iter()
+        .enumerate()
+        .map(|(n, text)| {
+            let poster = if n % 2 == 0 { &own } else { &admin };
+            poster.post_message(&room, text).id
+        })
+        .collect();
+    let (client, events) = logged_in(&user);
+    client.open_room(room.clone().into());
+    let mut mirror = Vec::new();
+    settle(&events, &mut mirror);
+    OwnMessages {
+        admin,
+        room,
+        ids,
+        client,
+        events,
+        mirror,
+    }
+}
+
+/// Follows the events like a frontend until the answer to `id` and returns its outcome.
+fn action_outcome(
+    events: &Receiver<Event>,
+    mirror: &mut Vec<Message>,
+    id: &str,
+) -> Result<(), ActionError> {
+    wait_for(events, |event| match event {
+        Event::Timeline(changes) => {
+            for change in changes {
+                change.apply(mirror);
+            }
+            None
+        }
+        Event::MessageAction {
+            id: answered,
+            outcome,
+            ..
+        } if answered.as_str() == id => Some(outcome.clone()),
+        _ => None,
+    })
+}
+
+// ACT-001
+#[test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+fn a_user_edits_their_own_message_and_it_shows_edited() {
+    let mut open = open_channel_with_own_and_others(&["mine", "theirs"]);
+    let id = open.ids[0].clone();
+
+    open.client.edit_message(id.clone().into(), "mine, edited");
+
+    let outcome = action_outcome(&open.events, &mut open.mirror, &id);
+    assert_eq!(outcome, Ok(()));
+    assert_eq!(texts(&open.mirror), ["mine, edited", "theirs"]);
+    assert!(open.mirror[0].edited);
+    assert!(!open.mirror[1].edited);
+    // The server's push of the same copy leaves it so.
+    open.admin.post_message(&open.room, "flush");
+    follow_until(&open.events, &mut open.mirror, |mirror| {
+        text_of(mirror, &id).is_some() && mirror.len() == 3
+    });
+    assert_eq!(texts(&open.mirror), ["mine, edited", "theirs", "flush"]);
+}
+
+// ACT-002
+#[test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+fn a_user_deletes_their_own_message_and_it_is_gone() {
+    let mut open = open_channel_with_own_and_others(&["mine", "theirs"]);
+    let id = open.ids[0].clone();
+
+    open.client.delete_message(id.clone().into());
+
+    let outcome = action_outcome(&open.events, &mut open.mirror, &id);
+    assert_eq!(outcome, Ok(()));
+    assert_eq!(texts(&open.mirror), ["theirs"]);
+}
+
+// ACT-001, ACT-002
+#[test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+fn the_message_of_somebody_else_is_refused_without_a_request_and_stays() {
+    let mut open = open_channel_with_own_and_others(&["mine", "theirs"]);
+    let id = open.ids[1].clone();
+
+    open.client.edit_message(id.clone().into(), "mine now");
+    let edit = action_outcome(&open.events, &mut open.mirror, &id);
+    open.client.delete_message(id.clone().into());
+    let delete = action_outcome(&open.events, &mut open.mirror, &id);
+
+    assert_eq!(edit, Err(ActionError::NotAllowed(MessageAction::Edit)));
+    assert_eq!(delete, Err(ActionError::NotAllowed(MessageAction::Delete)));
+    assert_eq!(texts(&open.mirror), ["mine", "theirs"]);
 }

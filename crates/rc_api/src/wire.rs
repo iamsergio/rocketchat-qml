@@ -13,8 +13,8 @@ use serde::{Deserialize, Deserializer};
 use crate::md;
 use crate::types::{
     Attachment, AttachmentImage, Author, AvatarOwner, Credentials, CustomEmoji, DdpEvent,
-    HistoryPage, LoginResult, Message, MessageChanges, Reaction, RoomType, ServerInfo,
-    ServerVersion, Subscription, User,
+    HistoryPage, LoginResult, Message, MessageChanges, MessageSettings, Reaction, RoomType,
+    ServerInfo, ServerVersion, Subscription, User,
 };
 
 #[derive(Deserialize)]
@@ -62,6 +62,20 @@ struct CustomEmojiEntry {
     #[serde(default)]
     aliases: Vec<String>,
     extension: String,
+}
+
+#[derive(Deserialize)]
+struct SettingsBody {
+    #[serde(default)]
+    settings: Vec<SettingEntry>,
+}
+
+#[derive(Deserialize)]
+struct SettingEntry {
+    #[serde(rename = "_id")]
+    id: String,
+    #[serde(default)]
+    value: serde_json::Value,
 }
 
 #[derive(Deserialize)]
@@ -471,6 +485,32 @@ pub(crate) fn parse_custom_emoji(bytes: &[u8]) -> Result<Vec<CustomEmoji>, serde
         .collect())
 }
 
+/// The answer of `settings.public` for the message settings. What is missing or not a boolean
+/// (a number of minutes) keeps its default.
+pub(crate) fn parse_message_settings(bytes: &[u8]) -> Result<MessageSettings, serde_json::Error> {
+    let body: SettingsBody = serde_json::from_slice(bytes)?;
+    let mut settings = MessageSettings::default();
+    for entry in body.settings {
+        let minutes = || entry.value.as_u64().and_then(|n| u32::try_from(n).ok());
+        match entry.id.as_str() {
+            "Message_AllowEditing" => {
+                settings.editing_allowed = entry.value.as_bool().unwrap_or(true);
+            }
+            "Message_AllowEditing_BlockEditInMinutes" => {
+                settings.edit_minutes = minutes().unwrap_or(0);
+            }
+            "Message_AllowDeleting" => {
+                settings.deleting_allowed = entry.value.as_bool().unwrap_or(true);
+            }
+            "Message_AllowDeleting_BlockDeleteInMinutes" => {
+                settings.delete_minutes = minutes().unwrap_or(0);
+            }
+            _ => {}
+        }
+    }
+    Ok(settings)
+}
+
 /// The time of each room's last message, by room id, for the rooms that have messages.
 pub(crate) fn parse_room_activity(
     bytes: &[u8],
@@ -746,6 +786,44 @@ mod tests {
     fn a_server_without_custom_emoji_lists_none() {
         let body = br#"{"emojis":{"update":[],"remove":[]},"success":true}"#;
         assert!(parse_custom_emoji(body).unwrap().is_empty());
+    }
+
+    // ACT-001, ACT-002
+    #[test]
+    fn reads_the_message_settings_of_the_server() {
+        let body = br#"{"settings":[
+            {"_id":"Message_AllowDeleting","value":false},
+            {"_id":"Message_AllowDeleting_BlockDeleteInMinutes","value":15},
+            {"_id":"Message_AllowEditing","value":true},
+            {"_id":"Message_AllowEditing_BlockEditInMinutes","value":5},
+            {"_id":"Something_Else","value":7}],"success":true}"#;
+        assert_eq!(
+            parse_message_settings(body).unwrap(),
+            MessageSettings {
+                editing_allowed: true,
+                edit_minutes: 5,
+                deleting_allowed: false,
+                delete_minutes: 15,
+            }
+        );
+    }
+
+    // ACT-001, ACT-002
+    #[test]
+    fn missing_or_odd_message_settings_have_their_defaults() {
+        let body = br#"{"settings":[
+            {"_id":"Message_AllowEditing","value":"yes"},
+            {"_id":"Message_AllowEditing_BlockEditInMinutes","value":-3},
+            {"_id":"Message_AllowDeleting_BlockDeleteInMinutes"}],"success":true}"#;
+        assert_eq!(
+            parse_message_settings(body).unwrap(),
+            MessageSettings::default()
+        );
+        let empty = br#"{"success":true}"#;
+        assert_eq!(
+            parse_message_settings(empty).unwrap(),
+            MessageSettings::default()
+        );
     }
 
     // RICH-001

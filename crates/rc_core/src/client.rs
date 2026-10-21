@@ -25,6 +25,7 @@ use crate::domain::{
 use crate::emoji::CustomEmojis;
 use crate::error::Error;
 use crate::images::{self, ImageUpdate, Images, images_of};
+use crate::policy::{ActionError, MessageAction, MessagePolicy};
 use crate::ports::{
     ApiError, CacheError, CacheKey, Changes, Connector, FileCache, MessageStore, Page, Pushed,
     Realtime, SecretStore, ServerApi, StoreError,
@@ -75,6 +76,17 @@ pub enum Event {
     /// The files to show as attachment images, for the images that got one. After a logout, the
     /// ones that go.
     Images(Vec<ImageUpdate>),
+    /// What the server lets users do with their own messages, whenever it changes. Logging out
+    /// resets it to the default (everything allowed), if it differed.
+    MessagePolicy(MessagePolicy),
+    /// How an edit or a deletion the frontend asked for ended. A refusal that needs no request
+    /// (not the user's message, past the time limit...) is answered at once. Nothing comes if the
+    /// session ends first.
+    MessageAction {
+        id: MessageId,
+        action: MessageAction,
+        outcome: Result<(), ActionError>,
+    },
 }
 
 /// Whether the session is live. The held rooms and messages stay on show while it is not.
@@ -103,6 +115,11 @@ enum Command {
         text: String,
     },
     RetryMessage(MessageId),
+    EditMessage {
+        id: MessageId,
+        text: String,
+    },
+    DeleteMessage(MessageId),
 }
 
 /// The core, as seen from a frontend: commands go in, events come out through the callback given
@@ -194,6 +211,8 @@ impl Client {
             rooms: RoomList::default(),
             emoji: CustomEmojis::default(),
             emoji_task: None,
+            policy: MessagePolicy::default(),
+            policy_task: None,
             cache: Arc::new(cache),
             avatars: Avatars::default(),
             avatar_tasks: JoinSet::new(),
@@ -269,6 +288,26 @@ impl Client {
     /// message of the open room.
     pub fn retry_message(&self, id: MessageId) {
         self.send(Command::RetryMessage(id));
+    }
+
+    /// Replaces the text of a message of the user's in the open room. The answer comes as
+    /// [`Event::MessageAction`]. The text is trimmed; a blank one is refused, and one that is the
+    /// message's text already succeeds without asking the server. Refused at once too if the
+    /// message isn't in the open room, isn't the user's, isn't sent, isn't text, or the server's
+    /// settings don't allow editing it (any more). Ignored unless logged in.
+    pub fn edit_message(&self, id: MessageId, text: &str) {
+        self.send(Command::EditMessage {
+            id,
+            text: text.to_owned(),
+        });
+    }
+
+    /// Deletes a message of the user's in the open room. The answer comes as
+    /// [`Event::MessageAction`], and the message leaves the room's messages with it. Refused at
+    /// once under the same conditions as [`edit_message`](Self::edit_message). Ignored unless
+    /// logged in.
+    pub fn delete_message(&self, id: MessageId) {
+        self.send(Command::DeleteMessage(id));
     }
 
     fn send(&self, command: Command) {
@@ -471,6 +510,13 @@ struct EmojiDone {
     outcome: Result<Vec<rc_api::CustomEmoji>, ApiError>,
 }
 
+/// A message settings fetch's answer.
+struct PolicyDone {
+    /// The sync cycle the fetch belongs to: the answer is stale if another has begun since.
+    cycle: u64,
+    outcome: Result<rc_api::MessageSettings, ApiError>,
+}
+
 /// What the realtime task tells the actor, in this order: the connection opens or fails, events
 /// follow, the connection ends.
 enum RealtimeDone {
@@ -538,11 +584,29 @@ struct MarkReadDone {
     outcome: Result<(), ApiError>,
 }
 
+/// What an edit or a deletion did on the server.
+enum Applied {
+    /// The message as the server stored it.
+    Edited(Box<Message>),
+    Deleted,
+}
+
+/// An edit's or a deletion's answer.
+struct ActionDone {
+    /// The login attempt the call belongs to: the answer is stale if the session has changed.
+    attempt: u64,
+    room: RoomId,
+    id: MessageId,
+    action: MessageAction,
+    outcome: Result<Applied, ApiError>,
+}
+
 /// What the tasks tell the actor.
 enum Done<A> {
     Login(LoginDone<A>),
     Rooms(RoomsDone),
     Emoji(EmojiDone),
+    Policy(PolicyDone),
     Avatar(AvatarDone),
     Image(ImageDone),
     Realtime(RealtimeReport),
@@ -554,6 +618,7 @@ enum Done<A> {
     Changes(ChangesDone),
     Send(SendDone),
     MarkRead(MarkReadDone),
+    Action(ActionDone),
 }
 
 /// A history fetch in flight.
@@ -636,6 +701,10 @@ struct Actor<C: Connector> {
     emoji: CustomEmojis,
     /// The custom emoji fetch of the current cycle, while it runs.
     emoji_task: Option<JoinHandle<()>>,
+    /// What the frontend was last told users may do with their messages.
+    policy: MessagePolicy,
+    /// The message settings fetch of the current cycle, while it runs.
+    policy_task: Option<JoinHandle<()>>,
     cache: Arc<dyn FileCache>,
     /// Which avatars are wanted, queued and shown.
     avatars: Avatars,
@@ -681,6 +750,7 @@ impl<C: Connector> Actor<C> {
                     Done::Login(done) => self.handle_login_done(done),
                     Done::Rooms(done) => self.handle_rooms_done(done),
                     Done::Emoji(done) => self.handle_emoji_done(done),
+                    Done::Policy(done) => self.handle_policy_done(done),
                     Done::Avatar(done) => self.handle_avatar_done(done),
                     Done::Image(done) => self.handle_image_done(done),
                     Done::Realtime(report) => self.handle_realtime_done(report),
@@ -689,6 +759,7 @@ impl<C: Connector> Actor<C> {
                     Done::Changes(done) => self.handle_changes_done(done),
                     Done::Send(done) => self.handle_send_done(done),
                     Done::MarkRead(done) => self.handle_mark_read_done(done),
+                    Done::Action(done) => self.handle_action_done(done),
                 },
             }
         }
@@ -723,6 +794,9 @@ impl<C: Connector> Actor<C> {
         if let Some(task) = self.emoji_task.take() {
             task.abort();
         }
+        if let Some(task) = self.policy_task.take() {
+            task.abort();
+        }
         self.abort_realtime_task();
         self.avatar_tasks.abort_all();
         self.image_tasks.abort_all();
@@ -751,6 +825,8 @@ impl<C: Connector> Actor<C> {
             Command::LoadOlder => self.load_older(),
             Command::SendMessage { room, text } => self.send_message(room, &text),
             Command::RetryMessage(id) => self.retry_message(&id),
+            Command::EditMessage { id, text } => self.edit_own_message(id, &text),
+            Command::DeleteMessage(id) => self.delete_own_message(id),
         }
     }
 
@@ -856,6 +932,7 @@ impl<C: Connector> Actor<C> {
             self.set_state(SessionState::LoggedOut { failure: None });
             self.clear_rooms();
             self.clear_emoji();
+            self.clear_policy();
             self.clear_avatars();
             self.clear_images();
             self.clear_timeline();
@@ -1222,6 +1299,7 @@ impl<C: Connector> Actor<C> {
                 .collect::<Vec<_>>(),
         );
         self.fetch_emoji();
+        self.fetch_policy();
         if self.realtime_open {
             self.succeeded_at = Some(Instant::now());
             self.set_connection(Connection::Connected);
@@ -1272,6 +1350,45 @@ impl<C: Connector> Actor<C> {
         if emoji != self.emoji {
             self.emoji = emoji.clone();
             (self.on_event)(Event::CustomEmoji(emoji));
+        }
+    }
+
+    /// Fetches what users may do with their messages in the current cycle. Until it comes, and if
+    /// it fails, the policy stays as it was: the server refuses what isn't allowed anyway.
+    fn fetch_policy(&mut self) {
+        let Some(session) = &self.session else {
+            return;
+        };
+        if let Some(task) = self.policy_task.take() {
+            task.abort();
+        }
+        let cycle = self.cycle;
+        let api = session.api.clone();
+        let credentials = session.credentials.clone();
+        let done = self.done_tx.clone();
+        self.policy_task = Some(tokio::spawn(async move {
+            let outcome = api.message_settings(&credentials).await;
+            // Fails only if the actor is gone.
+            let _ = done.send(Done::Policy(PolicyDone { cycle, outcome }));
+        }));
+    }
+
+    fn handle_policy_done(&mut self, done: PolicyDone) {
+        if done.cycle != self.cycle || !matches!(self.state, SessionState::LoggedIn(_)) {
+            tracing::debug!("answer of a stale message settings fetch dropped");
+            return;
+        }
+        self.policy_task = None;
+        match done.outcome {
+            Ok(settings) => {
+                let policy = MessagePolicy::from(settings);
+                if policy != self.policy {
+                    self.policy = policy;
+                    (self.on_event)(Event::MessagePolicy(policy));
+                }
+            }
+            // The rooms fetch of the cycle meets the same refusal and ends the session.
+            Err(error) => tracing::warn!(%error, "can't read the message settings"),
         }
     }
 
@@ -1423,6 +1540,17 @@ impl<C: Connector> Actor<C> {
         }
     }
 
+    /// Resets the message policy to the default and tells the frontend, unless it was that.
+    fn clear_policy(&mut self) {
+        if let Some(task) = self.policy_task.take() {
+            task.abort();
+        }
+        if self.policy != MessagePolicy::default() {
+            self.policy = MessagePolicy::default();
+            (self.on_event)(Event::MessagePolicy(MessagePolicy::default()));
+        }
+    }
+
     /// Fetches the newest messages of the open room again, after the connection was lost: what was
     /// said meanwhile was not pushed. The page joins what is held (see
     /// [`Timeline::merge_latest`]), and the messages pushed from now on wait for it. The edits and
@@ -1453,6 +1581,7 @@ impl<C: Connector> Actor<C> {
         });
         self.clear_rooms();
         self.clear_emoji();
+        self.clear_policy();
         self.clear_avatars();
         self.clear_images();
         self.clear_timeline();
@@ -1850,6 +1979,139 @@ impl<C: Connector> Actor<C> {
                         .into_iter()
                         .collect()
                 });
+            }
+        }
+    }
+
+    /// Answers an edit or a deletion the frontend asked for.
+    fn answer(&self, id: MessageId, action: MessageAction, outcome: Result<(), ActionError>) {
+        (self.on_event)(Event::MessageAction {
+            id,
+            action,
+            outcome,
+        });
+    }
+
+    /// The message of the open room, if it is one the user may change as `action` says. Answers
+    /// with a refusal otherwise.
+    fn changeable(&self, id: &MessageId, action: MessageAction) -> Option<&Message> {
+        let me = self.own_user()?;
+        let message = self
+            .open
+            .as_ref()
+            .and_then(|open| open.timeline.message(id))
+            .filter(|message| {
+                let now = jiff::Timestamp::now();
+                match action {
+                    MessageAction::Edit => self.policy.can_edit(message, &me.id, now),
+                    MessageAction::Delete => self.policy.can_delete(message, &me.id, now),
+                }
+            });
+        if message.is_none() {
+            tracing::debug!(message = %id, ?action, "refused: not a message the user can change");
+            self.answer(id.clone(), action, Err(ActionError::NotAllowed(action)));
+        }
+        message
+    }
+
+    fn edit_own_message(&mut self, id: MessageId, text: &str) {
+        let action = MessageAction::Edit;
+        if self.own_user().is_none() {
+            tracing::debug!("edit_message ignored: not logged in");
+            return;
+        }
+        let Some(message) = self.changeable(&id, action) else {
+            return;
+        };
+        let room = message.room_id.clone();
+        let text = text.trim();
+        if text.is_empty() {
+            self.answer(id, action, Err(ActionError::Empty));
+        } else if matches!(&message.kind, MessageKind::Text(held) if held.text == text) {
+            self.answer(id, action, Ok(()));
+        } else {
+            self.request_action(room, id, action, Some(text.to_owned()));
+        }
+    }
+
+    fn delete_own_message(&mut self, id: MessageId) {
+        let action = MessageAction::Delete;
+        if self.own_user().is_none() {
+            tracing::debug!("delete_message ignored: not logged in");
+            return;
+        }
+        if let Some(message) = self.changeable(&id, action) {
+            let room = message.room_id.clone();
+            self.request_action(room, id, action, None);
+        }
+    }
+
+    /// Edits the message to `text`, or deletes it without one, in a task that reports the outcome.
+    fn request_action(
+        &self,
+        room: RoomId,
+        id: MessageId,
+        action: MessageAction,
+        text: Option<String>,
+    ) {
+        let Some(session) = &self.session else {
+            return;
+        };
+        let api = session.api.clone();
+        let credentials = session.credentials.clone();
+        let attempt = self.attempt;
+        let done = self.done_tx.clone();
+        tokio::spawn(async move {
+            let outcome = match text {
+                Some(text) => api
+                    .edit_message(&credentials, &room, &id, &text)
+                    .await
+                    .map(|message| Applied::Edited(Box::new(message))),
+                None => api
+                    .delete_message(&credentials, &room, &id)
+                    .await
+                    .map(|()| Applied::Deleted),
+            };
+            // Fails only if the actor is gone.
+            let _ = done.send(Done::Action(ActionDone {
+                attempt,
+                room,
+                id,
+                action,
+                outcome,
+            }));
+        });
+    }
+
+    fn handle_action_done(&mut self, done: ActionDone) {
+        if done.attempt != self.attempt || !matches!(self.state, SessionState::LoggedIn(_)) {
+            tracing::debug!("answer of a stale message action dropped");
+            return;
+        }
+        match done.outcome {
+            Ok(Applied::Edited(message)) => {
+                // The push of the same copy follows, which changes nothing. A page that is on its
+                // way may predate the edit, so the copy joins it, as a sent message does.
+                if let Some(open) = self.open.as_mut().filter(|open| {
+                    open.timeline.room() == &done.room
+                        && open.fetch.as_ref().is_some_and(|fetch| !fetch.older)
+                }) {
+                    open.live.retain(|m| m.id != message.id);
+                    open.live.push((*message).clone());
+                }
+                self.change_timeline(&done.room, |timeline| {
+                    timeline.replace(*message).into_iter().collect()
+                });
+                self.answer(done.id, done.action, Ok(()));
+            }
+            Ok(Applied::Deleted) => {
+                self.delete_message(&done.room, &done.id);
+                self.answer(done.id, done.action, Ok(()));
+            }
+            Err(ApiError::Unauthorized) => self.expire_session(),
+            Err(error) => {
+                tracing::warn!(%error, message = %done.id, action = ?done.action, "refused");
+                self.answer(done.id, done.action, Err(ActionError::from(&error)));
             }
         }
     }

@@ -11,7 +11,7 @@ use serde_json::json;
 use crate::error::Error;
 use crate::types::{
     Credentials, CustomEmoji, Download, HistoryPage, LoginResult, Message, MessageChanges,
-    RoomType, ServerInfo, Subscription, User,
+    MessageSettings, RoomType, ServerInfo, Subscription, User,
 };
 use crate::wire;
 
@@ -203,6 +203,21 @@ impl RestSession {
     pub async fn custom_emoji(&self) -> Result<Vec<CustomEmoji>, Error> {
         let body = self.call(Method::GET, "api/v1/emoji-custom.list").await?;
         wire::parse_custom_emoji(&body).map_err(Error::Decode)
+    }
+
+    /// What the server allows users to do with their own messages (`GET /api/v1/settings.public`
+    /// for the four message settings). The settings are public, but the call carries the login
+    /// headers like the others.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Unauthorized`] if the token is expired or revoked, or any of the other errors.
+    pub async fn message_settings(&self) -> Result<MessageSettings, Error> {
+        let path = "api/v1/settings.public?_id=Message_AllowEditing,\
+            Message_AllowEditing_BlockEditInMinutes,Message_AllowDeleting,\
+            Message_AllowDeleting_BlockDeleteInMinutes";
+        let body = self.call(Method::GET, path).await?;
+        wire::parse_message_settings(&body).map_err(Error::Decode)
     }
 
     /// The etag of the user's own avatar (`GET /api/v1/users.info`), which says that they have
@@ -402,6 +417,41 @@ impl RestSession {
             },
             other => other,
         }
+    }
+
+    /// Replaces the text of a message (`POST /api/v1/chat.update`) and returns the message as the
+    /// server stored it, with `editedAt` set.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Unauthorized`] if the token is expired or revoked, [`Error::Server`] if the server
+    /// refuses the edit (not the user's message, editing not allowed, past the time limit...), or
+    /// any of the other errors.
+    pub async fn edit_message(
+        &self,
+        room_id: &str,
+        id: &str,
+        text: &str,
+    ) -> Result<Message, Error> {
+        let payload = json!({ "roomId": room_id, "msgId": id, "text": text });
+        let body = self
+            .call_json(Method::POST, "api/v1/chat.update", &payload)
+            .await?;
+        wire::parse_message(&body).map_err(Error::Decode)
+    }
+
+    /// Deletes a message (`POST /api/v1/chat.delete`).
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Unauthorized`] if the token is expired or revoked, [`Error::Server`] if the server
+    /// refuses the deletion (not the user's message, deleting not allowed, past the time limit...),
+    /// or any of the other errors.
+    pub async fn delete_message(&self, room_id: &str, id: &str) -> Result<(), Error> {
+        let payload = json!({ "roomId": room_id, "msgId": id });
+        self.call_json(Method::POST, "api/v1/chat.delete", &payload)
+            .await?;
+        Ok(())
     }
 
     /// The message with this id, or `None` if there is none or it can't be fetched.

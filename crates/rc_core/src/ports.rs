@@ -77,6 +77,16 @@ pub trait ServerApi: Clone + Send + Sync + 'static {
         credentials: &Credentials,
     ) -> impl Future<Output = Result<Vec<rc_api::CustomEmoji>, ApiError>> + Send;
 
+    /// What the server lets users do with their own messages.
+    ///
+    /// # Errors
+    ///
+    /// [`ApiError::Unauthorized`] if the credentials have expired or were revoked.
+    fn message_settings(
+        &self,
+        credentials: &Credentials,
+    ) -> impl Future<Output = Result<rc_api::MessageSettings, ApiError>> + Send;
+
     /// The avatar a user or room has uploaded: `None` if it has none, as the server draws one
     /// for those and the frontend shows initials instead. Asks the server whether there is one
     /// before downloading.
@@ -135,6 +145,33 @@ pub trait ServerApi: Clone + Send + Sync + 'static {
         id: &MessageId,
         text: &str,
     ) -> impl Future<Output = Result<Message, ApiError>> + Send;
+
+    /// Replaces the text of a message of the user's and returns it as the server stored it.
+    ///
+    /// # Errors
+    ///
+    /// [`ApiError::Unauthorized`] if the credentials have expired or were revoked,
+    /// [`ApiError::Server`] if the server refuses the edit.
+    fn edit_message(
+        &self,
+        credentials: &Credentials,
+        room: &RoomId,
+        id: &MessageId,
+        text: &str,
+    ) -> impl Future<Output = Result<Message, ApiError>> + Send;
+
+    /// Deletes a message of the user's.
+    ///
+    /// # Errors
+    ///
+    /// [`ApiError::Unauthorized`] if the credentials have expired or were revoked,
+    /// [`ApiError::Server`] if the server refuses the deletion.
+    fn delete_message(
+        &self,
+        credentials: &Credentials,
+        room: &RoomId,
+        id: &MessageId,
+    ) -> impl Future<Output = Result<(), ApiError>> + Send;
 
     /// Tells the server the user has seen everything in the room: it zeroes the room's unread and
     /// mention counts and pushes the changed subscription.

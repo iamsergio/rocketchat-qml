@@ -22,6 +22,6 @@ pub use ddp::{DdpClient, DdpEvents, SubscriptionId};
 pub use error::Error;
 pub use types::{
     Attachment, AttachmentImage, Author, AvatarOwner, Credentials, CustomEmoji, DdpEvent, Download,
-    HistoryPage, LoginResult, Message, MessageChanges, Reaction, RoomType, ServerInfo,
-    ServerVersion, Subscription, User,
+    HistoryPage, LoginResult, Message, MessageChanges, MessageSettings, Reaction, RoomType,
+    ServerInfo, ServerVersion, Subscription, User,
 };

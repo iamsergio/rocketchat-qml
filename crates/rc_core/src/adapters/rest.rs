@@ -67,6 +67,14 @@ impl ServerApi for RestApi {
         Ok(session.custom_emoji().await?)
     }
 
+    async fn message_settings(
+        &self,
+        credentials: &Credentials,
+    ) -> Result<rc_api::MessageSettings, ApiError> {
+        let session = self.client.session(api_credentials(credentials));
+        Ok(session.message_settings().await?)
+    }
+
     async fn avatar(
         &self,
         credentials: &Credentials,
@@ -138,6 +146,31 @@ impl ServerApi for RestApi {
             .await?;
         message_from(stored)
             .ok_or_else(|| ApiError::Unexpected("the server stored the message as a reply".into()))
+    }
+
+    async fn edit_message(
+        &self,
+        credentials: &Credentials,
+        room: &RoomId,
+        id: &MessageId,
+        text: &str,
+    ) -> Result<Message, ApiError> {
+        let session = self.client.session(api_credentials(credentials));
+        let stored = session
+            .edit_message(room.as_str(), id.as_str(), text)
+            .await?;
+        message_from(stored)
+            .ok_or_else(|| ApiError::Unexpected("the server stored the message as a reply".into()))
+    }
+
+    async fn delete_message(
+        &self,
+        credentials: &Credentials,
+        room: &RoomId,
+        id: &MessageId,
+    ) -> Result<(), ApiError> {
+        let session = self.client.session(api_credentials(credentials));
+        Ok(session.delete_message(room.as_str(), id.as_str()).await?)
     }
 
     async fn mark_read(&self, credentials: &Credentials, room: &RoomId) -> Result<(), ApiError> {

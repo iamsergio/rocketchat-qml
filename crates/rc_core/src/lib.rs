@@ -14,6 +14,7 @@ pub mod emoji;
 mod error;
 mod images;
 pub mod logging;
+pub mod policy;
 pub mod ports;
 mod random;
 pub mod rich;

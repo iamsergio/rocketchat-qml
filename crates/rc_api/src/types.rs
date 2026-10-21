@@ -183,6 +183,31 @@ pub struct CustomEmoji {
     pub extension: String,
 }
 
+/// What the server lets users do with their own messages: its public settings
+/// `Message_AllowEditing`, `Message_AllowDeleting` and the two `...BlockEditInMinutes` /
+/// `...BlockDeleteInMinutes` ones. A setting the server doesn't send, or sends in a form that
+/// isn't understood, has its default: allowed, no time limit.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MessageSettings {
+    pub editing_allowed: bool,
+    /// How long after sending a message can be edited. 0 is no limit.
+    pub edit_minutes: u32,
+    pub deleting_allowed: bool,
+    /// How long after sending a message can be deleted. 0 is no limit.
+    pub delete_minutes: u32,
+}
+
+impl Default for MessageSettings {
+    fn default() -> Self {
+        Self {
+            editing_allowed: true,
+            edit_minutes: 0,
+            deleting_allowed: true,
+            delete_minutes: 0,
+        }
+    }
+}
+
 /// One page of a room's history.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HistoryPage {
