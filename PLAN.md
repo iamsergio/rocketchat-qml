@@ -107,6 +107,20 @@ Done when: day-to-day use works. Edit, delete, react, threads, DMs, search and u
 - [ ] File upload with progress
 - [ ] Features ACT-001…ACT-009 tested
 
+## Multiple accounts
+
+Done when: you can be signed in to several servers at once, switch between them from a rail of servers, and see the unread counts of the ones in the background. Restarting resumes every account.
+
+One session actor per account under a thin accounts layer: the actor already holds exactly one session, so it barely changes. One account is on screen at a time.
+
+- [ ] `rc_core`: split `client.rs` into the handle and the account actor (its `impl` blocks by concern), and the actor tests into a harness plus one file per topic. No behaviour change
+- [ ] `rc_core`: one shared core (runtime, connector, file cache, store worker) separate from the account actor. Still one account
+- [ ] `rc_core`: the `SecretStore` port keeps a list of accounts (`AccountId`, server, user, token or none), with memory, file and keyring adapters (one keyring entry per account plus an index). The session stored by earlier builds is dropped: log in again
+- [ ] `rc_core`: accounts layer. Add, log in, remove; events tagged with the account; unread and mention totals per account; all accounts resumed at startup, independently; logging out removes the account; an expired one stays listed without a token, for a prefilled login; the same server and user can't be added twice. Two users on one server are fine
+- [ ] `rc_qt`: one cache per account and a current account that the existing view models show; an `Accounts` model; commands go to the current account
+- [ ] QML: mockup first, then a rail of servers with badges and an add button, the login page in add-account mode with Cancel, and a prefilled login for an expired account
+- [ ] Features ACCT-001…ACCT-007 tested. The second server in tests is the test server behind `rc_test_server::Proxy`
+
 ## Phase 6: Persistence and desktop integration
 
 Done when: the app starts instantly from cache (works offline read-only), shows desktop notifications, and has a settings page.
@@ -125,8 +139,7 @@ Done when: you can log in to servers that enforce 2FA or use SSO.
 - [ ] 2FA (TOTP and email code)
 - [ ] Personal access token login
 - [ ] OAuth/SSO login through the browser
-- [ ] Multiple server accounts
-- [ ] Features AUTH-006…AUTH-009 tested
+- [ ] Features AUTH-006…AUTH-008 tested
 
 ## Later
 
