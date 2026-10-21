@@ -1,0 +1,45 @@
+# Threads
+
+A thread is a message, its parent, and the replies to it. The parent gets a count and the time of the last reply; a reply carries the id of its parent and says whether the server also shows it in the channel. The app shows the open thread in a pane beside the room.
+
+## What the server does
+
+The contract tests (`crates/rc_api/tests/contract.rs`, `crates/rc_core/tests/contract.rs`) record it.
+
+- **Wire:** a parent has `tcount` (the number of replies) and `tlm` (the time of the last one); a reply has `tmid` (its parent) and `tshow` (also shown in the channel). `rc_api` reads them into `Message`'s `thread_replies`, `thread_last_reply`, `thread_id` and `thread_shown`.
+- **Reading:** `chat.getThreadMessages` gives a page of the replies, newest first and without the parent, with the `offset` to continue from and the `total`, which says when a page ends the thread. The channel's history lists the replies that were also sent to the channel, and none of the others.
+- **Sending:** `chat.sendMessage` with `tmid` and `tshow`. The first reply makes the message a parent. The server also stores a reply to a message of another room.
+- **Pushes:** a reply is pushed on `__my_messages__` like any message, shown in the channel or not. The parent is pushed again, before the reply, with its new count and last reply time.
+- **Deleting:** a deleted reply is announced only as a deleted message. The parent is not pushed: the server counts one less and leaves the time of the last reply alone, so the core does the same to the copies it holds. A parent deleted while it has replies is not removed, but pushed as a message of the removed kind (`rm`), which closes the thread.
+- **Catch-up:** `chat.syncMessages` lists changed and deleted replies, and the parent.
+
+## The core
+
+`Client::open_thread(parent)` shows the replies of a message of the open room beside it, one thread at a time.
+
+- **Which message:** a sent text message that the open room holds and that is not a reply itself. Anything else is logged at debug and ignored. So is the thread that is open already, unless its last load failed: then it tries again. Ignored unless logged in.
+- **The rows:** the parent first, then the replies, oldest first. The parent joins with the page that reaches the start, so older pages are plain prepends. Pages are asked by the number of replies held, with attempt ids like the room's, so stale answers are dropped.
+- **Events:** `ThreadTimeline` carries the changes and `ThreadStatus` the parent, the loading flags and the error, as `Timeline` and `TimelineStatus` do for the room. Opening resets the thread's list to nothing first.
+- **Pushes:** a pushed reply goes to the thread; one also sent to the channel goes to the room too. The parent's updates go to both.
+- **Actions:** edits, deletions, reactions, retries and quotes find a message in either timeline and apply to every one that holds it. A reply is sent only to the open thread (`send_message` with `thread`, which must be the open one) and shows as pending in the thread, and in the room if it also goes to the channel.
+- **Closing:** `close_thread` closes it, and it closes by itself with its room (another room is opened, or the room closes or leaves the list), on logout and when the parent goes. The newest replies are fetched again on every reconnect. Nothing of a thread is kept.
+
+## Qt side
+
+- **Models:** `MessageList` and the new `ThreadMessageList` are thin bridges over one `MessageMirror` (`message_mirror.rs`), which holds the messages newest first, the viewer, the avatars and the images, and has the roles, the application of a `TimelineChange` through `row_ops`, and the three setters. The calls that announce the changes are a macro (`message_model!`), because they name the bridge's own type (see CXX-QT.md). Both are singletons, as the emoji catalog is: qmllint can't resolve a list model that QML creates.
+- **Roles, on both:** `threadReplies` (the count, 0 unless it is a parent), `threadLastReply` (the time of day if it is today, else the heading of its day, empty without replies), `threadId` (the parent of a reply, else empty), `inThreadShown` (a reply also shown in the room), `canStartThread` (a sent text message that is not a reply: the rule of `open_thread`) and `threadParentText` (the parent's text on one line, if the model holds the parent, for the line above a reply in the room). The helpers are in `message_view.rs`.
+- **`Thread`:** a singleton view model like `Room`. Properties `parentId`, `isOpen` (not `open`, which is the command: a property and an invokable of one name clash in QML), `loading`, `loadingOlder`, `reachedStart`, `errorText` and `roomName`; invokables `open(messageId)`, `close()`, `loadOlder()`, `send(text, quotedId, alsoToChannel)`, `lastEditable()`, `messageText(id)` and `messageAuthor(id)`. What it shows is `thread_view.rs`, from the status and the room list (the name follows a rename).
+- **Hub and cache:** the cache mirrors the thread's messages and status next to the room's, so that a model or the view model created late catches up under the same lock. `ThreadTimeline` goes to `ThreadMessageList`, `ThreadStatus` (and any change of the room list or the room's status, which the name and the room to send to depend on) to `Thread`. Avatars, images and viewer changes go to both models. `messageText`, `messageAuthor` and the lookup of the newest editable message find a message in the thread too, so `Room.edit`, `remove`, `react` and `retry` work on a message in the pane, and their errors show in the room's one action-error bar.
+- **Sending:** `Thread.send` builds the reply from the cache (`outgoing_reply`: the open room, the open thread, the quote) and hands it to `send_message` with the thread and `alsoToChannel`. It returns whether there was anything to send, so the composer clears itself.
+
+## QML
+
+- **Pane:** `ThreadPane.qml`, in `RoomPage` after `RoomView`, `Theme.threadPaneWidth` wide, shown while `Thread.isOpen`, with a hairline at its left. The header has the title, `# room` and the close button; then the list (bottom to top like the room's, loading older replies at the top, with its busy indicators and error label) and a `Composer` with `forThread`. The window stays 900 wide by default, so the room is narrow beside the pane.
+- **Delegate:** `MessageDelegate` is the room's and the pane's, with `inThreadPane` set in the pane. Under the parent in the pane it draws the "N replies" divider. In the room:
+  - a parent with replies has a summary button under its text, files and reactions: the thread icon, "N replies" and "Last reply HH:MM". The core has no list of who replied, so there are no faces. While its thread is open the button is washed in `ownWash` and the row has the faint `ownTint`, with no edge, which means "about you";
+  - "Reply in thread" leads the menu of every message that `canStartThread`, also one that has replies;
+  - a reply also sent to the room has a faint line above its text, a corner arrow and "Replied in a thread: <start of the parent>". Clicking it opens the thread; the core ignores it if the room doesn't hold the parent.
+  None of the three is drawn in the pane. A long author name gives way to the time and the menu button (`maximumWidth: implicitWidth` with `fillWidth`; a `minimumWidth` of 0 did not shrink the row).
+- **Composer:** `forThread` picks the target of the reads (`Thread` or `Room`, as the `target` property) and of the send; edits still go to `Room`. The placeholder is "Reply in the thread". Under the text, inside the box, a check box "Also send to #room" is off by default and off again after each send, and when another thread opens. Escape with no edit or quote to cancel closes the thread. The pane takes the focus when it opens.
+- **Closing:** the close button, Escape in the composer, and opening another room (the core does it).
+- **Not done:** the faces of the repliers, a count of unread replies, and a notification for a reply in a thread the user doesn't have open. A reply to a message that has left the open room's window can't be opened from the room.
