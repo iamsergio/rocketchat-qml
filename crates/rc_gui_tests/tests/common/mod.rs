@@ -88,6 +88,27 @@ pub fn wait_for_message_after(admin: &Admin, channel_id: &str, before: &str) -> 
     }
 }
 
+/// Opens the menu of the message with its button and chooses the item at `action`.
+pub fn choose(gui: &Gui, message_id: &str, action: &str) {
+    gui.mouse_click(&message(message_id, message_row::MENU_BUTTON))
+        .unwrap();
+    gui.wait_until_visible(action, TIMEOUT).unwrap();
+    gui.mouse_click(action).unwrap();
+}
+
+/// Types `text` over what the composer holds and presses Enter.
+pub fn replace_text_and_press_enter(gui: &Gui, text: &str) {
+    gui.mouse_click(main_window::COMPOSER_FIELD).unwrap();
+    gui.set_text(main_window::COMPOSER_FIELD, text).unwrap();
+    gui.enter_key(main_window::COMPOSER_FIELD, Key::RETURN, Modifiers::NONE)
+        .unwrap();
+}
+
+/// Posts a message to the channel as `user` themselves, so that it is theirs to edit and delete.
+pub fn post_as(user: &TestUser, channel_id: &str, text: &str) -> Posted {
+    Admin::login_as(&user.username, &user.password).post_message(channel_id, text)
+}
+
 /// Logs in as `user` and waits until the row of the room with this id is there.
 pub fn log_in_and_wait_for_room(gui: &Gui, user: &TestUser, room_id: &str) {
     log_in_at_and_wait_for_room(gui, &server_url(), user, room_id);

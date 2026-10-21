@@ -40,8 +40,34 @@ pub mod main_window {
 
     /// Where the text to send is typed. Enter sends it, Shift+Enter starts a new line.
     pub const COMPOSER_FIELD: &str = "mainWindow/composerField";
-    /// Sends the text of the composer. Disabled while it is empty.
+    /// Sends the text of the composer, or saves it while a message is edited (the button then
+    /// says "Save"). Disabled while it is empty, and while a save is awaited.
     pub const COMPOSER_SEND: &str = "mainWindow/composerSend";
+    /// Above the composer while a message is edited.
+    pub const COMPOSER_EDIT_BAR: &str = "mainWindow/composerEditBar";
+    /// In the bar: stops editing and gives the composer back its draft.
+    pub const COMPOSER_EDIT_CANCEL: &str = "mainWindow/composerEditCancel";
+
+    /// Why the last edit or deletion failed. Visible only then.
+    pub const ROOM_ACTION_ERROR: &str = "mainWindow/roomActionError";
+    /// The reason, as its `text`.
+    pub const ROOM_ACTION_ERROR_TEXT: &str = "mainWindow/roomActionErrorText";
+    /// Hides the error.
+    pub const ROOM_ACTION_ERROR_DISMISS: &str = "mainWindow/roomActionErrorDismiss";
+
+    // The menu of a message and the confirmation of a deletion are popups, which hang off the
+    // window while they are open and not off the message. Only one is open at a time, so their
+    // items are addressed from the window.
+    /// An item of the open message menu: edits the message. Visible for the user's own messages.
+    pub const MESSAGE_EDIT_ACTION: &str = "mainWindow/msgEditAction";
+    /// An item of the open message menu: asks for a confirmation to delete the message.
+    pub const MESSAGE_DELETE_ACTION: &str = "mainWindow/msgDeleteAction";
+    /// The confirmation to delete a message: the question it asks, in its body.
+    pub const DELETE_DIALOG: &str = "mainWindow/deleteDialog";
+    /// In the confirmation: deletes the message.
+    pub const DELETE_CONFIRM: &str = "mainWindow/deleteConfirm";
+    /// In the confirmation: keeps the message.
+    pub const DELETE_CANCEL: &str = "mainWindow/deleteCancel";
 
     // The indicators of a message the server hasn't confirmed, for a test that can't know its id
     // (the client picks it). They exist only while a message is in that state, so the name alone
@@ -103,6 +129,9 @@ pub mod message_row {
     /// The chips of the reactions, visible if there are any. Each is a
     /// [`reaction`](super::reaction).
     pub const REACTIONS: &str = "msgReactions";
+    /// Opens the message's menu (edit, delete). Visible only for a message the user can change; it
+    /// is clear until the pointer is over the message, but a click gets to it all the same.
+    pub const MENU_BUTTON: &str = "msgMenuButton";
     /// Exists while the message is being sent.
     pub const PENDING: &str = "msgPending";
     /// Exists when the message couldn't be sent.
