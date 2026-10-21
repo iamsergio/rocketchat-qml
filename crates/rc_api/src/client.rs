@@ -510,6 +510,56 @@ impl RestSession {
         Ok(())
     }
 
+    /// Marks the room as unread for the user (`POST /api/v1/subscriptions.unread`): the server
+    /// sets the subscription's unread count to 1 and its alert flag, and pushes the change like
+    /// any other. A room without messages is refused.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Unauthorized`] if the token is expired or revoked, [`Error::Server`] if the server
+    /// refuses (no messages to mark unread...), or any of the other errors.
+    pub async fn mark_unread(&self, room_id: &str) -> Result<(), Error> {
+        let payload = json!({ "roomId": room_id });
+        self.call_json(Method::POST, "api/v1/subscriptions.unread", &payload)
+            .await?;
+        Ok(())
+    }
+
+    /// Marks the room as a favorite of the user, or takes it back (`POST /api/v1/rooms.favorite`).
+    /// The request says which of the two is wanted, so repeating it changes nothing.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Unauthorized`] if the token is expired or revoked, [`Error::Server`] if the user
+    /// has no subscription to the room, or any of the other errors.
+    pub async fn set_favorite(&self, room_id: &str, favorite: bool) -> Result<(), Error> {
+        let payload = json!({ "roomId": room_id, "favorite": favorite });
+        self.call_json(Method::POST, "api/v1/rooms.favorite", &payload)
+            .await?;
+        Ok(())
+    }
+
+    /// Leaves a channel or a private group (`POST /api/v1/channels.leave` or `groups.leave`,
+    /// depending on `kind`). The server removes the subscription and pushes that.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Unauthorized`] if the token is expired or revoked,
+    /// [`Error::UnsupportedRoomType`] for a direct message or any other kind of room,
+    /// [`Error::Server`] if the server refuses (the user is the room's last owner, is not in it
+    /// any more...), or any of the other errors.
+    pub async fn leave(&self, room_id: &str, kind: &RoomType) -> Result<(), Error> {
+        let path = match kind {
+            RoomType::Channel => "api/v1/channels.leave",
+            RoomType::Private => "api/v1/groups.leave",
+            RoomType::Direct => return Err(Error::UnsupportedRoomType("d".into())),
+            RoomType::Other(t) => return Err(Error::UnsupportedRoomType(t.clone())),
+        };
+        let payload = json!({ "roomId": room_id });
+        self.call_json(Method::POST, path, &payload).await?;
+        Ok(())
+    }
+
     /// Ends the session on the server (`POST /api/v1/logout`), which revokes the token. Servers
     /// answer with an empty body or with a JSON one; both are fine.
     ///

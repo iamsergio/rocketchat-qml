@@ -103,6 +103,8 @@ struct SubscriptionBody {
     alert: bool,
     #[serde(default)]
     open: bool,
+    #[serde(default)]
+    f: bool,
     /// When the user joined.
     #[serde(default, deserialize_with = "optional_timestamp")]
     ts: Option<jiff::Timestamp>,
@@ -403,6 +405,7 @@ impl From<SubscriptionBody> for Subscription {
             group_mentions: body.group_mentions,
             alert: body.alert,
             open: body.open,
+            favorite: body.f,
             created: body.ts,
             last_message: None,
             avatar_etag: None,
@@ -1395,11 +1398,37 @@ mod tests {
                 group_mentions: 0,
                 alert: false,
                 open: false,
+                favorite: false,
                 created: None,
                 last_message: None,
                 avatar_etag: None,
             }]
         );
+    }
+
+    // ROOM-006
+    #[test]
+    fn a_subscription_says_whether_it_is_a_favorite() {
+        let rooms = parse_subscriptions(
+            br#"{"update":[{"rid":"a","t":"c","f":true},{"rid":"b","t":"c","f":false},
+            {"rid":"c","t":"c"}]}"#,
+        )
+        .unwrap();
+        let favorites: Vec<_> = rooms.iter().map(|r| r.favorite).collect();
+        assert_eq!(favorites, [true, false, false]);
+    }
+
+    // ROOM-006
+    #[test]
+    fn a_pushed_subscription_says_whether_it_is_a_favorite() {
+        let fixture =
+            DDP_SUBSCRIPTION_UPDATED.replacen(r#""open": true,"#, r#""open": true, "f": true,"#, 1);
+        let favorite = |fixture: &str| match stream_event("stream-notify-user", fixture).unwrap() {
+            Some(DdpEvent::SubscriptionChanged(subscription)) => subscription.favorite,
+            other => panic!("{other:?}"),
+        };
+        assert!(favorite(&fixture));
+        assert!(!favorite(DDP_SUBSCRIPTION_UPDATED));
     }
 
     // RICH-004

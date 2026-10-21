@@ -83,6 +83,8 @@ pub struct Subscription {
     pub group_mentions: u32,
     pub alert: bool,
     pub open: bool,
+    /// Whether the user marked the room as a favorite (`f`; absent for a room never favorited).
+    pub favorite: bool,
     /// When the user joined the room.
     pub created: Option<jiff::Timestamp>,
     /// The time of the room's last message. Only [`RestSession::subscriptions`] fills it in, from

@@ -23,7 +23,7 @@ use rc_core::emoji::{CustomEmojis, catalog};
 use rc_core::policy::{ActionError, MessageAction};
 use rc_core::ports::{CacheError, CacheKey, Connector, FileCache, SecretStore, ServerApi, Stored};
 use rc_core::rich::{Block, Emoji, Inline, Mention, TaskItem};
-use rc_core::rooms::RoomChange;
+use rc_core::rooms::{RoomAction, RoomActionError, RoomChange};
 use rc_core::session::{LoginFailure, SessionState};
 use rc_core::timeline::{PAGE_SIZE, TimelineChange, TimelineStatus};
 use rc_core::{Client, Event};
@@ -839,6 +839,234 @@ fn a_message_in_the_open_room_stays_read() {
         assert!(Instant::now() < deadline, "the server still counts unread");
         std::thread::sleep(Duration::from_millis(200));
     }
+}
+
+/// The outcome of the next command on the room `id` that the client reports.
+fn room_action_outcome(events: &Receiver<Event>, id: &str) -> Result<(), RoomActionError> {
+    wait_for(events, |event| match event {
+        Event::RoomAction { room, outcome, .. } if room.as_str() == id => Some(outcome.clone()),
+        _ => None,
+    })
+}
+
+/// Whether a freshly logged-in client of `user` lists the room `id`.
+fn lists_room(user: &TestUser, id: &str) -> bool {
+    let (client, events) = start();
+    client.login(&server_url(), &user.username, password(user));
+    assert!(matches!(outcome(&events), SessionState::LoggedIn(_)));
+    wait_for(&events, |event| {
+        let Event::Rooms(changes) = event else {
+            return None;
+        };
+        changes.iter().find_map(|change| match change {
+            RoomChange::Reset(rooms) => Some(rooms.iter().any(|room| room.id.as_str() == id)),
+            _ => None,
+        })
+    })
+}
+
+/// Waits until a freshly logged-in client of `user` lists the room `id` as `wanted` says. Fails if
+/// that takes too long: the server's counts can lag a little behind.
+fn wait_for_listed(user: &TestUser, id: &str, wanted: impl Fn(&Room) -> bool) {
+    let deadline = Instant::now() + TIMEOUT;
+    while !wanted(&listed_room(user, id)) {
+        assert!(Instant::now() < deadline, "the server never listed it so");
+        std::thread::sleep(Duration::from_millis(200));
+    }
+}
+
+// ROOM-006
+#[test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+fn a_favorite_is_kept_by_the_server_and_moves_the_room_to_the_top() {
+    let admin = Admin::login();
+    let user = admin.create_user();
+    let (first, _) = admin.create_channel(&[&user.username]);
+    let (second, _) = admin.create_channel(&[&user.username]);
+    admin.post_message(&first, "newer");
+    let (client, events) = logged_in(&user);
+
+    client.set_favorite(second.clone().into(), true);
+
+    assert_eq!(room_action_outcome(&events, &second), Ok(()));
+    wait_for_listed(&user, &second, |room| room.favorite);
+    assert!(!listed_room(&user, &first).favorite);
+
+    client.set_favorite(second.clone().into(), false);
+
+    assert_eq!(room_action_outcome(&events, &second), Ok(()));
+    wait_for_listed(&user, &second, |room| !room.favorite);
+}
+
+// ROOM-006
+#[test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+fn a_favorite_set_by_another_client_arrives_live() {
+    let admin = Admin::login();
+    let user = admin.create_user();
+    let (id, _) = admin.create_channel(&[&user.username]);
+    let (client, events) = logged_in(&user);
+
+    Admin::login_as(&user.username, &user.password).set_favorite(&id, true);
+    let room = wait_for(&events, |event| {
+        room_changed(event, |room| room.id.as_str() == id && room.favorite)
+    });
+    assert!(room.favorite);
+
+    Admin::login_as(&user.username, &user.password).set_favorite(&id, false);
+    wait_for(&events, |event| {
+        room_changed(event, |room| room.id.as_str() == id && !room.favorite)
+    });
+    drop(client);
+}
+
+// ROOM-006
+#[test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+fn a_favorite_of_a_room_that_left_the_list_is_refused_at_once() {
+    let admin = Admin::login();
+    let user = admin.create_user();
+    let (id, _) = admin.create_channel(&[&user.username]);
+    let (client, events) = logged_in(&user);
+    // The room leaves the list: the command is refused before asking the server.
+    admin.kick(&id, &user.id);
+    wait_for(&events, |event| match event {
+        Event::Rooms(changes) => changes
+            .iter()
+            .any(|change| matches!(change, RoomChange::Removed { .. }))
+            .then_some(()),
+        _ => None,
+    });
+
+    client.set_favorite(id.clone().into(), true);
+
+    assert_eq!(
+        room_action_outcome(&events, &id),
+        Err(RoomActionError::NotAllowed(RoomAction::Favorite))
+    );
+}
+
+// ROOM-007
+#[test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+fn marking_a_room_read_and_unread_is_kept_by_the_server() {
+    let admin = Admin::login();
+    let user = admin.create_user();
+    let dm = admin.create_dm(&user.username);
+    admin.post_message(&dm, "one");
+    admin.post_message(&dm, "two");
+    let (client, events) = logged_in(&user);
+    assert_eq!(listed_room(&user, &dm).unread, 2);
+
+    client.mark_read(dm.clone().into());
+
+    assert_eq!(room_action_outcome(&events, &dm), Ok(()));
+    wait_for_listed(&user, &dm, |room| !room.has_unread());
+
+    client.mark_unread(dm.clone().into());
+
+    assert_eq!(room_action_outcome(&events, &dm), Ok(()));
+    // The server counts one unread message and raises the alert.
+    wait_for_listed(&user, &dm, |room| room.unread == 1 && room.alert);
+    // Its push of the same change leaves the room as it is.
+    admin.post_message(&dm, "three");
+    let room = wait_for(&events, |event| {
+        room_changed(event, |room| room.id.as_str() == dm && room.unread == 2)
+    });
+    assert!(room.alert);
+}
+
+// ROOM-007
+#[test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+fn marking_a_room_without_messages_unread_is_refused_with_the_servers_text() {
+    let admin = Admin::login();
+    let user = admin.create_user();
+    let (id, _) = admin.create_channel(&[&user.username]);
+    let (client, events) = logged_in(&user);
+
+    client.mark_unread(id.clone().into());
+
+    assert_eq!(
+        room_action_outcome(&events, &id),
+        Err(RoomActionError::Server(
+            "the server answered 400: There are no messages to mark unread \
+             [error-no-message-for-unread]"
+                .to_owned()
+        ))
+    );
+}
+
+// ROOM-007
+#[test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+fn leaving_a_channel_and_a_group_removes_them_from_the_list_and_from_the_server() {
+    let admin = Admin::login();
+    let user = admin.create_user();
+    let (channel, _) = admin.create_channel(&[&user.username]);
+    let (group, _) = admin.create_group(&[&user.username]);
+    let (kept, _) = admin.create_channel(&[&user.username]);
+    let (client, events) = logged_in(&user);
+
+    for id in [&channel, &group] {
+        client.leave_room(id.clone().into());
+        assert_eq!(room_action_outcome(&events, id), Ok(()));
+    }
+
+    assert!(!lists_room(&user, &channel));
+    assert!(!lists_room(&user, &group));
+    assert!(lists_room(&user, &kept));
+}
+
+// ROOM-007
+#[test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+fn leaving_the_open_room_closes_it() {
+    let admin = Admin::login();
+    let user = admin.create_user();
+    let (id, _) = admin.create_channel(&[&user.username]);
+    admin.post_message(&id, "hello");
+    let (client, events) = logged_in(&user);
+    client.open_room(id.clone().into());
+    settle(&events, &mut Vec::new());
+
+    client.leave_room(id.clone().into());
+
+    wait_for(&events, |event| match event {
+        Event::Timeline(changes) => changes
+            .iter()
+            .any(|change| matches!(change, TimelineChange::Reset { room: None, .. }))
+            .then_some(()),
+        _ => None,
+    });
+    assert_eq!(room_action_outcome(&events, &id), Ok(()));
+}
+
+// ROOM-007
+#[test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+fn the_last_owner_cannot_leave_and_the_room_stays() {
+    let admin = Admin::login();
+    let user = admin.create_user();
+    // The user creates the room, so is its only owner.
+    let owner = Admin::login_as(&user.username, &user.password);
+    let (group, _) = owner.create_group(&[]);
+    let (channel, _) = owner.create_channel(&[]);
+    let (client, events) = logged_in(&user);
+
+    // The text is shown to the user as the server words it.
+    let refusal = RoomActionError::Server(
+        "the server answered 400: You are the last owner. Please set new owner before leaving \
+         the room. [error-you-are-last-owner]"
+            .to_owned(),
+    );
+    for id in [&group, &channel] {
+        client.leave_room(id.clone().into());
+        assert_eq!(room_action_outcome(&events, id), Err(refusal.clone()));
+    }
+
+    assert!(lists_room(&user, &group));
+    assert!(lists_room(&user, &channel));
 }
 
 /// Where the rooms `ids` stand in the list `mirror`, in the order `mirror` has them.

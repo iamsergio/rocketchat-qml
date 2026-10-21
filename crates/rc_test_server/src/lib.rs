@@ -260,7 +260,8 @@ impl Admin {
         (json["channel"]["_id"].as_str().unwrap().to_owned(), name)
     }
 
-    /// A new private group with `members`. Returns its id and name.
+    /// A new private group with `members`. Returns its id and name. Its creator, the user this
+    /// `Admin` is logged in as, is its owner, and the only one.
     ///
     /// # Panics
     ///
@@ -420,6 +421,18 @@ impl Admin {
         self.post(
             "channels.setTopic",
             &json!({ "roomId": room_id, "topic": topic }),
+        );
+    }
+
+    /// Marks the room as a favorite of the user this `Admin` is logged in as, or takes it back.
+    ///
+    /// # Panics
+    ///
+    /// If the server refuses.
+    pub fn set_favorite(&self, room_id: &str, favorite: bool) {
+        self.post(
+            "rooms.favorite",
+            &json!({ "roomId": room_id, "favorite": favorite }),
         );
     }
 
