@@ -2,7 +2,7 @@
   SPDX-FileCopyrightText: 2026 Sergio Martins
   SPDX-License-Identifier: MIT
 -->
-<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="#555555" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="#ffffff" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
   <circle cx="8" cy="8" r="2.5"/>
   <path d="M10.5 5.5v3.5a1.75 1.75 0 0 0 3.5 0V8a6 6 0 1 0-2.4 4.8"/>
 </svg>

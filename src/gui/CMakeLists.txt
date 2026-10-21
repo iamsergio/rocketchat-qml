@@ -24,16 +24,26 @@ qt_add_qml_module(
   Main.qml
   Composer.qml
   EmojiPicker.qml
+  FieldLabel.qml
+  FlatButton.qml
+  Icon.qml
+  InputField.qml
   LoginPage.qml
   MessageDelegate.qml
+  PrimaryButton.qml
   RoomDelegate.qml
   RoomPage.qml
   RoomView.qml
   StartupPage.qml
   Theme.qml
+  VersionLabel.qml
   RESOURCES
+  fonts/InstrumentSans.ttf
+  fonts/InstrumentSans-Italic.ttf
   icons/channel.svg
   icons/direct.svg
+  icons/file.svg
+  icons/logout.svg
   icons/private.svg
   IMPORT_PATH
   ${rc_qt_export_dir}/qml_modules)

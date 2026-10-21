@@ -4,7 +4,7 @@
 pragma ComponentBehavior: Bound
 
 import QtQuick
-import QtQuick.Controls
+import QtQuick.Controls.Basic
 import QtQuick.Layouts
 import RocketChat.Bridge
 
@@ -25,13 +25,20 @@ Popup {
     parent: Overlay.overlay
     width: Theme.emojiPickerWidth
 
+    background: Rectangle {
+        border.color: Theme.raisedHover
+        border.width: Theme.borderWidth
+        color: Theme.raised
+        radius: Theme.radiusPanel
+    }
+
     onAboutToShow: search.clear()
     onOpened: search.forceActiveFocus()
 
     contentItem: ColumnLayout {
         spacing: Theme.spacingL
 
-        TextField {
+        InputField {
             id: search
 
             objectName: "emojiSearch"
@@ -97,9 +104,8 @@ Popup {
 
                 Rectangle {
                     anchors.fill: parent
-                    color: root.palette.highlight
-                    opacity: Theme.highlightOpacity
-                    radius: Theme.radiusSmall
+                    color: Theme.ownWash
+                    radius: Theme.radiusControl
                     visible: area.containsMouse
                 }
 

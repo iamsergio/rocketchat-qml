@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import QtQuick
-import QtQuick.Controls
+import QtQuick.Controls.Basic
 import QtQuick.Layouts
 import RocketChat.Bridge
 
@@ -16,7 +16,7 @@ import RocketChat.Bridge
 // And it quotes a message: beginQuote() shows a bar above the field with the author and the text of
 // the message, and Enter sends the text as a reply to it. Escape or the bar's button drops the
 // quote, and so does opening another room. Quoting and editing exclude each other.
-ColumnLayout {
+Rectangle {
     id: root
 
     // The message being edited, or empty when the box writes a new message.
@@ -33,7 +33,11 @@ ColumnLayout {
     property string quotedText: ""
     readonly property bool quoting: quotingId !== ""
 
-    spacing: Theme.spacingS
+    border.color: field.activeFocus ? Theme.ownBorder : Theme.raisedHover
+    border.width: Theme.borderWidth
+    color: Theme.raised
+    implicitHeight: column.implicitHeight + 2 * Theme.borderWidth
+    radius: Theme.radiusPanel
 
     function send() {
         if (Room.send(field.text, quotingId)) {
@@ -126,112 +130,174 @@ ColumnLayout {
         }
     }
 
-    RowLayout {
-        objectName: "composerQuoteBar"
-        // A layout with a child that fills the height would otherwise take the room's spare height.
-        Layout.fillHeight: false
-        Layout.fillWidth: true
-        visible: root.quoting
-        spacing: Theme.spacingL
+    // Inside the border.
+    ColumnLayout {
+        id: column
 
-        Rectangle {
-            Layout.fillHeight: true
-            color: root.palette.mid
-            implicitWidth: Theme.accentBarWidth
+        anchors.fill: parent
+        anchors.margins: Theme.borderWidth
+        spacing: Theme.spacingNone
+
+        // The bars above the field, each over a hairline.
+        ColumnLayout {
+            objectName: "composerQuoteBar"
+            Layout.fillWidth: true
+            spacing: Theme.spacingNone
+            visible: root.quoting
+
+            RowLayout {
+                // A layout with a child that fills the height would otherwise take the room's spare
+                // height.
+                Layout.fillHeight: false
+                Layout.fillWidth: true
+                Layout.bottomMargin: Theme.spacingL
+                Layout.leftMargin: Theme.composerPaddingH
+                Layout.rightMargin: Theme.spacingXL
+                Layout.topMargin: Theme.spacingL
+                spacing: Theme.spacingXL
+
+                Rectangle {
+                    Layout.fillHeight: true
+                    color: Theme.own
+                    implicitWidth: Theme.quoteBarWidth
+                    radius: Theme.quoteBarWidth
+                }
+
+                ColumnLayout {
+                    Layout.fillWidth: true
+                    spacing: Theme.spacingXXS
+
+                    Label {
+                        objectName: "composerQuoteAuthor"
+                        font.pointSize: Theme.fontSizeSmall
+                        font.weight: Theme.fontWeightSemibold
+                        text: root.quotedAuthor
+                        textFormat: Text.PlainText
+                    }
+
+                    Label {
+                        objectName: "composerQuoteText"
+                        Layout.fillWidth: true
+                        color: Theme.textMuted
+                        elide: Text.ElideRight
+                        font.pointSize: Theme.fontSizeSmall
+                        maximumLineCount: 1
+                        text: root.quotedText
+                        textFormat: Text.PlainText
+                    }
+                }
+
+                FlatButton {
+                    objectName: "composerQuoteCancel"
+                    text: qsTr("Cancel")
+                    onClicked: root.endQuote()
+                }
+            }
+
+            Rectangle {
+                Layout.fillWidth: true
+                color: Theme.raisedHover
+                implicitHeight: Theme.separatorWidth
+            }
         }
 
         ColumnLayout {
+            objectName: "composerEditBar"
             Layout.fillWidth: true
-            spacing: Theme.spacingXXS
+            spacing: Theme.spacingNone
+            visible: root.editing
 
-            Label {
-                objectName: "composerQuoteAuthor"
-                font.bold: true
-                text: root.quotedAuthor
-                textFormat: Text.PlainText
-            }
-
-            Label {
-                objectName: "composerQuoteText"
+            RowLayout {
                 Layout.fillWidth: true
-                color: root.palette.placeholderText
-                elide: Text.ElideRight
-                maximumLineCount: 1
-                text: root.quotedText
-                textFormat: Text.PlainText
+                Layout.bottomMargin: Theme.spacingL
+                Layout.leftMargin: Theme.composerPaddingH
+                Layout.rightMargin: Theme.spacingXL
+                Layout.topMargin: Theme.spacingL
+                spacing: Theme.spacingXL
+
+                Rectangle {
+                    Layout.fillHeight: true
+                    color: Theme.own
+                    implicitWidth: Theme.quoteBarWidth
+                    radius: Theme.quoteBarWidth
+                }
+
+                Label {
+                    Layout.fillWidth: true
+                    color: Theme.textMuted
+                    font.pointSize: Theme.fontSizeSmall
+                    text: qsTr("Editing message")
+                }
+
+                FlatButton {
+                    objectName: "composerEditCancel"
+                    text: qsTr("Cancel")
+                    onClicked: root.endEdit()
+                }
+            }
+
+            Rectangle {
+                Layout.fillWidth: true
+                color: Theme.raisedHover
+                implicitHeight: Theme.separatorWidth
             }
         }
 
-        ToolButton {
-            objectName: "composerQuoteCancel"
-            text: qsTr("Cancel")
-            onClicked: root.endQuote()
-        }
-    }
-
-    RowLayout {
-        objectName: "composerEditBar"
-        Layout.fillWidth: true
-        visible: root.editing
-        spacing: Theme.spacingL
-
-        Label {
+        RowLayout {
             Layout.fillWidth: true
-            color: root.palette.placeholderText
-            font.italic: true
-            text: qsTr("Editing message")
-        }
+            Layout.bottomMargin: Theme.spacingL
+            Layout.leftMargin: Theme.composerPaddingH
+            Layout.rightMargin: Theme.spacingL
+            Layout.topMargin: Theme.spacingL
+            spacing: Theme.spacingM
 
-        ToolButton {
-            objectName: "composerEditCancel"
-            text: qsTr("Cancel")
-            onClicked: root.endEdit()
-        }
-    }
+            ScrollView {
+                Layout.fillWidth: true
+                Layout.maximumHeight: Theme.composerMaxHeight
+                Layout.minimumHeight: Theme.composerFieldMinHeight
 
-    RowLayout {
-        Layout.fillWidth: true
-        spacing: Theme.spacingL
+                TextArea {
+                    id: field
 
-        ScrollView {
-            Layout.fillWidth: true
-            Layout.maximumHeight: Theme.composerMaxHeight
+                    objectName: "composerField"
+                    // The box draws the background and the border.
+                    background: null
+                    bottomPadding: Theme.textAreaPaddingV
+                    leftPadding: Theme.spacingNone
+                    placeholderText: qsTr("Message")
+                    readOnly: root.saving
+                    rightPadding: Theme.spacingNone
+                    topPadding: Theme.textAreaPaddingV
+                    wrapMode: TextEdit.Wrap
 
-            TextArea {
-                id: field
-
-                objectName: "composerField"
-                placeholderText: qsTr("Message")
-                readOnly: root.saving
-                wrapMode: TextEdit.Wrap
-
-                Keys.onPressed: event => {
-                    if ((event.key === Qt.Key_Return || event.key === Qt.Key_Enter) && !(event.modifiers & Qt.ShiftModifier)) {
-                        if (root.editing)
-                            root.save();
-                        else
-                            root.send();
-                        event.accepted = true;
-                    } else if (event.key === Qt.Key_Escape && root.editing) {
-                        root.endEdit();
-                        event.accepted = true;
-                    } else if (event.key === Qt.Key_Escape && root.quoting) {
-                        root.endQuote();
-                        event.accepted = true;
-                    } else if (event.key === Qt.Key_Up && !root.editing && field.length === 0) {
-                        root.editLast();
-                        event.accepted = true;
+                    Keys.onPressed: event => {
+                        if ((event.key === Qt.Key_Return || event.key === Qt.Key_Enter) && !(event.modifiers & Qt.ShiftModifier)) {
+                            if (root.editing)
+                                root.save();
+                            else
+                                root.send();
+                            event.accepted = true;
+                        } else if (event.key === Qt.Key_Escape && root.editing) {
+                            root.endEdit();
+                            event.accepted = true;
+                        } else if (event.key === Qt.Key_Escape && root.quoting) {
+                            root.endQuote();
+                            event.accepted = true;
+                        } else if (event.key === Qt.Key_Up && !root.editing && field.length === 0) {
+                            root.editLast();
+                            event.accepted = true;
+                        }
                     }
                 }
             }
-        }
 
-        Button {
-            objectName: "composerSend"
-            Layout.alignment: Qt.AlignBottom
-            text: root.editing ? qsTr("Save") : qsTr("Send")
-            enabled: field.length > 0 && !root.saving
-            onClicked: root.editing ? root.save() : root.send()
+            PrimaryButton {
+                objectName: "composerSend"
+                Layout.alignment: Qt.AlignBottom
+                text: root.editing ? qsTr("Save") : qsTr("Send")
+                enabled: field.length > 0 && !root.saving
+                onClicked: root.editing ? root.save() : root.send()
+            }
         }
     }
 }

@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: MIT
 
 #include <QCommandLineParser>
+#include <QFont>
+#include <QFontDatabase>
 #include <QGuiApplication>
 #include <QQmlApplicationEngine>
 #include <QStandardPaths>
@@ -24,6 +26,17 @@ int main(int argc, char *argv[])
     rc_qt::init_logging();
 
     QGuiApplication app(argc, argv);
+
+    // The UI font, bundled so the GUI looks the same everywhere. The point size stays the system's:
+    // Theme.fontSizeBase follows it.
+    for (const char *file : {"InstrumentSans.ttf", "InstrumentSans-Italic.ttf"}) {
+        if (QFontDatabase::addApplicationFont(QStringLiteral(":/qt/qml/rocketchat/fonts/") + QLatin1String(file)) < 0) {
+            qWarning("Can't load the bundled font %s", file);
+        }
+    }
+    QFont font = app.font();
+    font.setFamily(QStringLiteral("Instrument Sans"));
+    app.setFont(font);
 
     QCommandLineParser parser;
     parser.addHelpOption();

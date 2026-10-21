@@ -76,8 +76,8 @@ fn a_message_that_mentions_the_user_is_marked_and_others_are_not() {
 
     open_room(gui, &channel_id);
 
-    let html = html_containing(gui, &calling.id, "<b>@");
-    assert!(html.contains("rgba(255,152,0,0.55)"), "{html}");
+    let html = html_containing(gui, &calling.id, "class=\"mention-me\"");
+    assert!(html.contains("<span class=\"mention-me\">@"), "{html}");
     gui.wait_until_visible(&message(&calling.id, message_row::MENTIONS_ME), TIMEOUT)
         .unwrap();
     gui.wait_until_visible(&message(&everybody.id, message_row::MENTIONS_ME), TIMEOUT)

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import QtQuick
-import QtQuick.Controls
+import QtQuick.Controls.Basic
 import RocketChat.Bridge
 
 ApplicationWindow {
@@ -13,6 +13,35 @@ ApplicationWindow {
     height: Theme.windowHeight
     visible: true
     title: qsTr("RocketChatQml")
+    color: Theme.base
+    // Every control and label that doesn't set a size of its own takes it from here.
+    font.pointSize: Theme.fontSizeBase
+
+    // What the controls we don't restyle read: the menus, the dialogs, the scroll bars and the tool
+    // tips. `window` is the colour of popups, not of the window, which `color` above sets: the
+    // popups sit on top of it, so they are raised.
+    palette {
+        button: Theme.raised
+        buttonText: Theme.text
+        dark: Theme.raisedHover
+        highlight: Theme.own
+        highlightedText: Theme.textOnOwn
+        light: Theme.raisedHover
+        link: Theme.own
+        linkVisited: Theme.own
+        mid: Theme.raisedHover
+        midlight: Theme.raisedHover
+        placeholderText: Theme.textFaint
+        shadow: Theme.shadow
+        text: Theme.text
+        toolTipBase: Theme.raisedHover
+        toolTipText: Theme.text
+        window: Theme.raised
+        windowText: Theme.text
+        base: Theme.surface
+        alternateBase: Theme.surface
+        brightText: Theme.text
+    }
 
     // One page per session state. A Loader, so that a page starts empty each time it shows: the
     // login fields don't keep the password after a logout. While logging in the state is
@@ -30,20 +59,6 @@ ApplicationWindow {
             default:
                 return "LoginPage.qml";
             }
-        }
-    }
-
-    footer: ToolBar {
-        bottomPadding: Theme.toolBarPaddingV
-        leftPadding: Theme.toolBarPaddingH
-        rightPadding: Theme.toolBarPaddingH
-        topPadding: Theme.toolBarLinePadding
-
-        Label {
-            objectName: "versionLabel"
-            anchors.verticalCenter: parent.verticalCenter
-            leftPadding: Theme.spacingXXL
-            text: qsTr("Rocket.Chat %1").arg(AppInfo.version)
         }
     }
 }
