@@ -57,6 +57,11 @@ pub mod main_window {
     /// In the confirmation: stays in the room.
     pub const ROOM_LEAVE_CANCEL: &str = "mainWindow/roomLeaveCancel";
     pub const CURRENT_USER: &str = "mainWindow/currentUser";
+    /// Opens the settings menu, above it.
+    pub const SETTINGS_BUTTON: &str = "mainWindow/settingsButton";
+    /// An item of the open settings menu: logs what helps to diagnose problems (the DPI of the
+    /// screens for now) to stderr.
+    pub const DUMP_INFO_ACTION: &str = "mainWindow/dumpInfoAction";
     pub const LOGOUT_BUTTON: &str = "mainWindow/logoutButton";
     /// Shown while the realtime connection is down.
     pub const CONNECTION_BANNER: &str = "mainWindow/connectionBanner";
