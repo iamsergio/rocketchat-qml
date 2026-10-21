@@ -96,7 +96,7 @@ Done when: messages render formatting, mentions, emoji, avatars, images and reac
 
 Done when: day-to-day use works. Edit, delete, react, threads, DMs, search and uploads.
 
-- [ ] Edit and delete your own messages
+- [x] Edit and delete your own messages
 - [ ] Add and remove reactions (emoji picker)
 - [ ] Threads: open a thread panel, reply, see thread counts in the main timeline
 - [ ] Reply/quote a message

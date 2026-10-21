@@ -75,8 +75,8 @@ Every test carries a `// <ID>` comment. A feature can have tests at several leve
 
 | ID | Feature | Tests |
 |---|---|---|
-| ACT-001 | Edit own message | todo |
-| ACT-002 | Delete own message | todo |
+| ACT-001 | Edit own message | unit: `crates/rc_api/src/wire.rs`, `crates/rc_core/src/policy.rs`, `crates/rc_core/src/client/tests.rs`, `crates/rc_qt/src/cache.rs`, `crates/rc_qt/src/message_view.rs`, `crates/rc_qt/src/room_view.rs`; api: `crates/rc_api/tests/rest.rs`; contract: `crates/rc_api/tests/contract.rs`, `crates/rc_core/tests/contract.rs`; GUI: `crates/rc_gui_tests/tests/edit_delete.rs` |
+| ACT-002 | Delete own message | unit: `crates/rc_api/src/wire.rs`, `crates/rc_core/src/policy.rs`, `crates/rc_core/src/client/tests.rs`, `crates/rc_qt/src/cache.rs`, `crates/rc_qt/src/message_view.rs`, `crates/rc_qt/src/room_view.rs`; api: `crates/rc_api/tests/rest.rs`; contract: `crates/rc_api/tests/contract.rs`, `crates/rc_core/tests/contract.rs`; GUI: `crates/rc_gui_tests/tests/edit_delete.rs` |
 | ACT-003 | Add and remove reactions | todo |
 | ACT-004 | Threads: view and reply | todo |
 | ACT-005 | Reply/quote a message | todo |
