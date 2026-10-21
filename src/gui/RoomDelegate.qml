@@ -149,12 +149,6 @@ ItemDelegate {
             text: root.name
         }
 
-        Label {
-            objectName: "roomFavorite"
-            text: "\u2605"
-            visible: root.favorite
-        }
-
         // Mentions of the user.
         Rectangle {
             visible: root.userMentions > 0

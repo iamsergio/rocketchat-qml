@@ -148,8 +148,6 @@ pub mod room_row {
     pub const KIND_DIRECT: &str = "roomKind_direct";
     pub const UNREAD: &str = "roomUnread";
     pub const MENTIONS: &str = "roomMentions";
-    /// The star of a favorite: visible only for the user's favorites.
-    pub const FAVORITE: &str = "roomFavorite";
     /// The avatar, visible once its file has loaded: its `text` is the file URL.
     pub const AVATAR: &str = "roomAvatar";
     /// The initials on a colour, visible until the avatar has loaded, and always for a room
