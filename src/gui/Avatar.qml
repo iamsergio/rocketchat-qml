@@ -52,7 +52,12 @@ Item {
         anchors.fill: parent
         asynchronous: true
         fillMode: Image.PreserveAspectCrop
-        source: root.url
+        // Decode (and rasterise an SVG) at the size shown, in device pixels, not at the file's size.
+        // The item is 0x0 before the layout sets it, and a zero sourceSize means the natural size:
+        // so nothing is loaded until it has a size.
+        sourceSize.width: root.width * Screen.devicePixelRatio
+        sourceSize.height: root.height * Screen.devicePixelRatio
+        source: root.width && root.height ? root.url : ""
         visible: status === Image.Ready
         // The software scene graph (under the offscreen platform, for one) draws no layer
         // effects: there the corners stay square.
