@@ -5,6 +5,7 @@
 
 #![forbid(unsafe_code)]
 
+mod account;
 pub mod adapters;
 mod avatars;
 mod backoff;
@@ -21,6 +22,7 @@ mod random;
 pub mod rich;
 pub mod rooms;
 pub mod session;
+mod store_worker;
 pub mod timeline;
 
 pub use avatars::AvatarUpdate;
