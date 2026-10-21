@@ -22,7 +22,7 @@ use rc_core::domain::{AvatarOwner, MessageId, RoomId};
 use rc_core::emoji::CustomEmojis;
 use rc_core::policy::{ActionError, MessageAction};
 use rc_core::ports::SecretStore;
-use rc_core::rooms::RoomChange;
+use rc_core::rooms::{RoomActionError, RoomChange};
 use rc_core::timeline::TimelineChange;
 use rc_core::{Client, Event};
 use secrecy::SecretString;
@@ -235,6 +235,38 @@ pub fn react(message_id: String, emoji: &str, react: bool) {
     }
 }
 
+pub fn set_favorite(room_id: String, favorite: bool) {
+    if let Some(client) = &lock().client {
+        client.set_favorite(RoomId::from(room_id), favorite);
+    } else {
+        tracing::warn!("set_favorite ignored: the core isn't running");
+    }
+}
+
+pub fn mark_room_read(room_id: String) {
+    if let Some(client) = &lock().client {
+        client.mark_read(RoomId::from(room_id));
+    } else {
+        tracing::warn!("mark_read ignored: the core isn't running");
+    }
+}
+
+pub fn mark_room_unread(room_id: String) {
+    if let Some(client) = &lock().client {
+        client.mark_unread(RoomId::from(room_id));
+    } else {
+        tracing::warn!("mark_unread ignored: the core isn't running");
+    }
+}
+
+pub fn leave_room(room_id: String) {
+    if let Some(client) = &lock().client {
+        client.leave_room(RoomId::from(room_id));
+    } else {
+        tracing::warn!("leave_room ignored: the core isn't running");
+    }
+}
+
 pub fn delete_message(message_id: String) {
     if let Some(client) = &lock().client {
         client.delete_message(MessageId::from(message_id));
@@ -311,6 +343,7 @@ fn dispatch(event: Event) {
             action,
             outcome,
         } => answer_action(hub, id, action, outcome),
+        Event::RoomAction { outcome, .. } => answer_room_action(hub, outcome),
         Event::CustomEmoji(emoji) => {
             show_emoji(hub, &emoji);
             show_session(hub);
@@ -393,6 +426,19 @@ fn answer_action(
     if gone {
         tracing::debug!("the Room object is gone, unregistered");
         hub.room = None;
+    }
+}
+
+/// Tells the `RoomList` model how a command on a room ended.
+fn answer_room_action(hub: &mut Hub, outcome: Result<(), RoomActionError>) {
+    let gone = hub.rooms.as_ref().is_some_and(|thread| {
+        thread
+            .queue(move |model| model.finish_action(&outcome))
+            .is_err()
+    });
+    if gone {
+        tracing::debug!("the RoomList object is gone, unregistered");
+        hub.rooms = None;
     }
 }
 

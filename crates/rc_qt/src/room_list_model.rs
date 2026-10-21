@@ -12,6 +12,9 @@ pub mod qobject {
     }
 
     unsafe extern "C++" {
+        include!("cxx-qt-lib/qstring.h");
+        type QString = cxx_qt_lib::QString;
+
         include!("cxx-qt-lib/qhash.h");
         type QHash_i32_QByteArray = cxx_qt_lib::QHash<cxx_qt_lib::QHashPair_i32_QByteArray>;
 
@@ -31,7 +34,38 @@ pub mod qobject {
         #[qml_element = "RoomList"]
         #[qml_singleton]
         #[base = QAbstractListModel]
+        // Whether any room is a favorite: the list shows its sections only then.
+        #[qproperty(bool, has_favorites, cxx_name = "hasFavorites", READ, NOTIFY)]
+        // Why the last command on a room (a favorite, mark as read or unread, leaving) failed, to
+        // show until it is dismissed. Cleared by the next command and by `dismissRoomActionError`.
+        #[qproperty(QString, room_action_error, cxx_name = "roomActionError", READ, NOTIFY)]
         type RoomListModel = super::RoomListModelRust;
+
+        /// Marks the room as a favorite, or takes it back. The room moves in the list before the
+        /// answer comes; a failure is in `roomActionError`.
+        #[qinvokable]
+        #[cxx_name = "setFavorite"]
+        fn set_favorite(self: Pin<&mut RoomListModel>, room_id: &QString, favorite: bool);
+
+        /// Marks the room read, on the server and in the list.
+        #[qinvokable]
+        #[cxx_name = "markRead"]
+        fn mark_read(self: Pin<&mut RoomListModel>, room_id: &QString);
+
+        /// Marks the room unread. The open room is refused (it stays read while open), and so is
+        /// a room without messages.
+        #[qinvokable]
+        #[cxx_name = "markUnread"]
+        fn mark_unread(self: Pin<&mut RoomListModel>, room_id: &QString);
+
+        /// Leaves a channel or a private group. The row leaves the list when the server agrees.
+        #[qinvokable]
+        fn leave(self: Pin<&mut RoomListModel>, room_id: &QString);
+
+        /// Clears `roomActionError`.
+        #[qinvokable]
+        #[cxx_name = "dismissRoomActionError"]
+        fn dismiss_room_action_error(self: Pin<&mut RoomListModel>);
 
         #[qsignal]
         #[inherit]
@@ -145,11 +179,11 @@ use cxx_qt_lib::{
     QByteArray, QHash, QHashPair_i32_QByteArray, QModelIndex, QString, QVariant, QVector,
 };
 use rc_core::domain::{AvatarOwner, Room};
-use rc_core::rooms::RoomChange;
+use rc_core::rooms::{RoomActionError, RoomChange};
 
 use crate::avatar_view::{AvatarUrls, owners, room_placeholder, rows_using};
 use crate::hub;
-use crate::room_view::kind_name;
+use crate::room_view::{any_favorite, kind_name};
 use crate::row_ops::{RowOp, row_ops};
 
 use qobject::RoomListModel;
@@ -169,12 +203,17 @@ const ALERT_ROLE: i32 = 262;
 const AVATAR_ROLE: i32 = 263;
 const AVATAR_INITIALS_ROLE: i32 = 264;
 const AVATAR_COLOR_ROLE: i32 = 265;
+const FAVORITE_ROLE: i32 = 266;
+const HAS_UNREAD_ROLE: i32 = 267;
+const CAN_LEAVE_ROLE: i32 = 268;
 
 /// Backing data of [`qobject::RoomListModel`]: the rooms, mirrored from the core's changes.
 #[derive(Default)]
 pub struct RoomListModelRust {
     rooms: Vec<Room>,
     avatars: AvatarUrls,
+    has_favorites: bool,
+    room_action_error: QString,
 }
 
 /// Counts are `u32`, Qt's are `int`: saturate.
@@ -196,8 +235,18 @@ impl cxx_qt::Initialize for RoomListModel {
 }
 
 impl RoomListModel {
-    /// Applies the changes in order, announcing each one to the views.
+    /// Applies the changes in order, announcing each one to the views, then `hasFavorites` if it
+    /// changed.
     pub fn apply(mut self: Pin<&mut Self>, changes: &[RoomChange]) {
+        self.as_mut().apply_changes(changes);
+        let has_favorites = any_favorite(&self.rooms);
+        if self.has_favorites != has_favorites {
+            self.as_mut().rust_mut().has_favorites = has_favorites;
+            self.has_favorites_changed();
+        }
+    }
+
+    fn apply_changes(mut self: Pin<&mut Self>, changes: &[RoomChange]) {
         let no_parent = QModelIndex::default();
         for change in changes {
             match row_ops(change) {
@@ -259,6 +308,48 @@ impl RoomListModel {
         }
     }
 
+    /// Takes the core's answer to a command on a room in: a failure becomes `roomActionError`.
+    pub fn finish_action(self: Pin<&mut Self>, outcome: &Result<(), RoomActionError>) {
+        let error_text = outcome
+            .as_ref()
+            .err()
+            .map_or_else(String::new, ToString::to_string);
+        self.set_action_error_text(&error_text);
+    }
+
+    /// Sets `roomActionError`, announcing it if it changed.
+    fn set_action_error_text(mut self: Pin<&mut Self>, text: &str) {
+        let text = QString::from(text);
+        if self.room_action_error != text {
+            self.as_mut().rust_mut().room_action_error = text;
+            self.room_action_error_changed();
+        }
+    }
+
+    fn set_favorite(mut self: Pin<&mut Self>, room_id: &QString, favorite: bool) {
+        self.as_mut().set_action_error_text("");
+        hub::set_favorite(room_id.to_string(), favorite);
+    }
+
+    fn mark_read(mut self: Pin<&mut Self>, room_id: &QString) {
+        self.as_mut().set_action_error_text("");
+        hub::mark_room_read(room_id.to_string());
+    }
+
+    fn mark_unread(mut self: Pin<&mut Self>, room_id: &QString) {
+        self.as_mut().set_action_error_text("");
+        hub::mark_room_unread(room_id.to_string());
+    }
+
+    fn leave(mut self: Pin<&mut Self>, room_id: &QString) {
+        self.as_mut().set_action_error_text("");
+        hub::leave_room(room_id.to_string());
+    }
+
+    fn dismiss_room_action_error(self: Pin<&mut Self>) {
+        self.set_action_error_text("");
+    }
+
     /// Takes new avatar files in and announces their role, and only that, for the rows that show
     /// them.
     pub fn set_avatars(mut self: Pin<&mut Self>, changes: &[(AvatarOwner, String)]) {
@@ -303,6 +394,9 @@ impl RoomListModel {
             USER_MENTIONS_ROLE => QVariant::from(&count(room.user_mentions)),
             GROUP_MENTIONS_ROLE => QVariant::from(&count(room.group_mentions)),
             ALERT_ROLE => QVariant::from(&room.alert),
+            FAVORITE_ROLE => QVariant::from(&room.favorite),
+            HAS_UNREAD_ROLE => QVariant::from(&room.has_unread()),
+            CAN_LEAVE_ROLE => QVariant::from(&room.can_leave()),
             AVATAR_ROLE => QVariant::from(&QString::from(self.avatars.url(&room.avatar_owner()))),
             AVATAR_INITIALS_ROLE => QVariant::from(&QString::from(&room_placeholder(room).0)),
             AVATAR_COLOR_ROLE => QVariant::from(&QString::from(&room_placeholder(room).1)),
@@ -321,6 +415,9 @@ impl RoomListModel {
             (USER_MENTIONS_ROLE, "userMentions"),
             (GROUP_MENTIONS_ROLE, "groupMentions"),
             (ALERT_ROLE, "alert"),
+            (FAVORITE_ROLE, "favorite"),
+            (HAS_UNREAD_ROLE, "hasUnread"),
+            (CAN_LEAVE_ROLE, "canLeave"),
             (AVATAR_ROLE, "avatar"),
             (AVATAR_INITIALS_ROLE, "avatarInitials"),
             (AVATAR_COLOR_ROLE, "avatarColor"),
