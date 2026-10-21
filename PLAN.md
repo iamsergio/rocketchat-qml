@@ -99,7 +99,7 @@ Done when: day-to-day use works. Edit, delete, react, threads, DMs, search and u
 - [x] Edit and delete your own messages
 - [ ] Add and remove reactions (emoji picker)
 - [ ] Threads: open a thread panel, reply, see thread counts in the main timeline
-- [ ] Reply/quote a message
+- [x] Reply/quote a message
 - [ ] Typing indicators (send and receive)
 - [ ] Start a DM, search the directory, join a channel
 - [ ] File upload with progress
