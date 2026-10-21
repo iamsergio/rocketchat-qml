@@ -134,7 +134,7 @@ Done when: you can log in to servers that enforce 2FA or use SSO.
 
 ## Decisions
 
-- **One GUI test suite for both frontends.** It speaks the Spix XML-RPC protocol. The Qt app embeds C++ Spix and the Slint app embeds a Rust Spix server. See ARCHITECTURE.md, GUI testing contract.
+- **One GUI test suite for both frontends.** It speaks the Spix XML-RPC protocol. The Qt app embeds C++ Spix and the Slint app embeds a Rust Spix server. See [docs/design/gui-testing.md](docs/design/gui-testing.md).
 - **Qt ≥ 6.12.0.**
 - **No fake server.** Integration and GUI tests run against a real Rocket.Chat (`scripts/run_test_server.sh`), which CI shares. Failures that a real server can't produce on demand are tested with port fakes (`rc_core`) and wiremock (`rc_api`).
 - **File attachments open their server URL in the browser, without the token.** That works when the browser has a Rocket.Chat session. Downloading them through the app comes with file upload (Phase 5). Images are shown inline from the file cache.
