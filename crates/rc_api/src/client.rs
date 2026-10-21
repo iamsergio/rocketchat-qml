@@ -71,6 +71,23 @@ impl RestClient {
         wire::parse_info(&body).ok_or(Error::NotRocketChat)
     }
 
+    /// The server's own URL, its `Site_Url` setting without a trailing slash (`GET
+    /// /api/v1/settings.public`, which needs no login). `None` if the server has none or it is
+    /// not a text. The links of quotes must begin with it, or the server makes no quote of them.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Unreachable`] if the server can't be reached, [`Error::Server`] if it refuses or
+    /// answers with an error status, [`Error::Decode`] if the answer isn't Rocket.Chat's.
+    pub async fn site_url(&self) -> Result<Option<String>, Error> {
+        let path = "api/v1/settings.public?_id=Site_Url";
+        let (status, body) = self.send(Method::GET, path, None, None).await?;
+        if !status.is_success() {
+            return Err(server_error(status, &body));
+        }
+        wire::parse_site_url(&body).map_err(Error::Decode)
+    }
+
     /// Logs in with a username (or email) and password (`POST /api/v1/login`).
     ///
     /// # Errors

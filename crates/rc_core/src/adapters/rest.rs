@@ -37,6 +37,10 @@ impl ServerApi for RestApi {
         Ok(self.client.info().await?.version)
     }
 
+    async fn site_url(&self) -> Result<Option<String>, ApiError> {
+        Ok(self.client.site_url().await?)
+    }
+
     async fn login(
         &self,
         username: &str,
@@ -371,6 +375,7 @@ mod tests {
             thread_shown: false,
             md: None,
             attachments: Vec::new(),
+            quotes: Vec::new(),
             edited: false,
             reactions: Vec::new(),
         }

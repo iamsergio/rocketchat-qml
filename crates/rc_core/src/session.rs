@@ -72,6 +72,9 @@ pub(crate) struct Established<A> {
     pub api: A,
     pub credentials: Credentials,
     pub account: Account,
+    /// What the links of quotes must begin with: the server's `Site_Url`, or the address that was
+    /// used to log in if the server has none or didn't say.
+    pub site_url: String,
 }
 
 /// What the user types may lack the scheme: assume https.
@@ -84,20 +87,27 @@ pub(crate) fn normalize_server(input: &str) -> String {
     }
 }
 
-/// Connects and checks the server version.
+/// Connects and checks the server version, and asks for its `Site_Url` at the same time (the
+/// answer is the login's address if the server has none, or the request fails, which only
+/// warrants a warning).
 async fn connect_checked<C: Connector>(
     connector: &C,
     server: &str,
-) -> Result<C::Api, LoginFailure> {
+) -> Result<(C::Api, String), LoginFailure> {
     let api = connector.connect(server)?;
-    let version = api.version().await?;
+    let (version, site_url) = tokio::join!(api.version(), api.site_url());
+    let version = version?;
     if version < MIN_SERVER_VERSION {
         return Err(LoginFailure::UnsupportedVersion {
             found: version.to_string(),
             minimum: MIN_SERVER_VERSION.to_string(),
         });
     }
-    Ok(api)
+    let site_url = site_url.unwrap_or_else(|error| {
+        tracing::warn!(%error, "can't read the server's own address");
+        None
+    });
+    Ok((api, site_url.unwrap_or_else(|| server.to_owned())))
 }
 
 /// Connects, checks the server version and logs in. Doesn't try to log in on a server that's too
@@ -109,12 +119,13 @@ pub(crate) async fn log_in<C: Connector>(
     password: &SecretString,
 ) -> Result<Established<C::Api>, LoginFailure> {
     let server = normalize_server(server);
-    let api = connect_checked(connector, &server).await?;
+    let (api, site_url) = connect_checked(connector, &server).await?;
     let (credentials, user) = api.login(username, password).await?;
     Ok(Established {
         api,
         credentials,
         account: Account { server, user },
+        site_url,
     })
 }
 
@@ -124,7 +135,7 @@ pub(crate) async fn resume<C: Connector>(
     connector: &C,
     stored: &StoredSession,
 ) -> Result<Established<C::Api>, LoginFailure> {
-    let api = connect_checked(connector, &stored.server).await?;
+    let (api, site_url) = connect_checked(connector, &stored.server).await?;
     let user = api
         .me(&stored.credentials)
         .await
@@ -139,6 +150,7 @@ pub(crate) async fn resume<C: Connector>(
             server: stored.server.clone(),
             user,
         },
+        site_url,
     })
 }
 

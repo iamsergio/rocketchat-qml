@@ -126,9 +126,10 @@ pub struct Message {
     /// The server's parsed markdown of the text. `None` if it sent none or it isn't a list of
     /// nodes. Some old messages and some system messages have no `md`.
     pub md: Option<Vec<crate::md::Block>>,
-    /// The files attached to the message. Other kinds of attachment (quotes, integrations) are
-    /// left out.
+    /// The files attached to the message. Other kinds of attachment (integrations) are left out.
     pub attachments: Vec<Attachment>,
+    /// The messages this one quotes, in the order the server lists them.
+    pub quotes: Vec<Quote>,
     /// The message was edited after it was sent (`editedAt`).
     pub edited: bool,
     /// The reactions, in the order the server lists them. Empty if there are none.
@@ -142,6 +143,27 @@ pub struct Reaction {
     pub emoji: String,
     /// Who reacted, in the order the server lists them.
     pub usernames: Vec<String>,
+}
+
+/// A message that another one quotes. The server adds it as an attachment to a message whose text
+/// starts with an empty-label link to the quoted message's permalink (`[ ](<permalink>) text`),
+/// but only if the permalink begins with the server's own `Site_Url`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Quote {
+    /// The permalink of the quoted message (`message_link`).
+    pub link: String,
+    /// The username of the quoted message's author (`author_name`). Empty if the server sent none.
+    pub author: String,
+    /// The quoted message's text as it was written, so it still starts with the links of the
+    /// messages it quotes itself.
+    pub text: String,
+    /// The server's parsed markdown of the text, like [`Message::md`].
+    pub md: Option<Vec<crate::md::Block>>,
+    /// When the quoted message was sent.
+    pub ts: Option<jiff::Timestamp>,
+    /// The permalinks of the messages the quoted message quotes in turn. Those quotes are not
+    /// kept, only their links, which start the text and the markdown.
+    pub quoted_links: Vec<String>,
 }
 
 /// A file attached to a message, as uploaded. Its paths are relative to the server, below

@@ -19,8 +19,8 @@ use crate::adapters::{MemoryMessageStore, RestConnector};
 use crate::avatars::{AvatarUpdate, Avatars, Fetched, authors_of};
 use crate::backoff::Backoff;
 use crate::domain::{
-    Author, AvatarOwner, Credentials, Delivery, Message, MessageId, MessageKind, Room, RoomId,
-    RoomKind, StoredSession, User, room_from,
+    Author, AvatarOwner, Credentials, Delivery, Message, MessageId, MessageKind, Quote, Room,
+    RoomId, RoomKind, StoredSession, User, room_from,
 };
 use crate::emoji::CustomEmojis;
 use crate::error::Error;
@@ -30,6 +30,7 @@ use crate::ports::{
     ApiError, CacheError, CacheKey, Changes, Connector, FileCache, MessageStore, Page, Pushed,
     Realtime, SecretStore, ServerApi, StoreError,
 };
+use crate::quote::{permalink, wire_text};
 use crate::rooms::{RoomChange, RoomList};
 use crate::session::{Established, LoginFailure, SessionState, log_in, resume};
 use crate::timeline::{PAGE_SIZE, Timeline, TimelineChange, TimelineError, TimelineStatus};
@@ -113,6 +114,7 @@ enum Command {
     SendMessage {
         room: RoomId,
         text: String,
+        quote: Option<MessageId>,
     },
     RetryMessage(MessageId),
     EditMessage {
@@ -276,10 +278,17 @@ impl Client {
     /// [`Delivery`]), and becomes sent when the server confirms it, or failed if it can't. It
     /// goes out whichever room is open by then. Ignored unless logged in, if the room isn't in the
     /// room list, or if the text is blank.
-    pub fn send_message(&self, room: RoomId, text: &str) {
+    ///
+    /// With `quote`, the message quotes that one, which shows at once too. It must be a sent text
+    /// message that the open room holds, else the message goes out without a quote. The server
+    /// makes the quote from a link in the text, but only when the link begins with its own
+    /// `Site_Url`, so that is what the links are built from (it is read at login; the address of the
+    /// login stands in for a server that has none).
+    pub fn send_message(&self, room: RoomId, text: &str, quote: Option<MessageId>) {
         self.send(Command::SendMessage {
             room,
             text: text.to_owned(),
+            quote,
         });
     }
 
@@ -292,9 +301,10 @@ impl Client {
 
     /// Replaces the text of a message of the user's in the open room. The answer comes as
     /// [`Event::MessageAction`]. The text is trimmed; a blank one is refused, and one that is the
-    /// message's text already succeeds without asking the server. Refused at once too if the
-    /// message isn't in the open room, isn't the user's, isn't sent, isn't text, or the server's
-    /// settings don't allow editing it (any more). Ignored unless logged in.
+    /// message's text already succeeds without asking the server. The message keeps its quotes.
+    /// Refused at once too if the message isn't in the open room, isn't the user's, isn't sent,
+    /// isn't text, or the server's settings don't allow editing it (any more). Ignored unless
+    /// logged in.
     pub fn edit_message(&self, id: MessageId, text: &str) {
         self.send(Command::EditMessage {
             id,
@@ -654,6 +664,8 @@ struct OpenRoom {
 struct Session<A> {
     api: A,
     credentials: Credentials,
+    /// What the links of quotes must begin with (see [`Established::site_url`]).
+    site_url: String,
 }
 
 /// Owns the session state and handles one message at a time. Network calls run in spawned tasks
@@ -823,7 +835,7 @@ impl<C: Connector> Actor<C> {
             Command::Logout => self.logout(),
             Command::OpenRoom(room) => self.open_room(room),
             Command::LoadOlder => self.load_older(),
-            Command::SendMessage { room, text } => self.send_message(room, &text),
+            Command::SendMessage { room, text, quote } => self.send_message(room, &text, quote),
             Command::RetryMessage(id) => self.retry_message(&id),
             Command::EditMessage { id, text } => self.edit_own_message(id, &text),
             Command::DeleteMessage(id) => self.delete_own_message(id),
@@ -892,6 +904,7 @@ impl<C: Connector> Actor<C> {
                 self.session = Some(Session {
                     api: established.api,
                     credentials: established.credentials,
+                    site_url: established.site_url,
                 });
                 self.backoff.reset();
                 self.set_state(SessionState::LoggedIn(established.account));
@@ -1873,7 +1886,7 @@ impl<C: Connector> Actor<C> {
         }
     }
 
-    fn send_message(&mut self, room: RoomId, text: &str) {
+    fn send_message(&mut self, room: RoomId, text: &str, quote: Option<MessageId>) {
         let Some(me) = self.own_user() else {
             tracing::debug!("send_message ignored: not logged in");
             return;
@@ -1886,6 +1899,10 @@ impl<C: Connector> Actor<C> {
             tracing::debug!(%room, "send_message ignored: not in the room list");
             return;
         }
+        let quotes: Vec<Quote> = quote
+            .and_then(|quoted| self.quote_of(&room, &quoted))
+            .into_iter()
+            .collect();
         let message = Message {
             id: MessageId::generate(),
             room_id: room.clone(),
@@ -1898,12 +1915,56 @@ impl<C: Connector> Actor<C> {
             kind: MessageKind::Text(text.into()),
             delivery: Delivery::Pending,
             attachments: Vec::new(),
+            quotes,
             edited: false,
             reactions: Vec::new(),
         };
         let id = message.id.clone();
+        let wire = wire_text(&message.quotes, text);
         self.change_timeline(&room, |timeline| vec![timeline.add_unsent(message)]);
-        self.post(room, id, text.to_owned());
+        self.post(room, id, wire);
+    }
+
+    /// The quote of a message of the open room, as a copy to show until the server's comes. `None`
+    /// if the room isn't the open one, doesn't hold the message, or the message isn't sent text:
+    /// the server can't quote what it doesn't have, and a system message says nothing.
+    fn quote_of(&self, room: &RoomId, quoted: &MessageId) -> Option<Quote> {
+        let message = self
+            .open
+            .as_ref()
+            .filter(|open| open.timeline.room() == room)
+            .and_then(|open| open.timeline.message(quoted))
+            .filter(|message| !message.is_unsent());
+        let Some(Message {
+            kind: MessageKind::Text(text),
+            author,
+            ts,
+            ..
+        }) = message
+        else {
+            tracing::debug!(message = %quoted, "no quote: not sent text of the open room");
+            return None;
+        };
+        let Some(site) = self.quote_site() else {
+            tracing::debug!("no quote: no server address to make the link from");
+            return None;
+        };
+        let room_info = self.rooms.rooms().iter().find(|known| &known.id == room)?;
+        Some(Quote {
+            message: Some(quoted.clone()),
+            link: permalink(site, room_info, quoted),
+            author: author.username.clone(),
+            text: text.clone(),
+            ts: Some(*ts),
+        })
+    }
+
+    /// What the quote links must begin with: the server's own `Site_Url`, which is known from the
+    /// login on, else the address that was used to log in.
+    fn quote_site(&self) -> Option<&str> {
+        self.session
+            .as_ref()
+            .map(|session| session.site_url.as_str())
     }
 
     fn retry_message(&mut self, id: &MessageId) {
@@ -1915,13 +1976,14 @@ impl<C: Connector> Actor<C> {
         let Some(Message {
             kind: MessageKind::Text(text),
             delivery: Delivery::Failed,
+            quotes,
             ..
         }) = open.timeline.message(id)
         else {
             tracing::debug!(message = %id, "retry_message ignored: not a failed message");
             return;
         };
-        let text = text.text.clone();
+        let text = wire_text(quotes, &text.text);
         self.change_timeline(&room, |timeline| {
             timeline
                 .set_delivery(id, Delivery::Pending)
@@ -2030,7 +2092,10 @@ impl<C: Connector> Actor<C> {
         } else if matches!(&message.kind, MessageKind::Text(held) if held.text == text) {
             self.answer(id, action, Ok(()));
         } else {
-            self.request_action(room, id, action, Some(text.to_owned()));
+            // The links of the quotes are part of the text on the server: without them it
+            // drops the quotes.
+            let wire = wire_text(&message.quotes, text);
+            self.request_action(room, id, action, Some(wire));
         }
     }
 

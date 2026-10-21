@@ -304,6 +304,40 @@ impl Admin {
         }
     }
 
+    /// The server's own URL (`Site_Url`), which the links of quotes must begin with: the server
+    /// makes no quote from a link to it by any other name (`localhost` for `127.0.0.1`, the
+    /// container's name in CI).
+    ///
+    /// # Panics
+    ///
+    /// If the server refuses or has no such setting.
+    #[must_use]
+    pub fn site_url(&self) -> String {
+        let json = self.get("settings.public?_id=Site_Url");
+        let url = json["settings"][0]["value"].as_str().unwrap();
+        url.trim_end_matches('/').to_owned()
+    }
+
+    /// Posts `text` as a reply that quotes a message: the text starts with an empty-label link to
+    /// the quoted message's permalink. `room_path` is the room's part of the permalink, such as
+    /// `channel/<name>`.
+    ///
+    /// # Panics
+    ///
+    /// If the server refuses.
+    // Most callers only need the message to exist, so the result may be ignored.
+    #[allow(clippy::must_use_candidate)]
+    pub fn post_quote(
+        &self,
+        room_id: &str,
+        room_path: &str,
+        quoted_id: &str,
+        text: &str,
+    ) -> Posted {
+        let link = format!("{}/{room_path}?msg={quoted_id}", self.site_url());
+        self.post_message(room_id, &format!("[ ]({link}) {text}"))
+    }
+
     /// Edits the text of a message (`chat.update`). The server pushes the whole message again,
     /// with `editedAt`.
     ///

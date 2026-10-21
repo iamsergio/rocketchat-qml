@@ -1480,3 +1480,98 @@ async fn message_settings_are_the_servers_with_editing_and_deleting_allowed_with
     // The test server keeps the defaults for these settings.
     assert_eq!(settings, rc_api::MessageSettings::default());
 }
+
+// ACT-005
+#[tokio::test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+async fn the_site_url_is_known_without_a_login() {
+    let fixture = Fixture::new();
+
+    let site_url = fixture.client.site_url().await.unwrap();
+
+    assert_eq!(site_url, Some(fixture.admin.site_url()));
+}
+
+// ACT-005
+#[tokio::test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+async fn a_reply_with_the_permalink_of_a_message_comes_back_with_its_quote() {
+    let fixture = Fixture::new();
+    let (room_id, name) = fixture.create_channel();
+    let session = fixture.client.session(fixture.login().await.credentials);
+    let original = fixture
+        .admin
+        .post_message(&room_id, "original **bold** text");
+
+    let site_url = fixture.client.site_url().await.unwrap().unwrap();
+    let link = format!("{site_url}/channel/{name}?msg={}", original.id);
+    let reply_id = unique().replace('-', "");
+    session
+        .send_message(&room_id, &reply_id, &format!("[ ]({link}) my reply"))
+        .await
+        .unwrap();
+
+    let history = channel_history(&session, &room_id).await;
+    let reply = history.iter().find(|m| m.id == reply_id).unwrap();
+    assert_eq!(reply.text, format!("[ ]({link}) my reply"));
+    let [quote] = reply.quotes.as_slice() else {
+        panic!("expected one quote, got {:?}", reply.quotes);
+    };
+    assert_eq!(quote.link, link);
+    assert_eq!(quote.author, fixture.admin.username);
+    assert_eq!(quote.text, "original **bold** text");
+    assert!(quote.md.is_some());
+    assert_eq!(quote.ts, Some(original.ts.parse().unwrap()));
+    assert_eq!(quote.quoted_links, Vec::<String>::new());
+    let original = history.iter().find(|m| m.id == original.id).unwrap();
+    assert_eq!(original.quotes, []);
+}
+
+// ACT-005
+#[tokio::test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+async fn a_quote_of_a_quote_has_the_link_of_the_inner_one() {
+    let fixture = Fixture::new();
+    let (room_id, name) = fixture.create_channel();
+    let session = fixture.client.session(fixture.login().await.credentials);
+    let path = format!("channel/{name}");
+    let original = fixture.admin.post_message(&room_id, "original");
+    let first = fixture
+        .admin
+        .post_quote(&room_id, &path, &original.id, "first");
+    let second = fixture
+        .admin
+        .post_quote(&room_id, &path, &first.id, "second");
+
+    let history = channel_history(&session, &room_id).await;
+
+    let reply = history.iter().find(|m| m.id == second.id).unwrap();
+    let [quote] = reply.quotes.as_slice() else {
+        panic!("expected one quote, got {:?}", reply.quotes);
+    };
+    assert!(quote.link.ends_with(&first.id));
+    assert!(quote.text.ends_with(") first"));
+    assert_eq!(quote.quoted_links.len(), 1);
+    assert!(quote.quoted_links[0].ends_with(&original.id));
+}
+
+// ACT-005
+#[tokio::test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+async fn a_permalink_with_another_host_makes_no_quote() {
+    let fixture = Fixture::new();
+    let (room_id, name) = fixture.create_channel();
+    let session = fixture.client.session(fixture.login().await.credentials);
+    let original = fixture.admin.post_message(&room_id, "original");
+
+    let link = format!(
+        "http://not-the-site-url.invalid/channel/{name}?msg={}",
+        original.id
+    );
+    fixture
+        .admin
+        .post_message(&room_id, &format!("[ ]({link}) reply"));
+
+    let history = channel_history(&session, &room_id).await;
+    assert!(history.iter().all(|m| m.quotes.is_empty()));
+}

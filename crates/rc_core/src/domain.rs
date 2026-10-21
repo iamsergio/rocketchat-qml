@@ -7,6 +7,7 @@ use std::fmt;
 
 use secrecy::SecretString;
 
+use crate::quote::quoted_message;
 use crate::random;
 use crate::rich::RichText;
 
@@ -302,10 +303,28 @@ pub struct Message {
     pub delivery: Delivery,
     /// The files attached to it. An unsent message has none.
     pub attachments: Vec<Attachment>,
+    /// The messages it quotes, in the order the author quoted them. Its text doesn't show the
+    /// links that make them.
+    pub quotes: Vec<Quote>,
     /// The author changed the text after sending it. An unsent message isn't.
     pub edited: bool,
     /// What users reacted with, in the order the server lists it. An unsent message has none.
     pub reactions: Vec<Reaction>,
+}
+
+/// A message that another one quotes, as a copy taken when the quote was made: it doesn't follow
+/// edits of the quoted message.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Quote {
+    /// The quoted message, if the link says which.
+    pub message: Option<MessageId>,
+    /// The permalink of the quoted message.
+    pub link: String,
+    /// The username of the quoted message's author.
+    pub author: String,
+    /// What the quoted message said, without the links of the quotes it has itself.
+    pub text: RichText,
+    pub ts: Option<jiff::Timestamp>,
 }
 
 /// One emoji that users reacted to a message with.
@@ -350,6 +369,19 @@ impl From<rc_api::Reaction> for Reaction {
     }
 }
 
+impl From<rc_api::Quote> for Quote {
+    fn from(quote: rc_api::Quote) -> Self {
+        Self {
+            message: quoted_message(&quote.link),
+            text: RichText::from_markdown(quote.text, quote.md.as_deref())
+                .without_quote_links(&quote.quoted_links),
+            link: quote.link,
+            author: quote.author,
+            ts: quote.ts,
+        }
+    }
+}
+
 impl From<rc_api::Attachment> for Attachment {
     fn from(attachment: rc_api::Attachment) -> Self {
         Self {
@@ -390,8 +422,12 @@ pub(crate) fn message_from(message: rc_api::Message) -> Option<Message> {
     if message.thread_id.is_some() && !message.thread_shown {
         return None;
     }
+    let quote_links: Vec<String> = message.quotes.iter().map(|q| q.link.clone()).collect();
     let kind = match message.kind.as_deref() {
-        None => MessageKind::Text(RichText::from_markdown(message.text, message.md.as_deref())),
+        None => MessageKind::Text(
+            RichText::from_markdown(message.text, message.md.as_deref())
+                .without_quote_links(&quote_links),
+        ),
         Some("uj") => MessageKind::System(SystemEvent::Joined),
         Some("ul") => MessageKind::System(SystemEvent::Left),
         Some("au") => MessageKind::System(SystemEvent::Added {
@@ -420,6 +456,7 @@ pub(crate) fn message_from(message: rc_api::Message) -> Option<Message> {
         kind,
         delivery: Delivery::Sent,
         attachments: message.attachments.into_iter().map(Into::into).collect(),
+        quotes: message.quotes.into_iter().map(Into::into).collect(),
         edited: message.edited,
         reactions: message.reactions.into_iter().map(Into::into).collect(),
     })
@@ -572,6 +609,7 @@ mod tests {
             thread_shown: false,
             md: None,
             attachments: Vec::new(),
+            quotes: Vec::new(),
             edited: false,
             reactions: Vec::new(),
         }
@@ -693,6 +731,91 @@ mod tests {
                 "hi".into()
             )])])]
         );
+    }
+
+    fn link_node(url: &str) -> rc_api::md::Inline {
+        rc_api::md::Inline::Link {
+            url: url.into(),
+            label: vec![rc_api::md::Inline::Text(" ".into())],
+        }
+    }
+
+    fn reply_markdown(link: &str, text: &str) -> Vec<rc_api::md::Block> {
+        vec![rc_api::md::Block::Paragraph(vec![
+            link_node(link),
+            rc_api::md::Inline::Text(format!(" {text}")),
+        ])]
+    }
+
+    // ACT-005
+    #[test]
+    fn maps_the_quotes_of_a_message_and_hides_their_links() {
+        use crate::rich::{Block, Inline};
+        let outer_link = "http://s:3000/channel/c?msg=second";
+        let inner_link = "http://s:3000/channel/c?msg=first";
+        let mut entry = entry(None, &format!("[ ]({outer_link}) my reply"));
+        entry.md = Some(reply_markdown(outer_link, "my reply"));
+        // The quoted message is itself a reply, to `first`.
+        entry.quotes = vec![rc_api::Quote {
+            link: outer_link.into(),
+            author: "bob".into(),
+            text: format!("[ ]({inner_link}) second"),
+            md: Some(reply_markdown(inner_link, "second")),
+            ts: Some("2026-10-20T14:00:00Z".parse().unwrap()),
+            quoted_links: vec![inner_link.into()],
+        }];
+
+        let message = message_from(entry).unwrap();
+
+        let MessageKind::Text(body) = &message.kind else {
+            panic!("not text");
+        };
+        assert_eq!(body.text, "my reply");
+        assert_eq!(
+            body.blocks,
+            [Block::Paragraph(vec![Inline::Text("my reply".into())])]
+        );
+        let [quote] = message.quotes.as_slice() else {
+            panic!("expected one quote, got {:?}", message.quotes);
+        };
+        assert_eq!(quote.message, Some(MessageId::from("second".to_owned())));
+        assert_eq!(quote.link, outer_link);
+        assert_eq!(quote.author, "bob");
+        assert_eq!(quote.ts, Some("2026-10-20T14:00:00Z".parse().unwrap()));
+        assert_eq!(quote.text.text, "second");
+        assert_eq!(
+            quote.text.blocks,
+            [Block::Paragraph(vec![Inline::Text("second".into())])]
+        );
+    }
+
+    // ACT-005
+    #[test]
+    fn a_link_that_the_server_made_no_quote_of_stays_in_the_text() {
+        let text = "[ ](http://elsewhere/channel/c?msg=x) hi";
+        let message = message_from(entry(None, text)).unwrap();
+        assert_eq!(message.kind, MessageKind::Text(RichText::plain(text)));
+        assert_eq!(message.quotes, []);
+    }
+
+    // ACT-005
+    #[test]
+    fn a_message_that_is_only_a_quote_has_no_text() {
+        let link = "http://s:3000/channel/c?msg=x";
+        let mut entry = entry(None, &format!("[ ]({link}) "));
+        entry.quotes = vec![rc_api::Quote {
+            link: link.into(),
+            author: "bob".into(),
+            text: "x".into(),
+            md: None,
+            ts: None,
+            quoted_links: Vec::new(),
+        }];
+
+        let message = message_from(entry).unwrap();
+
+        assert_eq!(message.kind, MessageKind::Text(RichText::plain("")));
+        assert_eq!(message.quotes[0].text, RichText::plain("x"));
     }
 
     // RICH-001
