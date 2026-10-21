@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import QtQuick
-import QtQuick.Controls
+import QtQuick.Controls.Basic
 import QtQuick.Layouts
 import RocketChat.Bridge
 
@@ -17,40 +17,70 @@ Item {
             Layout.alignment: Qt.AlignHCenter
             text: qsTr("Log in to Rocket.Chat")
             font.pointSize: Theme.fontSizeTitle
+            font.weight: Theme.fontWeightBold
         }
 
-        TextField {
-            id: server
-
-            objectName: "loginServerField"
+        // A label above each field. Its name says what the field takes, where the placeholder gives
+        // an example.
+        ColumnLayout {
             Layout.fillWidth: true
-            text: Session.prefillServer
-            enabled: !Session.busy
-            placeholderText: qsTr("Server, e.g. https://chat.example.com")
-            inputMethodHints: Qt.ImhUrlCharactersOnly | Qt.ImhNoAutoUppercase
+            spacing: Theme.spacingM
+
+            FieldLabel {
+                text: qsTr("Server")
+            }
+
+            InputField {
+                id: server
+
+                objectName: "loginServerField"
+                Layout.fillWidth: true
+                text: Session.prefillServer
+                enabled: !Session.busy
+                placeholderText: qsTr("Server, e.g. https://chat.example.com")
+                inputMethodHints: Qt.ImhUrlCharactersOnly | Qt.ImhNoAutoUppercase
+            }
         }
 
-        TextField {
-            id: username
-
-            objectName: "loginUsernameField"
+        ColumnLayout {
             Layout.fillWidth: true
-            text: Session.prefillUsername
-            enabled: !Session.busy
-            placeholderText: qsTr("Username")
-            inputMethodHints: Qt.ImhNoAutoUppercase
+            spacing: Theme.spacingM
+
+            FieldLabel {
+                text: qsTr("Username")
+            }
+
+            InputField {
+                id: username
+
+                objectName: "loginUsernameField"
+                Layout.fillWidth: true
+                text: Session.prefillUsername
+                enabled: !Session.busy
+                placeholderText: qsTr("Username")
+                inputMethodHints: Qt.ImhNoAutoUppercase
+            }
         }
 
-        TextField {
-            id: password
-
-            objectName: "loginPasswordField"
+        ColumnLayout {
             Layout.fillWidth: true
-            text: Session.prefillPassword
-            enabled: !Session.busy
-            placeholderText: qsTr("Password")
-            echoMode: TextInput.Password
-            onAccepted: loginButton.click()
+            spacing: Theme.spacingM
+
+            FieldLabel {
+                text: qsTr("Password")
+            }
+
+            InputField {
+                id: password
+
+                objectName: "loginPasswordField"
+                Layout.fillWidth: true
+                text: Session.prefillPassword
+                enabled: !Session.busy
+                placeholderText: qsTr("Password")
+                echoMode: TextInput.Password
+                onAccepted: loginButton.click()
+            }
         }
 
         Label {
@@ -59,6 +89,7 @@ Item {
             visible: text !== ""
             text: Session.errorText
             color: Theme.error
+            font.pointSize: Theme.fontSizeSmall
             wrapMode: Text.Wrap
         }
 
@@ -66,10 +97,13 @@ Item {
             Layout.fillWidth: true
             spacing: Theme.spacingL
 
-            Button {
+            PrimaryButton {
                 id: loginButton
 
                 objectName: "loginButton"
+                Layout.fillWidth: true
+                font.pointSize: Theme.fontSizeBase
+                implicitHeight: Theme.fieldHeight
                 text: qsTr("Log in")
                 enabled: !Session.busy
                 onClicked: Session.login(server.text, username.text, password.text)
@@ -79,9 +113,16 @@ Item {
                 objectName: "loginBusy"
                 Layout.preferredHeight: Theme.busyIndicatorSize
                 Layout.preferredWidth: Theme.busyIndicatorSize
+                palette.dark: Theme.textMuted
                 visible: Session.busy
                 running: visible
             }
         }
+    }
+
+    VersionLabel {
+        anchors.bottom: parent.bottom
+        anchors.bottomMargin: Theme.spacingXXL
+        anchors.horizontalCenter: parent.horizontalCenter
     }
 }

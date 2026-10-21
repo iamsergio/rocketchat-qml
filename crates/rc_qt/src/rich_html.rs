@@ -5,8 +5,9 @@
 //! supports. Plain Rust, so it can be unit-tested without Qt. Everything the author typed goes
 //! through [`escape`]; the only markup is what this module writes.
 //!
-//! No colour is a palette colour: highlights are translucent, so they read on light and dark
-//! themes alike, and links take QML's `linkColor`.
+//! No colour is set here: the markup carries class names (`mention-me`, `mention`, `channel`,
+//! `code-block`, `quote-bar`, and the tag `code` for inline code) and the GUI's style sheet, in
+//! front of the HTML (`Theme.richTextStyle`), gives them their colours, as it does the links'.
 
 use std::fmt::Write as _;
 
@@ -16,15 +17,6 @@ use rc_core::domain::UserId;
 use rc_core::emoji::{CustomEmojis, Shown};
 use rc_core::policy::MessagePolicy;
 use rc_core::rich::{Block, Emoji, Inline, Mention, RichText};
-
-const CODE_BACKGROUND: &str = "rgba(127,127,127,0.2)";
-/// `CODE_BACKGROUND` as `#AARRGGBB`, for a `bgcolor` attribute.
-const CODE_BLOCK_BACKGROUND: &str = "#337f7f7f";
-const QUOTE_BAR: &str = "rgba(127,127,127,0.7)";
-const MENTION: &str = "rgba(33,150,243,0.3)";
-/// The user, `@all` and `@here`.
-const MENTION_ME: &str = "rgba(255,152,0,0.55)";
-const CHANNEL: &str = "rgba(76,175,80,0.3)";
 
 /// The edge of a custom emoji image inline, and in a message of nothing but emoji.
 const EMOJI_SIZE: u32 = 20;
@@ -117,11 +109,10 @@ impl Renderer<'_> {
             }
             Block::Code { text, .. } | Block::Math(text) => code_block(out, text),
             Block::Quote(blocks) => {
-                let _ = write!(
-                    out,
+                out.push_str(
                     "<table cellspacing=\"0\" cellpadding=\"0\" style=\"margin-top:2px; \
                      margin-bottom:2px\"><tr><td width=\"3\" \
-                     style=\"background-color:{QUOTE_BAR}\"></td><td style=\"padding-left:8px\">"
+                     class=\"quote-bar\"></td><td style=\"padding-left:8px\">",
                 );
                 for block in blocks {
                     self.block(out, block);
@@ -185,10 +176,7 @@ impl Renderer<'_> {
             Inline::Italic(content) => self.wrapped(out, "i", content),
             Inline::Strike(content) => self.wrapped(out, "s", content),
             Inline::Code(text) | Inline::Math(text) => {
-                let _ = write!(
-                    out,
-                    "<code style=\"font-family:monospace; background-color:{CODE_BACKGROUND}\">"
-                );
+                out.push_str("<code style=\"font-family:monospace\">");
                 push_escaped(out, text);
                 out.push_str("</code>");
             }
@@ -198,7 +186,7 @@ impl Renderer<'_> {
             }),
             Inline::Mention(mention) => self.mention(out, mention),
             Inline::ChannelMention(name) => {
-                let _ = write!(out, "<span style=\"background-color:{CHANNEL}\">#");
+                out.push_str("<span class=\"channel\">#");
                 push_escaped(out, name);
                 out.push_str("</span>");
             }
@@ -245,11 +233,11 @@ impl Renderer<'_> {
             ),
         };
         if me {
-            let _ = write!(out, "<span style=\"background-color:{MENTION_ME}\"><b>@");
+            out.push_str("<span class=\"mention-me\">@");
             push_escaped(out, name);
-            out.push_str("</b></span>");
+            out.push_str("</span>");
         } else {
-            let _ = write!(out, "<span style=\"background-color:{MENTION}\">@");
+            out.push_str("<span class=\"mention\">@");
             push_escaped(out, name);
             out.push_str("</span>");
         }
@@ -278,11 +266,10 @@ impl Renderer<'_> {
 /// Monospace on a background, padded by a one-cell table: block backgrounds have no padding. The
 /// background is on the table: on the cell, Qt paints it again behind each line of the `<pre>`.
 fn code_block(out: &mut String, text: &str) {
-    let _ = write!(
-        out,
+    out.push_str(
         "<table width=\"100%\" cellspacing=\"0\" cellpadding=\"6\" \
-         bgcolor=\"{CODE_BLOCK_BACKGROUND}\" style=\"margin-top:2px; margin-bottom:2px\"><tr><td>\
-         <pre style=\"margin:0px; font-family:monospace\">"
+         class=\"code-block\" style=\"margin-top:2px; margin-bottom:2px\"><tr><td>\
+         <pre style=\"margin:0px; font-family:monospace\">",
     );
     push_escaped(out, text);
     out.push_str("</pre></td></tr></table>");
@@ -444,22 +431,21 @@ mod tests {
 
     // RICH-001
     #[test]
-    fn inline_code_is_monospace_on_a_background() {
+    fn inline_code_is_monospace() {
         assert_eq!(
             body(vec![Inline::Code("a < b".into())]),
-            "<code style=\"font-family:monospace; background-color:rgba(127,127,127,0.2)\">\
-             a &lt; b</code>"
+            "<code style=\"font-family:monospace\">a &lt; b</code>"
         );
     }
 
     // RICH-001
     #[test]
-    fn a_code_block_is_monospace_on_a_background_and_keeps_its_lines() {
+    fn a_code_block_is_monospace_in_a_block_of_its_own_and_keeps_its_lines() {
         let html = html(vec![Block::Code {
             language: Some("rust".into()),
             text: "fn main() {\n    1 < 2\n}".into(),
         }]);
-        assert!(html.contains("bgcolor=\"#337f7f7f\""));
+        assert!(html.contains("class=\"code-block\""));
         assert!(html.contains("<pre style=\"margin:0px; font-family:monospace\">"));
         assert!(html.contains("fn main() {\n    1 &lt; 2\n}</pre>"));
     }
@@ -483,7 +469,7 @@ mod tests {
             Block::BulletList(vec![vec![t("item")]]),
         ])]);
         assert!(html.starts_with("<table"));
-        assert!(html.contains("<td width=\"3\" style=\"background-color:rgba(127,127,127,0.7)\">"));
+        assert!(html.contains("<td width=\"3\" class=\"quote-bar\">"));
         assert!(html.contains(">quoted</p>"));
         assert!(html.contains("<li>item</li>"));
         assert!(html.ends_with("</td></tr></table>"));
@@ -750,17 +736,11 @@ mod tests {
     fn mentions_stand_out_and_the_ones_of_the_viewer_more() {
         let other = body(vec![user("bob")]);
         let me = body(vec![user("Alice")]);
-        assert_eq!(
-            other,
-            "<span style=\"background-color:rgba(33,150,243,0.3)\">@bob</span>"
-        );
-        assert_eq!(
-            me,
-            "<span style=\"background-color:rgba(255,152,0,0.55)\"><b>@Alice</b></span>"
-        );
+        assert_eq!(other, "<span class=\"mention\">@bob</span>");
+        assert_eq!(me, "<span class=\"mention-me\">@Alice</span>");
         for everybody in [Mention::All, Mention::Here] {
             let shown = body(vec![Inline::Mention(everybody)]);
-            assert!(shown.contains("rgba(255,152,0,0.55)"), "{shown}");
+            assert!(shown.contains("class=\"mention-me\""), "{shown}");
         }
     }
 
@@ -769,7 +749,7 @@ mod tests {
     fn nobody_is_mentioned_when_nobody_is_logged_in() {
         let nobody = Viewer::default();
         let shown = html_with(vec![para(vec![user("alice")])], &nobody);
-        assert!(shown.contains("rgba(33,150,243,0.3)"));
+        assert!(shown.contains("class=\"mention\""));
     }
 
     // RICH-002
@@ -777,7 +757,7 @@ mod tests {
     fn a_channel_mention_is_marked_apart_from_user_mentions() {
         assert_eq!(
             body(vec![Inline::ChannelMention("general".into())]),
-            "<span style=\"background-color:rgba(76,175,80,0.3)\">#general</span>"
+            "<span class=\"channel\">#general</span>"
         );
     }
 

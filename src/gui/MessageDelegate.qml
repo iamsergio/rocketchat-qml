@@ -4,7 +4,7 @@
 pragma ComponentBehavior: Bound
 
 import QtQuick
-import QtQuick.Controls
+import QtQuick.Controls.Basic
 import QtQuick.Layouts
 import RocketChat.Bridge
 
@@ -57,7 +57,9 @@ Item {
 
     objectName: "msg_" + messageId
     width: ListView.view.width
-    implicitHeight: column.implicitHeight + Theme.spacingL
+    implicitHeight: column.implicitHeight
+    // The row that holds the message itself, below the heading of its day.
+    readonly property Item rowItem: isSystem ? systemRow : messageRow
 
     HoverHandler {
         id: rowHover
@@ -75,6 +77,9 @@ Item {
     // them by name from the window (mainWindow/msgEditAction), and only while they are open.
     Menu {
         id: menu
+
+        // Keeps the menu inside the window when it opens near an edge.
+        margins: Theme.spacingL
 
         MenuItem {
             objectName: "msgQuoteAction"
@@ -125,13 +130,13 @@ Item {
         width: Theme.dialogWidth
 
         footer: DialogButtonBox {
-            Button {
+            PrimaryButton {
                 objectName: "deleteConfirm"
                 DialogButtonBox.buttonRole: DialogButtonBox.AcceptRole
                 text: qsTr("Delete")
             }
 
-            Button {
+            FlatButton {
                 objectName: "deleteCancel"
                 DialogButtonBox.buttonRole: DialogButtonBox.RejectRole
                 text: qsTr("Cancel")
@@ -148,13 +153,33 @@ Item {
         }
     }
 
-    // Marks a message that mentions the user.
+    // The tint of the row under the pointer. Like the mark below, it covers the message and not
+    // the heading of its day.
+    Rectangle {
+        color: Theme.rowHover
+        height: root.rowItem.height + 2 * Theme.messagePaddingV
+        visible: rowHover.hovered
+        width: parent.width
+        y: column.y + root.rowItem.y - Theme.messagePaddingV
+    }
+
+    // Marks a message that mentions the user: the row washed in the colour of mentions, and an edge
+    // at its left.
     Rectangle {
         objectName: "msgMentionsMe"
-        anchors.fill: parent
+        color: Theme.signalWash
+        height: root.rowItem.height + 2 * Theme.messagePaddingV
         visible: root.mentionsMe
-        color: root.palette.highlight
-        opacity: Theme.highlightOpacity
+        width: parent.width
+        y: column.y + root.rowItem.y - Theme.messagePaddingV
+
+        Rectangle {
+            anchors.bottom: parent.bottom
+            anchors.left: parent.left
+            anchors.top: parent.top
+            color: Theme.signal
+            width: Theme.accentBarWidth
+        }
     }
 
     ColumnLayout {
@@ -162,42 +187,48 @@ Item {
 
         anchors.left: parent.left
         anchors.right: parent.right
-        anchors.leftMargin: Theme.spacingXXL
-        anchors.rightMargin: Theme.spacingXXL
+        anchors.leftMargin: Theme.spacingXXXL
+        anchors.rightMargin: Theme.spacingXXXL
         anchors.verticalCenter: parent.verticalCenter
         spacing: Theme.spacingXS
 
         // A heading above the first message of each day.
         RowLayout {
             Layout.fillWidth: true
-            Layout.topMargin: Theme.spacingM
+            Layout.bottomMargin: Theme.spacingL
+            Layout.topMargin: Theme.spacingXXXL
             visible: root.firstOfDay
-            spacing: Theme.spacingL
+            spacing: Theme.spacingXXL
 
             Rectangle {
                 Layout.fillWidth: true
                 implicitHeight: Theme.separatorWidth
-                color: root.palette.mid
+                color: Theme.line
             }
 
             Label {
                 objectName: "msgDaySeparator"
                 text: root.dayLabel
-                color: root.palette.placeholderText
-                font.bold: true
+                color: Theme.textMuted
+                font.pointSize: Theme.fontSizeSmall
+                font.weight: Theme.fontWeightSemibold
             }
 
             Rectangle {
                 Layout.fillWidth: true
                 implicitHeight: Theme.separatorWidth
-                color: root.palette.mid
+                color: Theme.line
             }
         }
 
         RowLayout {
+            id: messageRow
+
+            Layout.bottomMargin: Theme.messagePaddingV
             Layout.fillWidth: true
+            Layout.topMargin: Theme.messagePaddingV
             visible: !root.isSystem
-            spacing: Theme.spacingXL
+            spacing: Theme.spacingXXL
 
             Avatar {
                 Layout.alignment: Qt.AlignTop
@@ -223,7 +254,7 @@ Item {
 
                     Label {
                         objectName: "msgAuthor"
-                        font.bold: true
+                        font.weight: Theme.fontWeightSemibold
                         text: root.author
                         textFormat: Text.PlainText
                     }
@@ -232,15 +263,15 @@ Item {
                         id: timeLabel
 
                         objectName: "msgTime"
-                        color: root.palette.placeholderText
+                        color: Theme.textFaint
+                        font.pointSize: Theme.fontSizeTiny
                         text: root.time
                     }
 
                     Label {
                         objectName: "msgEdited"
-                        color: root.palette.placeholderText
-                        font.italic: true
-                        font.pointSize: Theme.fontSizeSmall
+                        color: Theme.textFaint
+                        font.pointSize: Theme.fontSizeTiny
                         text: qsTr("(edited)")
                         visible: root.edited
                     }
@@ -252,14 +283,31 @@ Item {
                     // Shown when the pointer is over the message, if there is anything to do with it.
                     // It keeps its place the rest of the time, so the rows don't change height.
                     ToolButton {
+                        id: menuButton
+
                         objectName: "msgMenuButton"
                         Layout.preferredHeight: Theme.menuButtonHeight
                         Layout.preferredWidth: Theme.menuButtonWidth
                         opacity: rowHover.hovered || menu.opened ? 1 : 0
-                        padding: Theme.menuButtonPadding
+                        padding: Theme.spacingNone
                         text: "\u22EF"
                         visible: root.canQuote || root.canReact || root.canEdit || root.canDelete
                         onClicked: menu.popup(this, 0, height)
+
+                        background: Rectangle {
+                            border.color: Theme.raisedHover
+                            border.width: Theme.borderWidth
+                            color: Theme.raised
+                            radius: Theme.radiusControl
+                        }
+
+                        contentItem: Text {
+                            color: menuButton.hovered ? Theme.text : Theme.textMuted
+                            font: menuButton.font
+                            horizontalAlignment: Text.AlignHCenter
+                            text: menuButton.text
+                            verticalAlignment: Text.AlignVCenter
+                        }
                     }
 
                     // These exist only while the message is in that state, so that a test can find the one
@@ -269,8 +317,8 @@ Item {
 
                         sourceComponent: Label {
                             objectName: "msgPending"
-                            color: root.palette.placeholderText
-                            font.italic: true
+                            color: Theme.textFaint
+                            font.pointSize: Theme.fontSizeTiny
                             text: qsTr("Sending…")
                         }
                     }
@@ -281,6 +329,7 @@ Item {
                         sourceComponent: Label {
                             objectName: "msgFailed"
                             color: Theme.error
+                            font.pointSize: Theme.fontSizeTiny
                             text: qsTr("Not sent")
                         }
                     }
@@ -288,7 +337,7 @@ Item {
                     Loader {
                         active: root.delivery === "failed"
 
-                        sourceComponent: ToolButton {
+                        sourceComponent: FlatButton {
                             objectName: "msgRetry"
                             text: qsTr("Retry")
                             onClicked: Room.retry(root.messageId)
@@ -311,12 +360,12 @@ Item {
                         objectName: "quote" + index
                         Layout.fillHeight: false
                         Layout.fillWidth: true
-                        spacing: Theme.spacingL
+                        spacing: Theme.spacingXXL
 
                         Rectangle {
                             Layout.fillHeight: true
-                            color: root.palette.mid
-                            implicitWidth: Theme.accentBarWidth
+                            color: Theme.raisedHover
+                            implicitWidth: Theme.quoteBarWidth
                         }
 
                         ColumnLayout {
@@ -328,14 +377,16 @@ Item {
 
                                 Label {
                                     objectName: "quoteAuthor"
-                                    font.bold: true
+                                    font.pointSize: Theme.fontSizeSmall
+                                    font.weight: Theme.fontWeightSemibold
                                     text: quote.modelData.author
                                     textFormat: Text.PlainText
                                 }
 
                                 Label {
                                     objectName: "quoteTime"
-                                    color: root.palette.placeholderText
+                                    color: Theme.textFaint
+                                    font.pointSize: Theme.fontSizeTiny
                                     text: quote.modelData.time
                                     textFormat: Text.PlainText
                                 }
@@ -352,9 +403,9 @@ Item {
 
                                     objectName: "quoteBodyHtml"
                                     width: parent.width
-                                    color: root.palette.placeholderText
-                                    linkColor: root.palette.link
-                                    text: quote.modelData.bodyHtml
+                                    color: Theme.textMuted
+                                    font.pointSize: Theme.fontSizeSmall
+                                    text: Theme.richTextStyle + quote.modelData.bodyHtml
                                     textFormat: Text.RichText
                                     wrapMode: Text.Wrap
                                     onLinkActivated: link => Qt.openUrlExternally(link)
@@ -381,10 +432,9 @@ Item {
 
                         objectName: "msgBodyHtml"
                         width: parent.width
-                        text: root.html
+                        text: Theme.richTextStyle + root.html
                         textFormat: Text.RichText
                         wrapMode: Text.Wrap
-                        linkColor: root.palette.link
                         onLinkActivated: link => Qt.openUrlExternally(link)
 
                         HoverHandler {
@@ -420,8 +470,8 @@ Item {
                             Rectangle {
                                 objectName: "attachmentPlaceholder"
                                 anchors.fill: parent
-                                color: root.palette.mid
-                                opacity: Theme.placeholderOpacity
+                                color: Theme.raised
+                                radius: Theme.radiusAttachment
                                 visible: picture.status !== Image.Ready
                             }
 
@@ -449,30 +499,57 @@ Item {
                             }
                         }
 
-                        RowLayout {
+                        // A chip with the file's icon, its title and its size.
+                        Rectangle {
                             // The address the file opens, which is what the tests read: Spix reads text.
                             property string text: attachment.modelData.link
 
                             objectName: "attachmentLink"
-                            Layout.fillWidth: true
+                            Layout.preferredHeight: fileRow.implicitHeight + 2 * Theme.spacingL
+                            Layout.preferredWidth: Math.min(fileRow.implicitWidth + 2 * Theme.spacingXL, Theme.attachmentFileMaxWidth)
+                            color: Theme.raised
+                            radius: Theme.radiusAttachment
                             visible: !attachment.modelData.isImage
-                            spacing: Theme.spacingL
 
-                            Label {
-                                objectName: "attachmentTitle"
-                                Layout.maximumWidth: content.width
-                                color: root.palette.link
-                                elide: Text.ElideMiddle
-                                font.underline: true
-                                text: attachment.modelData.title
-                                textFormat: Text.PlainText
-                            }
+                            RowLayout {
+                                id: fileRow
 
-                            Label {
-                                objectName: "attachmentSize"
-                                color: root.palette.placeholderText
-                                text: attachment.modelData.size
-                                textFormat: Text.PlainText
+                                anchors.fill: parent
+                                anchors.margins: Theme.spacingL
+                                anchors.leftMargin: Theme.spacingXL
+                                anchors.rightMargin: Theme.spacingXL
+                                spacing: Theme.spacingXL
+
+                                Icon {
+                                    Layout.preferredHeight: Theme.attachmentFileIconSize
+                                    Layout.preferredWidth: Theme.attachmentFileIconSize
+                                    source: "icons/file.svg"
+                                    tint: Theme.textMuted
+                                }
+
+                                ColumnLayout {
+                                    Layout.fillWidth: true
+                                    spacing: Theme.spacingNone
+
+                                    Label {
+                                        objectName: "attachmentTitle"
+                                        Layout.fillWidth: true
+                                        color: Theme.own
+                                        elide: Text.ElideMiddle
+                                        font.pointSize: Theme.fontSizeSmall
+                                        font.weight: Theme.fontWeightSemibold
+                                        text: attachment.modelData.title
+                                        textFormat: Text.PlainText
+                                    }
+
+                                    Label {
+                                        objectName: "attachmentSize"
+                                        color: Theme.textFaint
+                                        font.pointSize: Theme.fontSizeTiny
+                                        text: attachment.modelData.size
+                                        textFormat: Text.PlainText
+                                    }
+                                }
                             }
 
                             TapHandler {
@@ -515,9 +592,9 @@ Item {
                             property bool checked: modelData.mine
 
                             objectName: "reaction" + index
-                            border.color: modelData.mine ? root.palette.highlight : root.palette.mid
+                            border.color: modelData.mine ? Theme.ownBorder : hover.hovered ? Theme.raisedHover : Theme.transparent
                             border.width: Theme.borderWidth
-                            color: modelData.mine ? Qt.alpha(root.palette.highlight, Theme.highlightOpacity) : "transparent"
+                            color: modelData.mine ? Theme.ownWash : Theme.raised
                             implicitHeight: Theme.chipHeight
                             implicitWidth: chipRow.implicitWidth + Theme.chipPadding
                             radius: height / 2
@@ -559,6 +636,12 @@ Item {
                                 Label {
                                     objectName: "reactionCount"
                                     anchors.verticalCenter: parent.verticalCenter
+                                    color: chip.modelData.mine ? Theme.own : Theme.textMuted
+                                    font.pointSize: Theme.fontSizeSmall
+                                    font.weight: Theme.fontWeightSemibold
+                                    font.features: ({
+                                            "tnum": 1
+                                        })
                                     text: chip.modelData.count
                                 }
                             }
@@ -586,9 +669,9 @@ Item {
                     // Another emoji of the user's choosing.
                     Rectangle {
                         objectName: "reactionAdd"
-                        border.color: root.palette.mid
+                        border.color: addArea.containsMouse ? Theme.raisedHover : Theme.transparent
                         border.width: Theme.borderWidth
-                        color: "transparent"
+                        color: Theme.raised
                         implicitHeight: Theme.chipHeight
                         implicitWidth: Theme.chipAddWidth
                         radius: height / 2
@@ -596,12 +679,16 @@ Item {
 
                         Label {
                             anchors.centerIn: parent
+                            color: Theme.textMuted
                             text: "+"
                             textFormat: Text.PlainText
                         }
 
                         MouseArea {
+                            id: addArea
+
                             anchors.fill: parent
+                            hoverEnabled: true
                             cursorShape: Qt.PointingHandCursor
                             onClicked: root.reactRequested(root.messageId)
                         }
@@ -611,22 +698,27 @@ Item {
         }
 
         RowLayout {
+            id: systemRow
+
+            Layout.bottomMargin: Theme.messagePaddingV
             Layout.fillWidth: true
+            Layout.topMargin: Theme.messagePaddingV
             visible: root.isSystem
             spacing: Theme.spacingL
 
             Label {
                 objectName: "msgSystem"
                 Layout.fillWidth: true
-                color: root.palette.placeholderText
-                font.italic: true
+                color: Theme.textMuted
+                font.pointSize: Theme.fontSizeSmall
                 text: root.systemText
                 textFormat: Text.PlainText
                 wrapMode: Text.Wrap
             }
 
             Label {
-                color: root.palette.placeholderText
+                color: Theme.textFaint
+                font.pointSize: Theme.fontSizeTiny
                 text: root.time
             }
         }

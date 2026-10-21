@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import QtQuick
-import QtQuick.Controls
+import QtQuick.Controls.Basic
 import QtQuick.Layouts
 import RocketChat.Bridge
 
@@ -23,11 +23,28 @@ ItemDelegate {
     required property bool hasUnread
     required property bool canLeave
 
+    // Whether the room has something new for the user, which its name shows.
+    readonly property bool emphasised: alert || hasUnread || unread > 0
+
     objectName: "room_" + roomId
     width: ListView.view.width
+    implicitHeight: Theme.roomRowHeight
     highlighted: Room.roomId === roomId
-    padding: Theme.delegatePadding
+    padding: Theme.spacingNone
+    leftPadding: Theme.roomRowInset + Theme.rowPaddingH
+    rightPadding: Theme.roomRowInset + Theme.rowPaddingH
     onClicked: Room.open(roomId)
+
+    // The row is as wide as the list, as the view sets its position; the background floats inside.
+    background: Item {
+        Rectangle {
+            anchors.fill: parent
+            anchors.leftMargin: Theme.roomRowInset
+            anchors.rightMargin: Theme.roomRowInset
+            color: root.highlighted ? Theme.ownWash : root.hovered ? Theme.surface : Theme.transparent
+            radius: Theme.radiusControl
+        }
+    }
 
     // Right-click opens the menu of the room. A MouseArea, as Spix clicks don't reach a TapHandler.
     MouseArea {
@@ -40,6 +57,9 @@ ItemDelegate {
     // them by name from the window (mainWindow/roomLeaveAction), and only while they are open.
     Menu {
         id: menu
+
+        // Keeps the menu inside the window when it opens near an edge.
+        margins: Theme.spacingL
 
         MenuItem {
             objectName: "roomFavoriteAction"
@@ -87,13 +107,13 @@ ItemDelegate {
         width: Theme.dialogWidth
 
         footer: DialogButtonBox {
-            Button {
+            PrimaryButton {
                 objectName: "roomLeaveConfirm"
                 DialogButtonBox.buttonRole: DialogButtonBox.AcceptRole
                 text: qsTr("Leave")
             }
 
-            Button {
+            FlatButton {
                 objectName: "roomLeaveCancel"
                 DialogButtonBox.buttonRole: DialogButtonBox.RejectRole
                 text: qsTr("Cancel")
@@ -112,11 +132,11 @@ ItemDelegate {
     }
 
     contentItem: RowLayout {
-        spacing: Theme.spacingXXL
+        spacing: Theme.spacingL
 
         Avatar {
-            Layout.preferredWidth: Theme.roomIconSize
-            Layout.preferredHeight: Theme.roomIconSize
+            Layout.preferredWidth: Theme.roomAvatarSize
+            Layout.preferredHeight: Theme.roomAvatarSize
             url: root.avatar
             initials: root.avatarInitials
             fillColor: root.avatarColor
@@ -125,14 +145,23 @@ ItemDelegate {
             initialsName: "roomAvatarInitials"
         }
 
+        Label {
+            objectName: "roomName"
+            Layout.fillWidth: true
+            color: root.highlighted || root.emphasised ? Theme.text : Theme.textMuted
+            elide: Text.ElideRight
+            font.weight: root.emphasised ? Theme.fontWeightSemibold : Theme.fontWeightNormal
+            text: root.name
+        }
+
         // The icon is named after the room kind: icons/channel.svg, private.svg, direct.svg. Hidden
         // until it has loaded, so that a missing SVG plugin shows in the GUI tests.
-        Image {
+        Icon {
             objectName: "roomKind_" + root.kind
+            Layout.preferredHeight: Theme.roomIconSize
             Layout.preferredWidth: Theme.roomIconSize
-            fillMode: Image.Pad
             source: "icons/" + root.kind + ".svg"
-            sourceSize: Qt.size(Theme.roomIconSourceSize, Theme.roomIconSourceSize)
+            tint: root.highlighted ? Theme.own : Theme.textFaint
             visible: status === Image.Ready
 
             onStatusChanged: {
@@ -141,21 +170,13 @@ ItemDelegate {
             }
         }
 
-        Label {
-            objectName: "roomName"
-            Layout.fillWidth: true
-            elide: Text.ElideRight
-            font.bold: root.alert
-            text: root.name
-        }
-
         // Mentions of the user.
         Rectangle {
             visible: root.userMentions > 0
-            implicitWidth: mentionRow.implicitWidth + Theme.badgePaddingH
-            implicitHeight: mentionRow.implicitHeight + Theme.badgePaddingV
+            implicitWidth: Math.max(mentionRow.implicitWidth + Theme.badgePaddingH, Theme.unreadBadgeMinWidth)
+            implicitHeight: Theme.unreadBadgeHeight
             radius: height / 2
-            color: root.palette.highlight
+            color: Theme.signal
 
             Row {
                 id: mentionRow
@@ -165,29 +186,42 @@ ItemDelegate {
 
                 Label {
                     text: "@"
-                    color: root.palette.highlightedText
+                    color: Theme.textOnSignal
+                    font.pointSize: Theme.fontSizeTiny
+                    font.weight: Theme.fontWeightBold
                 }
 
                 Label {
                     objectName: "roomMentions"
                     text: root.userMentions
-                    color: root.palette.highlightedText
+                    color: Theme.textOnSignal
+                    font.features: ({
+                            "tnum": 1
+                        })
+                    font.pointSize: Theme.fontSizeTiny
+                    font.weight: Theme.fontWeightBold
                 }
             }
         }
 
         Rectangle {
             visible: root.unread > 0
-            implicitWidth: Math.max(unreadLabel.implicitWidth + Theme.badgePaddingH, height)
-            implicitHeight: unreadLabel.implicitHeight + Theme.badgePaddingV
+            implicitWidth: Math.max(unreadLabel.implicitWidth + Theme.badgePaddingH, Theme.unreadBadgeMinWidth)
+            implicitHeight: Theme.unreadBadgeHeight
             radius: height / 2
-            color: root.palette.mid
+            color: Theme.raisedHover
 
             Label {
                 id: unreadLabel
 
                 objectName: "roomUnread"
                 anchors.centerIn: parent
+                color: Theme.text
+                font.features: ({
+                        "tnum": 1
+                    })
+                font.pointSize: Theme.fontSizeTiny
+                font.weight: Theme.fontWeightBold
                 text: root.unread
             }
         }

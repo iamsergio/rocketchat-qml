@@ -42,3 +42,10 @@ path = "crates/rc_core/data/emojione.tsv"
 precedence = "aggregate"
 SPDX-FileCopyrightText = "2016 EmojiOne (https://www.emojione.com)"
 SPDX-License-Identifier = "MIT"
+
+# The UI font, bundled with the app (https://github.com/Instrument/instrument-sans).
+[[annotations]]
+path = "src/gui/fonts/**"
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2022 The Instrument Sans Project Authors"
+SPDX-License-Identifier = "OFL-1.1"
