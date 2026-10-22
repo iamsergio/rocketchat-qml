@@ -6,10 +6,60 @@
 [advisories]
 # Vulnerable, unmaintained, unsound and yanked crates are errors.
 yanked = "deny"
+# Unmaintained crates that Slint's winit backend pulls in on Linux, and no feature leaves out: zbus
+# (for the xdg desktop settings portal) and ttf-parser (Wayland window decorations). None is a
+# vulnerability. See "Slint pulls in unmaintained crates" in PLAN.md.
+ignore = [
+    { id = "RUSTSEC-2026-0192", reason = "ttf-parser, through winit's sctk-adwaita (Slint)" },
+    { id = "RUSTSEC-2026-0370", reason = "zvariant, through zbus in i-slint-backend-winit" },
+    { id = "RUSTSEC-2026-0371", reason = "zbus_names, through zbus in i-slint-backend-winit" },
+    { id = "RUSTSEC-2026-0372", reason = "zvariant_derive, through zbus in i-slint-backend-winit" },
+]
 
 [licenses]
 # Exactly what the lock file needs: cargo-deny warns about allowed licenses that no crate uses.
-allow = ["Apache-2.0", "BSD-3-Clause", "CDLA-Permissive-2.0", "ISC", "MIT", "Unicode-3.0", "Zlib"]
+allow = ["Apache-2.0", "BSD-2-Clause", "BSD-3-Clause", "BSL-1.0", "CDLA-Permissive-2.0", "ISC", "MIT", "Unicode-3.0", "Zlib"]
+
+# Slint is licensed "GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0".
+# TEMPORARY: the choice between GPL-3.0 and the royalty-free licence is still open, so both are
+# allowed for Slint's crates only (see "Slint's licence isn't chosen yet" in PLAN.md). Drop the
+# other one, and these exceptions, once it is made.
+[[licenses.exceptions]]
+allow = ["GPL-3.0-only", "LicenseRef-Slint-Royalty-free-2.0"]
+crate = "i-slint-backend-selector"
+[[licenses.exceptions]]
+allow = ["GPL-3.0-only", "LicenseRef-Slint-Royalty-free-2.0"]
+crate = "i-slint-backend-winit"
+[[licenses.exceptions]]
+allow = ["GPL-3.0-only", "LicenseRef-Slint-Royalty-free-2.0"]
+crate = "i-slint-common"
+[[licenses.exceptions]]
+allow = ["GPL-3.0-only", "LicenseRef-Slint-Royalty-free-2.0"]
+crate = "i-slint-compiler"
+[[licenses.exceptions]]
+allow = ["GPL-3.0-only", "LicenseRef-Slint-Royalty-free-2.0"]
+crate = "i-slint-core"
+[[licenses.exceptions]]
+allow = ["GPL-3.0-only", "LicenseRef-Slint-Royalty-free-2.0"]
+crate = "i-slint-core-macros"
+[[licenses.exceptions]]
+allow = ["GPL-3.0-only", "LicenseRef-Slint-Royalty-free-2.0"]
+crate = "i-slint-renderer-femtovg"
+[[licenses.exceptions]]
+allow = ["GPL-3.0-only", "LicenseRef-Slint-Royalty-free-2.0"]
+crate = "i-slint-renderer-skia"
+[[licenses.exceptions]]
+allow = ["GPL-3.0-only", "LicenseRef-Slint-Royalty-free-2.0"]
+crate = "i-slint-renderer-software"
+[[licenses.exceptions]]
+allow = ["GPL-3.0-only", "LicenseRef-Slint-Royalty-free-2.0"]
+crate = "slint"
+[[licenses.exceptions]]
+allow = ["GPL-3.0-only", "LicenseRef-Slint-Royalty-free-2.0"]
+crate = "slint-build"
+[[licenses.exceptions]]
+allow = ["GPL-3.0-only", "LicenseRef-Slint-Royalty-free-2.0"]
+crate = "slint-macros"
 
 [bans]
 # Duplicates come from build dependencies (cxx-qt's generators), which we don't control.

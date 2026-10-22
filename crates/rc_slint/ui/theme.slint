@@ -1,0 +1,18 @@
+// SPDX-FileCopyrightText: 2026 Sergio Martins
+// SPDX-License-Identifier: MIT
+
+// Every size, spacing, radius, font size, opacity and colour of the GUI, so it can be themed in one
+// place. The values mirror `src/gui/Theme.qml`.
+export global Theme {
+    // Colours
+    out property <color> base: #15181e;
+    out property <color> text-faint: #626a7a;
+
+    // Fonts
+    out property <length> font-size-base: 15px;
+    out property <length> font-size-tiny: font-size-base * 0.82;
+
+    // Window
+    out property <length> window-height: 600px;
+    out property <length> window-width: 964px;
+}

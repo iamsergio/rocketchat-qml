@@ -71,11 +71,11 @@ Done when: `rocketchat_slint`, a pure Rust app on `rc_core`, passes the GUI test
 
 The Slint app grows one feature at a time, and CI stays green throughout: a second ctest entry runs the GUI tests against `rocketchat_slint`, but only those listed in `crates/rc_gui_tests/slint.txt`, which grows with each feature and never shrinks. TRACEABILITY.md gets a Slint column (`todo`, `partial`, `done`; `done` when all of a feature's GUI tests are in the list).
 
-- [ ] `rc_view`: the parts of `rc_qt` with no Qt types (the caches per account, the views, the row operations) move to a crate both frontends use. Rendering `RichText` stays with each frontend: `rc_qt` keeps the HTML for Qt's rich text. No behaviour change
-- [ ] `rc_slint`: the `rocketchat_slint` binary starts and stops the core and shows the version (APP-001). `cargo deny` allows Slint's licence and its dependencies' licences. A Slint `Theme` global, under the same no-literals rule as `Theme.qml`
+- [x] `rc_view`: the parts of `rc_qt` with no Qt types (the caches per account, the views, the row operations) move to a crate both frontends use. Rendering `RichText` stays with each frontend: `rc_qt` keeps the HTML for Qt's rich text. No behaviour change
+- [x] `rc_slint`: the `rocketchat_slint` binary shows the version (APP-001, tested in-process with Slint's testing backend). A Slint `Theme` global (`ui/theme.slint`), under the same no-literals rule as `Theme.qml`. `deny.toml` has a temporary exception for Slint's licence. Logging setup is shared with `rc_qt` (`rc_core::logging::init_app`). It doesn't start the core yet
 - [ ] Spix server in Rust for Slint (in the spix fork), `--spix-port`, on Slint's `ElementHandle` search API, element names from `accessible-id`. Headless in CI: Slint's testing backend in Spix builds
 - [ ] ctest runs the GUI tests in `slint.txt` against `rocketchat_slint`. TRACEABILITY.md gets its Slint column, and a check that the list and the column agree
-- [ ] Split the hub of `rc_qt` (account switching, event routing, the secret store choice) from its Qt threading, so `rc_slint` reuses it
+- [ ] Split the hub of `rc_qt` (account switching, event routing, the secret store choice) from its Qt threading, so `rc_slint` reuses it. `rocketchat_slint` then starts and stops the core
 - [ ] Features, in the order of the GUI test files: auth, accounts, rooms, messages, realtime, sending, room menu, reactions, threads
 
 ## Phase 8: personal nice to haves
@@ -96,6 +96,9 @@ The Slint app grows one feature at a time, and CI stays green throughout: a seco
 
 # Issues
 
+- **Slint's licence isn't chosen yet.** `deny.toml` has a temporary exception for Slint's crates, which allows both GPL-3.0 and the royalty-free licence. Decide between them (the royalty-free one requires attribution in the app) before any release.
+- **rc_slint has no screen-reader support.** It is built without Slint's `accessibility` feature (AccessKit). Turn it on with the features that need it; the element names of the GUI tests (`accessible-id`) work without it.
+- **Slint pulls in unmaintained crates.** On Linux its winit backend always depends on zbus (the xdg desktop settings portal), and Wayland's window decorations on ttf-parser. `deny.toml` ignores their four "unmaintained" advisories; drop the ignores when Slint or winit move off them.
 - **Bulk deletions aren't followed.** An admin pruning a room sends `<room id>/deleteMessageBulk` instead of one `deleteMessage` per message. The messages stay on screen until the room is opened again with a catch-up (`chat.syncMessages` lists them as deleted), so subscribe to it next to `deleteMessage`.
 - **MongoDB 8.x won't start on Linux ≥ 6.19** (tcmalloc bug, [SERVER-121912](https://jira.mongodb.org/browse/SERVER-121912)). The test server uses MongoDB 7.0, which Rocket.Chat 8 accepts with a deprecation warning. Rocket.Chat 9 drops 7.0, so revisit before moving the test server to RC 9.
 - **Windows isn't built yet.** MSVC Debug builds need `CMAKE_MSVC_RUNTIME_LIBRARY=MultiThreadedDLL` and `MAP_IMPORTED_CONFIG_DEBUG=RELEASE` on the Qt targets (cxx-qt-cmake warns about this), and vcpkg's debug triplet builds with `/MDd`, which doesn't link against the Rust staticlib. Add a build-only `windows-latest` CI job before adding more C++ dependencies.
