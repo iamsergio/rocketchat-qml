@@ -372,6 +372,17 @@ fn pushed_from(event: DdpEvent) -> Pushed {
             room: room_id.into(),
             id: message_id.into(),
         },
+        DdpEvent::UserActivity {
+            room_id,
+            username,
+            typing,
+            thread_id,
+        } => Pushed::Typing {
+            room: room_id.into(),
+            username,
+            typing,
+            thread: thread_id.map(Into::into),
+        },
     }
 }
 
@@ -469,6 +480,41 @@ mod tests {
             Pushed::MessageDeleted {
                 room: "r1".to_owned().into(),
                 id: "m1".to_owned().into(),
+            }
+        );
+    }
+
+    // ACT-006
+    #[test]
+    fn typing_is_pushed_by_room_username_and_thread() {
+        let in_thread = pushed_from(DdpEvent::UserActivity {
+            room_id: "r1".into(),
+            username: "bob".into(),
+            typing: true,
+            thread_id: Some("t1".into()),
+        });
+        assert_eq!(
+            in_thread,
+            Pushed::Typing {
+                room: "r1".to_owned().into(),
+                username: "bob".into(),
+                typing: true,
+                thread: Some("t1".to_owned().into()),
+            }
+        );
+        let stopped = pushed_from(DdpEvent::UserActivity {
+            room_id: "r1".into(),
+            username: "bob".into(),
+            typing: false,
+            thread_id: None,
+        });
+        assert_eq!(
+            stopped,
+            Pushed::Typing {
+                room: "r1".to_owned().into(),
+                username: "bob".into(),
+                typing: false,
+                thread: None,
             }
         );
     }

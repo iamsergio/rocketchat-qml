@@ -11,6 +11,7 @@ publish.workspace = true
 
 [dependencies]
 serde_json.workspace = true
+tungstenite.workspace = true
 ureq.workspace = true
 
 [lints]

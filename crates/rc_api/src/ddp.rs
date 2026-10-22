@@ -145,6 +145,18 @@ impl DdpClient {
         self.subscribe("stream-notify-room", params).await
     }
 
+    /// What the users do in one room: type, in the room or in one of its threads, as
+    /// [`DdpEvent::UserActivity`] (`stream-notify-room` with `<room id>/user-activity`). Needs a
+    /// login first. End it with [`unsubscribe`](Self::unsubscribe).
+    ///
+    /// # Errors
+    ///
+    /// [`Error::ConnectionClosed`] if the connection ended, or [`Error::Refused`].
+    pub async fn subscribe_user_activity(&self, room_id: &str) -> Result<SubscriptionId, Error> {
+        let params = json!([format!("{room_id}/user-activity"), false]);
+        self.subscribe("stream-notify-room", params).await
+    }
+
     /// Ends a subscription: the server sends no more of its events. It doesn't wait for the
     /// server's answer, and an event already on its way may still arrive. Does nothing if the
     /// connection has ended, since its subscriptions have ended with it.
@@ -913,6 +925,44 @@ mod tests {
             Some(DdpEvent::MessageDeleted {
                 room_id: "r1".to_owned(),
                 message_id: "m1".to_owned(),
+            })
+        );
+    }
+
+    // ACT-006
+    #[tokio::test]
+    async fn user_activity_is_subscribed_for_the_room() {
+        let (client, _events, mut peer) = connected().await;
+        let subscribing = tokio::spawn(async move { client.subscribe_user_activity("r1").await });
+
+        let frame = peer.recv().await;
+        assert_eq!(frame["msg"], "sub");
+        assert_eq!(frame["name"], "stream-notify-room");
+        assert_eq!(frame["params"], json!(["r1/user-activity", false]));
+        peer.send(json!({ "msg": "ready", "subs": [frame["id"]] }))
+            .await;
+
+        let subscription = subscribing.await.unwrap().unwrap();
+        assert_eq!(subscription.0, frame["id"].as_str().unwrap());
+    }
+
+    // ACT-006
+    #[tokio::test]
+    async fn a_user_activity_arrives_as_an_event() {
+        let (_client, mut events, mut peer) = connected().await;
+        peer.send(
+            json!({ "msg": "changed", "collection": "stream-notify-room", "id": "id",
+            "fields": { "eventName": "r1/user-activity",
+                "args": ["bob", ["user-typing"], { "tmid": "t1" }] } }),
+        )
+        .await;
+        assert_eq!(
+            events.recv().await,
+            Some(DdpEvent::UserActivity {
+                room_id: "r1".to_owned(),
+                username: "bob".to_owned(),
+                typing: true,
+                thread_id: Some("t1".to_owned()),
             })
         );
     }

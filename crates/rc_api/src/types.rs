@@ -306,6 +306,19 @@ pub enum DdpEvent {
     /// A message was deleted. Only pushed for the rooms subscribed to with
     /// [`DdpClient::subscribe_room_deletions`](crate::DdpClient::subscribe_room_deletions).
     MessageDeleted { room_id: String, message_id: String },
+    /// A user started or stopped typing in a room, or in one of its threads. Only pushed for the
+    /// rooms subscribed to with
+    /// [`DdpClient::subscribe_user_activity`](crate::DdpClient::subscribe_user_activity), and for
+    /// any user's activity, the connection's own user's other clients included, so the caller ignores
+    /// its own `username`. `typing` is false once
+    /// the user stopped, and for the other activities (uploading, recording). `thread_id` is the
+    /// id of the thread's parent message, `None` for the room itself.
+    UserActivity {
+        room_id: String,
+        username: String,
+        typing: bool,
+        thread_id: Option<String>,
+    },
 }
 
 /// Whose avatar changed.
