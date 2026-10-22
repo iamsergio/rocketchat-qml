@@ -5,7 +5,7 @@
 
 use std::fs::{File, OpenOptions};
 use std::io::{self, IsTerminal};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use tracing_subscriber::filter::{EnvFilter, LevelFilter};
@@ -52,6 +52,23 @@ pub fn init(log_file: Option<&Path>) -> Result<(), AlreadyInitialized> {
         }
     }
     Ok(())
+}
+
+/// What each frontend does first thing at startup: `init`, logging to `<executable>.log` next to
+/// the executable too if `developer_mode` (so each build has its own log), then a line with the
+/// version. A failure to initialize is logged as a warning, not returned.
+pub fn init_app(developer_mode: bool) {
+    let log_file = developer_mode.then(developer_log_file).flatten();
+    if let Err(error) = init(log_file.as_deref()) {
+        tracing::warn!(%error);
+    }
+    tracing::info!(version = crate::VERSION, "starting");
+}
+
+fn developer_log_file() -> Option<PathBuf> {
+    std::env::current_exe()
+        .ok()
+        .map(|exe| exe.with_extension("log"))
 }
 
 fn open_append(path: &Path) -> io::Result<File> {
