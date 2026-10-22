@@ -412,9 +412,9 @@ impl<C: Connector> Actor<C> {
     ) -> Instant {
         self.start(stored);
         loop {
-            // Woken when the next shown direct message goes quiet. Made anew every time round, as
-            // anything can move that time.
-            let mut quiet = self.rooms.next_quiet().map(|at| self.clock.sleep_until(at));
+            // Woken at the earliest of the actor's deadlines (see `next_deadline`). Made anew every
+            // time round, as anything can move it.
+            let mut deadline = self.next_deadline().map(|at| self.clock.sleep_until(at));
             tokio::select! {
                 biased;
                 command = commands.recv() => match command {
@@ -439,14 +439,26 @@ impl<C: Connector> Actor<C> {
                     Done::RoomAction(done) => self.handle_room_action_done(done),
                 },
                 () = async {
-                    match &mut quiet {
+                    match &mut deadline {
                         Some(sleep) => sleep.await,
                         None => std::future::pending().await,
                     }
-                } => self.hide_quiet_rooms(),
+                } => self.handle_deadline(),
             }
         }
         self.stop().await
+    }
+
+    /// When the actor next has something to do without being asked: the earliest deadline of the
+    /// concerns that have one. `None` if none has.
+    fn next_deadline(&self) -> Option<jiff::Timestamp> {
+        self.rooms.next_quiet()
+    }
+
+    /// Does what the deadlines that have passed ask for. Each concern checks its own against the
+    /// clock, so one that is not due changes nothing.
+    fn handle_deadline(&mut self) {
+        self.hide_quiet_rooms();
     }
 
     /// Tells who the stored account is, if there is one, and resumes it if it holds a token. A stored
