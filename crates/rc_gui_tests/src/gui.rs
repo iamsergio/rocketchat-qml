@@ -138,6 +138,11 @@ impl Gui {
         self.command("mouseClick", &[path.into()]).map(drop)
     }
 
+    /// Double-clicks the left button at the item's centre.
+    pub fn mouse_double_click(&self, path: &str) -> Result<()> {
+        self.command("mouseDoubleClick", &[path.into()]).map(drop)
+    }
+
     pub fn mouse_click_with(
         &self,
         path: &str,
