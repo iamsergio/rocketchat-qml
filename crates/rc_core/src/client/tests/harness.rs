@@ -261,10 +261,7 @@ impl Harness {
 
     /// [`logout`](Self::logout) for the account `id`.
     pub(super) fn logout_account(&self, id: &AccountId) {
-        self.client.send(CoreCommand::Account(
-            id.clone(),
-            crate::client::Command::Logout,
-        ));
+        self.client.senders.send(id, crate::client::Command::Logout);
     }
 
     pub(super) fn login(&self, server: &str, username: &str) {

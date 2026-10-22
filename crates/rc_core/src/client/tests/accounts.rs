@@ -115,6 +115,31 @@ fn a_new_account_is_logged_out_and_logs_in_beside_the_first() {
 
 // ACCT-001
 #[test]
+fn a_login_sent_right_after_adding_the_account_is_not_lost() {
+    let fake = Fake::new();
+    let harness = logged_in_harness(&fake);
+    harness.allow_other_accounts();
+    let other = other_server(&fake);
+    other.script_login(None, Ok(()));
+    other.script_fetch(None, Ok(Vec::new()));
+
+    let b = harness.client.add_account();
+    harness
+        .client
+        .account(&b)
+        .login(OTHER, "bob", SecretString::from("secret"));
+    harness.expect_of(
+        &b,
+        &[
+            logged_out(None),
+            SessionState::Connecting,
+            logged_in(OTHER, "bob"),
+        ],
+    );
+}
+
+// ACCT-001
+#[test]
 fn commands_go_only_to_their_account() {
     let fake = Fake::new();
     let harness = logged_in_harness(&fake);

@@ -53,12 +53,12 @@ The actor sends it right after every `Rooms` event, if the totals differ from wh
 
 ## The core task
 
-One task owns the shared services, the accounts in order (id and command sender) and a `JoinSet` of the actor tasks. It loops over the `Client`'s commands and over the actors that end:
+One task owns the shared services, the order of the accounts and a `JoinSet` of the actor tasks. Commands for an account do not pass through it: the senders of the actors live in a small map (`ActorSenders`, behind a `Mutex` that is held only to look up, insert or remove a sender) shared with the `Client`, which sends them straight to the actors. A command sent earlier therefore always reaches the actor before an answer from a background task sent later, as the actor handles commands first. The core manages adding, removing and stopping, and loops over the `Client`'s core commands and over the actors that end:
 
-- Add: emit `Added`, spawn an actor.
-- Remove: send the actor a logout (which forgets the stored entry and the user), then drop its sender, which stops it. The actor waits for its own token revocation (2 s at most) in its own task, so the other accounts are not held up. When its task ends, the core emits `Removed`, and adds a new account if none is left.
-- A command for an account goes to its actor.
-- The `Client` dropped: the core drops every sender, waits for all the actors, drops the services and gives the store worker until the latest actor deadline to empty its queue. No `Removed` comes then.
+- Add: `Client::add_account` makes the channel, puts the sender in the map at once (so a login sent right after waits in the channel) and sends the receiver to the core, which emits `Added` and spawns the actor with it. The core makes the channel itself for the stored accounts at startup and for the new account after the last is removed.
+- Remove: `Client::remove_account` takes the sender out of the map, sends it a logout (which forgets the stored entry and the user) and drops it, which stops the actor once it has handled what is queued. Then it tells the core, which updates its order. The actor waits for its own token revocation (2 s at most) in its own task, so the other accounts are not held up. When its task ends, the core emits `Removed`, and adds a new account if none is left.
+- A command for an id not in the map is dropped and logged at debug.
+- The `Client` dropped: the map is cleared and the core commands end, so every actor stops. The core waits for all the actors, drops the services and gives the store worker until the latest actor deadline to empty its queue. No `Removed` comes then.
 
 Each actor runs in a tracing span with its id, so the logs say which account a line is about.
 

@@ -4,8 +4,9 @@
 //! The core task: what every account uses (the connector, the file cache and the store worker), and
 //! the account actors it runs, one per account.
 
-use std::sync::Arc;
+use std::collections::HashMap;
 use std::sync::mpsc as std_mpsc;
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use tokio::runtime::Runtime;
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
@@ -31,14 +32,66 @@ pub(crate) struct Shared<C: Connector> {
     pub(crate) users: Arc<Users>,
 }
 
-/// What a [`Client`](crate::Client) tells the core task.
+/// The command senders of the account actors, shared by the [`Client`](crate::Client), which sends
+/// the accounts' commands straight to the actors, and the core task, which adds the accounts it
+/// makes itself and clears the map when it stops.
+///
+/// Sending straight to the actor, with no hop through the core task, keeps a command the frontend
+/// sent earlier ahead of anything a background task answers later: the actor handles commands
+/// before answers.
+///
+/// A lock is fine here: it is held only to look up, insert or remove a sender, never across an
+/// await or a callback. Sending on an unbounded channel doesn't block.
+#[derive(Default)]
+pub(crate) struct ActorSenders(Mutex<HashMap<AccountId, UnboundedSender<Command>>>);
+
+impl ActorSenders {
+    pub(crate) fn insert(&self, id: AccountId, sender: UnboundedSender<Command>) {
+        self.lock().insert(id, sender);
+    }
+
+    /// Sends `command` to the account's actor. Returns false if there is no such account or its
+    /// actor is gone.
+    pub(crate) fn send(&self, id: &AccountId, command: Command) -> bool {
+        self.lock()
+            .get(id)
+            .is_some_and(|sender| sender.send(command).is_ok())
+    }
+
+    /// Takes the sender out. Dropping it, once the last command is sent, ends the actor.
+    pub(crate) fn take(&self, id: &AccountId) -> Option<UnboundedSender<Command>> {
+        self.lock().remove(id)
+    }
+
+    /// Drops every sender, which ends every actor.
+    pub(crate) fn clear(&self) {
+        // Dropped after the lock is released.
+        let senders = std::mem::take(&mut *self.lock());
+        drop(senders);
+    }
+
+    /// A poisoned lock is recovered: each update is one map call that leaves it consistent.
+    fn lock(&self) -> MutexGuard<'_, HashMap<AccountId, UnboundedSender<Command>>> {
+        self.0.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
+/// What a [`Client`](crate::Client) tells the core task. Commands for an account don't pass
+/// through it: they go straight to the actor (see [`ActorSenders`]).
 pub(crate) enum CoreCommand {
-    /// Adds a logged-out account with this id.
-    Add(AccountId),
-    /// Logs the account out, forgets it and ends it.
+    /// Runs an actor for a logged-out account with this id, taking its commands from the receiver.
+    /// The client has put the sender in the [`ActorSenders`] already.
+    Add(AccountId, UnboundedReceiver<Command>),
+    /// The client has told the account's actor to log out and dropped its sender: updates the
+    /// order of the accounts. `Removed` comes when the actor has ended.
     Remove(AccountId),
-    /// A command for one account's actor.
-    Account(AccountId, Command),
+}
+
+/// What the core task shares with the [`Client`](crate::Client): where the accounts' commands go,
+/// and the commands for the core itself.
+pub(crate) struct Link {
+    pub(crate) senders: Arc<ActorSenders>,
+    pub(crate) commands: UnboundedReceiver<CoreCommand>,
 }
 
 /// Calls the frontend's callback, tagged with the account.
@@ -61,7 +114,7 @@ pub(crate) fn spawn<C: Connector, S: SecretStore>(
     cache: impl FileCache,
     on_event: impl Fn(AccountId, Event) + Send + Sync + 'static,
     backoff: Backoff,
-    commands: UnboundedReceiver<CoreCommand>,
+    link: Link,
 ) -> std_mpsc::Receiver<()> {
     let (finished_tx, finished) = std_mpsc::channel();
     let (store_tx, store_rx) = mpsc::unbounded_channel();
@@ -75,11 +128,12 @@ pub(crate) fn spawn<C: Connector, S: SecretStore>(
         },
         on_event: Arc::new(on_event),
         backoff,
+        senders: link.senders,
         accounts: Vec::new(),
         actors: JoinSet::new(),
     };
     runtime.spawn(async move {
-        let deadline = core.run(commands).await;
+        let deadline = core.run(link.commands).await;
         if tokio::time::timeout_at(deadline, store_worker)
             .await
             .is_err()
@@ -104,9 +158,10 @@ struct Core<C: Connector> {
     shared: Shared<C>,
     on_event: OnEvent,
     backoff: Backoff,
-    /// The accounts in the order they were added, with the way to reach their actors. Removing
-    /// one drops its sender, which is what ends the actor.
-    accounts: Vec<(AccountId, UnboundedSender<Command>)>,
+    /// The senders of the actors' commands, shared with the client.
+    senders: Arc<ActorSenders>,
+    /// The accounts in the order they were added, until they are removed.
+    accounts: Vec<AccountId>,
     /// The actors, each yielding its account and the deadline by which its revocations are done.
     /// Includes the ones of accounts that were removed and are logging out.
     actors: JoinSet<(AccountId, Instant)>,
@@ -121,13 +176,15 @@ impl<C: Connector> Core<C> {
             Vec::new()
         });
         if stored.is_empty() {
-            self.add(AccountId::generate(), None);
+            self.add_new();
         }
         for account in stored {
             self.shared
                 .users
                 .claim(&account.id, &account.server, &account.user_id);
-            self.add(account.id.clone(), Some(account));
+            let (sender, receiver) = mpsc::unbounded_channel();
+            self.senders.insert(account.id.clone(), sender);
+            self.add(account.id.clone(), Some(account), receiver);
         }
         loop {
             tokio::select! {
@@ -143,23 +200,27 @@ impl<C: Connector> Core<C> {
 
     fn handle(&mut self, command: CoreCommand) {
         match command {
-            CoreCommand::Add(id) => self.add(id, None),
-            CoreCommand::Remove(id) => self.remove(&id),
-            CoreCommand::Account(id, command) => {
-                if let Some((_, actor)) = self.accounts.iter().find(|(account, _)| *account == id) {
-                    // Fails only if the actor is gone.
-                    let _ = actor.send(command);
-                } else {
-                    tracing::debug!(%id, "command for an unknown account dropped");
-                }
-            }
+            CoreCommand::Add(id, commands) => self.add(id, None, commands),
+            CoreCommand::Remove(id) => self.accounts.retain(|account| *account != id),
         }
     }
 
+    /// Adds a logged-out account with an id of our own.
+    fn add_new(&mut self) {
+        let (sender, receiver) = mpsc::unbounded_channel();
+        let id = AccountId::generate();
+        self.senders.insert(id.clone(), sender);
+        self.add(id, None, receiver);
+    }
+
     /// Emits `Added` and runs an actor for the account, which resumes `stored` if it holds a token.
-    fn add(&mut self, id: AccountId, stored: Option<StoredAccount>) {
+    fn add(
+        &mut self,
+        id: AccountId,
+        stored: Option<StoredAccount>,
+        commands: UnboundedReceiver<Command>,
+    ) {
         (self.on_event)(id.clone(), Event::Added);
-        let (commands, commands_rx) = mpsc::unbounded_channel();
         let on_event = Arc::clone(&self.on_event);
         let tagged = id.clone();
         let run = account::run(
@@ -168,36 +229,29 @@ impl<C: Connector> Core<C> {
             stored,
             move |event| on_event(tagged.clone(), event),
             self.backoff.clone(),
-            commands_rx,
+            commands,
         );
         let span = tracing::info_span!("account", %id);
         self.actors.spawn({
             let id = id.clone();
             async move { (id, run.instrument(span).await) }
         });
-        self.accounts.push((id, commands));
-    }
-
-    /// Tells the actor to log out and drops it, so that it stops. `Removed` follows when it has.
-    fn remove(&mut self, id: &AccountId) {
-        let Some(at) = self.accounts.iter().position(|(account, _)| account == id) else {
-            tracing::debug!(%id, "removal of an unknown account dropped");
-            return;
-        };
-        let (_, actor) = self.accounts.remove(at);
-        // Fails only if the actor is gone.
-        let _ = actor.send(Command::Logout);
+        self.accounts.push(id);
     }
 
     /// An actor ended, because its account was removed: emits `Removed`, and adds a new account
-    /// if none is left.
+    /// if none is left. The account leaves the order here too, as the actor may end before the
+    /// core reads the client's `Remove`.
     fn ended(&mut self, ended: Result<(AccountId, Instant), tokio::task::JoinError>) {
         match ended {
-            Ok((id, _)) => (self.on_event)(id, Event::Removed),
+            Ok((id, _)) => {
+                self.accounts.retain(|account| *account != id);
+                (self.on_event)(id, Event::Removed);
+            }
             Err(error) => tracing::error!(%error, "an account actor failed"),
         }
         if self.accounts.is_empty() {
-            self.add(AccountId::generate(), None);
+            self.add_new();
         }
     }
 
@@ -205,6 +259,7 @@ impl<C: Connector> Core<C> {
     /// deadlines the actors give the store worker. No `Removed` events come.
     async fn stop(mut self) -> Instant {
         self.accounts.clear();
+        self.senders.clear();
         let mut deadline = Instant::now();
         while let Some(ended) = self.actors.join_next().await {
             match ended {

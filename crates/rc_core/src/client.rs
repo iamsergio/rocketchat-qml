@@ -3,6 +3,7 @@
 
 //! The handle frontends drive the core through.
 
+use std::sync::Arc;
 use std::sync::mpsc as std_mpsc;
 use std::time::Duration;
 
@@ -13,7 +14,7 @@ use tokio::sync::mpsc::{self, UnboundedSender};
 use crate::adapters::RestConnector;
 use crate::avatars::AvatarUpdate;
 use crate::backoff::Backoff;
-use crate::core::{self, CoreCommand};
+use crate::core::{self, ActorSenders, CoreCommand};
 use crate::domain::{AccountId, Identity, MessageId, RoomId};
 use crate::emoji::{self, CustomEmojis};
 use crate::error::Error;
@@ -167,6 +168,8 @@ pub(crate) enum Command {
 pub struct Client {
     // Ending the commands is what stops the core.
     commands: Option<UnboundedSender<CoreCommand>>,
+    /// Where the accounts' commands go, straight to their actors.
+    senders: Arc<ActorSenders>,
     /// Signalled by the core when it has drained and is about to end.
     finished: std_mpsc::Receiver<()>,
     runtime: Option<Runtime>,
@@ -224,6 +227,7 @@ impl Client {
             .build()
             .map_err(Error::Runtime)?;
         let (commands, commands_rx) = mpsc::unbounded_channel();
+        let senders = Arc::new(ActorSenders::default());
         let finished = core::spawn(
             &runtime,
             connector,
@@ -231,10 +235,14 @@ impl Client {
             cache,
             on_event,
             backoff,
-            commands_rx,
+            core::Link {
+                senders: Arc::clone(&senders),
+                commands: commands_rx,
+            },
         );
         Ok(Self {
             commands: Some(commands),
+            senders,
             finished,
             runtime: Some(runtime),
         })
@@ -244,7 +252,11 @@ impl Client {
     /// state `LoggedOut`. Log in with [`account`](Self::account).
     pub fn add_account(&self) -> AccountId {
         let id = AccountId::generate();
-        self.send(CoreCommand::Add(id.clone()));
+        // The sender is in place before the core hears of the account, so the commands that
+        // follow wait in the channel until the actor runs.
+        let (sender, receiver) = mpsc::unbounded_channel();
+        self.senders.insert(id.clone(), sender);
+        self.send(CoreCommand::Add(id.clone(), receiver));
         id
     }
 
@@ -253,6 +265,14 @@ impl Client {
     /// come, then `Removed`, once the account is gone. If it was the last account, a new
     /// logged-out one is added after that. Ignored if there is no such account.
     pub fn remove_account(&self, id: &AccountId) {
+        let Some(actor) = self.senders.take(id) else {
+            tracing::debug!(%id, "removal of an unknown account dropped");
+            return;
+        };
+        // Fails only if the actor is gone. Dropping the sender ends the actor once it has handled
+        // what is queued, the logout last.
+        let _ = actor.send(Command::Logout);
+        drop(actor);
         self.send(CoreCommand::Remove(id.clone()));
     }
 
@@ -451,14 +471,16 @@ impl AccountHandle<'_> {
     }
 
     fn send(&self, command: Command) {
-        self.client
-            .send(CoreCommand::Account(self.id.clone(), command));
+        if !self.client.senders.send(self.id, command) {
+            tracing::debug!(id = %self.id, "command for an unknown account dropped");
+        }
     }
 }
 
 impl Drop for Client {
     fn drop(&mut self) {
         self.commands.take();
+        self.senders.clear();
         if self.finished.recv_timeout(SHUTDOWN_WAIT).is_err() {
             tracing::warn!("the core didn't finish in time, pending work is lost");
         }
