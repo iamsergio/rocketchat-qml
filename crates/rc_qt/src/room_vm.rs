@@ -134,16 +134,17 @@ pub struct RoomVmRust {
 
 impl Default for RoomVmRust {
     fn default() -> Self {
-        Self::from(&RoomState::default())
+        Self::new(&RoomState::default(), "")
     }
 }
 
-impl From<&RoomState> for RoomVmRust {
-    fn from(state: &RoomState) -> Self {
+impl RoomVmRust {
+    /// The values for `state`, whose topic is `topic_html` once rendered.
+    fn new(state: &RoomState, topic_html: &str) -> Self {
         Self {
             room_id: QString::from(&state.room_id),
             name: QString::from(&state.name),
-            topic_html: QString::from(&state.topic_html),
+            topic_html: QString::from(topic_html),
             kind: QString::from(&state.kind),
             loading: state.loading,
             loading_older: state.loading_older,
@@ -157,16 +158,17 @@ impl From<&RoomState> for RoomVmRust {
 
 impl cxx_qt::Initialize for qobject::RoomVm {
     fn initialize(mut self: Pin<&mut Self>) {
-        let state = hub::register_room(self.qt_thread());
-        self.as_mut().show(&state);
+        let (state, topic_html) = hub::register_room(self.qt_thread());
+        self.as_mut().show(&state, &topic_html);
     }
 }
 
 impl qobject::RoomVm {
-    /// Copies `state` into the properties, then emits the change signal of each one that changed,
-    /// so a handler sees the new values of all of them.
-    pub fn show(mut self: Pin<&mut Self>, state: &RoomState) {
-        let mut new = RoomVmRust::from(state);
+    /// Copies `state` into the properties, with `topic_html` (its topic rendered) for the topic,
+    /// then emits the change signal of each one that changed, so a handler sees the new values of
+    /// all of them.
+    pub fn show(mut self: Pin<&mut Self>, state: &RoomState, topic_html: &str) {
+        let mut new = RoomVmRust::new(state, topic_html);
         let room_id = self.room_id != new.room_id;
         let name = self.name != new.name;
         let topic_html = self.topic_html != new.topic_html;

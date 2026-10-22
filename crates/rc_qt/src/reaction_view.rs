@@ -9,7 +9,7 @@ use rc_core::domain::{Message, Reaction};
 use rc_core::emoji::Shown;
 use rc_core::rich::Emoji;
 
-use crate::rich_html::{Viewer, is_web_url};
+use crate::viewer::{Viewer, is_web_url};
 
 /// One reaction as QML gets it.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]

@@ -2,21 +2,22 @@
 // SPDX-License-Identifier: MIT
 
 //! What the `MessageList` model shows for the quotes of a message: for each one, who wrote the
-//! quoted message, what it said (as HTML and as written) and when. Plain Rust, so it can be
+//! quoted message, what it said (formatted and as written) and when. Plain Rust, so it can be
 //! unit-tested without Qt.
 
 use rc_core::domain::{Message, Quote};
+use rc_core::rich::RichText;
 
 use crate::message_view::time_text;
-use crate::rich_html::{Clock, Viewer, render};
+use crate::viewer::Clock;
 
 /// One quote as QML gets it.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct QuoteView {
     /// The username of the quoted message's author.
     pub author: String,
-    /// What the quoted message said, as HTML for rich text.
-    pub body_html: String,
+    /// What the quoted message said, formatted, for the frontend to render.
+    pub text: RichText,
     /// What it said as written, which the tests read.
     pub body: String,
     /// The time of day it was sent, empty if the server didn't say.
@@ -25,18 +26,18 @@ pub struct QuoteView {
 
 /// The quotes of `message`, in the order the author quoted them.
 #[must_use]
-pub fn quotes(message: &Message, viewer: &Viewer, clock: Clock) -> Vec<QuoteView> {
+pub fn quotes(message: &Message, clock: Clock) -> Vec<QuoteView> {
     message
         .quotes
         .iter()
-        .map(|quote| view(quote, viewer, clock))
+        .map(|quote| view(quote, clock))
         .collect()
 }
 
-fn view(quote: &Quote, viewer: &Viewer, clock: Clock) -> QuoteView {
+fn view(quote: &Quote, clock: Clock) -> QuoteView {
     QuoteView {
         author: quote.author.clone(),
-        body_html: render(&quote.text, viewer, clock),
+        text: quote.text.clone(),
         body: quote.text.text.clone(),
         time: quote
             .ts
@@ -103,20 +104,20 @@ mod tests {
                 Inline::Bold(vec![Inline::Text("it".into())]),
             ])],
         };
-        let message = message(vec![quote("bob", bold, Some("2026-10-21T09:42:00Z"))]);
+        let message = message(vec![quote(
+            "bob",
+            bold.clone(),
+            Some("2026-10-21T09:42:00Z"),
+        )]);
         let zone = TimeZone::get("Europe/Lisbon").unwrap();
 
-        let views = quotes(&message, &Viewer::default(), clock(&zone));
+        let views = quotes(&message, clock(&zone));
 
         let [view] = views.as_slice() else {
             panic!("expected one view, got {views:?}");
         };
         assert_eq!(view.author, "bob");
-        assert!(
-            view.body_html.contains("say <b>it</b>"),
-            "{}",
-            view.body_html
-        );
+        assert_eq!(view.text, bold);
         assert_eq!(view.body, "say **it**");
         // Lisbon is an hour ahead of UTC in October.
         assert_eq!(view.time, "10:42");
@@ -131,17 +132,14 @@ mod tests {
         ]);
         let zone = TimeZone::UTC;
 
-        let views = quotes(&message, &Viewer::default(), clock(&zone));
+        let views = quotes(&message, clock(&zone));
 
         let seen: Vec<_> = views
             .iter()
             .map(|v| (v.author.as_str(), v.time.as_str()))
             .collect();
         assert_eq!(seen, [("bob", ""), ("carol", "09:42")]);
-        assert_eq!(
-            quotes(&self::message(Vec::new()), &Viewer::default(), clock(&zone)),
-            []
-        );
+        assert_eq!(quotes(&self::message(Vec::new()), clock(&zone)), []);
     }
 
     // ACT-005
@@ -150,11 +148,11 @@ mod tests {
         let message = message(vec![quote("bob", RichText::plain(""), None)]);
         let zone = TimeZone::UTC;
 
-        let views = quotes(&message, &Viewer::default(), clock(&zone));
+        let views = quotes(&message, clock(&zone));
 
         assert_eq!(
-            (views[0].body.as_str(), views[0].body_html.as_str()),
-            ("", "")
+            (views[0].body.as_str(), &views[0].text),
+            ("", &RichText::plain(""))
         );
     }
 }

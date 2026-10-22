@@ -13,38 +13,17 @@ use std::fmt::Write as _;
 
 use jiff::Timestamp;
 use jiff::tz::TimeZone;
-use rc_core::domain::UserId;
-use rc_core::emoji::{CustomEmojis, Shown};
-use rc_core::policy::MessagePolicy;
+use rc_core::domain::{Message, MessageKind};
+use rc_core::emoji::Shown;
 use rc_core::rich::{Block, Emoji, Inline, Mention, RichText};
+
+use crate::viewer::{Clock, Viewer, is_web_url};
 
 /// The edge of a custom emoji image inline, and in a message of nothing but emoji.
 const EMOJI_SIZE: u32 = 20;
 const BIG_EMOJI_SIZE: u32 = 40;
 /// A message of nothing but emoji, in pixels.
 const BIG_EMOJI_FONT: u32 = 32;
-
-/// Whoever looks at the messages: it decides which mentions stand out, which emoji exist and where
-/// the links of attachments lead.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct Viewer {
-    /// The logged-in user, if any.
-    pub username: Option<String>,
-    /// The URL the user logged in with: attachment links are relative to it.
-    pub server: Option<String>,
-    pub emoji: CustomEmojis,
-    /// The logged-in user's id: their messages are the ones they may change.
-    pub user_id: Option<UserId>,
-    /// What the server lets users do with their own messages.
-    pub policy: MessagePolicy,
-}
-
-/// Where times are read and when it is now, so that tests don't depend on either.
-#[derive(Clone, Copy)]
-pub struct Clock<'a> {
-    pub zone: &'a TimeZone,
-    pub now: Timestamp,
-}
 
 /// The HTML of the body, for `Text.RichText`.
 #[must_use]
@@ -55,6 +34,26 @@ pub fn render(text: &RichText, viewer: &Viewer, clock: Clock) -> String {
         renderer.block(&mut out, block);
     }
     out
+}
+
+/// The formatted body of an ordinary message, as HTML for rich text; nothing for a system message.
+#[must_use]
+pub fn message_html(message: &Message, viewer: &Viewer, clock: Clock) -> String {
+    match &message.kind {
+        MessageKind::Text(text) => render(text, viewer, clock),
+        MessageKind::System(_) => String::new(),
+    }
+}
+
+/// The HTML of a room's topic, which is markdown; empty for no topic. Nothing in it depends on
+/// the time.
+#[must_use]
+pub fn topic_html(topic: &str, viewer: &Viewer) -> String {
+    let clock = Clock {
+        zone: &TimeZone::UTC,
+        now: Timestamp::UNIX_EPOCH,
+    };
+    render(&RichText::from_topic(topic), viewer, clock)
 }
 
 /// `text` with the characters that mean something in HTML replaced.
@@ -77,11 +76,6 @@ fn is_safe_url(url: &str) -> bool {
     ["http://", "https://", "mailto:"]
         .iter()
         .any(|scheme| lower.starts_with(scheme))
-}
-
-pub(crate) fn is_web_url(url: &str) -> bool {
-    let lower = url.trim_start().to_ascii_lowercase();
-    lower.starts_with("http://") || lower.starts_with("https://")
 }
 
 struct Renderer<'a> {
@@ -332,6 +326,8 @@ fn relative(time: Timestamp, now: Timestamp) -> String {
 
 #[cfg(test)]
 mod tests {
+    use rc_core::domain::{Author, Delivery, SystemEvent};
+    use rc_core::emoji::CustomEmojis;
     use rc_core::rich::TaskItem;
 
     use super::*;
@@ -399,6 +395,111 @@ mod tests {
             .and_then(|html| html.strip_suffix("</p>"))
             .unwrap()
             .to_owned()
+    }
+
+    /// A message from alice of the given kind.
+    fn message(kind: MessageKind) -> Message {
+        Message {
+            id: "m".to_owned().into(),
+            room_id: "r".to_owned().into(),
+            author: Author {
+                id: "u".to_owned().into(),
+                username: "alice".into(),
+                display_name: None,
+            },
+            ts: Timestamp::UNIX_EPOCH,
+            kind,
+            delivery: Delivery::Sent,
+            attachments: Vec::new(),
+            quotes: Vec::new(),
+            edited: false,
+            reactions: Vec::new(),
+            thread_id: None,
+            thread_shown: false,
+            thread_replies: 0,
+            thread_last_reply: None,
+        }
+    }
+
+    // ACT-005
+    #[test]
+    fn a_quoted_text_renders_like_a_body_and_nothing_renders_as_nothing() {
+        let bold = RichText {
+            text: "say **it**".into(),
+            blocks: vec![para(vec![t("say "), Inline::Bold(vec![t("it")])])],
+        };
+        let zone = TimeZone::UTC;
+        let clock = Clock {
+            zone: &zone,
+            now: Timestamp::UNIX_EPOCH,
+        };
+        let html = render(&bold, &Viewer::default(), clock);
+        assert!(html.contains("say <b>it</b>"), "{html}");
+        assert_eq!(render(&RichText::plain(""), &Viewer::default(), clock), "");
+    }
+
+    // RICH-001
+    #[test]
+    fn the_html_is_the_formatted_body_and_empty_for_system_messages() {
+        let clock = Clock {
+            zone: &TimeZone::UTC,
+            now: "2026-10-20T10:00:00Z".parse().unwrap(),
+        };
+        assert_eq!(
+            message_html(
+                &message(MessageKind::Text("hi".into())),
+                &Viewer::default(),
+                clock
+            ),
+            "<p style=\"margin-top:0px; margin-bottom:0px\">hi</p>"
+        );
+        assert_eq!(
+            message_html(
+                &message(MessageKind::System(SystemEvent::Joined)),
+                &Viewer::default(),
+                clock
+            ),
+            ""
+        );
+    }
+
+    const LINE: &str = "<p style=\"margin-top:0px; margin-bottom:0px\">";
+
+    // ROOM-009
+    #[test]
+    fn a_topic_is_markdown_shown_as_html_and_empty_for_none() {
+        assert_eq!(
+            topic_html(
+                "**Plans** for <b>May</b> & https://example.com :rocket:",
+                &Viewer::default()
+            ),
+            format!(
+                "{LINE}<b>Plans</b> for &lt;b&gt;May&lt;/b&gt; &amp; \
+                 <a href=\"https://example.com\">https://example.com</a> \u{1F680}</p>"
+            )
+        );
+        assert_eq!(topic_html("", &Viewer::default()), "");
+    }
+
+    // ROOM-009
+    #[test]
+    fn a_topic_shows_the_custom_emoji_of_the_viewer() {
+        let viewer = Viewer {
+            emoji: CustomEmojis::new(
+                "https://chat.example.com",
+                &[rc_api::CustomEmoji {
+                    name: "party".into(),
+                    aliases: Vec::new(),
+                    extension: "gif".into(),
+                }],
+            ),
+            ..Viewer::default()
+        };
+        let html = topic_html(":party:", &viewer);
+        assert!(
+            html.contains("<img src=\"https://chat.example.com/"),
+            "{html}"
+        );
     }
 
     // RICH-001

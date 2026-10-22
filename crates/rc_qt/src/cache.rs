@@ -17,10 +17,10 @@ use crate::accounts::{AccountView, Status, account_status, monogram};
 use crate::attachment_view::ImageUrls;
 use crate::avatar_view::AvatarUrls;
 use crate::message_view::{author_name, body, can_edit};
-use crate::rich_html::Viewer;
 use crate::room_view::{RoomState, room_state, typing_line};
 use crate::session_view::{LoginMode, SessionView, host, session_view};
 use crate::thread_view::{ThreadState, thread_state};
+use crate::viewer::Viewer;
 
 /// One account's: its identity and unread totals, the latest session state, a mirror of the room list and mirrors of the open room's messages and
 /// of the open thread's.
@@ -382,7 +382,7 @@ impl Cache {
     /// What the `Room` view model shows now.
     #[must_use]
     pub fn room_state(&self) -> RoomState {
-        let mut state = room_state(&self.rooms, &self.status, &self.viewer());
+        let mut state = room_state(&self.rooms, &self.status);
         // Only for the room the view model shows: a late event of another one means nothing.
         if let (Some((room, names)), Some(open)) = (&self.typing, &self.status.room)
             && room == open
@@ -839,7 +839,7 @@ mod tests {
             room: Some("a".to_owned().into()),
             ..TimelineStatus::default()
         }));
-        assert_eq!(cache.room_state().topic_html, "");
+        assert_eq!(cache.room_state().topic, "");
         let with_topic = |topic: &str| {
             Event::Rooms(vec![RoomChange::Updated {
                 index: 0,
@@ -850,9 +850,9 @@ mod tests {
             }])
         };
         cache.apply(&with_topic("Plans"));
-        assert!(cache.room_state().topic_html.contains(">Plans</p>"));
+        assert_eq!(cache.room_state().topic, "Plans");
         cache.apply(&with_topic(""));
-        assert_eq!(cache.room_state().topic_html, "");
+        assert_eq!(cache.room_state().topic, "");
     }
 
     /// A reply to `parent` in the thread, sent by somebody else.

@@ -19,13 +19,14 @@ use crate::attachment_view::{AttachmentView, ImageUrls, attachments, paths, show
 use crate::avatar_view::{AvatarUrls, color, initials, message_owner, owners, rows_using, runs};
 use crate::message_view::{
     author_name, body, can_delete, can_edit, can_quote, can_react, can_start_thread, day_label,
-    delivery_name, first_of_day, html, in_thread_shown, mentions_me, system_text, thread_id,
+    delivery_name, first_of_day, in_thread_shown, mentions_me, system_text, thread_id,
     thread_last_reply_text, thread_parent_text, thread_replies, time_text,
 };
 use crate::quote_view::{QuoteView, quotes};
 use crate::reaction_view::{ReactionView, reactions};
-use crate::rich_html::{Clock, Viewer};
+use crate::rich_html::{message_html, render};
 use crate::row_ops::{MessageOp, apply_newest_first, message_ops};
+use crate::viewer::{Clock, Viewer};
 
 /// `Qt::DisplayRole`, which shows the body too.
 const DISPLAY_ROLE: i32 = 0;
@@ -106,14 +107,14 @@ fn reactions_variant(views: &[ReactionView]) -> QVariant {
 }
 
 /// The quotes as a `QVariantList` of `QVariantMap`s, with the keys QML reads.
-fn quotes_variant(views: &[QuoteView]) -> QVariant {
+fn quotes_variant(views: &[QuoteView], viewer: &Viewer, clock: Clock) -> QVariant {
     let text = |value: &str| QVariant::from(&QString::from(value));
     let mut list = QList::<QVariant>::default();
     for view in views {
         let mut map = QMap::<QMapPair_QString_QVariant>::default();
         for (key, value) in [
             ("author", text(&view.author)),
-            ("bodyHtml", text(&view.body_html)),
+            ("bodyHtml", text(&render(&view.text, viewer, clock))),
             ("body", text(&view.body)),
             ("time", text(&view.time)),
         ] {
@@ -250,7 +251,7 @@ impl MessageMirror {
             )),
             DAY_LABEL_ROLE => text(&day_label(message.ts, &self.zone, Timestamp::now())),
             DELIVERY_ROLE => text(delivery_name(message.delivery)),
-            HTML_ROLE => text(&html(
+            HTML_ROLE => text(&message_html(
                 message,
                 &self.viewer,
                 Clock {
@@ -275,14 +276,13 @@ impl MessageMirror {
             // drawn.
             CAN_EDIT_ROLE => QVariant::from(&can_edit(message, &self.viewer, Timestamp::now())),
             CAN_DELETE_ROLE => QVariant::from(&can_delete(message, &self.viewer, Timestamp::now())),
-            QUOTES_ROLE => quotes_variant(&quotes(
-                message,
-                &self.viewer,
-                Clock {
+            QUOTES_ROLE => {
+                let clock = Clock {
                     zone: &self.zone,
                     now: Timestamp::now(),
-                },
-            )),
+                };
+                quotes_variant(&quotes(message, clock), &self.viewer, clock)
+            }
             CAN_QUOTE_ROLE => QVariant::from(&can_quote(message)),
             CAN_REACT_ROLE => QVariant::from(&can_react(message)),
             THREAD_REPLIES_ROLE => QVariant::from(&thread_replies(message)),
@@ -426,7 +426,7 @@ macro_rules! message_model {
             pub fn show(
                 mut self: ::core::pin::Pin<&mut Self>,
                 snapshot: &::rc_core::timeline::TimelineChange,
-                viewer: $crate::rich_html::Viewer,
+                viewer: $crate::viewer::Viewer,
                 avatars: $crate::avatar_view::AvatarUrls,
                 images: $crate::attachment_view::ImageUrls,
             ) {
@@ -445,7 +445,7 @@ macro_rules! message_model {
             /// Shows the messages to someone else (see [`MessageMirror::set_viewer`]).
             pub fn set_viewer(
                 mut self: ::core::pin::Pin<&mut Self>,
-                viewer: $crate::rich_html::Viewer,
+                viewer: $crate::viewer::Viewer,
             ) {
                 use ::cxx_qt::CxxQtType;
 
