@@ -27,6 +27,9 @@ cxx-qt-lib = "0.10.0"
 dbus-secret-service-keyring-store = { version = "1.0.1", default-features = false, features = ["crypto-rust"] }
 emojis = "0.9.1"
 futures-util = { version = "0.3.34", default-features = false, features = ["sink", "std"] }
+# The testing backend (the search API for UI tests) is internal to Slint: its version must match
+# slint's exactly.
+i-slint-backend-testing = "=1.18.1"
 jiff = "0.2.38"
 keyring-core = "1.0.0"
 linkify = "0.10.0"
@@ -46,6 +49,10 @@ serde = { version = "1.0.229", features = ["derive"] }
 # preserve_order: a message pushed over DDP goes through `Value` first, and its reactions must keep
 # the order the server lists them in.
 serde_json = { version = "1.0.151", features = ["preserve_order"] }
+# A pure Rust build: no `backend-qt` (it builds a Qt backend when qmake is found). No
+# `accessibility` yet: see "rc_slint has no screen-reader support" in PLAN.md.
+slint = { version = "1.18.1", default-features = false, features = ["backend-winit", "compat-1-2", "renderer-femtovg", "renderer-software", "std"] }
+slint-build = "1.18.1"
 thiserror = "2.0.21"
 tokio = "1.53.2"
 # TLS through the rustls config rc_api builds, with the same verifier as reqwest.

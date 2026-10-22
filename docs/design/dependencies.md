@@ -16,6 +16,8 @@
 | thiserror | Typed errors in library crates |
 | tracing | Structured logging |
 | ureq, roxmltree | HTTP and XML for the small XML-RPC client in `rc_gui_tests` (Spix uses a handful of value types, so no XML-RPC crate) |
+| slint, slint-build | The Slint frontend (`rc_slint`): winit backend with the FemtoVG and software renderers, no Qt backend and no `accessibility` feature (it pulls in zbus). The licence is not chosen yet (see PLAN.md) |
+| i-slint-backend-testing | Dev only: Slint's testing backend and element search API (`ElementHandle`), for the in-process tests of `rc_slint`. Its version must match slint's exactly |
 | wiremock | Dev only: mock HTTP server for the `rc_api` tests |
 | secrecy | Keeps passwords and tokens out of logs and `Debug` output |
 | keyring-core + native stores | OS credential storage for the session token (on Linux the Secret Service through the system libdbus, which Qt loads too, so it needs `libdbus-1-dev` to build) |

@@ -1,0 +1,23 @@
+// SPDX-FileCopyrightText: 2026 Sergio Martins
+// SPDX-License-Identifier: MIT
+
+import { Theme } from "theme.slint";
+
+export component MainWindow inherits Window {
+    // The version of the app, set from Rust (`rc_core::VERSION`).
+    in property <string> version;
+
+    title: @tr("RocketChatQml");
+    background: Theme.base;
+    preferred-width: Theme.window-width;
+    preferred-height: Theme.window-height;
+
+    Text {
+        accessible-id: "versionLabel";
+        color: Theme.text-faint;
+        font-size: Theme.font-size-tiny;
+        text: @tr("RocketChatQml {}", root.version);
+        horizontal-alignment: left;
+        vertical-alignment: top;
+    }
+}
