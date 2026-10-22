@@ -28,6 +28,9 @@ pub mod qobject {
         // `actionError`: why the last edit, deletion or reaction failed, to show until it is
         // dismissed. Cleared by the next one, by `dismissActionError` and by opening another room.
         #[qproperty(QString, action_error, cxx_name = "actionError", READ, NOTIFY)]
+        // `typing`: who is typing in the open room, as a line for the room view ("alice is
+        // typing…"), empty for nobody.
+        #[qproperty(QString, typing, READ, NOTIFY)]
         type RoomVm = super::RoomVmRust;
 
         /// Shows the room's messages; the outcome shows in the properties and in `MessageList`.
@@ -126,6 +129,7 @@ pub struct RoomVmRust {
     reached_start: bool,
     error_text: QString,
     action_error: QString,
+    typing: QString,
 }
 
 impl Default for RoomVmRust {
@@ -146,6 +150,7 @@ impl From<&RoomState> for RoomVmRust {
             reached_start: state.reached_start,
             error_text: QString::from(&state.error_text),
             action_error: QString::default(),
+            typing: QString::from(&state.typing),
         }
     }
 }
@@ -170,6 +175,7 @@ impl qobject::RoomVm {
         let loading_older = self.loading_older != new.loading_older;
         let reached_start = self.reached_start != new.reached_start;
         let error_text = self.error_text != new.error_text;
+        let typing = self.typing != new.typing;
         // What failed in one room means nothing in another. The state doesn't know of it.
         if !room_id {
             new.action_error.clone_from(&self.action_error);
@@ -202,6 +208,9 @@ impl qobject::RoomVm {
         }
         if action_error {
             self.as_mut().action_error_changed();
+        }
+        if typing {
+            self.as_mut().typing_changed();
         }
     }
 

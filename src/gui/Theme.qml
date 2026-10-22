@@ -174,6 +174,9 @@ QtObject {
     readonly property int threadPaneWidth: 360
     readonly property int threadSummaryHeight: 28
     readonly property int threadSummaryIconSize: 14
+    // The line "alice is typing…" over the composer. Its height is always taken, with or without
+    // text, so the messages don't move when someone starts or stops typing.
+    readonly property int typingLineHeight: 20
     readonly property int unreadBadgeHeight: 18
     readonly property int unreadBadgeMinWidth: 20
     readonly property int windowHeight: 600

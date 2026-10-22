@@ -53,6 +53,20 @@ pub fn outgoing(
     Some((RoomId::from(room_id.to_owned()), text.to_owned(), quoted))
 }
 
+/// The line that says who is typing, from their names in the order they started: empty for none,
+/// then `alice is typing…`, `alice and bob are typing…`, `alice, bob and carol are typing…` and,
+/// from four, `alice, bob and 2 others are typing…` (the first two, then how many more).
+#[must_use]
+pub fn typing_line(names: &[String]) -> String {
+    match names {
+        [] => String::new(),
+        [one] => format!("{one} is typing\u{2026}"),
+        [a, b] => format!("{a} and {b} are typing\u{2026}"),
+        [a, b, c] => format!("{a}, {b} and {c} are typing\u{2026}"),
+        [a, b, rest @ ..] => format!("{a}, {b} and {} others are typing\u{2026}", rest.len()),
+    }
+}
+
 /// The values of the `Room` properties: the open room, and how loading its messages is going.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct RoomState {
@@ -68,6 +82,8 @@ pub struct RoomState {
     pub reached_start: bool,
     /// Why the last load failed, as it is to be shown. Empty if it didn't.
     pub error_text: String,
+    /// Who is typing in the room, as [`typing_line`] says it. Empty for nobody.
+    pub typing: String,
 }
 
 /// The HTML of a topic, which is markdown. Nothing in it depends on the time.
@@ -100,6 +116,7 @@ pub fn room_state(rooms: &[Room], status: &TimelineStatus, viewer: &Viewer) -> R
             .error
             .as_ref()
             .map_or_else(String::new, ToString::to_string),
+        typing: String::new(),
     }
 }
 
@@ -132,6 +149,53 @@ mod tests {
             favorite: false,
             last_activity: jiff::Timestamp::UNIX_EPOCH,
         }
+    }
+
+    fn names(names: &[&str]) -> Vec<String> {
+        names.iter().map(|name| (*name).to_owned()).collect()
+    }
+
+    // ACT-006
+    #[test]
+    fn nobody_typing_is_no_line() {
+        assert_eq!(typing_line(&[]), "");
+    }
+
+    // ACT-006
+    #[test]
+    fn one_typist_is_named() {
+        assert_eq!(typing_line(&names(&["alice"])), "alice is typing\u{2026}");
+    }
+
+    // ACT-006
+    #[test]
+    fn two_typists_are_named_with_and() {
+        assert_eq!(
+            typing_line(&names(&["alice", "bob"])),
+            "alice and bob are typing\u{2026}"
+        );
+    }
+
+    // ACT-006
+    #[test]
+    fn three_typists_are_all_named() {
+        assert_eq!(
+            typing_line(&names(&["alice", "bob", "carol"])),
+            "alice, bob and carol are typing\u{2026}"
+        );
+    }
+
+    // ACT-006
+    #[test]
+    fn from_four_typists_the_first_two_are_named_and_the_rest_counted() {
+        assert_eq!(
+            typing_line(&names(&["alice", "bob", "carol", "dave"])),
+            "alice, bob and 2 others are typing\u{2026}"
+        );
+        assert_eq!(
+            typing_line(&names(&["a", "b", "c", "d", "e", "f"])),
+            "a, b and 4 others are typing\u{2026}"
+        );
     }
 
     // ACT-001, ACT-002, ACT-003

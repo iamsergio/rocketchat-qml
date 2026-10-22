@@ -22,6 +22,8 @@ pub struct ThreadState {
     pub reached_start: bool,
     /// Why the last load failed, as it is to be shown. Empty if it didn't.
     pub error_text: String,
+    /// Who is typing in the thread, as `typing_line` says it. Empty for nobody.
+    pub typing: String,
 }
 
 /// The state for the thread `status` is about, in the open room `room` (with its name taken from
@@ -46,6 +48,7 @@ pub fn thread_state(rooms: &[Room], room: Option<&RoomId>, status: &ThreadStatus
             .error
             .as_ref()
             .map_or_else(String::new, ToString::to_string),
+        typing: String::new(),
     }
 }
 

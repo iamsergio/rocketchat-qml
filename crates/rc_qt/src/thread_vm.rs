@@ -28,6 +28,8 @@ pub mod qobject {
         #[qproperty(QString, error_text, cxx_name = "errorText", READ, NOTIFY)]
         // The name of the open room, for the pane's heading and its check box.
         #[qproperty(QString, room_name, cxx_name = "roomName", READ, NOTIFY)]
+        // Who is typing in the open thread, as a line ("alice is typing…"), empty for nobody.
+        #[qproperty(QString, typing, READ, NOTIFY)]
         type ThreadVm = super::ThreadVmRust;
 
         /// Shows the replies of a message of the open room beside it; the outcome shows in the
@@ -98,6 +100,7 @@ pub struct ThreadVmRust {
     reached_start: bool,
     error_text: QString,
     room_name: QString,
+    typing: QString,
 }
 
 impl Default for ThreadVmRust {
@@ -116,6 +119,7 @@ impl From<&ThreadState> for ThreadVmRust {
             reached_start: state.reached_start,
             error_text: QString::from(&state.error_text),
             room_name: QString::from(&state.room_name),
+            typing: QString::from(&state.typing),
         }
     }
 }
@@ -139,6 +143,7 @@ impl qobject::ThreadVm {
         let reached_start = self.reached_start != new.reached_start;
         let error_text = self.error_text != new.error_text;
         let room_name = self.room_name != new.room_name;
+        let typing = self.typing != new.typing;
         *self.as_mut().rust_mut() = new;
         if parent_id {
             self.as_mut().parent_id_changed();
@@ -160,6 +165,9 @@ impl qobject::ThreadVm {
         }
         if room_name {
             self.as_mut().room_name_changed();
+        }
+        if typing {
+            self.as_mut().typing_changed();
         }
     }
 
