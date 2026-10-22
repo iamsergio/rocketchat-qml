@@ -288,7 +288,8 @@ pub mod message_row {
     /// [`reaction`](super::reaction).
     pub const REACTIONS: &str = "msgReactions";
     /// The "+" after the chips: opens the emoji picker. Visible when the message has reactions and
-    /// can be reacted to.
+    /// can be reacted to; it is clear until the pointer is over the message, but a click gets to it
+    /// all the same.
     pub const REACTION_ADD: &str = "reactionAdd";
     /// Opens the message's menu (quote, add reaction, edit, delete). Visible only for a message
     /// that can be quoted or reacted to or that the user can change; it is clear until the pointer

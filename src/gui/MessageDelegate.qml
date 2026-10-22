@@ -342,7 +342,7 @@ Item {
                         objectName: "msgMenuButton"
                         Layout.preferredHeight: Theme.menuButtonHeight
                         Layout.preferredWidth: Theme.menuButtonWidth
-                        opacity: rowHover.hovered || menu.opened ? 1 : 0
+                        opacity: rowHover.hovered || menu.opened ? Theme.opaque : Theme.clear
                         padding: Theme.spacingNone
                         text: "\u22EF"
                         visible: root.hasMenu
@@ -787,9 +787,12 @@ Item {
                         }
                     }
 
-                    // Another emoji of the user's choosing.
+                    // Another emoji of the user's choosing. Shown when the pointer is over the message,
+                    // like the menu button; it keeps its place the rest of the time, so the chips
+                    // don't move.
                     Rectangle {
                         objectName: "reactionAdd"
+                        opacity: rowHover.hovered ? Theme.opaque : Theme.clear
                         border.color: addArea.containsMouse ? Theme.raisedHover : Theme.transparent
                         border.width: Theme.borderWidth
                         color: Theme.raised

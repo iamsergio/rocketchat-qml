@@ -219,6 +219,9 @@ QtObject {
 
     // Opacity
     readonly property real disabledOpacity: 0.6
+    // What shows only while the pointer is over its row: shown, and clear but still clickable.
+    readonly property real opaque: 1
+    readonly property real clear: 0
 
     // The factor that makes the main button brighter under the pointer.
     readonly property real hoverLighter: 1.08
