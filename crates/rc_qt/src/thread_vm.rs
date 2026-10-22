@@ -88,7 +88,7 @@ use cxx_qt::{CxxQtType, Threading};
 use cxx_qt_lib::QString;
 
 use crate::hub;
-use crate::thread_view::{ThreadState, outgoing_reply};
+use rc_view::thread_view::{ThreadState, outgoing_reply};
 
 /// Backing data of [`qobject::ThreadVm`].
 #[allow(clippy::struct_excessive_bools)] // A property each.

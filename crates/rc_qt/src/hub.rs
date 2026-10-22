@@ -39,22 +39,22 @@ use rc_core::{AccountHandle, Client, Event};
 use secrecy::SecretString;
 
 use crate::account_list_model::qobject::AccountListModel;
-use crate::accounts::{AccountChange, AccountView, Accounts};
-use crate::attachment_view::ImageUrls;
-use crate::avatar_view::AvatarUrls;
-use crate::cache::Cache;
 use crate::emoji_picker_model::qobject::EmojiPickerModel;
 use crate::message_list_model::qobject::MessageListModel;
 use crate::rich_html::topic_html;
 use crate::room_list_model::qobject::RoomListModel;
-use crate::room_view::RoomState;
 use crate::room_vm::qobject::RoomVm;
-use crate::session_view::SessionView;
 use crate::session_vm::qobject::SessionVm;
 use crate::thread_message_list_model::qobject::ThreadMessageListModel;
-use crate::thread_view::ThreadState;
 use crate::thread_vm::qobject::ThreadVm;
-use crate::viewer::Viewer;
+use rc_view::accounts::{AccountChange, AccountView, Accounts};
+use rc_view::attachment_view::ImageUrls;
+use rc_view::avatar_view::AvatarUrls;
+use rc_view::cache::Cache;
+use rc_view::room_view::RoomState;
+use rc_view::session_view::SessionView;
+use rc_view::thread_view::ThreadState;
+use rc_view::viewer::Viewer;
 
 /// Environment variable choosing where the session token is kept. `memory` keeps it in memory
 /// only, and `file:<path>` in a plain file (GUI tests, in builds with `test-file-store`); anything

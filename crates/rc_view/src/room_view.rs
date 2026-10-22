@@ -8,8 +8,8 @@ use rc_core::domain::{MessageId, Room, RoomId, RoomKind};
 use rc_core::policy::MessageAction;
 use rc_core::timeline::TimelineStatus;
 
-/// How QML sees the kind of a room. A string rather than another Qt enum, which keeps the role a
-/// plain `QVariant`.
+/// How the GUI sees the kind of a room: a string rather than an enum of the toolkit's.
+#[must_use]
 pub fn kind_name(kind: RoomKind) -> &'static str {
     match kind {
         RoomKind::Channel => "channel",
@@ -18,7 +18,9 @@ pub fn kind_name(kind: RoomKind) -> &'static str {
     }
 }
 
-/// How QML sees what was done to a message, in the answer to an edit, a deletion or a reaction.
+/// How the GUI sees what was done to a message, in the answer to an edit, a deletion or a
+/// reaction.
+#[must_use]
 pub fn action_name(action: MessageAction) -> &'static str {
     match action {
         MessageAction::Edit => "edit",

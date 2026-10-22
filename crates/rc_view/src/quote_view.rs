@@ -11,7 +11,7 @@ use rc_core::rich::RichText;
 use crate::message_view::time_text;
 use crate::viewer::Clock;
 
-/// One quote as QML gets it.
+/// One quote as the GUI gets it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct QuoteView {
     /// The username of the quoted message's author.

@@ -140,7 +140,7 @@ pub fn thread_parent_text(messages: &[Message], message: &Message) -> String {
         .unwrap_or_default()
 }
 
-/// How QML sees the delivery state of a message: a string, as for the kind of a room.
+/// How the GUI sees the delivery state of a message: a string, as for the kind of a room.
 #[must_use]
 pub fn delivery_name(delivery: Delivery) -> &'static str {
     match delivery {
@@ -150,8 +150,8 @@ pub fn delivery_name(delivery: Delivery) -> &'static str {
     }
 }
 
-/// What a system message says, in English; empty for an ordinary message. Built here so that QML
-/// has no wording logic.
+/// What a system message says, in English; empty for an ordinary message. Built here so that the
+/// GUI has no wording logic.
 #[must_use]
 pub fn system_text(message: &Message) -> String {
     let MessageKind::System(event) = &message.kind else {

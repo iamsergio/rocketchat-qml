@@ -1,0 +1,25 @@
+# SPDX-FileCopyrightText: 2026 Sergio Martins
+# SPDX-License-Identifier: MIT
+
+[package]
+name = "rc_view"
+description = "What the screens show for each account, without any GUI toolkit"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+jiff.workspace = true
+rc_core.workspace = true
+tracing.workspace = true
+
+[features]
+# Set through rc_qt's feature of the same name: `--dev` fills the login page in (dev_login).
+developer-mode = []
+
+[dev-dependencies]
+rc_api.workspace = true
+
+[lints]
+workspace = true

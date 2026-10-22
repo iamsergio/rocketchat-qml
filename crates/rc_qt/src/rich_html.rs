@@ -17,7 +17,7 @@ use rc_core::domain::{Message, MessageKind};
 use rc_core::emoji::Shown;
 use rc_core::rich::{Block, Emoji, Inline, Mention, RichText};
 
-use crate::viewer::{Clock, Viewer, is_web_url};
+use rc_view::viewer::{Clock, Viewer, is_web_url};
 
 /// The edge of a custom emoji image inline, and in a message of nothing but emoji.
 const EMOJI_SIZE: u32 = 20;

@@ -3,7 +3,7 @@
 #
 # SPDX-License-Identifier: MIT
 
-# Rust code coverage of rc_api, rc_core and rc_qt, from every kind of test: the unit tests, the
+# Rust code coverage of rc_api, rc_core, rc_view and rc_qt, from every kind of test: the unit tests, the
 # contract tests (they need the Rocket.Chat test server, see scripts/run_test_server.sh) and the GUI
 # tests, which run the app built by CMake with coverage instrumentation. Needs cargo-llvm-cov and
 # rustup's llvm-tools-preview component.

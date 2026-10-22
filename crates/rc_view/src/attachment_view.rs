@@ -6,13 +6,14 @@
 //! without Qt.
 
 use std::collections::{HashMap, HashSet};
+use std::hash::BuildHasher;
 
 use rc_core::ImageUpdate;
 use rc_core::domain::{Attachment, Message};
 
 use crate::avatar_view::file_url;
 
-/// The image files by their path on the server, as the `file://` URLs QML loads them from. An
+/// The image files by their path on the server, as the `file://` URLs the GUI loads them from. An
 /// image without a file has no entry.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ImageUrls {
@@ -61,7 +62,7 @@ impl ImageUrls {
     }
 }
 
-/// One attachment as QML gets it.
+/// One attachment as the GUI gets it.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct AttachmentView {
     /// The file's name, or its link's if the server gave none.
@@ -153,7 +154,7 @@ pub fn paths(changes: &[(String, String)]) -> HashSet<String> {
 
 /// Whether the message shows one of the images at `changed`.
 #[must_use]
-pub fn shows_image(message: &Message, changed: &HashSet<String>) -> bool {
+pub fn shows_image<S: BuildHasher>(message: &Message, changed: &HashSet<String, S>) -> bool {
     message
         .attachments
         .iter()

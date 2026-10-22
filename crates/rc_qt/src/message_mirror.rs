@@ -15,18 +15,18 @@ use jiff::tz::TimeZone;
 use rc_core::domain::{AvatarOwner, Message, MessageKind};
 use rc_core::timeline::TimelineChange;
 
-use crate::attachment_view::{AttachmentView, ImageUrls, attachments, paths, shows_image};
-use crate::avatar_view::{AvatarUrls, color, initials, message_owner, owners, rows_using, runs};
-use crate::message_view::{
+use crate::rich_html::{message_html, render};
+use rc_view::attachment_view::{AttachmentView, ImageUrls, attachments, paths, shows_image};
+use rc_view::avatar_view::{AvatarUrls, color, initials, message_owner, owners, rows_using, runs};
+use rc_view::message_view::{
     author_name, body, can_delete, can_edit, can_quote, can_react, can_start_thread, day_label,
     delivery_name, first_of_day, in_thread_shown, mentions_me, system_text, thread_id,
     thread_last_reply_text, thread_parent_text, thread_replies, time_text,
 };
-use crate::quote_view::{QuoteView, quotes};
-use crate::reaction_view::{ReactionView, reactions};
-use crate::rich_html::{message_html, render};
-use crate::row_ops::{MessageOp, apply_newest_first, message_ops};
-use crate::viewer::{Clock, Viewer};
+use rc_view::quote_view::{QuoteView, quotes};
+use rc_view::reaction_view::{ReactionView, reactions};
+use rc_view::row_ops::{MessageOp, apply_newest_first, message_ops};
+use rc_view::viewer::{Clock, Viewer};
 
 /// `Qt::DisplayRole`, which shows the body too.
 const DISPLAY_ROLE: i32 = 0;
@@ -355,8 +355,8 @@ macro_rules! message_model {
                 changes: &[::rc_core::timeline::TimelineChange],
             ) {
                 use ::cxx_qt::CxxQtType;
+                use ::rc_view::row_ops::MessageOp;
                 use $crate::message_mirror::row;
-                use $crate::row_ops::MessageOp;
 
                 let no_parent = ::cxx_qt_lib::QModelIndex::default();
                 for change in changes {
@@ -426,9 +426,9 @@ macro_rules! message_model {
             pub fn show(
                 mut self: ::core::pin::Pin<&mut Self>,
                 snapshot: &::rc_core::timeline::TimelineChange,
-                viewer: $crate::viewer::Viewer,
-                avatars: $crate::avatar_view::AvatarUrls,
-                images: $crate::attachment_view::ImageUrls,
+                viewer: ::rc_view::viewer::Viewer,
+                avatars: ::rc_view::avatar_view::AvatarUrls,
+                images: ::rc_view::attachment_view::ImageUrls,
             ) {
                 use ::cxx_qt::CxxQtType;
 
@@ -445,7 +445,7 @@ macro_rules! message_model {
             /// Shows the messages to someone else (see [`MessageMirror::set_viewer`]).
             pub fn set_viewer(
                 mut self: ::core::pin::Pin<&mut Self>,
-                viewer: $crate::viewer::Viewer,
+                viewer: ::rc_view::viewer::Viewer,
             ) {
                 use ::cxx_qt::CxxQtType;
 

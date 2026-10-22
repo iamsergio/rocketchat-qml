@@ -6,17 +6,18 @@
 
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
+use std::hash::BuildHasher;
 use std::path::Path;
 
 use rc_core::AvatarUpdate;
 use rc_core::domain::{AvatarOwner, Message, MessageKind, Room};
 
-/// The avatar files by owner, as the `file://` URLs QML loads them from. An owner without a file
-/// has no entry.
+/// The avatar files by owner, as the `file://` URLs the GUI loads them from. An owner without a
+/// file has no entry.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct AvatarUrls {
     urls: HashMap<AvatarOwner, String>,
-    /// Counts how often the owner's file was announced: QML keeps images by URL, so a replaced
+    /// Counts how often the owner's file was announced: the GUI keeps images by URL, so a replaced
     /// file needs a new one.
     versions: HashMap<AvatarOwner, u64>,
 }
@@ -60,8 +61,8 @@ impl AvatarUrls {
     }
 }
 
-/// The `file://` URL of `path`, with `?v=<version>` so that a replaced file is another image to QML.
-/// The query is not part of the file: Qt takes the path of a local URL.
+/// The `file://` URL of `path`, with `?v=<version>` so that a replaced file is another image to the
+/// GUI. The query is not part of the file: Qt takes the path of a local URL.
 #[must_use]
 pub fn file_url(path: &Path, version: u64) -> String {
     let text = path.to_string_lossy().replace('\\', "/");
@@ -93,9 +94,9 @@ pub fn message_owner(message: &Message) -> Option<AvatarOwner> {
 /// The rows, as runs `(first, last)` of consecutive rows, for which `uses` says the row shows one
 /// of the avatars that changed: the only ones to announce.
 #[must_use]
-pub fn rows_using(
+pub fn rows_using<S: BuildHasher>(
     count: usize,
-    changed: &HashSet<AvatarOwner>,
+    changed: &HashSet<AvatarOwner, S>,
     owner: impl Fn(usize) -> Option<AvatarOwner>,
 ) -> Vec<(usize, usize)> {
     runs(count, |row| {

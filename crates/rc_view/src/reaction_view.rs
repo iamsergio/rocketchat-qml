@@ -11,10 +11,10 @@ use rc_core::rich::Emoji;
 
 use crate::viewer::{Viewer, is_web_url};
 
-/// One reaction as QML gets it.
+/// One reaction as the GUI gets it.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ReactionView {
-    /// The shortcode as the server sends it, colons included. QML shows it when it has neither a
+    /// The shortcode as the server sends it, colons included. The GUI shows it when it has neither a
     /// glyph nor an image.
     pub emoji: String,
     /// The emoji as Unicode text; empty for a custom emoji and for a shortcode nobody knows.

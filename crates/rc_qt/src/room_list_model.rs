@@ -181,10 +181,10 @@ use cxx_qt_lib::{
 use rc_core::domain::{AvatarOwner, Room};
 use rc_core::rooms::{RoomActionError, RoomChange};
 
-use crate::avatar_view::{AvatarUrls, owners, room_placeholder, rows_using};
 use crate::hub;
-use crate::room_view::{any_favorite, kind_name};
-use crate::row_ops::{RowOp, row_ops};
+use rc_view::avatar_view::{AvatarUrls, owners, room_placeholder, rows_using};
+use rc_view::room_view::{any_favorite, kind_name};
+use rc_view::row_ops::{RowOp, row_ops};
 
 use qobject::RoomListModel;
 

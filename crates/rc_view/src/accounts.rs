@@ -63,7 +63,7 @@ pub fn monogram(host: &str) -> String {
 }
 
 /// One row of the `AccountList` model.
-// One role each for QML, which is told the flags and does not combine them.
+// One role each for the GUI, which is told the flags and does not combine them.
 #[allow(clippy::struct_excessive_bools)]
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct AccountView {

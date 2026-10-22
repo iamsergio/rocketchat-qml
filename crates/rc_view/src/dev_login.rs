@@ -21,11 +21,11 @@ const PASSWORD_ENV: &str = "RC_DEV_PASS";
 pub struct DevLogin {
     pub server: String,
     pub username: String,
-    /// Only ever a test server's password: it sits in a QML property in clear.
+    /// Only ever a test server's password: it sits in a GUI property in clear.
     pub password: String,
 }
 
-// Set once, before the QML is loaded; the `Session` view model reads it when QML creates it.
+// Set once, before the GUI is loaded; the session view reads it when the GUI creates it.
 static PREFILL: OnceLock<DevLogin> = OnceLock::new();
 
 /// The defaults, with each one that `var` (the environment) has a non-empty value for replaced.
@@ -43,7 +43,7 @@ fn from_env(var: impl Fn(&str) -> Option<String>) -> DevLogin {
     }
 }
 
-/// Fills in the login fields from now on. Call before the QML is loaded.
+/// Fills in the login fields from now on. Call before the GUI is loaded.
 #[cfg(feature = "developer-mode")]
 pub fn enable() {
     let login = from_env(|name| std::env::var(name).ok());

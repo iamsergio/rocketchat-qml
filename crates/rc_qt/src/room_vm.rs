@@ -116,7 +116,7 @@ use cxx_qt_lib::QString;
 use rc_core::policy::{ActionError, MessageAction};
 
 use crate::hub;
-use crate::room_view::{RoomState, action_name, outgoing};
+use rc_view::room_view::{RoomState, action_name, outgoing};
 
 /// Backing data of [`qobject::RoomVm`].
 pub struct RoomVmRust {
