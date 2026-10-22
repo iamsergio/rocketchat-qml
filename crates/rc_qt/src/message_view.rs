@@ -9,7 +9,7 @@ use jiff::tz::TimeZone;
 use jiff::{Timestamp, Zoned};
 use rc_core::domain::{Author, Delivery, Message, MessageKind, SystemEvent};
 
-use crate::rich_html::{Clock, Viewer, render};
+use crate::viewer::Viewer;
 
 /// Who to show as the author: the display name, else the username.
 #[must_use]
@@ -27,15 +27,6 @@ pub fn body(message: &Message) -> &str {
     match &message.kind {
         MessageKind::Text(text) => &text.text,
         MessageKind::System(_) => "",
-    }
-}
-
-/// The formatted body of an ordinary message, as HTML for rich text; nothing for a system message.
-#[must_use]
-pub fn html(message: &Message, viewer: &Viewer, clock: Clock) -> String {
-    match &message.kind {
-        MessageKind::Text(text) => render(text, viewer, clock),
-        MessageKind::System(_) => String::new(),
     }
 }
 
@@ -301,24 +292,6 @@ mod tests {
             blocks: vec![Block::Paragraph(vec![Inline::Mention(mention)])],
         });
         message
-    }
-
-    // RICH-001
-    #[test]
-    fn the_html_is_the_formatted_body_and_empty_for_system_messages() {
-        let zone = zone("UTC");
-        let clock = Clock {
-            zone: &zone,
-            now: at("2026-10-20T10:00:00Z"),
-        };
-        assert_eq!(
-            html(&text("2026-10-20T10:00:00Z"), &Viewer::default(), clock),
-            "<p style=\"margin-top:0px; margin-bottom:0px\">hi</p>"
-        );
-        assert_eq!(
-            html(&system(SystemEvent::Joined), &Viewer::default(), clock),
-            ""
-        );
     }
 
     // RICH-002

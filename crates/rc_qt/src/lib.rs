@@ -67,3 +67,4 @@ mod room_view;
 mod row_ops;
 mod session_view;
 mod thread_view;
+mod viewer;

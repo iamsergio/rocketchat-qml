@@ -45,7 +45,7 @@ use crate::avatar_view::AvatarUrls;
 use crate::cache::Cache;
 use crate::emoji_picker_model::qobject::EmojiPickerModel;
 use crate::message_list_model::qobject::MessageListModel;
-use crate::rich_html::Viewer;
+use crate::rich_html::topic_html;
 use crate::room_list_model::qobject::RoomListModel;
 use crate::room_view::RoomState;
 use crate::room_vm::qobject::RoomVm;
@@ -54,6 +54,7 @@ use crate::session_vm::qobject::SessionVm;
 use crate::thread_message_list_model::qobject::ThreadMessageListModel;
 use crate::thread_view::ThreadState;
 use crate::thread_vm::qobject::ThreadVm;
+use crate::viewer::Viewer;
 
 /// Environment variable choosing where the session token is kept. `memory` keeps it in memory
 /// only, and `file:<path>` in a plain file (GUI tests, in builds with `test-file-store`); anything
@@ -475,10 +476,18 @@ pub fn message_author(message_id: &str) -> String {
 
 /// Registers the `Room` view model and returns what it shows now. Call on the GUI thread; the
 /// events that follow the returned state are queued to `thread`.
-pub fn register_room(thread: CxxQtThread<RoomVm>) -> RoomState {
+pub fn register_room(thread: CxxQtThread<RoomVm>) -> (RoomState, String) {
     let mut hub = lock();
     hub.views.room.register(thread);
-    hub.accounts.current_cache().room_state()
+    room_shown(hub.accounts.current_cache())
+}
+
+/// What the `Room` view model shows for `cache`: the state, and its topic as HTML for that
+/// account's viewer.
+fn room_shown(cache: &Cache) -> (RoomState, String) {
+    let state = cache.room_state();
+    let topic_html = topic_html(&state.topic, &cache.viewer());
+    (state, topic_html)
 }
 
 /// Registers the `MessageList` model and returns the change that brings it up to date, who it
@@ -646,9 +655,9 @@ impl Views {
         self.thread_messages
             .queue(move |model| model.show(&replies, viewer, avatars, images));
         self.show_emoji(&cache.viewer().emoji);
-        let state = cache.room_state();
+        let (state, topic_html) = room_shown(cache);
         self.room.queue(move |mut vm| {
-            vm.as_mut().show(&state);
+            vm.as_mut().show(&state, &topic_html);
             // What failed for the other account means nothing for this one.
             vm.dismiss_action_error();
         });
@@ -736,8 +745,8 @@ impl Views {
 
     /// Sends the `Room` view model what `cache` says it shows now.
     fn show_room(&mut self, cache: &Cache) {
-        let state = cache.room_state();
-        self.room.queue(move |vm| vm.show(&state));
+        let (state, topic_html) = room_shown(cache);
+        self.room.queue(move |vm| vm.show(&state, &topic_html));
     }
 
     /// Sends the `Thread` view model what `cache` says it shows now.
