@@ -170,8 +170,11 @@ impl<C: Connector> Actor<C> {
                 }
             }
             Pushed::SubscriptionRemoved(id) => self.remove_room(&id),
-            Pushed::Activity { room, at } => {
-                if let Some(change) = self.rooms.bump(&room, at, self.clock.now()) {
+            Pushed::RoomChanged { room, last_message } => {
+                // A room without a last message (just created) has no activity.
+                if let Some(at) = last_message
+                    && let Some(change) = self.rooms.bump(&room, at, self.clock.now())
+                {
                     self.emit_rooms(vec![change]);
                 }
             }

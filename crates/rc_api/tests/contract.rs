@@ -313,10 +313,10 @@ async fn a_message_arrives_as_room_activity_with_its_time() {
 
     let event = event_where(
         &mut events,
-        |e| matches!(e, DdpEvent::RoomActivity { room_id: r, last_message } if *r == room_id && *last_message == posted.ts.parse::<jiff::Timestamp>().unwrap()),
+        |e| matches!(e, DdpEvent::RoomChanged { room_id: r, last_message } if *r == room_id && *last_message == Some(posted.ts.parse::<jiff::Timestamp>().unwrap())),
     )
     .await;
-    assert!(matches!(event, DdpEvent::RoomActivity { .. }));
+    assert!(matches!(event, DdpEvent::RoomChanged { .. }));
 }
 
 // ROOM-004
@@ -1066,7 +1066,7 @@ async fn all_streams_deliver_on_one_connection() {
             DdpEvent::SubscriptionChanged(s) => {
                 subscription |= s.room_id == room_id && s.unread >= 1;
             }
-            DdpEvent::RoomActivity { room_id: r, .. } => activity |= *r == room_id,
+            DdpEvent::RoomChanged { room_id: r, .. } => activity |= *r == room_id,
             DdpEvent::SubscriptionRemoved { .. }
             | DdpEvent::AvatarChanged(_)
             | DdpEvent::MessageDeleted { .. } => {}

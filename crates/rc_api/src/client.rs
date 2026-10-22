@@ -216,11 +216,12 @@ impl RestSession {
             self.call(Method::GET, "api/v1/rooms.get"),
         )?;
         let mut subscriptions = wire::parse_subscriptions(&subscriptions).map_err(Error::Decode)?;
-        let activity = wire::parse_room_activity(&rooms).map_err(Error::Decode)?;
-        let mut avatars = wire::parse_room_avatars(&rooms).map_err(Error::Decode)?;
+        let mut rooms = wire::parse_rooms(&rooms).map_err(Error::Decode)?;
         for subscription in &mut subscriptions {
-            subscription.last_message = activity.get(&subscription.room_id).copied();
-            subscription.avatar_etag = avatars.remove(&subscription.room_id);
+            if let Some(room) = rooms.remove(&subscription.room_id) {
+                subscription.last_message = room.lm;
+                subscription.avatar_etag = room.avatar_etag;
+            }
         }
         Ok(subscriptions)
     }

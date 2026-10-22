@@ -85,9 +85,9 @@ fn activity_moves_the_room_to_the_front() {
 
     assert!(fake.push(
         0,
-        Pushed::Activity {
+        Pushed::RoomChanged {
             room: "1".to_owned().into(),
-            at: at(40)
+            last_message: Some(at(40))
         }
     ));
 
@@ -110,9 +110,9 @@ fn a_message_raises_the_unread_count_and_then_moves_the_room() {
     assert!(fake.push(0, Pushed::Subscription(unread)));
     assert!(fake.push(
         0,
-        Pushed::Activity {
+        Pushed::RoomChanged {
             room: "3".to_owned().into(),
-            at: at(50)
+            last_message: Some(at(50))
         }
     ));
 
@@ -158,12 +158,30 @@ fn old_or_unknown_activity_changes_nothing() {
     for (room, secs) in [("2", 30), ("2", 5), ("zzz", 99)] {
         assert!(fake.push(
             0,
-            Pushed::Activity {
+            Pushed::RoomChanged {
                 room: room.to_owned().into(),
-                at: at(secs)
+                last_message: Some(at(secs))
             }
         ));
     }
+    // Something that does show, as the end of the line.
+    assert!(fake.push(0, removed("2")));
+
+    harness.expect_events(vec![rooms_change(RoomChange::Removed { index: 0 })]);
+}
+
+// ROOM-005
+#[test]
+fn a_room_change_without_a_last_message_is_no_activity() {
+    let fake = Fake::new();
+    let harness = logged_in_by_activity(&fake);
+    assert!(fake.push(
+        0,
+        Pushed::RoomChanged {
+            room: "1".to_owned().into(),
+            last_message: None
+        }
+    ));
     // Something that does show, as the end of the line.
     assert!(fake.push(0, removed("2")));
 

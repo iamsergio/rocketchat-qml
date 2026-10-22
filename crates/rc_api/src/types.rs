@@ -286,11 +286,12 @@ pub enum DdpEvent {
     SubscriptionChanged(Subscription),
     /// The user left a room or was removed from it.
     SubscriptionRemoved { room_id: String },
-    /// One of the user's rooms has a message at `last_message`. Pushed for every new message, and
-    /// again for other changes of the room (a rename...), with the same time.
-    RoomActivity {
+    /// One of the user's rooms changed. Pushed for every new message, which sets `last_message`,
+    /// and for other changes of the room (a rename...), with the same time, if the room has
+    /// messages.
+    RoomChanged {
         room_id: String,
-        last_message: jiff::Timestamp,
+        last_message: Option<jiff::Timestamp>,
     },
     /// A user's or a room's avatar changed: fetch it again. The server announces every user's and
     /// every room's, not only those the client knows.

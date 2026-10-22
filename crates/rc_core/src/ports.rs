@@ -321,9 +321,12 @@ pub enum Pushed {
     Subscription(rc_api::Subscription),
     /// The user left a room or was removed from it.
     SubscriptionRemoved(RoomId),
-    /// One of the user's rooms has a message at that time. Comes with every new message, and with
-    /// other changes of the room too, then with a time the room has already.
-    Activity { room: RoomId, at: jiff::Timestamp },
+    /// One of the user's rooms changed. Comes with every new message, which sets the time of the
+    /// last one, and with other changes of the room too, then with a time the room has already.
+    RoomChanged {
+        room: RoomId,
+        last_message: Option<jiff::Timestamp>,
+    },
     /// The server says this avatar changed, whoever's it is: fetch it again if it is shown.
     AvatarChanged(AvatarOwner),
     /// A message was deleted. Only comes for the room the connection was told is open.
