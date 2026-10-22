@@ -285,7 +285,7 @@ impl qobject::RoomVm {
         QString::from(&hub::message_author(&message_id.to_string()))
     }
 
-    fn dismiss_action_error(self: Pin<&mut Self>) {
+    pub fn dismiss_action_error(self: Pin<&mut Self>) {
         self.set_action_error_text("");
     }
 }

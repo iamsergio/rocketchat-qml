@@ -10,7 +10,7 @@ ColumnLayout {
     id: root
 
     // The server without its scheme or path, as the sidebar names it.
-    readonly property string host: String(Session.server).replace(/^[a-z][a-z0-9+.-]*:\/\//i, "").replace(/\/.*$/, "")
+    readonly property string host: Session.host
 
     // The first letter of the host, for its mark: none for an IP address, which starts with a digit.
     readonly property string hostInitial: {

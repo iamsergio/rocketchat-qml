@@ -32,6 +32,8 @@ pub struct SessionView {
     /// The logged-in account; empty otherwise.
     pub username: String,
     pub server: String,
+    /// The server without its scheme or path, as the sidebar names it; see [`host`].
+    pub host: String,
     /// What to tell the user while the realtime connection is down. Empty while it is up, and
     /// outside a session.
     pub connection_text: String,
@@ -68,10 +70,21 @@ pub fn session_view(state: Option<&SessionState>, connection: Connection) -> Ses
             status: Status::LoggedIn,
             username: account.user.username.clone(),
             server: account.server.clone(),
+            host: host(&account.server),
             connection_text: connection_text(connection),
             ..SessionView::default()
         },
     }
+}
+
+/// The host and port of `server`, a URL: no scheme, no path, query or fragment.
+#[must_use]
+pub fn host(server: &str) -> String {
+    let rest = server.split_once("://").map_or(server, |(_, rest)| rest);
+    rest.split(['/', '?', '#'])
+        .next()
+        .unwrap_or_default()
+        .to_owned()
 }
 
 fn connection_text(connection: Connection) -> String {
@@ -136,7 +149,26 @@ mod tests {
         assert!(!view.busy);
         assert_eq!(view.username, "admin");
         assert_eq!(view.server, "http://127.0.0.1:3000");
+        assert_eq!(view.host, "127.0.0.1:3000");
         assert_eq!(view.error_text, "");
+    }
+
+    // ACCT-001
+    #[test]
+    fn the_host_has_no_scheme_or_path() {
+        for (server, expected) in [
+            ("http://127.0.0.1:3000", "127.0.0.1:3000"),
+            ("https://chat.example.com/", "chat.example.com"),
+            (
+                "https://chat.example.com/sub/path?x=1#y",
+                "chat.example.com",
+            ),
+            ("HTTPS://Chat.Example.com:8443/a", "Chat.Example.com:8443"),
+            ("chat.example.com/a", "chat.example.com"),
+            ("", ""),
+        ] {
+            assert_eq!(host(server), expected, "{server}");
+        }
     }
 
     // AUTH-002
@@ -191,6 +223,7 @@ mod tests {
         assert_eq!(view.error_text, "");
         assert_eq!(view.username, "");
         assert_eq!(view.server, "");
+        assert_eq!(view.host, "");
     }
 
     // RT-004
