@@ -18,6 +18,11 @@ Secret Service (the desktop's keyring) through the system libdbus.
 whose AnyRPC dependency comes from vcpkg. `cmake --preset=rel && cmake --build build-rel` is a
 release build without Spix, which installs nothing from vcpkg.
 
+The Slint frontend is pure Rust and needs neither Qt nor vcpkg: `cmake --preset=dev-slint && cmake
+--build build-dev-slint` (or `rel-slint`) builds `rocketchat_slint` into `build-dev-slint/bin`. Those
+presets turn `ROCKETCHATQML_QT` off and `ROCKETCHATQML_SLINT` on; both can be on together. `cargo
+build -p rc_slint` works too.
+
 The app logs to stderr (`RUST_LOG` sets the filter, `info` by default). Developer builds also append
 to `build-dev/bin/rocketchat_qml.log`.
 
@@ -34,6 +39,9 @@ app offscreen and drive it through Spix. The GUI tests log in to the local test 
 it: start it with `scripts/run_test_server.sh` and set `RC_TEST_SERVER_URL`:
 
     RC_TEST_SERVER_URL=http://127.0.0.1:3000 ctest --test-dir build-dev --output-on-failure
+
+In the Slint presets (no Qt) ctest runs `cargo test --workspace --exclude rc_qt`; they have no GUI
+tests yet.
 
 A plain `cargo test` skips the GUI tests; to run them by hand:
 

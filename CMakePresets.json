@@ -12,6 +12,12 @@
       }
     },
     {
+      "name": "base-slint",
+      "generator": "Ninja",
+      "binaryDir": "build-${presetName}",
+      "hidden": true
+    },
+    {
       "name": "dev",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug",
@@ -48,6 +54,29 @@
       ],
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "RelWithDebInfo"
+      }
+    },
+    {
+      "name": "dev-slint",
+      "inherits": [
+        "base-slint"
+      ],
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "ROCKETCHATQML_DEVELOPER_MODE": "ON",
+        "ROCKETCHATQML_QT": "OFF",
+        "ROCKETCHATQML_SLINT": "ON"
+      }
+    },
+    {
+      "name": "rel-slint",
+      "inherits": [
+        "base-slint"
+      ],
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "ROCKETCHATQML_QT": "OFF",
+        "ROCKETCHATQML_SLINT": "ON"
       }
     },
     {
