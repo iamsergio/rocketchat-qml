@@ -4,7 +4,7 @@
 |---|---|
 | Qt ≥ 6.12 (system) | QML runtime and Qt Quick Controls |
 | cxx-qt / cxx | Rust ⇄ C++/Qt bridge, QObjects and models defined in Rust |
-| 3rdparty/corrosion | Builds the Rust crates from CMake and links them into the Qt executable |
+| 3rdparty/corrosion | Builds the Rust crates from CMake: links them into the Qt executable, and builds the `rocketchat_slint` binary |
 | 3rdparty/cxx-qt-cmake | CMake functions that import cxx-qt crates and their QML modules (uses Corrosion) |
 | tokio | Async runtime for networking and the session actor |
 | reqwest (rustls) | REST client |
