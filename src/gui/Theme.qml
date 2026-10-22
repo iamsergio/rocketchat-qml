@@ -64,9 +64,11 @@ QtObject {
 
     // Fonts
     // The system's size, made larger: Instrument Sans reads smaller than the usual system fonts at
-    // the same size, and a 9 pt system font in it is too small to read comfortably.
+    // the same size (its x-height is 0.51 em, theirs 0.55), and a 9 pt system font in it is too
+    // small to read comfortably. 9 pt is also what Qt falls back to without a platform theme, and
+    // this makes it 15 px, which chat apps settle on for messages.
     readonly property real fontSizeBase: Application.font.pointSize * fontScale
-    readonly property real fontScale: 1.17
+    readonly property real fontScale: 1.25
     readonly property real fontSizeEmoji: 18
     readonly property real fontSizeTiny: fontSizeBase * 0.82
     readonly property real fontSizeSmall: fontSizeBase * 0.89
