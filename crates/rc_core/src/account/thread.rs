@@ -156,6 +156,8 @@ impl<C: Connector> Actor<C> {
             live: Vec::new(),
             deleted: HashSet::new(),
         });
+        // Typists in this thread show at once, and the old thread's are told to be gone.
+        self.tell_typing();
         self.fetch_thread(false);
     }
 
@@ -299,6 +301,7 @@ impl<C: Connector> Actor<C> {
                 messages: Vec::new(),
             }]));
             self.emit_thread_status();
+            self.tell_typing();
         }
     }
 }

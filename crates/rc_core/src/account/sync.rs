@@ -107,6 +107,8 @@ impl<C: Connector> Actor<C> {
         self.abort_rooms_task();
         self.abort_realtime_task();
         self.realtime_open = false;
+        // Their stops can't reach us any more.
+        self.end_typing();
         // A connection that dropped soon after it worked is no better than one that never did.
         if let Some(since) = self.succeeded_at.take()
             && self.backoff.lasted(since.elapsed())
@@ -188,8 +190,12 @@ impl<C: Connector> Actor<C> {
             }
             Pushed::Message(message) => self.add_live_message(message),
             Pushed::MessageDeleted { room, id } => self.delete_message(&room, &id),
-            // Who is typing isn't kept yet.
-            Pushed::Typing { .. } => {}
+            Pushed::Typing {
+                room,
+                username,
+                typing,
+                thread,
+            } => self.handle_typing(&room, &username, typing, thread),
             // The server announces everybody's: only what was looked at is looked at again, and
             // the rooms of the list, as a room that had no avatar may have one now.
             Pushed::AvatarChanged(owner) => {

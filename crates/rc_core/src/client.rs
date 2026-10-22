@@ -87,6 +87,19 @@ pub enum Event {
     /// What the server lets users do with their own messages, whenever it changes. Logging out
     /// resets it to the default (everything allowed), if it differed.
     MessagePolicy(MessagePolicy),
+    /// Who types in the open room, by the names to show, in the order they started. Comes when
+    /// the list changes: empty once nobody types, and for the room that closes or is replaced.
+    /// Typists in a thread are not in it. The account's own user is never in it.
+    Typing {
+        room: RoomId,
+        names: Vec<String>,
+    },
+    /// Who types in the open thread (`thread` is its parent message's id), as for `Typing`: empty
+    /// for the thread that closes or is replaced by another.
+    ThreadTyping {
+        thread: MessageId,
+        names: Vec<String>,
+    },
     /// How an edit, a deletion or a reaction the frontend asked for ended. A refusal that needs no
     /// request (not the user's message, past the time limit...) is answered at once. Nothing comes
     /// if the session ends first.

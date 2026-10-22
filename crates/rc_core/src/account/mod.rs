@@ -32,6 +32,7 @@ use crate::session::{Established, LoginFailure, SessionState, log_in, resume};
 use crate::store_worker::StoreHandle;
 use crate::timeline::{Timeline, TimelineError};
 use crate::tuning::Tuning;
+use crate::typing::Typists;
 use crate::users::Users;
 
 mod media;
@@ -41,6 +42,7 @@ mod room_actions;
 mod sending;
 mod sync;
 mod thread;
+mod typing;
 
 use thread::OpenThread;
 
@@ -318,6 +320,13 @@ struct Actor<C: Connector> {
     open: Option<OpenRoom>,
     /// The thread beside the open room: always one of its messages, and closed with it.
     open_thread: Option<OpenThread>,
+    /// Who types in the open room and its threads (see [`Actor::handle_typing`]).
+    typists: Typists,
+    /// The open room and the names the frontend was last told type in it; `None` while it was
+    /// last told that nobody does.
+    typing_told: Option<(RoomId, Vec<String>)>,
+    /// The same for the open thread, by its parent.
+    thread_typing_told: Option<(MessageId, Vec<String>)>,
     /// Counts history and thread fetches, to tell the answer of the current one from a stale one.
     history_attempt: u64,
     /// The history fetch of the open room, while it runs.
@@ -393,6 +402,9 @@ impl<C: Connector> Actor<C> {
             messages: Box::new(MemoryMessageStore::default()),
             open: None,
             open_thread: None,
+            typists: Typists::default(),
+            typing_told: None,
+            thread_typing_told: None,
             history_attempt: 0,
             history_task: None,
             thread_task: None,
@@ -452,13 +464,17 @@ impl<C: Connector> Actor<C> {
     /// When the actor next has something to do without being asked: the earliest deadline of the
     /// concerns that have one. `None` if none has.
     fn next_deadline(&self) -> Option<jiff::Timestamp> {
-        self.rooms.next_quiet()
+        [self.rooms.next_quiet(), self.typists.next_deadline()]
+            .into_iter()
+            .flatten()
+            .min()
     }
 
     /// Does what the deadlines that have passed ask for. Each concern checks its own against the
     /// clock, so one that is not due changes nothing.
     fn handle_deadline(&mut self) {
         self.hide_quiet_rooms();
+        self.expire_typists();
     }
 
     /// Tells who the stored account is, if there is one, and resumes it if it holds a token. A stored
