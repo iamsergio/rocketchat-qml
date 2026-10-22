@@ -65,14 +65,25 @@ Done when: you can log in to servers that enforce 2FA or use SSO.
 - [ ] OAuth/SSO login through the browser
 - [ ] Features AUTH-006…AUTH-008 tested
 
+## Slint frontend
+
+Done when: `rocketchat_slint`, a pure Rust app on `rc_core`, passes the GUI tests of every feature, run unchanged against it.
+
+The Slint app grows one feature at a time, and CI stays green throughout: a second ctest entry runs the GUI tests against `rocketchat_slint`, but only those listed in `crates/rc_gui_tests/slint.txt`, which grows with each feature and never shrinks. TRACEABILITY.md gets a Slint column (`todo`, `partial`, `done`; `done` when all of a feature's GUI tests are in the list).
+
+- [ ] `rc_view`: the parts of `rc_qt` with no Qt types (the caches per account, the views, the row operations) move to a crate both frontends use. Rendering `RichText` stays with each frontend: `rc_qt` keeps the HTML for Qt's rich text. No behaviour change
+- [ ] `rc_slint`: the `rocketchat_slint` binary starts and stops the core and shows the version (APP-001). `cargo deny` allows Slint's licence and its dependencies' licences. A Slint `Theme` global, under the same no-literals rule as `Theme.qml`
+- [ ] Spix server in Rust for Slint (in the spix fork), `--spix-port`, on Slint's `ElementHandle` search API, element names from `accessible-id`. Headless in CI: Slint's testing backend in Spix builds
+- [ ] ctest runs the GUI tests in `slint.txt` against `rocketchat_slint`. TRACEABILITY.md gets its Slint column, and a check that the list and the column agree
+- [ ] Split the hub of `rc_qt` (account switching, event routing, the secret store choice) from its Qt threading, so `rc_slint` reuses it
+- [ ] Features, in the order of the GUI test files: auth, accounts, rooms, messages, realtime, sending, room menu, reactions, threads
+
 ## Phase 8: personal nice to haves
 - [ ] Move logout icon. Logout is seldom used. right lcick on the server rail on a server tile can have the logout option.
 - [ ] Channels are not showing description
 
 ## Later
 
-- Slint frontend (`rc_slint`, pure Rust) reusing `rc_core`. Separate plan.
-- Spix RPC server in Rust for Slint (in the spix fork), checked by running the unchanged `rc_gui_tests` against `rc_slint`.
 - Packaging (Flatpak, AppImage, Windows installer).
 
 ## Decisions
