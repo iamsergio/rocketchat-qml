@@ -7,10 +7,13 @@
 //! A new user also joins `general`, so the list holds about four rooms: they fit in the window and
 //! every row exists. A longer list would need scrolling to create the rows below the fold.
 
+// Helpers outside #[test] fns may unwrap: a failed step should just fail the test.
+#![allow(clippy::unwrap_used)]
+
 mod common;
 
-use rc_gui_tests::App;
 use rc_gui_tests::paths::{main_window, room, room_row};
+use rc_gui_tests::{App, Gui};
 use rc_test_server::Admin;
 
 use common::{TIMEOUT, log_in_and_wait_for_room, open_room, row_y};
@@ -188,6 +191,15 @@ fn a_quiet_direct_message_leaves_the_list_and_comes_back_with_a_message() {
         .unwrap();
 }
 
+/// The rich text of the topic in the header once it holds `part`.
+fn topic_containing(gui: &Gui, part: &str) -> String {
+    gui.wait_until(&format!("{part:?} in the topic"), TIMEOUT, || {
+        Ok(gui.text(main_window::ROOM_TOPIC)?.contains(part))
+    })
+    .unwrap();
+    gui.text(main_window::ROOM_TOPIC).unwrap()
+}
+
 // ROOM-009
 #[test]
 #[ignore = "needs the app and a Rocket.Chat server: run through ctest"]
@@ -196,7 +208,7 @@ fn the_header_shows_the_topic_of_the_open_room_and_follows_its_changes() {
     let user = admin.create_user();
     let (with_id, with_name) = admin.create_channel(&[&user.username]);
     let (without_id, _) = admin.create_channel(&[&user.username]);
-    admin.set_topic(&with_id, "Plans for May");
+    admin.set_topic(&with_id, "**Plans** for https://example.com");
     let app = App::launch().unwrap();
     let gui = app.gui();
     log_in_and_wait_for_room(gui, &user, &with_id);
@@ -206,15 +218,18 @@ fn the_header_shows_the_topic_of_the_open_room_and_follows_its_changes() {
     open_room(gui, &with_id);
     gui.wait_until_text(main_window::ROOM_TITLE, &with_name, TIMEOUT)
         .unwrap();
-    gui.wait_until_text(main_window::ROOM_TOPIC, "Plans for May", TIMEOUT)
-        .unwrap();
+    // The topic is markdown: bold, and a bare address as a link.
+    let html = topic_containing(gui, "<b>Plans</b>");
+    assert!(
+        html.contains(r#"<a href="https://example.com">https://example.com</a>"#),
+        "{html}"
+    );
     // With a topic the name is above the middle of the header.
     let title_y = gui.bounding_box(main_window::ROOM_TITLE).unwrap().y;
 
     // A change shows while the room is open.
-    admin.set_topic(&with_id, "Plans for June");
-    gui.wait_until_text(main_window::ROOM_TOPIC, "Plans for June", TIMEOUT)
-        .unwrap();
+    admin.set_topic(&with_id, "Plans for _June_");
+    topic_containing(gui, "Plans for <i>June</i>");
 
     // Another room has none: the line is gone, and the name is lower.
     open_room(gui, &without_id);
@@ -224,8 +239,7 @@ fn the_header_shows_the_topic_of_the_open_room_and_follows_its_changes() {
 
     // Taking the topic away removes the line.
     open_room(gui, &with_id);
-    gui.wait_until_text(main_window::ROOM_TOPIC, "Plans for June", TIMEOUT)
-        .unwrap();
+    topic_containing(gui, "Plans for <i>June</i>");
     admin.set_topic(&with_id, "");
     gui.wait_until_hidden(main_window::ROOM_TOPIC, TIMEOUT)
         .unwrap();

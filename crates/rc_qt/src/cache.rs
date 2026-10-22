@@ -372,7 +372,7 @@ impl Cache {
     /// What the `Room` view model shows now.
     #[must_use]
     pub fn room_state(&self) -> RoomState {
-        room_state(&self.rooms, &self.status)
+        room_state(&self.rooms, &self.status, &self.viewer())
     }
 
     /// What the `Thread` view model shows now.
@@ -815,7 +815,7 @@ mod tests {
             room: Some("a".to_owned().into()),
             ..TimelineStatus::default()
         }));
-        assert_eq!(cache.room_state().topic, "");
+        assert_eq!(cache.room_state().topic_html, "");
         let with_topic = |topic: &str| {
             Event::Rooms(vec![RoomChange::Updated {
                 index: 0,
@@ -826,9 +826,9 @@ mod tests {
             }])
         };
         cache.apply(&with_topic("Plans"));
-        assert_eq!(cache.room_state().topic, "Plans");
+        assert!(cache.room_state().topic_html.contains(">Plans</p>"));
         cache.apply(&with_topic(""));
-        assert_eq!(cache.room_state().topic, "");
+        assert_eq!(cache.room_state().topic_html, "");
     }
 
     /// A reply to `parent` in the thread, sent by somebody else.
