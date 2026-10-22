@@ -87,7 +87,8 @@ fn activity_moves_the_room_to_the_front() {
         0,
         Pushed::RoomChanged {
             room: "1".to_owned().into(),
-            last_message: Some(at(40))
+            last_message: Some(at(40)),
+            topic: None,
         }
     ));
 
@@ -112,7 +113,8 @@ fn a_message_raises_the_unread_count_and_then_moves_the_room() {
         0,
         Pushed::RoomChanged {
             room: "3".to_owned().into(),
-            last_message: Some(at(50))
+            last_message: Some(at(50)),
+            topic: None,
         }
     ));
 
@@ -160,7 +162,8 @@ fn old_or_unknown_activity_changes_nothing() {
             0,
             Pushed::RoomChanged {
                 room: room.to_owned().into(),
-                last_message: Some(at(secs))
+                last_message: Some(at(secs)),
+                topic: None,
             }
         ));
     }
@@ -179,13 +182,111 @@ fn a_room_change_without_a_last_message_is_no_activity() {
         0,
         Pushed::RoomChanged {
             room: "1".to_owned().into(),
-            last_message: None
+            last_message: None,
+            topic: None,
         }
     ));
     // Something that does show, as the end of the line.
     assert!(fake.push(0, removed("2")));
 
     harness.expect_events(vec![rooms_change(RoomChange::Removed { index: 0 })]);
+}
+
+// ROOM-009
+#[test]
+fn a_push_sets_changes_and_clears_the_topic_of_a_room() {
+    let fake = Fake::new();
+    let harness = logged_in_by_activity(&fake);
+    let topic_push = |topic: Option<&str>| Pushed::RoomChanged {
+        room: "1".to_owned().into(),
+        last_message: None,
+        topic: topic.map(str::to_owned),
+    };
+    let with_topic = |topic: &str| {
+        rooms_change(RoomChange::Updated {
+            index: 2,
+            room: Room {
+                topic: topic.to_owned(),
+                ..active_room("1", "alpha", 10)
+            },
+        })
+    };
+
+    assert!(fake.push(0, topic_push(Some("Plans"))));
+    assert!(fake.push(0, topic_push(Some("Plans"))));
+    assert!(fake.push(0, topic_push(Some("More plans"))));
+    // A push that doesn't say changes nothing.
+    assert!(fake.push(0, topic_push(None)));
+    assert!(fake.push(0, topic_push(Some(""))));
+
+    harness.expect_events(vec![
+        with_topic("Plans"),
+        with_topic("More plans"),
+        with_topic(""),
+    ]);
+}
+
+// ROOM-009
+#[test]
+fn a_push_with_a_message_and_a_topic_changes_both_at_once() {
+    let fake = Fake::new();
+    let harness = logged_in_by_activity(&fake);
+
+    assert!(fake.push(
+        0,
+        Pushed::RoomChanged {
+            room: "1".to_owned().into(),
+            last_message: Some(at(40)),
+            topic: Some("Plans".to_owned()),
+        }
+    ));
+
+    // In one event, in the order of the changes.
+    harness.expect_events(vec![Event::Rooms(vec![
+        RoomChange::Moved {
+            from: 2,
+            to: 0,
+            room: active_room("1", "alpha", 40),
+        },
+        RoomChange::Updated {
+            index: 0,
+            room: Room {
+                topic: "Plans".to_owned(),
+                ..active_room("1", "alpha", 40)
+            },
+        },
+    ])]);
+}
+
+// ROOM-009
+#[test]
+fn the_topic_of_a_room_survives_a_subscription_push() {
+    let fake = Fake::new();
+    fake.script_login(None, Ok(()));
+    let mut listed = active_subscription("1", "alpha", 10);
+    listed.topic = "Plans".to_owned();
+    fake.script_fetch(None, Ok(vec![listed.clone()]));
+    let harness = Harness::new(&fake);
+    harness.login("http://h", "alice");
+    let alpha = Room {
+        topic: "Plans".to_owned(),
+        ..active_room("1", "alpha", 10)
+    };
+    harness.expect_events(vec![
+        session_event(SessionState::Connecting),
+        session_event(logged_in("http://h", "alice")),
+        rooms_event(vec![alpha.clone()]),
+    ]);
+
+    // The subscription doesn't carry the topic.
+    listed.topic = String::new();
+    listed.unread = 1;
+    assert!(fake.push(0, Pushed::Subscription(listed)));
+
+    harness.expect_events(vec![rooms_change(RoomChange::Updated {
+        index: 0,
+        room: Room { unread: 1, ..alpha },
+    })]);
 }
 
 // ROOM-005

@@ -323,9 +323,11 @@ pub enum Pushed {
     SubscriptionRemoved(RoomId),
     /// One of the user's rooms changed. Comes with every new message, which sets the time of the
     /// last one, and with other changes of the room too, then with a time the room has already.
+    /// The topic is empty once it was taken away, and `None` if the push doesn't say.
     RoomChanged {
         room: RoomId,
         last_message: Option<jiff::Timestamp>,
+        topic: Option<String>,
     },
     /// The server says this avatar changed, whoever's it is: fetch it again if it is shown.
     AvatarChanged(AvatarOwner),

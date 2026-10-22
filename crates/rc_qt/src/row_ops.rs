@@ -221,6 +221,7 @@ mod tests {
             name: "r".to_owned(),
             peer: None,
             avatar_etag: None,
+            topic: String::new(),
             unread: 0,
             user_mentions: 0,
             group_mentions: 0,

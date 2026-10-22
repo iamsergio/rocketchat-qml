@@ -1594,6 +1594,51 @@ async fn subscriptions_carry_the_avatar_etag_of_the_rooms_that_have_one() {
     assert_eq!(etag_of(&ids[1]), None);
 }
 
+// ROOM-009
+#[tokio::test]
+async fn subscriptions_carry_the_topic_of_the_rooms_that_have_one() {
+    let server = MockServer::start().await;
+    mount_authenticated(
+        &server,
+        "GET",
+        "/api/v1/subscriptions.get",
+        json_response(200, SUBSCRIPTIONS),
+    )
+    .await;
+    let subscriptions: serde_json::Value = serde_json::from_str(SUBSCRIPTIONS).unwrap();
+    let ids: Vec<_> = subscriptions["update"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| s["rid"].as_str().unwrap().to_owned())
+        .collect();
+    let rooms = json!({ "update": [{ "_id": ids[0], "topic": "Plans" }, { "_id": ids[1], "topic": "" }], "remove": [] });
+    mount_authenticated(
+        &server,
+        "GET",
+        "/api/v1/rooms.get",
+        json_response(200, &rooms.to_string()),
+    )
+    .await;
+
+    let listed = session(&RestClient::new(&server.uri()).unwrap())
+        .subscriptions()
+        .await
+        .unwrap();
+
+    let topic_of = |id: &str| {
+        listed
+            .iter()
+            .find(|s| s.room_id == id)
+            .unwrap()
+            .topic
+            .clone()
+    };
+    assert_eq!(topic_of(&ids[0]), "Plans");
+    assert_eq!(topic_of(&ids[1]), "");
+    assert_eq!(topic_of(&ids[2]), "");
+}
+
 // RICH-004
 #[tokio::test]
 async fn a_user_has_an_avatar_of_their_own_when_users_info_has_an_etag() {

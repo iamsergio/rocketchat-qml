@@ -16,7 +16,7 @@ Rectangle {
         anchors.fill: parent
         spacing: Theme.spacingNone
 
-        // The kind of the open room and its name, over a hairline.
+        // The kind of the open room, its name and under it its topic, over a hairline.
         Item {
             Layout.fillWidth: true
             implicitHeight: Theme.roomHeaderHeight
@@ -35,14 +35,43 @@ Rectangle {
                     tint: Theme.own
                 }
 
-                Label {
-                    objectName: "roomTitle"
+                // Centred, so that the name of a room without a topic is in the middle.
+                ColumnLayout {
+                    Layout.alignment: Qt.AlignVCenter
                     Layout.fillWidth: true
-                    elide: Text.ElideRight
-                    font.pointSize: Theme.fontSizeHeading
-                    font.weight: Theme.fontWeightBold
-                    text: Room.name
-                    textFormat: Text.PlainText
+                    spacing: Theme.spacingXXS
+
+                    Label {
+                        objectName: "roomTitle"
+                        Layout.fillWidth: true
+                        elide: Text.ElideRight
+                        font.pointSize: Theme.fontSizeHeading
+                        font.weight: Theme.fontWeightBold
+                        text: Room.name
+                        textFormat: Text.PlainText
+                    }
+
+                    Label {
+                        id: topic
+
+                        objectName: "roomTopic"
+                        Layout.fillWidth: true
+                        color: Theme.textMuted
+                        elide: Text.ElideRight
+                        font.pointSize: Theme.fontSizeSmall
+                        text: Room.topic
+                        textFormat: Text.PlainText
+                        visible: Room.topic !== ""
+
+                        // The whole topic, if it doesn't fit.
+                        HoverHandler {
+                            id: topicHover
+                        }
+
+                        ToolTip.delay: Theme.toolTipDelay
+                        ToolTip.text: Room.topic
+                        ToolTip.visible: topicHover.hovered && topic.truncated
+                    }
                 }
             }
 

@@ -203,6 +203,8 @@ pub struct Room {
     /// Identifies the room's own avatar, if it has one; the server draws the others. A change
     /// that only a push brings isn't seen here, as pushes don't carry it.
     pub avatar_etag: Option<String>,
+    /// What the room is about, for the header of the open room; empty for a room without one.
+    pub topic: String,
     pub unread: u32,
     /// Mentions of the user (`@name`).
     pub user_mentions: u32,
@@ -302,6 +304,7 @@ pub(crate) fn room_from(sub: rc_api::Subscription) -> Option<Room> {
         name,
         peer,
         avatar_etag: sub.avatar_etag,
+        topic: sub.topic,
         unread: sub.unread,
         user_mentions: sub.user_mentions,
         group_mentions: sub.group_mentions,
@@ -613,6 +616,7 @@ mod tests {
             created: None,
             last_message: None,
             avatar_etag: None,
+            topic: String::new(),
         }
     }
 
@@ -635,6 +639,15 @@ mod tests {
             room_from(subscription).unwrap().last_activity,
             at("2026-10-20T10:00:00Z")
         );
+    }
+
+    // ROOM-009
+    #[test]
+    fn the_room_has_the_topic_of_the_subscription() {
+        let mut subscription = sub("r", RoomType::Channel);
+        assert_eq!(room_from(subscription.clone()).unwrap().topic, "");
+        subscription.topic = "Plans for May".to_owned();
+        assert_eq!(room_from(subscription).unwrap().topic, "Plans for May");
     }
 
     // ROOM-004

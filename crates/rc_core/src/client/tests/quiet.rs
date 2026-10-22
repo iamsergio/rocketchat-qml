@@ -132,7 +132,8 @@ fn a_message_brings_a_hidden_direct_message_back_and_its_avatar_is_wanted_then()
         0,
         Pushed::RoomChanged {
             room: "1".to_owned().into(),
-            last_message: Some(at(30 * DAY))
+            last_message: Some(at(30 * DAY)),
+            topic: None,
         }
     ));
 

@@ -10,6 +10,7 @@ use crate::domain::{AvatarOwner, Room, RoomId, room_from};
 use crate::emoji::CustomEmojis;
 use crate::policy::MessagePolicy;
 use crate::ports::{ApiError, Connector, Pushed, Realtime, ServerApi};
+use crate::rooms::RoomChange;
 use crate::session::SessionState;
 
 use super::{Actor, Done, EmojiDone, PolicyDone, RealtimeDone, RealtimeReport, RoomsDone};
@@ -150,10 +151,11 @@ impl<C: Connector> Actor<C> {
                 let known = self.rooms.get(&id).cloned();
                 match room_from(subscription) {
                     Some(mut room) => {
-                        // Nor does it push the avatar of the room.
+                        // Nor does it push the avatar or the topic of the room.
                         if let Some(known) = known {
                             room.last_activity = known.last_activity;
                             room.avatar_etag = known.avatar_etag;
+                            room.topic = known.topic;
                         }
                         let room = self.seen_if_open(room);
                         let owner = room.avatar_to_fetch();
@@ -170,12 +172,18 @@ impl<C: Connector> Actor<C> {
                 }
             }
             Pushed::SubscriptionRemoved(id) => self.remove_room(&id),
-            Pushed::RoomChanged { room, last_message } => {
+            Pushed::RoomChanged {
+                room,
+                last_message,
+                topic,
+            } => {
+                let now = self.clock.now();
                 // A room without a last message (just created) has no activity.
-                if let Some(at) = last_message
-                    && let Some(change) = self.rooms.bump(&room, at, self.clock.now())
-                {
-                    self.emit_rooms(vec![change]);
+                let moved = last_message.and_then(|at| self.rooms.bump(&room, at, now));
+                let retitled = topic.and_then(|topic| self.rooms.set_topic(&room, topic, now));
+                let changes: Vec<RoomChange> = moved.into_iter().chain(retitled).collect();
+                if !changes.is_empty() {
+                    self.emit_rooms(changes);
                 }
             }
             Pushed::Message(message) => self.add_live_message(message),
