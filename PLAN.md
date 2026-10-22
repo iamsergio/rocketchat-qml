@@ -28,7 +28,7 @@ Done when: day-to-day use works. Edit, delete, react, threads, DMs, search and u
 - [x] Room menu: favorite, mark as read or unread, leave
 - [x] Threads: open a thread panel, reply, see thread counts in the main timeline
 - [x] Reply/quote a message
-- [ ] Typing indicators, received only: see [Typing indicators](#typing-indicators)
+- [x] Typing indicators, received only: see [Typing indicators](#typing-indicators)
 - [ ] Start a DM, search the directory, join a channel
 - [ ] File upload with progress
 - [ ] Features ACT-001…ACT-009 tested
@@ -43,7 +43,7 @@ The server relays what the other clients emit on `stream-notify-room` as `<room 
 - [x] `rc_core`: the realtime connection follows the open room's activity next to its deletions (`Pushed::Typing`). `Realtime::watch` stops being about deletions only. Contract test
 - [x] `rc_core`: who is typing, kept with the open room: per typist, the room or the thread, and when they expire (15 s after their last event, through the `Clock`, which wakes the actor like the quiet-DM timer does). A typist ends on their stop, on a message of theirs in the same room or thread, or on expiry. Everyone ends on another room, a lost connection or a logout. Only the open room counts, and the user's own username is ignored, since their other clients are typing. `Event::Typing` and `Event::ThreadTyping` (the open thread's) carry the names in the order they started, only when they change. The name is the display name if a held message of the room has it, else the username. Unit tests with the fake clock
 - [x] `rc_qt` / QML: `RoomVm.typing`, the line itself, written in Rust (`alice is typing…`, `alice and bob are typing…`, `alice, bob and 2 others are typing…`), with unit tests. A line between the messages and the composer, whose height is always reserved so the messages don't jump. Every size comes from Theme. Then the same for `ThreadVm` in the thread pane
-- [ ] Feature ACT-006 tested: GUI tests with a `Typist` in the open room, then in the open thread, that see the line come and go
+- [x] Feature ACT-006 tested: GUI tests with a `Typist` in the open room, then in the open thread, that see the line come and go
 
 ## Phase 6: Persistence and desktop integration
 
