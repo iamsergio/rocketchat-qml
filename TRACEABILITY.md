@@ -86,6 +86,7 @@ Every test carries a `// <ID>` comment. A feature can have tests at several leve
 | RICH-005 | Image attachments inline, other files as links | unit: `crates/rc_api/src/client.rs`, `crates/rc_api/src/wire.rs`, `crates/rc_core/src/domain.rs`, `crates/rc_core/src/images.rs`, `crates/rc_core/src/ports.rs`, `crates/rc_core/src/client/tests/images.rs`, `crates/rc_qt/src/attachment_view.rs`, `crates/rc_qt/src/cache.rs`; api: `crates/rc_api/tests/rest.rs`; contract: `crates/rc_api/tests/contract.rs`, `crates/rc_core/tests/contract.rs`; GUI: `crates/rc_gui_tests/tests/attachments.rs` |
 | RICH-006 | Live message edits and deletes | unit: `crates/rc_api/src/ddp.rs`, `crates/rc_api/src/wire.rs`, `crates/rc_core/src/domain.rs`, `crates/rc_core/src/timeline.rs`, `crates/rc_core/src/adapters/rest.rs`, `crates/rc_core/src/client/tests/changes.rs`, `crates/rc_qt/src/row_ops.rs`; api: `crates/rc_api/tests/rest.rs`; contract: `crates/rc_api/tests/contract.rs`, `crates/rc_core/tests/contract.rs`; GUI: `crates/rc_gui_tests/tests/edits.rs` |
 | RICH-007 | Reactions displayed | unit: `crates/rc_api/src/wire.rs`, `crates/rc_core/src/domain.rs`, `crates/rc_core/src/timeline.rs`, `crates/rc_core/src/client/tests/changes.rs`, `crates/rc_qt/src/reaction_view.rs`; contract: `crates/rc_api/tests/contract.rs`, `crates/rc_core/tests/contract.rs`; GUI: `crates/rc_gui_tests/tests/reactions.rs` |
+| RICH-008 | Right-click on a link: open it or copy its address | GUI: `crates/rc_gui_tests/tests/links.rs` |
 
 ## Interaction
 
