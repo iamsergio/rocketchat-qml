@@ -95,12 +95,21 @@ Item {
             menu.popup(origin, x, y);
     }
 
-    // Right-click opens the same menu as the button. The texts with links take the clicks on them.
+    // Right-click opens the same menu as the button, and double-clicking opens the emoji picker
+    // like its "Add reaction" does. The texts with links, the chips and the buttons take the
+    // clicks on them.
     MouseArea {
-        acceptedButtons: Qt.RightButton
+        acceptedButtons: Qt.LeftButton | Qt.RightButton
         anchors.fill: parent
         enabled: root.hasMenu
-        onClicked: mouse => menu.popup(root, mouse.x, mouse.y)
+        onClicked: mouse => {
+            if (mouse.button === Qt.RightButton)
+                menu.popup(root, mouse.x, mouse.y);
+        }
+        onDoubleClicked: mouse => {
+            if (mouse.button === Qt.LeftButton && root.canReact)
+                root.reactRequested(root.messageId);
+        }
     }
 
     // The popups are parented to the window's overlay while open, so Spix finds the items inside

@@ -276,7 +276,8 @@ pub mod message_row {
     pub const TIME: &str = "msgTime";
     /// The "(edited)" marker next to the time: visible only for a message that was edited.
     pub const EDITED: &str = "msgEdited";
-    /// The message as written: its `text` is the markdown source.
+    /// The message as written: its `text` is the markdown source. Double-clicking it opens the
+    /// emoji picker to react to the message, if it can be reacted to.
     pub const BODY: &str = "msgBody";
     /// The message as shown: its `text` is the rich text (HTML) of the body.
     pub const BODY_HTML: &str = "msgBodyHtml";
