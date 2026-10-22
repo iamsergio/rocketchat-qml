@@ -19,7 +19,6 @@ use crate::adapters::MemoryStore;
 use crate::avatars::AvatarUpdate;
 use crate::backoff::Backoff;
 use crate::client::{AccountHandle, Client, Connection, Event};
-use crate::core::CoreCommand;
 use crate::domain::{
     Account, AccountId, Attachment, Author, AvatarOwner, Credentials, Delivery, Identity,
     ImageAttachment, Message, MessageId, MessageKind, Quote, Reaction, Room, RoomId, RoomKind,
