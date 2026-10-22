@@ -14,6 +14,10 @@ project(rocketchat_qml LANGUAGES CXX)
 
 option(ROCKETCHATQML_COVERAGE "Instrument the app's Rust code for coverage (scripts/coverage.sh)" OFF)
 
+# Rust has no UBSan: the C++ side gets -fsanitize=undefined from the preset, and Rust's debug builds
+# already check overflow. Needs Rust_CARGO_TARGET, so that the flags skip build scripts and proc macros.
+set(ROCKETCHATQML_RUST_SANITIZER "" CACHE STRING "Sanitizer for the app's Rust code: address or thread (needs rust-src)")
+
 option(ROCKETCHATQML_DEVELOPER_MODE "Build with developer options" OFF)
 
 set(CMAKE_CXX_STANDARD 23)
@@ -76,6 +80,18 @@ if(ROCKETCHATQML_COVERAGE)
   # For rc_qt and every crate it builds. The profiler runtime is linked in src/gui/CMakeLists.txt.
   # The app writes its profile (LLVM_PROFILE_FILE) when it exits normally.
   corrosion_add_target_rustflags(rc_qt -Cinstrument-coverage)
+endif()
+if(ROCKETCHATQML_RUST_SANITIZER)
+  if(NOT Rust_CARGO_TARGET)
+    message(FATAL_ERROR "ROCKETCHATQML_RUST_SANITIZER needs Rust_CARGO_TARGET set to the host triple")
+  endif()
+  # -Z flags need nightly: RUSTC_BOOTSTRAP lets the pinned stable toolchain take them. std is rebuilt
+  # so that it is instrumented too, which TSan needs to not report false races.
+  corrosion_add_target_rustflags(rc_qt -Zsanitizer=${ROCKETCHATQML_RUST_SANITIZER})
+  # Corrosion builds RelWithDebInfo with cargo's release profile, which has no debug info of its own;
+  # the sanitizers' reports need it for symbols.
+  corrosion_set_env_vars(rc_qt RUSTC_BOOTSTRAP=1 CARGO_PROFILE_RELEASE_DEBUG=true)
+  corrosion_set_cargo_flags(rc_qt -Zbuild-std=std,panic_abort)
 endif()
 # Must match the QmlModule in crates/rc_qt/build.rs.
 set(RC_QT_QML_URI RocketChat.Bridge)
