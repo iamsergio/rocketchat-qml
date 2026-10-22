@@ -98,6 +98,9 @@ pub mod main_window {
     pub const ROOM_PLACEHOLDER: &str = "mainWindow/roomPlaceholder";
     /// The name of the open room.
     pub const ROOM_TITLE: &str = "mainWindow/roomTitle";
+    /// Who is typing in the open room, as its `text` ("alice is typing…"), between the messages and
+    /// the composer; empty for nobody. Visible, with its height taken, whenever a room is open.
+    pub const ROOM_TYPING: &str = "mainWindow/roomTyping";
     /// The topic of the open room, under its name, as its `text`: the style sheet and the HTML of
     /// the topic. Visible only while the room has one.
     pub const ROOM_TOPIC: &str = "mainWindow/roomTopic";
@@ -184,6 +187,9 @@ pub mod main_window {
     pub const THREAD_LOADING: &str = "mainWindow/threadLoading";
     /// Why the replies of the open thread couldn't be loaded.
     pub const THREAD_ERROR: &str = "mainWindow/threadError";
+    /// Who is typing in the open thread, as its `text` ("alice is typing…"), over the composer;
+    /// empty for nobody. Visible, with its height taken, as long as the pane is.
+    pub const THREAD_TYPING: &str = "mainWindow/threadTyping";
     /// The box to reply in. Its parts are found through it, as the room's are by name alone.
     pub const THREAD_COMPOSER: &str = "mainWindow/threadComposer";
     /// Where the reply is typed. Enter sends it, Escape closes the thread when there is nothing to
