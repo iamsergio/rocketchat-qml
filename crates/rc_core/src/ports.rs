@@ -507,6 +507,12 @@ pub struct Stored {
     pub changed: bool,
 }
 
+/// The time of day. The actor asks it instead of the system, so that tests can set the time.
+pub trait Clock: Send + Sync + 'static {
+    /// The current time.
+    fn now(&self) -> jiff::Timestamp;
+}
+
 /// Downloaded files, kept where the frontend can open them. The calls block: the core runs them off
 /// the async threads, except [`get`](Self::get), which only looks.
 pub trait FileCache: Send + Sync + 'static {

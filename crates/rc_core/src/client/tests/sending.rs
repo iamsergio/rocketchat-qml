@@ -18,6 +18,21 @@ fn reset_messages(harness: &Harness) -> Vec<Message> {
 
 // SEND-001
 #[test]
+fn a_pending_message_carries_the_time_of_the_clock() {
+    let fake = Fake::new();
+    let harness = logged_in_harness(&fake);
+    open_first_room(&fake, &harness, false);
+    let now = FakeClock::start() + Duration::from_secs(90);
+    harness.clock.set(FakeClock::start());
+    harness.clock.advance(Duration::from_secs(90));
+    harness
+        .account()
+        .send_message("1".to_owned().into(), "hello", None, None, false);
+    assert_eq!(expect_pending(&harness).ts, now);
+}
+
+// SEND-001
+#[test]
 fn a_sent_message_shows_as_pending_and_becomes_sent_when_the_server_answers() {
     let fake = Fake::new();
     let harness = logged_in_harness(&fake);

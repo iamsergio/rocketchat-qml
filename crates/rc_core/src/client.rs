@@ -11,7 +11,7 @@ use secrecy::SecretString;
 use tokio::runtime::{Builder, Runtime};
 use tokio::sync::mpsc::{self, UnboundedSender};
 
-use crate::adapters::RestConnector;
+use crate::adapters::{RestConnector, SystemClock};
 use crate::avatars::AvatarUpdate;
 use crate::backoff::Backoff;
 use crate::core::{self, ActorSenders, CoreCommand};
@@ -20,7 +20,7 @@ use crate::emoji::{self, CustomEmojis};
 use crate::error::Error;
 use crate::images::ImageUpdate;
 use crate::policy::{ActionError, MessageAction, MessagePolicy};
-use crate::ports::{Connector, FileCache, SecretStore};
+use crate::ports::{Clock, Connector, FileCache, SecretStore};
 use crate::rooms::{RoomAction, RoomActionError, RoomChange, Unread};
 use crate::session::SessionState;
 use crate::timeline::{ThreadStatus, TimelineChange, TimelineStatus};
@@ -186,12 +186,12 @@ impl Client {
         cache: impl FileCache,
         on_event: impl Fn(AccountId, Event) + Send + Sync + 'static,
     ) -> Result<Self, Error> {
-        Self::with_ports(RestConnector, store, cache, on_event)
+        Self::with_ports(RestConnector, store, cache, SystemClock, on_event)
     }
 
     /// A client that reaches servers through `connector`, remembers the accounts in `store` and
-    /// keeps downloaded files in `cache`; tests pass fakes. Every stored account is added, and
-    /// resumed if it holds a token.
+    /// keeps downloaded files in `cache`, and tells the time by `clock`; tests pass fakes. Every
+    /// stored account is added, and resumed if it holds a token.
     ///
     /// `on_event` is called once per event, with the account it belongs to, from a runtime thread.
     /// The events of one account come in order, from `Added` to `Removed`; those of different
@@ -207,9 +207,10 @@ impl Client {
         connector: C,
         store: S,
         cache: impl FileCache,
+        clock: impl Clock,
         on_event: impl Fn(AccountId, Event) + Send + Sync + 'static,
     ) -> Result<Self, Error> {
-        Self::with_backoff(connector, store, cache, on_event, Backoff::default())
+        Self::with_backoff(connector, store, cache, clock, on_event, Backoff::default())
     }
 
     /// [`with_ports`](Self::with_ports) with the waits between reconnects set, so that tests don't
@@ -218,6 +219,7 @@ impl Client {
         connector: C,
         store: S,
         cache: impl FileCache,
+        clock: impl Clock,
         on_event: impl Fn(AccountId, Event) + Send + Sync + 'static,
         backoff: Backoff,
     ) -> Result<Self, Error> {
@@ -230,9 +232,12 @@ impl Client {
         let senders = Arc::new(ActorSenders::default());
         let finished = core::spawn(
             &runtime,
-            connector,
-            store,
-            cache,
+            core::Ports {
+                connector,
+                store,
+                cache: Arc::new(cache),
+                clock: Arc::new(clock),
+            },
             on_event,
             backoff,
             core::Link {

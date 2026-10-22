@@ -396,6 +396,7 @@ fn a_stored_account_tells_who_it_is_right_after_added() {
         &fake,
         store_with("http://h"),
         FakeCache::default(),
+        FakeClock::default(),
         Backoff::new(NEVER, NEVER, NEVER),
     );
     assert_eq!(
@@ -422,6 +423,7 @@ fn a_stored_account_without_a_token_is_added_logged_out_with_its_identity() {
         &fake,
         store.clone(),
         FakeCache::default(),
+        FakeClock::default(),
         Backoff::new(NEVER, NEVER, NEVER),
     );
     assert_eq!(
@@ -536,6 +538,7 @@ fn a_restart_lists_an_expired_account_logged_out_with_its_identity() {
         &fake,
         store.clone(),
         FakeCache::default(),
+        FakeClock::default(),
         Backoff::new(NEVER, NEVER, NEVER),
     );
     assert_eq!(

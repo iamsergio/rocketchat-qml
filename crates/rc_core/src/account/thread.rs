@@ -183,7 +183,7 @@ impl<C: Connector> Actor<C> {
         thread.fetch = Some(Fetch {
             attempt,
             older,
-            started: jiff::Timestamp::now(),
+            started: self.clock.now(),
             with_changes: false,
         });
         thread.error = None;

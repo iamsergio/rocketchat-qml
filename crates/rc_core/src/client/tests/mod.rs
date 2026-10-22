@@ -28,8 +28,8 @@ use crate::emoji::CustomEmojis;
 use crate::images::ImageUpdate;
 use crate::policy::{ActionError, MessageAction, MessagePolicy};
 use crate::ports::{
-    ApiError, CacheError, CacheKey, Changes, Connector, FileCache, Image, Page, Pushed, Realtime,
-    SecretStore, ServerApi, StoreError, Stored, ThreadTarget, image_extension,
+    ApiError, CacheError, CacheKey, Changes, Clock, Connector, FileCache, Image, Page, Pushed,
+    Realtime, SecretStore, ServerApi, StoreError, Stored, ThreadTarget, image_extension,
 };
 use crate::rooms::{RoomAction, RoomActionError, RoomChange, Unread};
 use crate::session::{LoginFailure, SessionState};

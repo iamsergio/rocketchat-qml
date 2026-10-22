@@ -965,6 +965,39 @@ impl ServerApi for Fake {
     }
 }
 
+/// A clock that tells the time the test sets, and stands still otherwise. Clones share the time.
+#[derive(Clone)]
+pub(super) struct FakeClock(Arc<Mutex<jiff::Timestamp>>);
+
+impl FakeClock {
+    /// The time a harness starts at: well after the epoch, so that nothing is mistaken for "never".
+    pub(super) fn start() -> jiff::Timestamp {
+        jiff::Timestamp::from_second(1_800_000_000).expect("in range")
+    }
+
+    pub(super) fn set(&self, time: jiff::Timestamp) {
+        *self.0.lock().unwrap() = time;
+    }
+
+    pub(super) fn advance(&self, by: Duration) {
+        let mut time = self.0.lock().unwrap();
+        *time = time.checked_add(by).expect("in range");
+    }
+}
+
+impl Default for FakeClock {
+    /// At [`start`](Self::start).
+    fn default() -> Self {
+        Self(Arc::new(Mutex::new(Self::start())))
+    }
+}
+
+impl Clock for FakeClock {
+    fn now(&self) -> jiff::Timestamp {
+        *self.0.lock().unwrap()
+    }
+}
+
 /// Files in memory, at made-up paths: `/cache/<server>/<user or room>/<name>.<extension>`.
 #[derive(Clone, Default)]
 pub(super) struct FakeCache(pub(super) Arc<Mutex<FakeFiles>>);
