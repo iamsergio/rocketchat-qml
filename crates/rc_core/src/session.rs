@@ -50,6 +50,9 @@ pub enum LoginFailure {
     InvalidCredentials,
     #[error("Your session has expired, log in again")]
     SessionExpired,
+    /// The user logged in is another account's already.
+    #[error("You have added that account already")]
+    AlreadyAdded,
     /// Any other server error, with its message.
     #[error("The server reported an error: {0}")]
     Server(String),

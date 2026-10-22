@@ -113,7 +113,27 @@ fn display_order(a: &Room, b: &Room) -> Ordering {
         .then_with(|| a.id.cmp(&b.id))
 }
 
+/// What a frontend shows as an account's badge: the totals over its room list.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Unread {
+    /// How many rooms show as unread.
+    pub rooms: u32,
+    /// The sum of the rooms' mention badges.
+    pub mentions: u32,
+}
+
 impl RoomList {
+    /// The unread totals of the rooms.
+    #[must_use]
+    pub fn unread(&self) -> Unread {
+        self.rooms
+            .iter()
+            .fold(Unread::default(), |total, room| Unread {
+                rooms: total.rooms + u32::from(room.has_unread()),
+                mentions: total.mentions + room.mention_badge(),
+            })
+    }
+
     #[must_use]
     pub fn rooms(&self) -> &[Room] {
         &self.rooms
@@ -717,5 +737,35 @@ mod tests {
         step(l, m, |l| l.upsert(active("d", "d", 47)));
         step(l, m, |l| l.remove(&id("c")));
         assert_eq!(names(&list), ["d", "b", "a"]);
+    }
+
+    // ACCT-004
+    #[test]
+    fn the_unread_totals_count_the_unread_rooms_and_sum_the_mention_badges() {
+        assert_eq!(RoomList::default().unread(), Unread::default());
+        let list = list_of(vec![
+            room("a", "a"),
+            Room {
+                unread: 5,
+                user_mentions: 2,
+                ..room("b", "b")
+            },
+            Room {
+                user_mentions: 1,
+                alert: true,
+                ..room("c", "c")
+            },
+            Room {
+                group_mentions: 4,
+                ..room("d", "d")
+            },
+        ]);
+        assert_eq!(
+            list.unread(),
+            Unread {
+                rooms: 3,
+                mentions: 3
+            }
+        );
     }
 }

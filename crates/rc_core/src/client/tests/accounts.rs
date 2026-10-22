@@ -315,3 +315,478 @@ fn dropping_the_client_waits_for_the_logouts_of_all_accounts() {
     assert_eq!(other.state().logouts_done, 1);
     assert!(store.load().unwrap().is_empty());
 }
+
+fn identity(server: &str, username: &str) -> Identity {
+    Identity {
+        server: server.to_owned(),
+        username: username.to_owned(),
+    }
+}
+
+/// The state of a user whose id on the server is not the fake's usual one.
+fn logged_in_as(server: &str, username: &str, id: &str) -> SessionState {
+    SessionState::LoggedIn(Account {
+        server: server.to_owned(),
+        user: User {
+            id: id.to_owned().into(),
+            ..user(username)
+        },
+    })
+}
+
+/// A harness for a store, with alice logged in on `http://h` and the events of that read.
+fn alice_logged_in(fake: &Fake, store: &MemoryStore) -> Harness {
+    fake.script_login(None, Ok(()));
+    let harness = Harness::with_store(fake, store.clone());
+    harness.allow_other_accounts();
+    harness.login("http://h", "alice");
+    harness.expect_events(vec![
+        session_event(SessionState::Connecting),
+        session_event(logged_in("http://h", "alice")),
+        rooms_event(vec![]),
+    ]);
+    harness
+}
+
+/// The events of an account that logs in, up to the end of the attempt.
+fn attempt_events(harness: &Harness, id: &AccountId) -> Vec<Event> {
+    harness.events_until_of(id, |event| {
+        matches!(
+            event,
+            Event::Session(
+                SessionState::LoggedIn(_) | SessionState::LoggedOut { failure: Some(_) }
+            )
+        )
+    })
+}
+
+// ACCT-002
+#[test]
+fn a_stored_account_tells_who_it_is_right_after_added() {
+    let fake = Fake::new();
+    let (client, events) = raw_client(
+        &fake,
+        store_with("http://h"),
+        FakeCache::default(),
+        Backoff::new(NEVER, NEVER, NEVER),
+    );
+    assert_eq!(
+        raw_events(&events, 4),
+        [
+            Event::Added,
+            Event::Identity(identity("http://h", "alice")),
+            session_event(SessionState::Resuming),
+            session_event(logged_in("http://h", "alice")),
+        ]
+    );
+    drop(client);
+}
+
+// ACCT-002
+#[test]
+fn a_stored_account_without_a_token_is_added_logged_out_with_its_identity() {
+    let fake = Fake::new();
+    let store = MemoryStore::default();
+    let mut signed_out = stored("http://h");
+    signed_out.token = None;
+    store.save(&signed_out).unwrap();
+    let (client, events) = raw_client(
+        &fake,
+        store.clone(),
+        FakeCache::default(),
+        Backoff::new(NEVER, NEVER, NEVER),
+    );
+    assert_eq!(
+        raw_events(&events, 3),
+        [
+            Event::Added,
+            Event::Identity(identity("http://h", "alice")),
+            session_event(logged_out(None)),
+        ]
+    );
+    drop(client);
+    // Nothing was resumed, and the account is still stored.
+    assert!(fake.state().me_calls.is_empty());
+    assert_eq!(stored_ids(&store), [STORED_ID]);
+}
+
+// ACCT-002
+#[test]
+fn a_first_login_tells_who_the_account_is_before_logging_in() {
+    let fake = Fake::new();
+    fake.script_login(None, Ok(()));
+    let harness = Harness::new(&fake);
+    harness.login("http://h", "alice");
+    assert_eq!(
+        attempt_events(&harness, harness.id()),
+        [
+            session_event(SessionState::Connecting),
+            Event::Identity(identity("http://h", "alice")),
+            session_event(logged_in("http://h", "alice")),
+        ]
+    );
+}
+
+// ACCT-002
+#[test]
+fn a_login_as_someone_else_on_an_expired_account_tells_the_new_identity() {
+    let fake = Fake::new();
+    fake.state().me_result = Some(Err(ApiError::Unauthorized));
+    fake.state().user_ids.insert("bob".into(), "bob-id".into());
+    fake.script_login(None, Ok(()));
+    let store = store_with("http://h");
+    let harness = Harness::with_store(&fake, store.clone());
+    harness.expect(&[logged_out(Some(LoginFailure::SessionExpired))]);
+
+    harness.login("http://h", "bob");
+    assert_eq!(
+        attempt_events(&harness, harness.id()),
+        [
+            session_event(SessionState::Connecting),
+            Event::Identity(identity("http://h", "bob")),
+            session_event(logged_in_as("http://h", "bob", "bob-id")),
+        ]
+    );
+}
+
+// ACCT-002
+#[test]
+fn a_login_as_the_same_user_tells_nothing_new() {
+    let fake = Fake::new();
+    fake.state().me_result = Some(Err(ApiError::Unauthorized));
+    fake.script_login(None, Ok(()));
+    let harness = Harness::with_store(&fake, store_with("http://h"));
+    harness.expect(&[logged_out(Some(LoginFailure::SessionExpired))]);
+
+    harness.login("http://h", "alice");
+    assert_eq!(
+        attempt_events(&harness, harness.id()),
+        [
+            session_event(SessionState::Connecting),
+            session_event(logged_in("http://h", "alice")),
+        ]
+    );
+}
+
+// ACCT-006
+#[test]
+fn logging_in_again_on_an_expired_account_saves_the_token_under_the_same_id() {
+    let fake = Fake::new();
+    fake.state().me_result = Some(Err(ApiError::Unauthorized));
+    fake.script_login(None, Ok(()));
+    let store = store_with("http://h");
+    let harness = Harness::with_store(&fake, store.clone());
+    harness.expect(&[logged_out(Some(LoginFailure::SessionExpired))]);
+    wait_for_expired(&store);
+
+    harness.login("http://h", "alice");
+    harness.expect(&[SessionState::Connecting, logged_in("http://h", "alice")]);
+    let saved = wait_until(|| {
+        let accounts = store.load().unwrap();
+        let [account] = accounts.as_slice() else {
+            return None;
+        };
+        account.token.is_some().then(|| account.clone())
+    });
+    assert_eq!(saved.id.as_str(), STORED_ID);
+    assert_eq!(saved.server, "http://h");
+    assert_eq!(saved.token.unwrap().expose_secret(), "tok");
+}
+
+// ACCT-006
+#[test]
+fn a_restart_lists_an_expired_account_logged_out_with_its_identity() {
+    let fake = Fake::new();
+    fake.state().me_result = Some(Err(ApiError::Unauthorized));
+    let store = store_with("http://h");
+    let harness = Harness::with_store(&fake, store.clone());
+    harness.expect(&[logged_out(Some(LoginFailure::SessionExpired))]);
+    wait_for_expired(&store);
+    drop(harness);
+
+    let (client, events) = raw_client(
+        &fake,
+        store.clone(),
+        FakeCache::default(),
+        Backoff::new(NEVER, NEVER, NEVER),
+    );
+    assert_eq!(
+        raw_events(&events, 3),
+        [
+            Event::Added,
+            Event::Identity(identity("http://h", "alice")),
+            session_event(logged_out(None)),
+        ]
+    );
+    drop(client);
+    // It wasn't resumed again.
+    assert_eq!(fake.state().me_calls.len(), 1);
+}
+
+// ACCT-006
+#[test]
+fn a_live_expiry_keeps_the_account_stored_without_a_token() {
+    let fake = Fake::new();
+    fake.script_login(None, Ok(()));
+    let store = MemoryStore::default();
+    let harness = Harness::with_backoff(&fake, store.clone(), fast());
+    harness.login("http://h", "alice");
+    harness.expect(&[SessionState::Connecting, logged_in("http://h", "alice")]);
+    fake.wait_for_connections(1);
+    fake.script_realtime(None, Vec::new(), Err(ApiError::Unauthorized));
+    fake.end_connection(0);
+    harness.expect(&[logged_out(Some(LoginFailure::SessionExpired))]);
+
+    let kept = wait_for_expired(&store);
+    assert_eq!(&kept.id, harness.id());
+    assert_eq!(kept.server, "http://h");
+    assert_eq!(kept.username, "alice");
+    assert_eq!(kept.user_id.as_str(), "uid");
+}
+
+// ACCT-007
+#[test]
+fn a_user_another_account_has_cannot_be_added_and_the_new_token_is_revoked() {
+    let fake = Fake::new();
+    let store = MemoryStore::default();
+    let harness = alice_logged_in(&fake, &store);
+    let first = harness.id().to_string();
+
+    let b = harness.client.add_account();
+    fake.script_login(None, Ok(()));
+    harness
+        .client
+        .account(&b)
+        .login("http://h", "alice", SecretString::from("secret"));
+    assert_eq!(
+        attempt_events(&harness, &b),
+        [
+            Event::Added,
+            session_event(logged_out(None)),
+            session_event(SessionState::Connecting),
+            session_event(logged_out(Some(LoginFailure::AlreadyAdded))),
+        ]
+    );
+    assert_eq!(
+        fake.wait_for_logout_call(),
+        ("uid".to_owned(), "tok".to_owned())
+    );
+    // Nothing of it was saved or opened.
+    drop(harness);
+    assert_eq!(stored_ids(&store), [first]);
+    assert_eq!(fake.state().realtime_calls.len(), 1);
+}
+
+// ACCT-007
+#[test]
+fn the_failure_says_the_account_was_added_already() {
+    assert_eq!(
+        LoginFailure::AlreadyAdded.to_string(),
+        "You have added that account already"
+    );
+}
+
+// ACCT-007
+#[test]
+fn a_user_listed_without_a_token_cannot_be_added_either() {
+    let fake = Fake::new();
+    let store = MemoryStore::default();
+    let mut signed_out = stored_as("one", "http://h");
+    signed_out.token = None;
+    store.save(&signed_out).unwrap();
+    let harness = Harness::with_accounts(&fake, store.clone());
+    assert_eq!(harness.first, logged_out(None));
+
+    let b = harness.client.add_account();
+    fake.script_login(None, Ok(()));
+    harness
+        .client
+        .account(&b)
+        .login("http://h", "alice", SecretString::from("secret"));
+    let events = attempt_events(&harness, &b);
+    assert_eq!(
+        events.last(),
+        Some(&session_event(logged_out(Some(LoginFailure::AlreadyAdded))))
+    );
+    assert!(!events.iter().any(|e| matches!(e, Event::Identity(_))));
+    fake.wait_for_logout_call();
+    drop(harness);
+    assert_eq!(stored_ids(&store), ["one"]);
+}
+
+// ACCT-007
+#[test]
+fn the_same_username_on_another_server_and_another_user_on_the_same_server_are_fine() {
+    let fake = Fake::new();
+    let store = MemoryStore::default();
+    let harness = alice_logged_in(&fake, &store);
+    let other = other_server(&fake);
+    other.script_login(None, Ok(()));
+    fake.state().user_ids.insert("bob".into(), "bob-id".into());
+
+    let on_other = harness.client.add_account();
+    harness
+        .client
+        .account(&on_other)
+        .login(OTHER, "alice", SecretString::from("secret"));
+    let events = attempt_events(&harness, &on_other);
+    assert_eq!(
+        events.last(),
+        Some(&session_event(logged_in(OTHER, "alice")))
+    );
+
+    fake.script_login(None, Ok(()));
+    let bob = harness.client.add_account();
+    harness
+        .client
+        .account(&bob)
+        .login("http://h", "bob", SecretString::from("secret"));
+    let events = attempt_events(&harness, &bob);
+    assert_eq!(
+        events.last(),
+        Some(&session_event(logged_in_as("http://h", "bob", "bob-id")))
+    );
+    drop(harness);
+    assert_eq!(store.load().unwrap().len(), 3);
+}
+
+// ACCT-007
+#[test]
+fn the_user_can_be_added_again_once_the_other_account_is_removed() {
+    let fake = Fake::new();
+    let store = MemoryStore::default();
+    let harness = alice_logged_in(&fake, &store);
+    let first = harness.id().clone();
+    let b = harness.client.add_account();
+    fake.script_login(None, Ok(()));
+    harness
+        .client
+        .account(&b)
+        .login("http://h", "alice", SecretString::from("secret"));
+    assert_eq!(
+        attempt_events(&harness, &b).last(),
+        Some(&session_event(logged_out(Some(LoginFailure::AlreadyAdded))))
+    );
+
+    harness.client.remove_account(&first);
+    harness.events_until_of(&first, |event| *event == Event::Removed);
+    fake.script_login(None, Ok(()));
+    harness
+        .client
+        .account(&b)
+        .login("http://h", "alice", SecretString::from("secret"));
+    assert_eq!(
+        attempt_events(&harness, &b).last(),
+        Some(&session_event(logged_in("http://h", "alice")))
+    );
+}
+
+/// The fake's subscription of room `id` with unread messages and mentions of the user.
+fn unread_in(id: &str, unread: u32, mentions: u32) -> rc_api::Subscription {
+    let mut sub = subscription(id, id, rc_api::RoomType::Channel);
+    sub.unread = unread;
+    sub.user_mentions = mentions;
+    sub
+}
+
+fn totals(rooms: u32, mentions: u32) -> Unread {
+    Unread { rooms, mentions }
+}
+
+// ACCT-004
+#[test]
+fn the_unread_totals_follow_the_room_list() {
+    let fake = Fake::new();
+    fake.script_login(None, Ok(()));
+    fake.script_fetch(
+        None,
+        Ok(vec![
+            unread_in("a", 3, 1),
+            unread_in("b", 2, 0),
+            unread_in("c", 0, 0),
+        ]),
+    );
+    let harness = Harness::new(&fake);
+    harness.login("http://h", "alice");
+
+    // Listed: the totals come right after the rooms.
+    let events = harness.events_until(|event| matches!(event, Event::Unread(_)));
+    assert!(matches!(
+        &events[events.len() - 2..],
+        [Event::Rooms(_), Event::Unread(unread)] if *unread == totals(2, 1)
+    ));
+
+    // A pushed change.
+    assert!(fake.push(0, Pushed::Subscription(unread_in("a", 0, 0))));
+    assert_eq!(harness.next_unread(), totals(1, 0));
+
+    // A change that leaves the totals alone sends nothing: the next totals are the next change's.
+    let mut favorite = unread_in("b", 2, 0);
+    favorite.favorite = true;
+    assert!(fake.push(0, Pushed::Subscription(favorite)));
+    assert!(fake.push(0, Pushed::Subscription(unread_in("c", 4, 7))));
+    assert_eq!(harness.next_unread(), totals(2, 7));
+
+    // Marking a room read.
+    harness.account().mark_read("c".to_owned().into());
+    assert_eq!(harness.next_unread(), totals(1, 0));
+
+    // A logout empties the list.
+    harness.logout();
+    assert_eq!(harness.next_unread(), totals(0, 0));
+}
+
+// ACCT-004
+#[test]
+fn nothing_is_sent_while_the_totals_are_zero() {
+    let fake = Fake::new();
+    fake.script_login(None, Ok(()));
+    fake.script_fetch(None, Ok(vec![unread_in("a", 0, 0)]));
+    let harness = Harness::new(&fake);
+    harness.login("http://h", "alice");
+    harness.expect_events(vec![
+        session_event(SessionState::Connecting),
+        session_event(logged_in("http://h", "alice")),
+        rooms_event(vec![room_from(unread_in("a", 0, 0)).unwrap()]),
+    ]);
+    assert!(fake.push(0, Pushed::Subscription(unread_in("b", 0, 0))));
+    harness.expect_events(vec![rooms_change(RoomChange::Inserted {
+        index: 1,
+        room: room_from(unread_in("b", 0, 0)).unwrap(),
+    })]);
+    harness.logout();
+    harness.expect_events(vec![session_event(logged_out(None)), rooms_event(vec![])]);
+
+    // Logging in again with unread rooms: the first totals ever sent come now.
+    fake.script_login(None, Ok(()));
+    fake.script_fetch(None, Ok(vec![unread_in("a", 1, 0)]));
+    harness.login("http://h", "alice");
+    let events = harness.events_until(|event| matches!(event, Event::Unread(_)));
+    assert_eq!(events.last(), Some(&Event::Unread(totals(1, 0))));
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| matches!(event, Event::Unread(_)))
+            .count(),
+        1
+    );
+}
+
+// ACCT-004
+#[test]
+fn two_accounts_have_separate_totals() {
+    let fake = Fake::new();
+    let other = other_server(&fake);
+    let store = store_with_two();
+    fake.script_fetch(None, Ok(vec![unread_in("a", 1, 0)]));
+    other.script_fetch(None, Ok(vec![unread_in("x", 5, 2), unread_in("y", 1, 1)]));
+    let harness = Harness::with_accounts(&fake, store);
+    let two = AccountId::from("two".to_owned());
+
+    assert_eq!(harness.next_unread(), totals(1, 0));
+    assert_eq!(harness.next_unread_of(&two), totals(2, 3));
+    assert!(other.push(0, Pushed::Subscription(unread_in("x", 0, 0))));
+    assert_eq!(harness.next_unread_of(&two), totals(1, 1));
+    // The first account heard nothing of it.
+    assert!(harness.recv_timeout(Duration::from_millis(100)).is_err());
+}

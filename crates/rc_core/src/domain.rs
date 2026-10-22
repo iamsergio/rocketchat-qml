@@ -165,6 +165,15 @@ impl StoredAccount {
     }
 }
 
+/// Who an account is, as far as a frontend can say before it is logged in: enough to list the
+/// account and to prefill its login.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Identity {
+    /// The normalized URL that was used to log in.
+    pub server: String,
+    pub username: String,
+}
+
 /// Whose avatar it is.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum AvatarOwner {
@@ -228,10 +237,17 @@ impl Room {
         (self.peer.is_some() || self.avatar_etag.is_some()).then(|| self.avatar_owner())
     }
 
-    /// Whether the room shows as unread.
+    /// Whether the room shows as unread: anything is counted, or the server raised its alert.
     #[must_use]
     pub fn has_unread(&self) -> bool {
         self.unread > 0 || self.user_mentions > 0 || self.group_mentions > 0 || self.alert
+    }
+
+    /// The number the room's mention badge shows, if it is not zero: the mentions of the user by
+    /// name. `@all` and `@here` only make the room unread, they have no badge.
+    #[must_use]
+    pub fn mention_badge(&self) -> u32 {
+        self.user_mentions
     }
 
     /// Whether the user may leave the room: channels and private groups, not direct messages.
@@ -639,6 +655,19 @@ mod tests {
         }
         room.unread = 5;
         assert_eq!(room.read().unread, 0);
+    }
+
+    // ACCT-004
+    #[test]
+    fn only_the_mentions_of_the_user_have_a_badge() {
+        let mut room = room_from(sub("r", RoomType::Channel)).unwrap();
+        room.unread = 4;
+        room.group_mentions = 2;
+        room.alert = true;
+        assert_eq!(room.mention_badge(), 0);
+        assert!(room.has_unread());
+        room.user_mentions = 3;
+        assert_eq!(room.mention_badge(), 3);
     }
 
     // ROOM-002

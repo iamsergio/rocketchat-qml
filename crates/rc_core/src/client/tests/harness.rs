@@ -120,6 +120,46 @@ pub(super) fn wait_for_empty(store: &MemoryStore) {
     wait_until(|| store.load().unwrap().is_empty().then_some(()));
 }
 
+/// Waits until the store holds a single account that has lost its token, and returns it: what an
+/// expired session leaves.
+pub(super) fn wait_for_expired(store: &MemoryStore) -> StoredAccount {
+    wait_until(|| {
+        let accounts = store.load().unwrap();
+        match accounts.as_slice() {
+            [account] if account.token.is_none() => Some(account.clone()),
+            _ => None,
+        }
+    })
+}
+
+/// A client whose events are read raw, none skipped, as they come.
+pub(super) fn raw_client(
+    fake: &Fake,
+    store: impl SecretStore,
+    cache: FakeCache,
+    backoff: Backoff,
+) -> (Client, Receiver<(AccountId, Event)>) {
+    let (tx, events) = mpsc::channel();
+    let client = Client::with_backoff(
+        fake.clone(),
+        store,
+        cache,
+        move |id, event| {
+            let _ = tx.send((id, event));
+        },
+        backoff,
+    )
+    .unwrap();
+    (client, events)
+}
+
+/// The next `count` events, whichever account they belong to.
+pub(super) fn raw_events(events: &Receiver<(AccountId, Event)>, count: usize) -> Vec<Event> {
+    (0..count)
+        .map(|_| events.recv_timeout(TIMEOUT).expect("no event").1)
+        .collect()
+}
+
 pub(super) struct Harness {
     pub(super) client: Client,
     events: Receiver<(AccountId, Event)>,
@@ -182,17 +222,7 @@ impl Harness {
         backoff: Backoff,
         several: bool,
     ) -> Self {
-        let (tx, events) = mpsc::channel();
-        let client = Client::with_backoff(
-            fake.clone(),
-            store,
-            cache,
-            move |id, event| {
-                let _ = tx.send((id, event));
-            },
-            backoff,
-        )
-        .unwrap();
+        let (client, events) = raw_client(fake, store, cache, backoff);
         let (account, added) = events.recv_timeout(TIMEOUT).expect("no event");
         assert_eq!(added, Event::Added);
         let mut harness = Self {
@@ -277,8 +307,10 @@ impl Harness {
         }
     }
 
-    /// The next event, connection changes aside: the tests that don't look at them don't wait for
-    /// them either. See [`next_connection`](Self::next_connection).
+    /// The next event, connection changes, identities and unread totals aside: the tests that
+    /// don't look at them don't wait for them either. See
+    /// [`next_connection`](Self::next_connection), [`events_until`](Self::events_until) (identities)
+    /// and [`next_unread_of`](Self::next_unread_of).
     pub(super) fn next_event(&self) -> Event {
         self.next_event_of(&self.account)
     }
@@ -287,10 +319,24 @@ impl Harness {
     pub(super) fn next_event_of(&self, id: &AccountId) -> Event {
         loop {
             match self.recv_of(id, TIMEOUT).expect("no event") {
-                Event::Connection(_) => {}
+                Event::Connection(_) | Event::Identity(_) | Event::Unread(_) => {}
                 event => return event,
             }
         }
+    }
+
+    /// The next unread totals of the account `id`, skipping the other events.
+    pub(super) fn next_unread_of(&self, id: &AccountId) -> Unread {
+        loop {
+            if let Event::Unread(unread) = self.recv_of(id, TIMEOUT).expect("no event") {
+                return unread;
+            }
+        }
+    }
+
+    /// The next unread totals of the account, skipping the other events.
+    pub(super) fn next_unread(&self) -> Unread {
+        self.next_unread_of(&self.account)
     }
 
     /// The updates of the next `Avatars` event, skipping the other events.
@@ -391,6 +437,29 @@ impl Harness {
         for expected in events {
             assert_eq!(self.next_event_of(id), expected);
         }
+    }
+
+    /// The raw events of the account `id`, none skipped, up to and including the first that
+    /// satisfies `last`.
+    pub(super) fn events_until_of(
+        &self,
+        id: &AccountId,
+        last: impl Fn(&Event) -> bool,
+    ) -> Vec<Event> {
+        let mut events = Vec::new();
+        loop {
+            let event = self.recv_of(id, TIMEOUT).expect("no event");
+            let done = last(&event);
+            events.push(event);
+            if done {
+                return events;
+            }
+        }
+    }
+
+    /// [`events_until_of`](Self::events_until_of) for the account the harness follows.
+    pub(super) fn events_until(&self, last: impl Fn(&Event) -> bool) -> Vec<Event> {
+        self.events_until_of(&self.account, last)
     }
 
     /// The account whose `Added` comes next in the stream, which the test can't know yet because

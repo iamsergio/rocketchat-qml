@@ -391,7 +391,7 @@ impl RoomListModel {
             ROOM_ID_ROLE => QVariant::from(&QString::from(room.id.as_str())),
             KIND_ROLE => QVariant::from(&QString::from(kind_name(room.kind))),
             UNREAD_ROLE => QVariant::from(&count(room.unread)),
-            USER_MENTIONS_ROLE => QVariant::from(&count(room.user_mentions)),
+            USER_MENTIONS_ROLE => QVariant::from(&count(room.mention_badge())),
             GROUP_MENTIONS_ROLE => QVariant::from(&count(room.group_mentions)),
             ALERT_ROLE => QVariant::from(&room.alert),
             FAVORITE_ROLE => QVariant::from(&room.favorite),

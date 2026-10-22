@@ -14,13 +14,13 @@ use crate::adapters::RestConnector;
 use crate::avatars::AvatarUpdate;
 use crate::backoff::Backoff;
 use crate::core::{self, CoreCommand};
-use crate::domain::{AccountId, MessageId, RoomId};
+use crate::domain::{AccountId, Identity, MessageId, RoomId};
 use crate::emoji::{self, CustomEmojis};
 use crate::error::Error;
 use crate::images::ImageUpdate;
 use crate::policy::{ActionError, MessageAction, MessagePolicy};
 use crate::ports::{Connector, FileCache, SecretStore};
-use crate::rooms::{RoomAction, RoomActionError, RoomChange};
+use crate::rooms::{RoomAction, RoomActionError, RoomChange, Unread};
 use crate::session::SessionState;
 use crate::timeline::{ThreadStatus, TimelineChange, TimelineStatus};
 
@@ -43,11 +43,20 @@ pub enum Event {
     /// The last event of an account: it is gone, and nothing comes for it afterwards. Comes after
     /// everything the account emitted, the events of its logout included.
     Removed,
+    /// Who the account is, so that a frontend can list it and prefill its login while it is not
+    /// logged in. Comes when it becomes known or changes: at startup for a stored account, right
+    /// after `Added` and before its first `Session`, and after a login, before `LoggedIn`, if it
+    /// differs from what was sent. Never unset while the account lives.
+    Identity(Identity),
     Session(SessionState),
     /// Changes to the room list, to apply in order. After `LoggedIn` it carries the rooms; after
     /// `LoggedOut` it empties the list, unless the list was empty already. Reconnecting brings
     /// what changed meanwhile as inserts, updates, moves and removals, never as a reset.
     Rooms(Vec<RoomChange>),
+    /// What the frontend shows as the account's badge: how many rooms show as unread, and the sum
+    /// of their mention badges. Comes after the `Rooms` event that changes it, and after a
+    /// logout empties the list; not while it stays the same, nor while it is zero from the start.
+    Unread(Unread),
     /// Changes to the message list of the open room, to apply in order. Opening a room starts with
     /// a reset, to what is held of it already. Logging out resets to nothing, if a room was open.
     Timeline(Vec<TimelineChange>),

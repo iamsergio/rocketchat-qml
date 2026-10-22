@@ -209,9 +209,9 @@ fn a_message_pushed_while_the_room_loads_joins_the_page() {
     ]);
 }
 
-// AUTH-004
+// AUTH-004, ACCT-006
 #[test]
-fn an_unauthorized_realtime_connection_expires_the_session() {
+fn an_unauthorized_realtime_connection_expires_the_session_and_keeps_the_account() {
     let fake = Fake::new();
     fake.script_login(None, Ok(()));
     fake.script_realtime(None, Vec::new(), Err(ApiError::Unauthorized));
@@ -223,7 +223,7 @@ fn an_unauthorized_realtime_connection_expires_the_session() {
         session_event(logged_in("http://h", "alice")),
         session_event(logged_out(Some(LoginFailure::SessionExpired))),
     ]);
-    wait_for_empty(&store);
+    wait_for_expired(&store);
     // Dropping flushes the actor's work: a fetch or a revoke would show by now.
     drop(harness);
     assert!(fake.state().subscriptions_calls.is_empty());
@@ -477,9 +477,9 @@ fn logout_cancels_a_pending_reconnect() {
     assert_eq!(fake.state().realtime_calls.len(), 1);
 }
 
-// RT-003
+// RT-003, ACCT-006
 #[test]
-fn an_expired_token_on_a_reconnect_expires_the_session() {
+fn an_expired_token_on_a_reconnect_expires_the_session_and_keeps_the_account() {
     let fake = Fake::new();
     let store = MemoryStore::default();
     fake.script_login(None, Ok(()));
@@ -490,7 +490,7 @@ fn an_expired_token_on_a_reconnect_expires_the_session() {
     fake.script_realtime(None, Vec::new(), Err(ApiError::Unauthorized));
     fake.end_connection(0);
     harness.expect(&[logged_out(Some(LoginFailure::SessionExpired))]);
-    wait_for_empty(&store);
+    wait_for_expired(&store);
     // No more tries, and nothing revoked.
     std::thread::sleep(BASE * 2);
     drop(harness);

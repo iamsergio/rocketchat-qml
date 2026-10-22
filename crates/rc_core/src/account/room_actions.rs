@@ -6,7 +6,7 @@
 use crate::client::Event;
 use crate::domain::{Room, RoomId};
 use crate::ports::{ApiError, Connector, ServerApi};
-use crate::rooms::{RoomAction, RoomActionError};
+use crate::rooms::{RoomAction, RoomActionError, RoomChange};
 use crate::session::SessionState;
 
 use super::{Actor, Done, MarkReadDone, RoomActionDone};
@@ -164,6 +164,16 @@ impl<C: Connector> Actor<C> {
         }
     }
 
+    /// Tells the frontend the room list changed, and its unread totals if they did too.
+    pub(super) fn emit_rooms(&mut self, changes: Vec<RoomChange>) {
+        (self.on_event)(Event::Rooms(changes));
+        let unread = self.rooms.unread();
+        if unread != self.unread {
+            self.unread = unread;
+            (self.on_event)(Event::Unread(unread));
+        }
+    }
+
     /// Changes a listed room and tells the frontend, unless nothing changes. The open room stays
     /// read, as for a push.
     fn change_room(&mut self, id: &RoomId, change: impl FnOnce(Room) -> Room) {
@@ -172,14 +182,14 @@ impl<C: Connector> Actor<C> {
         };
         let room = self.seen_if_open(change(held));
         if let Some(change) = self.rooms.upsert(room) {
-            (self.on_event)(Event::Rooms(vec![change]));
+            self.emit_rooms(vec![change]);
         }
     }
 
     /// Drops the room from the list, and closes it if it was open.
     pub(super) fn remove_room(&mut self, id: &RoomId) {
         if let Some(change) = self.rooms.remove(id) {
-            (self.on_event)(Event::Rooms(vec![change]));
+            self.emit_rooms(vec![change]);
         }
         if self
             .open
@@ -197,6 +207,6 @@ impl<C: Connector> Actor<C> {
             return;
         }
         let change = self.rooms.reset(Vec::new());
-        (self.on_event)(Event::Rooms(vec![change]));
+        self.emit_rooms(vec![change]);
     }
 }

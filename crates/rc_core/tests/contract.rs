@@ -2366,3 +2366,127 @@ fn two_accounts_see_their_own_rooms_and_removing_one_leaves_the_other_working() 
     assert_eq!(admin.last_message(&bob_room).id, mirror[0].id.as_str());
     assert!(accounts.try_recv().is_err(), "an account was added");
 }
+
+// ACCT-007
+#[test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+fn the_same_user_cannot_be_added_twice_but_the_server_under_another_address_is_another_server() {
+    let user = new_user();
+    // The same server, reached by another address, counts as another server.
+    let proxy = Proxy::start();
+    let (client, accounts) = start_accounts();
+
+    let (a, a_events) = accounts.recv_timeout(TIMEOUT).expect("no account");
+    assert_eq!(next(&a_events), SessionState::LoggedOut { failure: None });
+    client
+        .account(&a)
+        .login(&server_url(), &user.username, password(&user));
+    assert!(matches!(outcome(&a_events), SessionState::LoggedIn(_)));
+
+    let b = client.add_account();
+    let (added, b_events) = accounts.recv_timeout(TIMEOUT).expect("no account");
+    assert_eq!(added, b);
+    assert_eq!(next(&b_events), SessionState::LoggedOut { failure: None });
+    client
+        .account(&b)
+        .login(&server_url(), &user.username, password(&user));
+    assert_failure(&outcome(&b_events), &LoginFailure::AlreadyAdded);
+
+    // The account that failed is logged out, not gone: through the proxy it works.
+    client
+        .account(&b)
+        .login(&proxy.url(), &user.username, password(&user));
+    assert!(matches!(outcome(&b_events), SessionState::LoggedIn(_)));
+}
+
+/// The room list as the events say it, and the unread totals as they last said them.
+#[derive(Default)]
+struct Badge {
+    rooms: Vec<Room>,
+    unread: (u32, u32),
+}
+
+impl Badge {
+    /// Takes in the event. Every `Unread` comes right after the `Rooms` that changes it, so it
+    /// must equal what the room list says. Other rooms of a dirty server may change too, so that
+    /// is all a test can check about the totals as a whole.
+    fn follow(&mut self, event: &Event) {
+        match event {
+            Event::Rooms(changes) => {
+                for change in changes {
+                    change.apply(&mut self.rooms);
+                }
+            }
+            Event::Unread(unread) => {
+                self.unread = (unread.rooms, unread.mentions);
+                assert_eq!(self.unread, self.listed_totals(), "{:?}", self.rooms);
+            }
+            _ => {}
+        }
+    }
+
+    fn listed_totals(&self) -> (u32, u32) {
+        let unread = self.rooms.iter().filter(|room| room.has_unread()).count();
+        (
+            u32::try_from(unread).unwrap(),
+            self.rooms.iter().map(|room| room.user_mentions).sum(),
+        )
+    }
+
+    /// The totals have caught up with the room list.
+    fn settled(&self) -> bool {
+        self.unread == self.listed_totals()
+    }
+
+    fn room(&self, id: &str) -> Option<&Room> {
+        self.rooms.iter().find(|room| room.id.as_str() == id)
+    }
+}
+
+// ACCT-004
+#[test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+fn the_unread_totals_follow_what_other_users_post() {
+    let admin = Admin::login();
+    let user = admin.create_user();
+    let (channel, _) = admin.create_channel(&[&user.username]);
+    let dm = admin.create_dm(&user.username);
+    let (client, events) = start();
+    client
+        .account()
+        .login(&server_url(), &user.username, password(&user));
+    assert!(matches!(outcome(&events), SessionState::LoggedIn(_)));
+
+    let mut badge = Badge::default();
+    wait_for(&events, |event| {
+        badge.follow(event);
+        (badge.settled() && badge.room(&channel).is_some()).then_some(())
+    });
+
+    admin.post_message(&dm, "hello");
+    admin.post_message(&channel, &format!("hello @{}", user.username));
+    wait_for(&events, |event| {
+        badge.follow(event);
+        let unread = badge.room(&dm).is_some_and(Room::has_unread);
+        let mentioned = badge.room(&channel).is_some_and(|r| r.user_mentions == 1);
+        (badge.settled() && unread && mentioned).then_some(())
+    });
+    assert!(
+        badge.unread.0 >= 2 && badge.unread.1 >= 1,
+        "{:?}",
+        badge.unread
+    );
+
+    client.account().mark_read(dm.clone().into());
+    wait_for(&events, |event| {
+        badge.follow(event);
+        let read = badge.room(&dm).is_some_and(|room| !room.has_unread());
+        (badge.settled() && read).then_some(())
+    });
+    // The channel's mention is still counted.
+    assert!(
+        badge.unread.0 >= 1 && badge.unread.1 >= 1,
+        "{:?}",
+        badge.unread
+    );
+}
