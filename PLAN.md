@@ -122,6 +122,17 @@ One session actor per account under a thin accounts layer: the actor already hol
 - [x] QML: mockup first, then a rail of servers with badges and an add button, the login page in add-account mode with Cancel, and a prefilled login for an expired account
 - [x] Features ACCT-001…ACCT-007 tested. The second server in tests is the test server behind `rc_test_server::Proxy`
 
+## Quiet direct messages
+
+Done when: the room list leaves out the direct messages that had no activity for 10 days, unless they are favorites, unread or open, and one comes back as soon as it has a message.
+
+A hidden direct message can't be reached until it has a message: "Start a DM" (Phase 5) will open it.
+
+- [x] `rc_core`: split `RoomList` into the shown rooms (in display order, the only positions `RoomChange` indices refer to) and the hidden ones (by id, without a position). Nothing is hidden yet. No behaviour change
+- [ ] `rc_core`: a `Clock` port (system and fake adapters) in place of the actor's `jiff::Timestamp::now()` calls, so the tests control the time. No behaviour change
+- [ ] `rc_core`: the rule. A direct message is hidden once its last activity is older than the limit (10 days), unless it is a favorite, has something unread or is open. A timer wakes the actor at the next time a shown one goes quiet; opening another room re-checks the one left. A dev-only environment variable shortens the limit, for the GUI test
+- [ ] Feature ROOM-008 tested. No contract test: the real server stamps every message itself, so it can't give a quiet direct message
+
 ## Phase 6: Persistence and desktop integration
 
 Done when: the app starts instantly from cache (works offline read-only), shows desktop notifications, and has a settings page.

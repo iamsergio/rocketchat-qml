@@ -27,7 +27,7 @@ impl<C: Connector> Actor<C> {
         if text.is_empty() {
             return;
         }
-        if !self.rooms.rooms().iter().any(|known| known.id == room) {
+        if self.rooms.get(&room).is_none() {
             tracing::debug!(%room, "send_message ignored: not in the room list");
             return;
         }
@@ -104,7 +104,7 @@ impl<C: Connector> Actor<C> {
             tracing::debug!("no quote: no server address to make the link from");
             return None;
         };
-        let room_info = self.rooms.rooms().iter().find(|known| &known.id == room)?;
+        let room_info = self.rooms.get(room)?;
         Some(Quote {
             message: Some(quoted.clone()),
             link: permalink(site, room_info, quoted),
