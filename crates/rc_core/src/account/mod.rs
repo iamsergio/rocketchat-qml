@@ -271,8 +271,8 @@ struct Actor<C: Connector> {
     realtime_task: Option<JoinHandle<()>>,
     /// The connection of the current cycle is open.
     realtime_open: bool,
-    /// Tells the open connection which room is open, so that it follows its deletions. `None`
-    /// while there is no connection.
+    /// Tells the open connection which room is open, so that it follows its deletions and typing.
+    /// `None` while there is no connection.
     realtime_watch: Option<UnboundedSender<Option<RoomId>>>,
     /// Counts sync cycles (see [`open_realtime`](Self::open_realtime)), to tell the reports of the
     /// current one from stale ones.

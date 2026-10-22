@@ -352,10 +352,11 @@ pub type PushedEvents = UnboundedReceiver<Pushed>;
 #[derive(Debug)]
 pub struct Realtime {
     pub events: PushedEvents,
-    /// Says which room is open. The server pushes a deleted message only for the room it was told
-    /// about, so the connection follows the room that is open: send `Some(room)` when one opens
-    /// and `None` when it closes. Only one room is followed at a time. A room that can't be
-    /// followed is logged and nothing else.
+    /// Says which room is open. The server pushes a deleted message ([`Pushed::MessageDeleted`])
+    /// and who is typing ([`Pushed::Typing`]) only for the room it was told about, so the
+    /// connection follows the room that is open: send `Some(room)` when one opens and `None` when
+    /// it closes. Only one room is followed at a time. What can't be followed is logged and
+    /// nothing else.
     pub watch: UnboundedSender<Option<RoomId>>,
 }
 
