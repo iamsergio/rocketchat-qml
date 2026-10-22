@@ -1,0 +1,20 @@
+// SPDX-FileCopyrightText: 2026 Sergio Martins
+// SPDX-License-Identifier: MIT
+
+import { Theme } from "theme.slint";
+
+// A monochrome SVG icon in the colour `tint`. The SVGs are white, so colorizing gives the colour as
+// it is.
+export component Icon inherits Image {
+    in property <brush> tint: Theme.text;
+
+    image-fit: contain;
+    colorize: tint;
+}
+
+// The icon of a room kind (`channel`, `private` or `direct`), the SVGs the QML app has.
+export component KindIcon inherits Icon {
+    in property <string> kind;
+
+    source: kind == "channel" ? @image-url("../../../src/gui/icons/channel.svg") : kind == "private" ? @image-url("../../../src/gui/icons/private.svg") : @image-url("../../../src/gui/icons/direct.svg");
+}

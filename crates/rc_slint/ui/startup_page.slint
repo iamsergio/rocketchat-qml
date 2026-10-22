@@ -1,0 +1,28 @@
+// SPDX-FileCopyrightText: 2026 Sergio Martins
+// SPDX-License-Identifier: MIT
+
+import { BusyIndicator } from "busy_indicator.slint";
+import { Theme } from "theme.slint";
+import { VersionLabel } from "version_label.slint";
+
+// Shown until the core has said whether a stored session resumes, so that the login page doesn't
+// flash first.
+export component StartupPage inherits Rectangle {
+    in property <string> version;
+
+    BusyIndicator {
+        accessible-id: "startupBusy";
+        accessible-role: progress-indicator;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: Theme.busy-indicator-large-size;
+        height: Theme.busy-indicator-large-size;
+    }
+
+    VersionLabel {
+        version: root.version;
+        x: (parent.width - self.width) / 2;
+        y: parent.height - self.height - Theme.spacing-xxl;
+        width: self.preferred-width;
+    }
+}

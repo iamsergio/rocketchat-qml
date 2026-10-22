@@ -4472,8 +4472,11 @@ version = "0.0.0"
 dependencies = [
  "i-slint-backend-testing",
  "rc_core",
+ "rc_view",
+ "secrecy",
  "slint",
  "slint-build",
+ "tracing",
 ]
 
 [[package]]

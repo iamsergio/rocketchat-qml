@@ -1,0 +1,69 @@
+// SPDX-FileCopyrightText: 2026 Sergio Martins
+// SPDX-License-Identifier: MIT
+
+// What Rust tells the GUI, as the views of `rc_view` give it.
+
+// Where the session is. Mirrors `rc_view::session_view::Status`.
+export enum SessionStatus {
+    unknown,
+    logged-out,
+    connecting,
+    resuming,
+    logged-in,
+}
+
+// What the login page is for. Mirrors `rc_view::session_view::LoginMode`.
+export enum LoginMode {
+    login,
+    adding,
+    again,
+}
+
+// One tile of the rail: an `rc_view::accounts::AccountView`.
+export struct AccountTile {
+    id: string,
+    // The letter of the tile.
+    monogram: string,
+    // What the tile is called for accessibility.
+    label: string,
+    // A new account, nobody logged in: its tile is a dashed plus.
+    fresh: bool,
+    // The account on screen.
+    current: bool,
+    // Some room is unread, and the account is not on screen.
+    unread: bool,
+    // Connecting or resuming.
+    busy: bool,
+    // The login ended.
+    expired: bool,
+    mentions: int,
+}
+
+// What a row of the room list is: a room, or the heading of a section.
+export enum RoomSection {
+    room,
+    favorites,
+    rooms,
+}
+
+// One row of the room list: a room, or the heading of a section (nothing else is set then).
+export struct RoomRow {
+    section: RoomSection,
+    id: string,
+    name: string,
+    // `channel`, `private` or `direct`.
+    kind: string,
+    unread: int,
+    // The mention badge; none for zero.
+    mentions: int,
+    // The room has something new for the user, which its name shows.
+    has-unread: bool,
+    // The initials and the colour behind them, shown while there is no avatar image.
+    initials: string,
+    initials-color: color,
+    // The `file://` URL of the avatar file; empty for none.
+    avatar-url: string,
+    // Whether `avatar` holds an image.
+    has-avatar: bool,
+    avatar: image,
+}

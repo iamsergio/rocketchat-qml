@@ -1,0 +1,177 @@
+// SPDX-FileCopyrightText: 2026 Sergio Martins
+// SPDX-License-Identifier: MIT
+
+import { Icon } from "icon.slint";
+import { MenuItem } from "menu_item.slint";
+import { ServerTile } from "server_tile.slint";
+import { AccountTile } from "structs.slint";
+import { Theme } from "theme.slint";
+
+// The accounts, in the order they were added, one tile each, then the way to add one, and the
+// settings at the bottom. Always there, with one account too, so that + is where one would look.
+export component ServerRail inherits Rectangle {
+    in property <[AccountTile]> tiles;
+    // A new account waits for its login: its tile is where to go to add one.
+    in property <bool> has-new;
+    callback select-account(string);
+    callback add-account();
+    callback remove-account(string);
+    // Log out of the account on screen.
+    callback logout();
+
+    accessible-id: "serverRail";
+    accessible-role: list;
+    background: Theme.rail;
+    width: Theme.rail-width;
+
+    // The tiles scroll when they don't fit, above the settings button. The + follows the last one.
+    Flickable {
+        x: Theme.spacing-none;
+        y: Theme.spacing-none;
+        width: parent.width;
+        height: settings.y - Theme.spacing-l;
+        content-height: content.preferred-height;
+
+        // Inside the view, so that the ring and the badges of the first and last tile aren't cut.
+        content := VerticalLayout {
+            padding-top: Theme.spacing-xxl;
+            spacing: Theme.spacing-none;
+            alignment: start;
+
+            VerticalLayout {
+                padding: Theme.spacing-none;
+                spacing: Theme.spacing-l;
+
+                for tile[index] in root.tiles: ServerTile {
+                    tile: tile;
+                    index: index;
+                    selected => {
+                        root.select-account(tile.id);
+                    }
+                    removed => {
+                        root.remove-account(tile.id);
+                    }
+                }
+            }
+
+            VerticalLayout {
+                padding: Theme.spacing-none;
+                padding-top: Theme.spacing-l;
+                spacing: Theme.spacing-l;
+
+                // A new account has its tile, which is where to go to add one.
+                if !root.has-new: Rectangle {
+                    height: Theme.separator-width;
+
+                    Rectangle {
+                        x: (parent.width - self.width) / 2;
+                        width: Theme.rail-separator-width;
+                        height: Theme.separator-width;
+                        background: Theme.line;
+                    }
+                }
+
+                if !root.has-new: Rectangle {
+                    accessible-id: "addServerButton";
+                    accessible-role: button;
+                    accessible-label: @tr("Add a server");
+                    accessible-action-default => {
+                        root.add-account();
+                    }
+                    height: Theme.rail-tile-size;
+
+                    Rectangle {
+                        x: (parent.width - self.width) / 2;
+                        width: Theme.rail-tile-size;
+                        height: Theme.rail-tile-size;
+                        border-color: add-touch.has-hover ? Theme.own : Theme.raised-hover;
+                        border-width: Theme.border-width;
+                        border-radius: Theme.rail-tile-radius;
+                        background: Theme.transparent;
+
+                        Icon {
+                            x: (parent.width - self.width) / 2;
+                            y: (parent.height - self.height) / 2;
+                            width: Theme.rail-add-icon-size;
+                            height: Theme.rail-add-icon-size;
+                            source: @image-url("../../../src/gui/icons/plus.svg");
+                            tint: add-touch.has-hover ? Theme.own : Theme.text-faint;
+                        }
+                    }
+
+                    add-touch := TouchArea {
+                        clicked => {
+                            root.add-account();
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Opens above the button, to its right: the button is at the bottom of the window.
+    settings := Rectangle {
+        accessible-id: "settingsButton";
+        accessible-role: button;
+        accessible-label: @tr("Settings");
+        accessible-action-default => {
+            settings-menu.show();
+        }
+        x: (parent.width - self.width) / 2;
+        y: parent.height - self.height - Theme.spacing-xxl;
+        width: Theme.icon-button-size;
+        height: Theme.icon-button-size;
+        background: settings-touch.has-hover ? Theme.raised : Theme.transparent;
+        border-radius: Theme.radius-control;
+
+        Icon {
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            width: Theme.icon-button-icon-size;
+            height: Theme.icon-button-icon-size;
+            source: @image-url("../../../src/gui/icons/settings.svg");
+            tint: settings-touch.has-hover ? Theme.text : Theme.text-muted;
+        }
+
+        settings-touch := TouchArea {
+            clicked => {
+                settings-menu.show();
+            }
+        }
+
+        settings-menu := PopupWindow {
+            x: parent.width;
+            y: parent.height - self.height;
+            width: Theme.menu-width;
+            height: Theme.menu-item-height + 2 * Theme.menu-padding + 2 * Theme.border-width;
+
+            Rectangle {
+                background: Theme.raised;
+                border-color: Theme.raised-hover;
+                border-width: Theme.border-width;
+                border-radius: Theme.radius-control;
+
+                VerticalLayout {
+                    padding: Theme.menu-padding;
+                    spacing: Theme.spacing-none;
+
+                    MenuItem {
+                        accessible-id: "settingsLogoutAction";
+                        text: @tr("Log out");
+                        triggered => {
+                            settings-menu.close();
+                            root.logout();
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Rectangle {
+        x: parent.width - self.width;
+        width: Theme.separator-width;
+        height: parent.height;
+        background: Theme.line;
+    }
+}

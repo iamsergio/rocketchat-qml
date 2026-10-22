@@ -15,11 +15,14 @@ path = "src/main.rs"
 
 [dependencies]
 rc_core.workspace = true
+rc_view.workspace = true
+secrecy.workspace = true
 slint.workspace = true
+tracing.workspace = true
 
 [features]
-# Also log to a file next to the executable.
-developer-mode = []
+# Also log to a file next to the executable, and `--dev` fills the login page in.
+developer-mode = ["rc_view/developer-mode"]
 
 [dev-dependencies]
 i-slint-backend-testing.workspace = true

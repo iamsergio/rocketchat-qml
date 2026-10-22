@@ -1,0 +1,44 @@
+// SPDX-FileCopyrightText: 2026 Sergio Martins
+// SPDX-License-Identifier: MIT
+
+import { Theme } from "theme.slint";
+
+// The main action of a place: Log in. In the colour of what is the user's. Its `accessible-id` is
+// set by the user of the component.
+export component PrimaryButton inherits Rectangle {
+    in property <string> text;
+    in property <bool> enabled: true;
+    callback clicked();
+
+    accessible-role: button;
+    accessible-label: root.text;
+    accessible-enabled: root.enabled;
+    accessible-action-default => {
+        if root.enabled {
+            root.clicked();
+        }
+    }
+
+    min-width: label.preferred-width + 2 * Theme.button-padding-h;
+    height: Theme.button-height;
+    background: touch.has-hover && root.enabled ? Theme.own.brighter(Theme.hover-brighter) : Theme.own;
+    border-radius: Theme.radius-control;
+    opacity: root.enabled ? Theme.opaque : Theme.disabled-opacity;
+
+    label := Text {
+        color: Theme.text-on-own;
+        font-size: Theme.font-size-base;
+        font-weight: Theme.font-weight-semibold;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        overflow: elide;
+        text: root.text;
+    }
+
+    touch := TouchArea {
+        enabled: root.enabled;
+        clicked => {
+            root.clicked();
+        }
+    }
+}

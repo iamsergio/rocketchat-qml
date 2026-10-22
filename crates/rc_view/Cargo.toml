@@ -15,7 +15,7 @@ rc_core.workspace = true
 tracing.workspace = true
 
 [features]
-# Set through rc_qt's feature of the same name: `--dev` fills the login page in (dev_login).
+# Set through the feature of the same name of rc_qt or rc_slint: `--dev` fills the login page in (dev_login).
 developer-mode = []
 # Set through rc_qt's feature of the same name: RC_SECRET_STORE=file:<path> keeps the token in a plain file.
 test-file-store = ["rc_core/test-file-store"]

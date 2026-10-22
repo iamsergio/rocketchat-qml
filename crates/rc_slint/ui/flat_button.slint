@@ -1,0 +1,45 @@
+// SPDX-FileCopyrightText: 2026 Sergio Martins
+// SPDX-License-Identifier: MIT
+
+import { Theme } from "theme.slint";
+
+// A secondary action that doesn't draw attention: Cancel, Remove this server. Only the pointer over
+// it shows that it is a button. Its `accessible-id` is set by the user of the component.
+export component FlatButton inherits Rectangle {
+    in property <string> text;
+    in property <bool> enabled: true;
+    in property <length> button-height: Theme.button-height;
+    callback clicked();
+
+    accessible-role: button;
+    accessible-label: root.text;
+    accessible-enabled: root.enabled;
+    accessible-action-default => {
+        if root.enabled {
+            root.clicked();
+        }
+    }
+
+    min-width: label.preferred-width + 2 * Theme.button-padding-h;
+    height: root.button-height;
+    background: touch.has-hover && root.enabled ? Theme.raised-hover : Theme.transparent;
+    border-radius: Theme.radius-control;
+    opacity: root.enabled ? Theme.opaque : Theme.disabled-opacity;
+
+    label := Text {
+        color: touch.has-hover ? Theme.text : Theme.text-muted;
+        font-size: Theme.font-size-small;
+        font-weight: Theme.font-weight-semibold;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        overflow: elide;
+        text: root.text;
+    }
+
+    touch := TouchArea {
+        enabled: root.enabled;
+        clicked => {
+            root.clicked();
+        }
+    }
+}
