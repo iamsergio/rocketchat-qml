@@ -73,6 +73,11 @@ Rectangle {
                             textFormat: Text.RichText
                             wrapMode: Text.NoWrap
                             onLinkActivated: link => Qt.openUrlExternally(link)
+
+                            LinkArea {
+                                label: topic
+                                onMenuRequested: (url, origin, x, y) => linkMenu.openFor(url, origin, x, y)
+                            }
                         }
 
                         Rectangle {
@@ -167,6 +172,7 @@ Rectangle {
                 onEditRequested: messageId => composer.beginEdit(messageId)
                 onQuoteRequested: messageId => composer.beginQuote(messageId)
                 onReactRequested: messageId => picker.openFor(messageId)
+                onLinkMenuRequested: (url, origin, x, y) => linkMenu.openFor(url, origin, x, y)
             }
             verticalLayoutDirection: ListView.BottomToTop
             boundsBehavior: Flickable.StopAtBounds
@@ -266,6 +272,11 @@ Rectangle {
                 text: qsTr("Dismiss")
                 onClicked: Room.dismissActionError()
             }
+        }
+
+        // What to do with the link that was right-clicked, in a message or in the topic.
+        LinkMenu {
+            id: linkMenu
         }
 
         // The emoji to react with, for the message whose menu or "+" chip asked.

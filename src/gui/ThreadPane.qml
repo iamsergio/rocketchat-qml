@@ -136,6 +136,7 @@ Rectangle {
                 onEditRequested: messageId => composer.beginEdit(messageId)
                 onQuoteRequested: messageId => composer.beginQuote(messageId)
                 onReactRequested: messageId => picker.openFor(messageId)
+                onLinkMenuRequested: (url, origin, x, y) => linkMenu.openFor(url, origin, x, y)
             }
 
             ScrollBar.vertical: ScrollBar {}
@@ -175,6 +176,11 @@ Rectangle {
                 running: visible
                 visible: Thread.loading
             }
+        }
+
+        // What to do with the link that was right-clicked in a reply.
+        LinkMenu {
+            id: linkMenu
         }
 
         // The emoji to react with, for the message whose menu or "+" chip asked.
