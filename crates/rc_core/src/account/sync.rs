@@ -188,6 +188,8 @@ impl<C: Connector> Actor<C> {
             }
             Pushed::Message(message) => self.add_live_message(message),
             Pushed::MessageDeleted { room, id } => self.delete_message(&room, &id),
+            // Who is typing isn't kept yet.
+            Pushed::Typing { .. } => {}
             // The server announces everybody's: only what was looked at is looked at again, and
             // the rooms of the list, as a room that had no avatar may have one now.
             Pushed::AvatarChanged(owner) => {

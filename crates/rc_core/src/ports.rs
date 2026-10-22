@@ -333,6 +333,16 @@ pub enum Pushed {
     AvatarChanged(AvatarOwner),
     /// A message was deleted. Only comes for the room the connection was told is open.
     MessageDeleted { room: RoomId, id: MessageId },
+    /// A user started or stopped typing in a room, or in one of its threads (`thread` is the id
+    /// of the thread's parent message, `None` for the room itself). Like a deletion, only comes
+    /// for the room the connection was told is open. It also comes for the user's own other
+    /// clients.
+    Typing {
+        room: RoomId,
+        username: String,
+        typing: bool,
+        thread: Option<MessageId>,
+    },
 }
 
 /// What [`ServerApi::realtime`] returns: the pushed events in the order the server sent them.

@@ -184,6 +184,11 @@ struct DeletedBody {
 }
 
 #[derive(Deserialize)]
+struct ActivityExtras {
+    tmid: Option<String>,
+}
+
+#[derive(Deserialize)]
 struct SentBody {
     message: MessageBody,
 }
@@ -702,15 +707,30 @@ pub(crate) fn parse_stream_event(
             }
             .map(DdpEvent::AvatarChanged))
         }
-        // The id of the deleted message. The room is in the event name.
+        // The room is in the event name.
         "stream-notify-room" => {
-            let Some(room_id) = fields.event_name.strip_suffix("/deleteMessage") else {
+            if let Some(room_id) = fields.event_name.strip_suffix("/deleteMessage") {
+                // The id of the deleted message.
+                let deleted: DeletedBody = serde_json::from_value(next_arg()?)?;
+                return Ok(Some(DdpEvent::MessageDeleted {
+                    room_id: room_id.to_owned(),
+                    message_id: deleted.id,
+                }));
+            }
+            let Some(room_id) = fields.event_name.strip_suffix("/user-activity") else {
                 return Ok(None);
             };
-            let deleted: DeletedBody = serde_json::from_value(next_arg()?)?;
-            Ok(Some(DdpEvent::MessageDeleted {
+            // Who, what they do (nothing once they stop), then where. The server leaves the
+            // thread out of the room's, `{}`; a push without the last argument is taken the same.
+            let username: String = serde_json::from_value(next_arg()?)?;
+            let activities: Vec<String> = serde_json::from_value(next_arg()?)?;
+            let extras: Option<ActivityExtras> =
+                next_arg().ok().map(serde_json::from_value).transpose()?;
+            Ok(Some(DdpEvent::UserActivity {
                 room_id: room_id.to_owned(),
-                message_id: deleted.id,
+                username,
+                typing: activities.iter().any(|a| a == "user-typing"),
+                thread_id: extras.and_then(|e| e.tmid),
             }))
         }
         _ => Ok(None),
@@ -2024,6 +2044,81 @@ mod tests {
         assert_eq!(stream_event("stream-notify-room", typing).unwrap(), None);
         let no_id = r#"{"eventName":"room1/deleteMessage","args":[]}"#;
         assert!(stream_event("stream-notify-room", no_id).is_err());
+    }
+
+    // ACT-006
+    #[test]
+    fn typing_in_the_room_names_the_typist_and_no_thread() {
+        // As the RC 8.0 test server relays it.
+        let fixture = r#"{"eventName":"6ada3d3d31e897217514dcef/user-activity","args":["ct-user-1104100-1792687421091135322-0",["user-typing"],{}]}"#;
+        assert_eq!(
+            stream_event("stream-notify-room", fixture).unwrap(),
+            Some(DdpEvent::UserActivity {
+                room_id: "6ada3d3d31e897217514dcef".into(),
+                username: "ct-user-1104100-1792687421091135322-0".into(),
+                typing: true,
+                thread_id: None,
+            })
+        );
+    }
+
+    // ACT-006
+    #[test]
+    fn typing_in_a_thread_names_the_thread() {
+        let fixture = r#"{"eventName":"6ada3d3d31e897217514dcef/user-activity","args":["ct-user-1104100-1792687421091135322-0",["user-typing"],{"tmid":"TdtaL5wabSd8TtxR9"}]}"#;
+        let Some(DdpEvent::UserActivity {
+            typing, thread_id, ..
+        }) = stream_event("stream-notify-room", fixture).unwrap()
+        else {
+            panic!("expected an activity");
+        };
+        assert!(typing);
+        assert_eq!(thread_id.as_deref(), Some("TdtaL5wabSd8TtxR9"));
+    }
+
+    // ACT-006
+    #[test]
+    fn no_activities_is_a_stop_in_the_room_or_in_the_thread() {
+        for (extras, thread) in [("{}", None), (r#"{"tmid":"t1"}"#, Some("t1".to_owned()))] {
+            let fixture =
+                format!(r#"{{"eventName":"room1/user-activity","args":["bob",[],{extras}]}}"#);
+            assert_eq!(
+                stream_event("stream-notify-room", &fixture).unwrap(),
+                Some(DdpEvent::UserActivity {
+                    room_id: "room1".into(),
+                    username: "bob".into(),
+                    typing: false,
+                    thread_id: thread,
+                })
+            );
+        }
+    }
+
+    // ACT-006
+    #[test]
+    fn uploading_or_recording_is_not_typing() {
+        for activity in ["user-uploading", "user-recording"] {
+            let fixture = format!(
+                r#"{{"eventName":"room1/user-activity","args":["bob",["{activity}"],{{}}]}}"#
+            );
+            let event = stream_event("stream-notify-room", &fixture).unwrap();
+            assert!(
+                matches!(event, Some(DdpEvent::UserActivity { typing: false, .. })),
+                "{activity}: {event:?}"
+            );
+        }
+        let both = r#"{"eventName":"room1/user-activity","args":["bob",["user-uploading","user-typing"],{}]}"#;
+        assert!(matches!(
+            stream_event("stream-notify-room", both).unwrap(),
+            Some(DdpEvent::UserActivity { typing: true, .. })
+        ));
+    }
+
+    // ACT-006
+    #[test]
+    fn an_activity_without_a_username_is_an_error() {
+        let fixture = r#"{"eventName":"room1/user-activity","args":[]}"#;
+        assert!(stream_event("stream-notify-room", fixture).is_err());
     }
 
     // RICH-006

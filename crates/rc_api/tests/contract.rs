@@ -16,7 +16,9 @@ use rc_api::{
     Credentials, DdpClient, DdpEvent, DdpEvents, Error, Message, RestClient, RoomType,
     ServerVersion, Subscription, User,
 };
-use rc_test_server::{Admin, PIXEL_PNG, TestUser, server_url, status_without_login, unique};
+use rc_test_server::{
+    Admin, PIXEL_PNG, TestUser, Typist, server_url, status_without_login, unique,
+};
 use secrecy::{ExposeSecret, SecretString};
 
 const POLL_TIMEOUT: Duration = Duration::from_secs(3);
@@ -1104,7 +1106,8 @@ async fn all_streams_deliver_on_one_connection() {
             DdpEvent::RoomChanged { room_id: r, .. } => activity |= *r == room_id,
             DdpEvent::SubscriptionRemoved { .. }
             | DdpEvent::AvatarChanged(_)
-            | DdpEvent::MessageDeleted { .. } => {}
+            | DdpEvent::MessageDeleted { .. }
+            | DdpEvent::UserActivity { .. } => {}
         }
         message && subscription && activity
     })
@@ -1581,6 +1584,42 @@ async fn a_deletion_arrives_on_the_rooms_deletion_subscription() {
         room_id: room_id.clone(),
         message_id: posted.id.clone(),
     };
+    assert_eq!(event_where(&mut events, |e| *e == expected).await, expected);
+}
+
+// ACT-006
+#[tokio::test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+async fn a_typists_start_thread_and_stop_reach_a_connection_following_the_room() {
+    let fixture = Fixture::new();
+    let typist_user = fixture.admin.create_user();
+    let (room_id, _) = fixture
+        .admin
+        .create_channel(&[&fixture.user.username, &typist_user.username]);
+    let parent = fixture.admin.post_message(&room_id, "a thread");
+    let login = fixture.login().await;
+    let (client, mut events) = connect_and_login(&login.credentials).await;
+    client.subscribe_user_activity(&room_id).await.unwrap();
+    let mut typist = Typist::connect(&typist_user);
+
+    let activity = |typing: bool, thread: Option<&str>| DdpEvent::UserActivity {
+        room_id: room_id.clone(),
+        username: typist_user.username.clone(),
+        typing,
+        thread_id: thread.map(str::to_owned),
+    };
+    // Each step is awaited before the next, so the order of the events shows too.
+    typist.start(&room_id);
+    let expected = activity(true, None);
+    assert_eq!(event_where(&mut events, |e| *e == expected).await, expected);
+    typist.start_in_thread(&room_id, &parent.id);
+    let expected = activity(true, Some(&parent.id));
+    assert_eq!(event_where(&mut events, |e| *e == expected).await, expected);
+    typist.stop_in_thread(&room_id, &parent.id);
+    let expected = activity(false, Some(&parent.id));
+    assert_eq!(event_where(&mut events, |e| *e == expected).await, expected);
+    typist.stop(&room_id);
+    let expected = activity(false, None);
     assert_eq!(event_where(&mut events, |e| *e == expected).await, expected);
 }
 
