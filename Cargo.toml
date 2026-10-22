@@ -29,6 +29,9 @@ emojis = "0.9.1"
 futures-util = { version = "0.3.34", default-features = false, features = ["sink", "std"] }
 jiff = "0.2.38"
 keyring-core = "1.0.0"
+linkify = "0.10.0"
+# Markdown for the topic of a room, parsed to events: no HTML renderer.
+pulldown-cmark = { version = "0.13.4", default-features = false }
 rc_api = { path = "crates/rc_api" }
 rc_core = { path = "crates/rc_core" }
 rc_test_server = { path = "crates/rc_test_server" }
