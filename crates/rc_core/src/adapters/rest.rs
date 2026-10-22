@@ -353,9 +353,11 @@ fn pushed_from(event: DdpEvent) -> Pushed {
         DdpEvent::RoomChanged {
             room_id,
             last_message,
+            topic,
         } => Pushed::RoomChanged {
             room: room_id.into(),
             last_message,
+            topic,
         },
         DdpEvent::AvatarChanged(rc_api::AvatarOwner::User { username }) => {
             Pushed::AvatarChanged(AvatarOwner::User(username))
@@ -487,12 +489,14 @@ mod tests {
         let activity = pushed_from(DdpEvent::RoomChanged {
             room_id: "r1".into(),
             last_message: Some(at),
+            topic: None,
         });
         assert_eq!(
             activity,
             Pushed::RoomChanged {
                 room: "r1".to_owned().into(),
-                last_message: Some(at)
+                last_message: Some(at),
+                topic: None
             }
         );
     }

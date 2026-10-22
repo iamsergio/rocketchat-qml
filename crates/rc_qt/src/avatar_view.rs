@@ -319,6 +319,7 @@ mod tests {
             name: name.to_owned(),
             peer: peer.map(str::to_owned),
             avatar_etag: None,
+            topic: String::new(),
             unread: 0,
             user_mentions: 0,
             group_mentions: 0,

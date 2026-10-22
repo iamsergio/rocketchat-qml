@@ -221,6 +221,7 @@ impl RestSession {
             if let Some(room) = rooms.remove(&subscription.room_id) {
                 subscription.last_message = room.lm;
                 subscription.avatar_etag = room.avatar_etag;
+                subscription.topic = room.topic.unwrap_or_default();
             }
         }
         Ok(subscriptions)

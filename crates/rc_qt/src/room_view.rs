@@ -57,6 +57,8 @@ pub struct RoomState {
     /// The name and kind the room list shows; empty while the room isn't in it.
     pub name: String,
     pub kind: String,
+    /// What the room is about, as the room list has it; empty for none.
+    pub topic: String,
     pub loading: bool,
     pub loading_older: bool,
     pub reached_start: bool,
@@ -64,7 +66,7 @@ pub struct RoomState {
     pub error_text: String,
 }
 
-/// The state for the room `status` is about, with its name and kind taken from `rooms`.
+/// The state for the room `status` is about, with its name, kind and topic taken from `rooms`.
 #[must_use]
 pub fn room_state(rooms: &[Room], status: &TimelineStatus) -> RoomState {
     let Some(id) = &status.room else {
@@ -77,6 +79,7 @@ pub fn room_state(rooms: &[Room], status: &TimelineStatus) -> RoomState {
         kind: room
             .map(|room| kind_name(room.kind).to_owned())
             .unwrap_or_default(),
+        topic: room.map(|room| room.topic.clone()).unwrap_or_default(),
         loading: status.loading,
         loading_older: status.loading_older,
         reached_start: status.reached_start,
@@ -108,6 +111,7 @@ mod tests {
             name: name.to_owned(),
             peer: None,
             avatar_etag: None,
+            topic: String::new(),
             unread: 0,
             user_mentions: 0,
             group_mentions: 0,
@@ -236,6 +240,28 @@ mod tests {
                 ..RoomState::default()
             }
         );
+    }
+
+    // ROOM-009
+    #[test]
+    fn the_open_room_takes_its_topic_from_the_list() {
+        let rooms = [
+            Room {
+                topic: "Plans".into(),
+                ..room("1", "general", RoomKind::Channel)
+            },
+            room("2", "random", RoomKind::Channel),
+        ];
+        let topic_of = |id: &str| {
+            let status = TimelineStatus {
+                room: Some(id.to_owned().into()),
+                ..TimelineStatus::default()
+            };
+            room_state(&rooms, &status).topic
+        };
+        assert_eq!(topic_of("1"), "Plans");
+        assert_eq!(topic_of("2"), "");
+        assert_eq!(room_state(&rooms, &TimelineStatus::default()).topic, "");
     }
 
     // MSG-002

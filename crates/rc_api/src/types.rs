@@ -97,6 +97,11 @@ pub struct Subscription {
     ///
     /// [`RestSession::subscriptions`]: crate::RestSession::subscriptions
     pub avatar_etag: Option<String>,
+    /// What the room is about; empty for a room without a topic. Only
+    /// [`RestSession::subscriptions`] fills it in, from the rooms, like `last_message`.
+    ///
+    /// [`RestSession::subscriptions`]: crate::RestSession::subscriptions
+    pub topic: String,
 }
 
 /// Who wrote a message, as the message carries it.
@@ -288,10 +293,12 @@ pub enum DdpEvent {
     SubscriptionRemoved { room_id: String },
     /// One of the user's rooms changed. Pushed for every new message, which sets `last_message`,
     /// and for other changes of the room (a rename...), with the same time, if the room has
-    /// messages.
+    /// messages. `topic` is the room's topic, empty once it was taken away, and `None` if the push
+    /// doesn't say.
     RoomChanged {
         room_id: String,
         last_message: Option<jiff::Timestamp>,
+        topic: Option<String>,
     },
     /// A user's or a room's avatar changed: fetch it again. The server announces every user's and
     /// every room's, not only those the client knows.

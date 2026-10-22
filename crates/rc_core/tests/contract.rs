@@ -812,6 +812,32 @@ fn a_direct_message_raises_the_unread_count() {
     drop(client);
 }
 
+// ROOM-009
+#[test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+fn the_topic_of_a_room_is_listed_and_a_change_of_it_is_shown() {
+    let admin = Admin::login();
+    let user = admin.create_user();
+    let (channel, _) = admin.create_channel(&[&user.username]);
+    admin.set_topic(&channel, "Plans for May");
+    assert_eq!(listed_room(&user, &channel).topic, "Plans for May");
+    let (client, events) = logged_in(&user);
+
+    admin.set_topic(&channel, "Plans for June");
+    wait_for(&events, |event| {
+        room_changed(event, |room| {
+            room.id.as_str() == channel && room.topic == "Plans for June"
+        })
+    });
+    admin.set_topic(&channel, "");
+    wait_for(&events, |event| {
+        room_changed(event, |room| {
+            room.id.as_str() == channel && room.topic.is_empty()
+        })
+    });
+    drop(client);
+}
+
 /// The room `id` as a freshly logged-in client of `user` lists it.
 fn listed_room(user: &TestUser, id: &str) -> Room {
     let (client, events) = start();

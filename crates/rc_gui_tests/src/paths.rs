@@ -92,6 +92,9 @@ pub mod main_window {
     pub const ROOM_PLACEHOLDER: &str = "mainWindow/roomPlaceholder";
     /// The name of the open room.
     pub const ROOM_TITLE: &str = "mainWindow/roomTitle";
+    /// The topic of the open room, under its name, as its `text`. Visible only while the room has
+    /// one.
+    pub const ROOM_TOPIC: &str = "mainWindow/roomTopic";
     /// Why the messages of the open room couldn't be loaded.
     pub const ROOM_ERROR: &str = "mainWindow/roomError";
     /// The messages of the open room, oldest first. Its `count` is how many are loaded, not how

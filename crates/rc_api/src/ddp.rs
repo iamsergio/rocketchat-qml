@@ -810,6 +810,7 @@ mod tests {
         let Some(DdpEvent::RoomChanged {
             room_id,
             last_message: Some(last_message),
+            ..
         }) = events.recv().await
         else {
             panic!("expected a room change with a last message");
