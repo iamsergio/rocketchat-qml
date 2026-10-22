@@ -5,6 +5,7 @@
 //! in step. Frontends mirror the list and never sort or diff it themselves.
 
 use std::cmp::Ordering;
+use std::collections::HashMap;
 
 use crate::domain::{Room, RoomId};
 use crate::ports::ApiError;
@@ -58,10 +59,14 @@ impl RoomChange {
     }
 }
 
-/// The rooms in display order.
+/// The account's rooms: the ones the frontend shows, in display order, and the ones the list holds
+/// back. Positions exist only among the shown rooms: a held-back room is found by its id.
 #[derive(Debug, Default)]
 pub struct RoomList {
-    rooms: Vec<Room>,
+    /// The rooms the frontend shows, in display order. `RoomChange` indices point here.
+    shown: Vec<Room>,
+    /// The rooms the list doesn't show. They have no position, only an id.
+    hidden: HashMap<RoomId, Room>,
 }
 
 /// Something the user does to a room from the room list's menu.
@@ -123,42 +128,48 @@ pub struct Unread {
 }
 
 impl RoomList {
-    /// The unread totals of the rooms.
+    /// The unread totals of all the rooms, the hidden ones too.
     #[must_use]
     pub fn unread(&self) -> Unread {
-        self.rooms
+        self.shown
             .iter()
+            .chain(self.hidden.values())
             .fold(Unread::default(), |total, room| Unread {
                 rooms: total.rooms + u32::from(room.has_unread()),
                 mentions: total.mentions + room.mention_badge(),
             })
     }
 
+    /// The rooms the frontend shows, in display order: what `RoomChange` indices refer to.
     #[must_use]
     pub fn rooms(&self) -> &[Room] {
-        &self.rooms
+        &self.shown
     }
 
-    /// Replaces the content, sorting it.
+    /// Replaces the content, sorting it. The hidden rooms go too.
     pub fn reset(&mut self, mut rooms: Vec<Room>) -> RoomChange {
         rooms.sort_by(display_order);
-        self.rooms.clone_from(&rooms);
+        self.shown.clone_from(&rooms);
+        self.hidden.clear();
         RoomChange::Reset(rooms)
     }
 
-    /// Adds the room, or replaces the one with the same id. `None` if nothing changes.
+    /// Adds the room, or replaces the one with the same id, wherever it is. `None` if nothing
+    /// changes.
     pub fn upsert(&mut self, room: Room) -> Option<RoomChange> {
         let Some(from) = self.position(&room.id) else {
+            // A room is in one place only: a hidden one is shown from now on.
+            self.hidden.remove(&room.id);
             let index = self.insertion_index(&room);
-            self.rooms.insert(index, room.clone());
+            self.shown.insert(index, room.clone());
             return Some(RoomChange::Inserted { index, room });
         };
-        if self.rooms[from] == room {
+        if self.shown[from] == room {
             return None;
         }
-        self.rooms.remove(from);
+        self.shown.remove(from);
         let to = self.insertion_index(&room);
-        self.rooms.insert(to, room.clone());
+        self.shown.insert(to, room.clone());
         Some(if to == from {
             RoomChange::Updated { index: from, room }
         } else {
@@ -171,8 +182,9 @@ impl RoomList {
     /// rows (and what they show, such as a selection) for the rooms that didn't change.
     pub fn sync(&mut self, rooms: Vec<Room>) -> Vec<RoomChange> {
         let gone: Vec<RoomId> = self
-            .rooms
+            .shown
             .iter()
+            .chain(self.hidden.values())
             .filter(|old| !rooms.iter().any(|room| room.id == old.id))
             .map(|old| old.id.clone())
             .collect();
@@ -183,15 +195,18 @@ impl RoomList {
         changes
     }
 
-    /// `None` if there's no such room.
+    /// `None` if there's no such room, or it was hidden: the frontend has no row to remove.
     pub fn remove(&mut self, id: &RoomId) -> Option<RoomChange> {
-        let index = self.position(id)?;
-        self.rooms.remove(index);
+        let Some(index) = self.position(id) else {
+            self.hidden.remove(id);
+            return None;
+        };
+        self.shown.remove(index);
         Some(RoomChange::Removed { index })
     }
 
     /// Moves the room up if it had a message after what is known of it. `None` if the room isn't
-    /// listed or already knew that time.
+    /// known or already knew that time.
     pub fn bump(&mut self, id: &RoomId, at: jiff::Timestamp) -> Option<RoomChange> {
         let room = self.get(id).filter(|room| room.last_activity < at)?;
         self.upsert(Room {
@@ -200,18 +215,23 @@ impl RoomList {
         })
     }
 
+    /// The room with that id, shown or hidden.
     #[must_use]
     pub fn get(&self, id: &RoomId) -> Option<&Room> {
-        self.rooms.iter().find(|room| &room.id == id)
+        self.shown
+            .iter()
+            .find(|room| &room.id == id)
+            .or_else(|| self.hidden.get(id))
     }
 
+    /// The index of a shown room. Hidden rooms have none.
     fn position(&self, id: &RoomId) -> Option<usize> {
-        self.rooms.iter().position(|room| &room.id == id)
+        self.shown.iter().position(|room| &room.id == id)
     }
 
-    /// Where `room` goes in the list as it is now.
+    /// Where `room` goes among the shown rooms as they are now.
     fn insertion_index(&self, room: &Room) -> usize {
-        self.rooms
+        self.shown
             .partition_point(|other| display_order(other, room).is_lt())
     }
 }

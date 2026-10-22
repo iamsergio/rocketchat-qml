@@ -159,13 +159,7 @@ impl<C: Connector> Actor<C> {
         {
             return;
         }
-        let Some(kind) = self
-            .rooms
-            .rooms()
-            .iter()
-            .find(|room| room.id == id)
-            .map(|room| room.kind)
-        else {
+        let Some(kind) = self.rooms.get(&id).map(|room| room.kind) else {
             tracing::debug!(room = %id, "open_room ignored: not in the room list");
             return;
         };
