@@ -350,12 +350,12 @@ fn pushed_from(event: DdpEvent) -> Pushed {
         DdpEvent::Message(message) => Pushed::Message(message_from(message)),
         DdpEvent::SubscriptionChanged(subscription) => Pushed::Subscription(subscription),
         DdpEvent::SubscriptionRemoved { room_id } => Pushed::SubscriptionRemoved(room_id.into()),
-        DdpEvent::RoomActivity {
+        DdpEvent::RoomChanged {
             room_id,
             last_message,
-        } => Pushed::Activity {
+        } => Pushed::RoomChanged {
             room: room_id.into(),
-            at: last_message,
+            last_message,
         },
         DdpEvent::AvatarChanged(rc_api::AvatarOwner::User { username }) => {
             Pushed::AvatarChanged(AvatarOwner::User(username))
@@ -484,15 +484,15 @@ mod tests {
     #[test]
     fn room_activity_is_pushed_by_room_id() {
         let at: jiff::Timestamp = "2026-10-20T14:12:48.587Z".parse().unwrap();
-        let activity = pushed_from(DdpEvent::RoomActivity {
+        let activity = pushed_from(DdpEvent::RoomChanged {
             room_id: "r1".into(),
-            last_message: at,
+            last_message: Some(at),
         });
         assert_eq!(
             activity,
-            Pushed::Activity {
+            Pushed::RoomChanged {
                 room: "r1".to_owned().into(),
-                at
+                last_message: Some(at)
             }
         );
     }

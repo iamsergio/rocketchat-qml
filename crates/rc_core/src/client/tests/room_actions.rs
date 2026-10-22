@@ -261,9 +261,9 @@ fn activity_in_another_room_does_not_lift_it_above_the_favorites() {
 
     assert!(fake.push(
         0,
-        Pushed::Activity {
+        Pushed::RoomChanged {
             room: "3".to_owned().into(),
-            at: at(50),
+            last_message: Some(at(50)),
         }
     ));
 
