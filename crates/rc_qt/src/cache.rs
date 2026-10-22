@@ -8,18 +8,18 @@ use rc_core::domain::{AccountId, AvatarOwner, Identity, Message, Room, RoomId, U
 use rc_core::emoji::CustomEmojis;
 use rc_core::policy::MessagePolicy;
 use rc_core::rooms::{RoomChange, Unread};
-use rc_core::session::SessionState;
+use rc_core::session::{LoginFailure, SessionState};
 use rc_core::timeline::{ThreadStatus, TimelineChange, TimelineStatus};
 use rc_core::{AvatarUpdate, ImageUpdate};
 use rc_core::{Connection, Event};
 
-use crate::accounts::{AccountView, account_status};
+use crate::accounts::{AccountView, Status, account_status, monogram};
 use crate::attachment_view::ImageUrls;
 use crate::avatar_view::AvatarUrls;
 use crate::message_view::{author_name, body, can_edit};
 use crate::rich_html::Viewer;
 use crate::room_view::{RoomState, room_state};
-use crate::session_view::{SessionView, host, session_view};
+use crate::session_view::{LoginMode, SessionView, host, session_view};
 use crate::thread_view::{ThreadState, thread_state};
 
 /// One account's: its identity and unread totals, the latest session state, a mirror of the room list and mirrors of the open room's messages and
@@ -32,6 +32,9 @@ pub struct Cache {
     /// Who the account is. Unlike `username` and `server` it holds while logged out, and it is
     /// never unset.
     identity: Option<Identity>,
+    /// The last time the account settled logged out, it was because its session ended. Stays
+    /// while it logs in again, so that the login page doesn't change under the user.
+    expired: bool,
     unread: Unread,
     rooms: Vec<Room>,
     /// The room `messages` belong to.
@@ -69,6 +72,7 @@ impl Cache {
             state: None,
             connection: Connection::Connected,
             identity: None,
+            expired: false,
             unread: Unread {
                 rooms: 0,
                 mentions: 0,
@@ -105,6 +109,13 @@ impl Cache {
     pub fn apply(&mut self, event: &Event) {
         match event {
             Event::Session(state) => {
+                match state {
+                    SessionState::LoggedIn(_) => self.expired = false,
+                    SessionState::LoggedOut { failure } => {
+                        self.expired = *failure == Some(LoginFailure::SessionExpired);
+                    }
+                    SessionState::Connecting | SessionState::Resuming => {}
+                }
                 self.state = Some(state.clone());
                 (self.username, self.user_id, self.server) = match state {
                     SessionState::LoggedIn(account) => (
@@ -158,10 +169,52 @@ impl Cache {
         self.state.is_some()
     }
 
-    /// What the `Session` view model shows now.
+    /// What the `Session` view model shows now, for the account `id`, when `others` says that other
+    /// accounts are listed besides it.
     #[must_use]
-    pub fn session_view(&self) -> SessionView {
-        session_view(self.state.as_ref(), self.connection)
+    pub fn session_view(&self, id: &AccountId, others: bool) -> SessionView {
+        let mut view = session_view(self.state.as_ref(), self.connection);
+        id.as_str().clone_into(&mut view.account_id);
+        view.login_mode = self.login_mode(others);
+        let host = host(self.identity.as_ref().map_or("", |i| i.server.as_str()));
+        view.login_mode.title().clone_into(&mut view.login_title);
+        view.login_mode.lede().clone_into(&mut view.login_lede);
+        view.login_notice = view.login_mode.notice(&host);
+        if view.login_mode == LoginMode::Again {
+            // The notice says so, with the host.
+            view.error_text.clear();
+        }
+        if matches!(
+            self.state,
+            Some(SessionState::LoggedOut { .. } | SessionState::Connecting)
+        ) && let Some(identity) = &self.identity
+        {
+            view.login_server.clone_from(&identity.server);
+            view.login_username.clone_from(&identity.username);
+        }
+        view
+    }
+
+    /// What the login page is for, if the account has one up.
+    fn login_mode(&self, others: bool) -> LoginMode {
+        if self.expired
+            && matches!(
+                self.state,
+                Some(SessionState::LoggedOut { .. } | SessionState::Connecting)
+            )
+        {
+            LoginMode::Again
+        } else if others && self.is_blank() {
+            LoginMode::Adding
+        } else {
+            LoginMode::Login
+        }
+    }
+
+    /// The account is a new one: nobody is logged in on it and it doesn't say who it is yet.
+    #[must_use]
+    pub const fn is_blank(&self) -> bool {
+        self.identity.is_none() && !matches!(self.state, Some(SessionState::LoggedIn(_)))
     }
 
     /// What the account list shows of the account `id`, `current` or not.
@@ -173,12 +226,39 @@ impl Cache {
             .map_or((String::new(), String::new()), |identity| {
                 (identity.server.clone(), identity.username.clone())
             });
+        let status = account_status(self.state.as_ref());
+        let fresh = self.is_blank();
+        let tip_title = if fresh {
+            "New server".to_owned()
+        } else {
+            host(&server)
+        };
+        let tip_line = if fresh {
+            "Log in to add it".to_owned()
+        } else if status == Status::Expired {
+            format!("{username}: log in again")
+        } else if self.unread.mentions > 0 {
+            let n = self.unread.mentions;
+            format!(
+                "{username} \u{b7} {n} mention{}",
+                if n == 1 { "" } else { "s" }
+            )
+        } else {
+            username.clone()
+        };
         AccountView {
             id: id.as_str().to_owned(),
+            monogram: monogram(&host(&server)),
             host: host(&server),
             server,
             username,
-            status: account_status(self.state.as_ref()),
+            status,
+            fresh,
+            label: format!("{tip_title}, {tip_line}"),
+            tip_title,
+            tip_line,
+            busy: matches!(status, Status::Connecting | Status::Resuming),
+            unread: self.unread.rooms > 0 && !current,
             connected: matches!(self.state, Some(SessionState::LoggedIn(_)))
                 && self.connection == Connection::Connected,
             unread_rooms: self.unread.rooms,
@@ -420,7 +500,7 @@ mod tests {
 
         let mut cache = Cache::new();
         cache.apply(&Event::Session(SessionState::LoggedOut { failure: None }));
-        assert_eq!(cache.session_view().connection_text, "");
+        assert_eq!(view(&cache).connection_text, "");
         cache.apply(&Event::Session(SessionState::LoggedIn(Account {
             server: "http://h".to_owned(),
             user: User {
@@ -433,11 +513,11 @@ mod tests {
             retry_in: Duration::from_secs(3),
         }));
         assert_eq!(
-            cache.session_view().connection_text,
+            view(&cache).connection_text,
             "Connection lost, reconnecting in 3s…"
         );
         cache.apply(&Event::Connection(Connection::Connected));
-        assert_eq!(cache.session_view().connection_text, "");
+        assert_eq!(view(&cache).connection_text, "");
         cache.apply(&Event::Connection(Connection::Reconnecting));
         cache.apply(&Event::Session(SessionState::LoggedOut { failure: None }));
         assert_eq!(cache.connection, Connection::Connected);
@@ -972,5 +1052,125 @@ mod tests {
         let gone = [avatar("alice", None)];
         cache.apply(&Event::Avatars(gone.to_vec()));
         assert_eq!(cache.avatar_changes(&gone)[0].1, "");
+    }
+
+    fn identity(server: &str, username: &str) -> Event {
+        Event::Identity(Identity {
+            server: server.to_owned(),
+            username: username.to_owned(),
+        })
+    }
+
+    fn expired() -> Event {
+        Event::Session(SessionState::LoggedOut {
+            failure: Some(LoginFailure::SessionExpired),
+        })
+    }
+
+    fn view(cache: &Cache) -> SessionView {
+        cache.session_view(&AccountId::from("a".to_owned()), false)
+    }
+
+    // ACCT-006
+    #[test]
+    fn an_expired_session_asks_to_log_in_again_as_who_the_account_was() {
+        let mut cache = Cache::new();
+        cache.apply(&identity("http://h", "alice"));
+        cache.apply(&Event::Session(SessionState::Resuming));
+        cache.apply(&logged_in("alice"));
+        assert_eq!(view(&cache).login_mode, LoginMode::Login);
+        assert_eq!(view(&cache).login_server, "");
+
+        cache.apply(&expired());
+        let shown = view(&cache);
+        assert_eq!(shown.login_mode, LoginMode::Again);
+        assert_eq!(shown.login_title, "Log in again");
+        assert_eq!(
+            shown.login_notice,
+            "Your session on h has ended. Log in to see its rooms again."
+        );
+        assert_eq!(shown.login_server, "http://h");
+        assert_eq!(shown.login_username, "alice");
+        // The notice says it already.
+        assert_eq!(shown.error_text, "");
+
+        // Logging in again stays on that page.
+        cache.apply(&Event::Session(SessionState::Connecting));
+        assert_eq!(view(&cache).login_mode, LoginMode::Again);
+        assert_eq!(view(&cache).login_server, "http://h");
+
+        cache.apply(&logged_in("alice"));
+        let shown = view(&cache);
+        assert_eq!(shown.login_mode, LoginMode::Login);
+        assert_eq!(shown.login_server, "");
+        assert_eq!(shown.login_notice, "");
+    }
+
+    // ACCT-006
+    #[test]
+    fn a_failed_login_again_shows_the_login_page_prefilled_with_the_error() {
+        let mut cache = Cache::new();
+        cache.apply(&identity("http://h", "alice"));
+        cache.apply(&expired());
+        cache.apply(&Event::Session(SessionState::Connecting));
+        cache.apply(&Event::Session(SessionState::LoggedOut {
+            failure: Some(LoginFailure::InvalidCredentials),
+        }));
+        let shown = view(&cache);
+        assert_eq!(shown.login_mode, LoginMode::Login);
+        assert_eq!(shown.login_server, "http://h");
+        assert_eq!(shown.login_username, "alice");
+        assert_eq!(shown.error_text, "Wrong username or password");
+    }
+
+    // ACCT-006
+    #[test]
+    fn an_unreachable_server_at_resume_is_a_login_prefilled_not_an_expired_one() {
+        let mut cache = Cache::new();
+        cache.apply(&identity("http://h", "alice"));
+        cache.apply(&Event::Session(SessionState::Resuming));
+        cache.apply(&Event::Session(SessionState::LoggedOut {
+            failure: Some(LoginFailure::Unreachable),
+        }));
+        let shown = view(&cache);
+        // Not adding either, with others: the account has an identity.
+        assert_eq!(
+            cache
+                .session_view(&AccountId::from("a".to_owned()), true)
+                .login_mode,
+            LoginMode::Login
+        );
+        assert_eq!(shown.login_mode, LoginMode::Login);
+        assert_eq!(shown.login_server, "http://h");
+        assert_eq!(shown.login_username, "alice");
+        assert_eq!(shown.error_text, "Can't reach the server");
+        assert_eq!(shown.login_notice, "");
+    }
+
+    // ACCT-002
+    #[test]
+    fn a_stored_account_without_a_token_is_expired() {
+        let mut cache = Cache::new();
+        cache.apply(&identity("http://h", "alice"));
+        cache.apply(&expired());
+        assert_eq!(view(&cache).login_mode, LoginMode::Again);
+        let row = cache.account_view(&AccountId::from("a".to_owned()), false);
+        assert_eq!(row.status, Status::Expired);
+        assert!(!row.fresh);
+    }
+
+    // ACCT-001
+    #[test]
+    fn a_first_login_does_not_look_like_a_login_again() {
+        let mut cache = Cache::new();
+        cache.apply(&Event::Session(SessionState::LoggedOut { failure: None }));
+        assert!(cache.is_blank());
+        cache.apply(&Event::Session(SessionState::Connecting));
+        // The identity comes after the login, before the session.
+        cache.apply(&identity("http://h", "alice"));
+        assert_eq!(view(&cache).login_mode, LoginMode::Login);
+        cache.apply(&logged_in("alice"));
+        assert_eq!(view(&cache).login_mode, LoginMode::Login);
+        assert!(!cache.is_blank());
     }
 }

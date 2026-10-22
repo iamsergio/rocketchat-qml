@@ -11,12 +11,13 @@
 use std::path::PathBuf;
 use std::thread;
 use std::time::{Duration, Instant};
+use std::{env, fs};
 
 use rc_gui_tests::paths::{
     emoji_pick, main_window, message, message_row, room, room_row, thread_message,
 };
 use rc_gui_tests::{App, Gui, Key, Modifiers};
-use rc_test_server::{Admin, Posted, TestUser, server_url};
+use rc_test_server::{Admin, Posted, TestUser, server_url, unique};
 
 /// The core works asynchronously, against a real server: tests wait this long for the UI to catch
 /// up with it before they fail.
@@ -228,5 +229,25 @@ pub fn wait_for_reply_after(admin: &Admin, thread_id: &str, before: Option<&str>
             "the reply never reached the server"
         );
         thread::sleep(Duration::from_millis(100));
+    }
+}
+
+/// Deletes the session file even if an assertion fails.
+pub struct SessionFile(PathBuf);
+
+impl SessionFile {
+    pub fn new() -> Self {
+        Self(env::temp_dir().join(format!("rc-gui-session-{}.json", unique())))
+    }
+
+    /// The `RC_SECRET_STORE` value for it.
+    pub fn store(&self) -> String {
+        format!("file:{}", self.0.display())
+    }
+}
+
+impl Drop for SessionFile {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.0);
     }
 }

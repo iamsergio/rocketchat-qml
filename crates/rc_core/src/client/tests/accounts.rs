@@ -277,7 +277,10 @@ fn removing_a_logged_out_account_forgets_its_stored_entry() {
     store.save(&signed_out).unwrap();
     store.save(&stored_as("two", "http://h")).unwrap();
     let harness = Harness::with_accounts(&fake, store.clone());
-    assert_eq!(harness.first, logged_out(None));
+    assert_eq!(
+        harness.first,
+        logged_out(Some(LoginFailure::SessionExpired))
+    );
 
     harness.client.remove_account(harness.id());
     // Logged out already: nothing but the end.
@@ -426,7 +429,7 @@ fn a_stored_account_without_a_token_is_added_logged_out_with_its_identity() {
         [
             Event::Added,
             Event::Identity(identity("http://h", "alice")),
-            session_event(logged_out(None)),
+            session_event(logged_out(Some(LoginFailure::SessionExpired))),
         ]
     );
     drop(client);
@@ -540,7 +543,7 @@ fn a_restart_lists_an_expired_account_logged_out_with_its_identity() {
         [
             Event::Added,
             Event::Identity(identity("http://h", "alice")),
-            session_event(logged_out(None)),
+            session_event(logged_out(Some(LoginFailure::SessionExpired))),
         ]
     );
     drop(client);
@@ -620,7 +623,10 @@ fn a_user_listed_without_a_token_cannot_be_added_either() {
     signed_out.token = None;
     store.save(&signed_out).unwrap();
     let harness = Harness::with_accounts(&fake, store.clone());
-    assert_eq!(harness.first, logged_out(None));
+    assert_eq!(
+        harness.first,
+        logged_out(Some(LoginFailure::SessionExpired))
+    );
 
     let b = harness.client.add_account();
     fake.script_login(None, Ok(()));

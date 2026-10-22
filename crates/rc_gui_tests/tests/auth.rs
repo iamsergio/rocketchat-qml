@@ -6,35 +6,12 @@
 
 mod common;
 
-use std::net::TcpListener;
-use std::path::PathBuf;
-use std::{env, fs};
-
 use rc_gui_tests::App;
 use rc_gui_tests::paths::main_window;
-use rc_test_server::{Admin, server_url, unique};
+use rc_test_server::{Admin, server_url};
+use std::net::TcpListener;
 
-use common::{TIMEOUT, log_in};
-
-/// Deletes the session file even if an assertion fails.
-struct SessionFile(PathBuf);
-
-impl SessionFile {
-    fn new() -> Self {
-        Self(env::temp_dir().join(format!("rc-gui-session-{}.json", unique())))
-    }
-
-    /// The `RC_SECRET_STORE` value for it.
-    fn store(&self) -> String {
-        format!("file:{}", self.0.display())
-    }
-}
-
-impl Drop for SessionFile {
-    fn drop(&mut self) {
-        let _ = fs::remove_file(&self.0);
-    }
-}
+use common::{SessionFile, TIMEOUT, log_in};
 
 // AUTH-001
 #[test]

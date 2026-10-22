@@ -46,6 +46,8 @@ pub mod qobject {
         #[qml_element = "AccountList"]
         #[qml_singleton]
         #[base = QAbstractListModel]
+        // A row is a new account, waiting for its first login.
+        #[qproperty(bool, has_new, cxx_name = "hasNew", READ, NOTIFY)]
         type AccountListModel = super::AccountListModelRust;
 
         /// Shows the account: its rooms, open room and thread replace the ones shown.
@@ -159,11 +161,25 @@ const CONNECTED_ROLE: i32 = 261;
 const UNREAD_ROOMS_ROLE: i32 = 262;
 const MENTIONS_ROLE: i32 = 263;
 const CURRENT_ROLE: i32 = 264;
+const MONOGRAM_ROLE: i32 = 265;
+const BUSY_ROLE: i32 = 266;
+const UNREAD_ROLE: i32 = 267;
+const FRESH_ROLE: i32 = 268;
+const TIP_TITLE_ROLE: i32 = 269;
+const TIP_LINE_ROLE: i32 = 270;
+const LABEL_ROLE: i32 = 271;
 
 /// Backing data of [`qobject::AccountListModel`]: the rows, mirrored from the hub's changes.
 #[derive(Default)]
 pub struct AccountListModelRust {
     rows: Vec<AccountView>,
+    has_new: bool,
+}
+
+/// Whether one of the rows is a new account: the rail has a dashed plus for it, and no use for
+/// another one.
+fn has_new(rows: &[AccountView]) -> bool {
+    rows.iter().any(|row| row.fresh)
 }
 
 /// Counts are `u32`, Qt's are `int`: saturate.
@@ -189,13 +205,24 @@ const fn status(status: Status) -> AccountStatus {
 impl cxx_qt::Initialize for AccountListModel {
     fn initialize(mut self: Pin<&mut Self>) {
         // Nothing is looking at the model yet, so there is nothing to announce.
-        self.as_mut().rust_mut().rows = hub::register_accounts(self.qt_thread());
+        let rows = hub::register_accounts(self.qt_thread());
+        self.as_mut().rust_mut().has_new = has_new(&rows);
+        self.as_mut().rust_mut().rows = rows;
     }
 }
 
 impl AccountListModel {
     /// Applies the change, announcing it to the views.
     pub fn apply(mut self: Pin<&mut Self>, change: &AccountChange) {
+        self.as_mut().apply_rows(change);
+        let new = has_new(&self.rows);
+        if new != self.has_new {
+            self.as_mut().rust_mut().has_new = new;
+            self.as_mut().has_new_changed();
+        }
+    }
+
+    fn apply_rows(mut self: Pin<&mut Self>, change: &AccountChange) {
         let no_parent = QModelIndex::default();
         match *change {
             AccountChange::Inserted { index, .. } => {
@@ -265,6 +292,13 @@ impl AccountListModel {
             UNREAD_ROOMS_ROLE => QVariant::from(&count(account.unread_rooms)),
             MENTIONS_ROLE => QVariant::from(&count(account.mentions)),
             CURRENT_ROLE => QVariant::from(&account.current),
+            MONOGRAM_ROLE => text(&account.monogram),
+            BUSY_ROLE => QVariant::from(&account.busy),
+            UNREAD_ROLE => QVariant::from(&account.unread),
+            FRESH_ROLE => QVariant::from(&account.fresh),
+            TIP_TITLE_ROLE => text(&account.tip_title),
+            TIP_LINE_ROLE => text(&account.tip_line),
+            LABEL_ROLE => text(&account.label),
             _ => QVariant::default(),
         }
     }
@@ -282,6 +316,13 @@ impl AccountListModel {
             (UNREAD_ROOMS_ROLE, "unreadRooms"),
             (MENTIONS_ROLE, "mentions"),
             (CURRENT_ROLE, "current"),
+            (MONOGRAM_ROLE, "monogram"),
+            (BUSY_ROLE, "busy"),
+            (UNREAD_ROLE, "unread"),
+            (FRESH_ROLE, "fresh"),
+            (TIP_TITLE_ROLE, "tipTitle"),
+            (TIP_LINE_ROLE, "tipLine"),
+            (LABEL_ROLE, "label"),
         ] {
             names.insert(role, QByteArray::from(name));
         }

@@ -14,6 +14,8 @@ QtObject {
     // button, the focused field.
     // The sidebar and the window.
     readonly property color base: "#15181e"
+    // The rail of servers at the left of the window: darker than the sidebar.
+    readonly property color rail: "#111319"
     // The conversation, and the input fields.
     readonly property color surface: "#1b1f26"
     // What sits on the surface: the composer, chips, menus and popups.
@@ -73,6 +75,8 @@ QtObject {
     readonly property real fontSizeTiny: fontSizeBase * 0.82
     readonly property real fontSizeSmall: fontSizeBase * 0.89
     readonly property real fontSizeHeading: fontSizeBase * 1.2
+    // The letter of a server's tile.
+    readonly property real fontSizeRailTile: fontSizeBase * 1.13
     readonly property real fontSizeTitle: fontSizeBase * 1.7
     readonly property real avatarFontScale: 0.4
     readonly property int fontWeightNormal: Font.Normal
@@ -153,7 +157,8 @@ QtObject {
     readonly property int roomHeaderIconSize: 18
     readonly property int roomIconSize: 14
     readonly property int roomRowHeight: 34
-    readonly property int serverMarkSize: 26
+    // The space each side of the server's name at the top of the sidebar.
+    readonly property int sidebarHeaderPaddingH: 16
     readonly property int sidebarWidth: 264
     // The thread pane beside the room, and the summary of a thread under its parent.
     readonly property int threadPaneWidth: 360
@@ -162,13 +167,54 @@ QtObject {
     readonly property int unreadBadgeHeight: 18
     readonly property int unreadBadgeMinWidth: 20
     readonly property int windowHeight: 600
-    readonly property int windowWidth: 900
+    // The rail, the sidebar, the room and room for a thread beside it.
+    readonly property int windowWidth: 964
+
+    // The rail of servers: one tile per account, a pip at the left edge, a badge for mentions
+    // (bottom right) and a dot for a login that ended (top right), both cut out of the rail's
+    // colour, and a ring that turns while the account connects.
+    readonly property int railWidth: 64
+    readonly property int railTileSize: 40
+    readonly property int railTileRadius: 12
+    // The pip: short for unread, tall for the account on screen.
+    readonly property int railPipWidth: 4
+    readonly property int railPipUnread: 8
+    readonly property int railPipCurrent: 24
+    // The mentions badge: its height (also its minimum width), the space each side of its text, how
+    // far it sticks out of the tile's corner, and the width of the cut-out around it and around the
+    // dot.
+    readonly property int railBadgeHeight: 18
+    readonly property int railBadgePaddingH: 5
+    readonly property int railBadgeOverhangX: 5
+    readonly property int railBadgeOverhangY: 4
+    readonly property int railCutoutWidth: 3
+    readonly property int railDotSize: 11
+    readonly property int railDotOverhang: 3
+    // The ring around a connecting tile: its distance from the tile, width and turn time.
+    readonly property int railRingGap: 4
+    readonly property int railRingWidth: 2
+    readonly property int railRingDuration: 1000
+    readonly property int railSeparatorWidth: 28
+    readonly property int railAddIconSize: 18
+    // The border of the tile of a server that isn't added yet.
+    readonly property real railNewBorderWidth: 1.5
+    // The ring's arc, in radians (a quarter of the circle, from the top left to the top right), and
+    // the angles of its turn, in degrees.
+    readonly property real railRingArcStart: -3 * Math.PI / 4
+    readonly property real railRingArcEnd: -Math.PI / 4
+    readonly property int railRingTurnFrom: 0
+    readonly property int railRingTurnTo: 360
+    // How far the tool tip of a tile overlaps the rail.
+    readonly property int railTipOverlap: 4
 
     // Opacity
     readonly property real disabledOpacity: 0.6
 
     // The factor that makes the main button brighter under the pointer.
     readonly property real hoverLighter: 1.08
+
+    // Stacking: what shows above its siblings, like the rail and its tool tip above the page.
+    readonly property int zAbove: 1
 
     // Timing
     readonly property int toolTipDelay: 400

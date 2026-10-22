@@ -10,6 +10,7 @@ use rc_core::domain::AccountId;
 use rc_core::session::{LoginFailure, SessionState};
 
 use crate::cache::Cache;
+use crate::session_view::SessionView;
 
 /// Where an account is, as the account list shows it. Mirrors the `AccountStatus` Qt enum.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -21,8 +22,8 @@ pub enum Status {
     /// A stored session is being picked up at startup.
     Resuming,
     LoggedIn,
-    /// The server refused the token: the account is listed, logged out, until the user logs in
-    /// again.
+    /// The server refused the token, or the account was stored without one: the account is listed,
+    /// logged out, until the user logs in again.
     Expired,
 }
 
@@ -40,7 +41,30 @@ pub fn account_status(state: Option<&SessionState>) -> Status {
     }
 }
 
+/// The letter of the tile of a server: the first of its host, upper case, after dropping a leading
+/// `chat.`, `rc.`, `open.` or `www.` (`open.rocket.chat` is `R`, `127.0.0.1:3000` is `1`). Empty
+/// for an empty host.
+#[must_use]
+pub fn monogram(host: &str) -> String {
+    const PREFIXES: [&str; 4] = ["chat.", "rc.", "open.", "www."];
+    let name = PREFIXES
+        .iter()
+        .find_map(|prefix| {
+            host.get(..prefix.len())
+                .filter(|start| start.eq_ignore_ascii_case(prefix))
+                .map(|_| &host[prefix.len()..])
+        })
+        .filter(|rest| !rest.is_empty())
+        .unwrap_or(host);
+    name.chars()
+        .next()
+        .and_then(|first| first.to_uppercase().next())
+        .map_or_else(String::new, String::from)
+}
+
 /// One row of the `AccountList` model.
+// One role each for QML, which is told the flags and does not combine them.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct AccountView {
     pub id: String,
@@ -49,7 +73,21 @@ pub struct AccountView {
     /// The host and port of `server`.
     pub host: String,
     pub username: String,
+    /// The letter of the account's tile: see [`monogram`]. Empty until it has an identity.
+    pub monogram: String,
     pub status: Status,
+    /// A new account: nobody is logged in on it and it doesn't say who it is yet. Its tile is a
+    /// dashed plus.
+    pub fresh: bool,
+    /// What the tile's tool tip says: a title (the host) and a line under it (the username and the
+    /// mentions, or why the account needs a login), and both as one label for accessibility.
+    pub tip_title: String,
+    pub tip_line: String,
+    pub label: String,
+    /// The tile shows it is waiting for something: connecting or resuming.
+    pub busy: bool,
+    /// The tile shows that some room is unread: there are, and the account is not on screen.
+    pub unread: bool,
     /// The realtime connection is up. It can't be while the account is logged out.
     pub connected: bool,
     /// How many rooms show as unread.
@@ -179,6 +217,16 @@ impl Accounts {
         self.current.as_ref()
     }
 
+    /// What the `Session` view model shows: the current account's, or an empty account's.
+    #[must_use]
+    pub fn session_view(&self) -> SessionView {
+        let others = self.entries.len() > 1;
+        match &self.current {
+            Some(id) => self.current_cache().session_view(id, others),
+            None => NO_CACHE.session_view(&AccountId::from(String::new()), others),
+        }
+    }
+
     /// What the view models show: the current account's cache, or an empty one.
     #[must_use]
     pub fn current_cache(&self) -> &Cache {
@@ -211,6 +259,7 @@ impl Accounts {
 
 #[cfg(test)]
 mod tests {
+    use crate::session_view::LoginMode;
     use rc_core::domain::{Account, Identity, User};
     use rc_core::rooms::Unread;
     use rc_core::{Connection, Event};
@@ -319,7 +368,7 @@ mod tests {
         accounts.removed(&id("a"));
         assert_eq!(accounts.current(), None);
         assert!(accounts.views().is_empty());
-        assert_eq!(accounts.current_cache().session_view().username, "");
+        assert_eq!(accounts.session_view().username, "");
         accounts.added(id("b"));
         assert_eq!(accounts.current(), Some(&id("b")));
     }
@@ -349,10 +398,10 @@ mod tests {
         let mut accounts = three();
         accounts.apply(&id("a"), &logged_in("http://a", "alice"));
         accounts.apply(&id("b"), &logged_in("http://b", "bob"));
-        assert_eq!(accounts.current_cache().session_view().username, "alice");
+        assert_eq!(accounts.session_view().username, "alice");
         accounts.select(&id("b"));
-        assert_eq!(accounts.current_cache().session_view().username, "bob");
-        assert_eq!(accounts.current_cache().session_view().host, "b");
+        assert_eq!(accounts.session_view().username, "bob");
+        assert_eq!(accounts.session_view().host, "b");
     }
 
     // ACCT-003
@@ -375,16 +424,16 @@ mod tests {
         );
         assert_eq!(accounts.apply(&id("nobody"), &logged_out()), None);
         // The background account kept the event; the current cache didn't see it.
-        assert_eq!(accounts.current_cache().session_view().username, "alice");
+        assert_eq!(accounts.session_view().username, "alice");
         accounts.select(&id("c"));
-        assert_eq!(accounts.current_cache().session_view().username, "carol");
+        assert_eq!(accounts.session_view().username, "carol");
     }
 
     // ACCT-003
     #[test]
     fn an_account_without_a_current_one_shows_an_empty_cache() {
         let accounts = Accounts::new();
-        let view = accounts.current_cache().session_view();
+        let view = accounts.session_view();
         assert_eq!(view.username, "");
         assert!(accounts.current_cache().viewer().username.is_none());
     }
@@ -395,6 +444,7 @@ mod tests {
         let mut accounts = three();
         let view = |accounts: &Accounts| accounts.view(&id("b")).unwrap().1;
         assert_eq!(view(&accounts).server, "");
+        accounts.apply(&id("b"), &logged_out());
         accounts.apply(&id("b"), &identity("https://chat.example.com:8443/", "bob"));
         accounts.apply(&id("b"), &logged_out());
         let row = view(&accounts);
@@ -578,5 +628,152 @@ mod tests {
             AccountChange::Updated { index, view }.apply(&mut rows);
         }
         assert_eq!(rows, accounts.views());
+    }
+
+    // ACCT-001
+    #[test]
+    fn the_monogram_is_the_first_letter_of_the_host_without_a_generic_prefix() {
+        for (host, expected) in [
+            ("open.rocket.chat", "R"),
+            ("chat.northwind.dev", "N"),
+            ("rc.lumen.studio", "L"),
+            ("www.example.com", "E"),
+            ("Chat.Northwind.dev", "N"),
+            ("rocket.chat", "R"),
+            ("127.0.0.1:3000", "1"),
+            ("localhost:3000", "L"),
+            ("\u{e9}cole.example", "\u{c9}"),
+            ("chat.", "C"),
+            ("chatty.example", "C"),
+            ("", ""),
+        ] {
+            assert_eq!(monogram(host), expected, "{host}");
+        }
+    }
+
+    // ACCT-001
+    #[test]
+    fn the_row_has_a_monogram_once_the_account_has_an_identity() {
+        let mut accounts = three();
+        let row = |accounts: &Accounts| accounts.view(&id("b")).unwrap().1;
+        assert_eq!(row(&accounts).monogram, "");
+        accounts.apply(&id("b"), &identity("https://open.rocket.chat/", "bob"));
+        assert_eq!(row(&accounts).monogram, "R");
+    }
+
+    // ACCT-001
+    #[test]
+    fn the_row_is_busy_while_connecting_or_resuming() {
+        let mut accounts = three();
+        let busy = |accounts: &Accounts| accounts.view(&id("a")).unwrap().1.busy;
+        assert!(!busy(&accounts));
+        for (state, expected) in [
+            (SessionState::Connecting, true),
+            (SessionState::Resuming, true),
+            (SessionState::LoggedOut { failure: None }, false),
+        ] {
+            accounts.apply(&id("a"), &Event::Session(state));
+            assert_eq!(busy(&accounts), expected);
+        }
+        accounts.apply(&id("a"), &logged_in("http://h", "alice"));
+        assert!(!busy(&accounts));
+    }
+
+    // ACCT-004
+    #[test]
+    fn the_row_shows_unread_only_for_an_account_that_is_not_on_screen() {
+        let mut accounts = three();
+        let unread = |accounts: &Accounts, name| accounts.view(&id(name)).unwrap().1.unread;
+        for name in ["a", "b"] {
+            accounts.apply(
+                &id(name),
+                &Event::Unread(Unread {
+                    rooms: 2,
+                    mentions: 0,
+                }),
+            );
+        }
+        assert!(!unread(&accounts, "a"), "current");
+        assert!(unread(&accounts, "b"));
+        assert!(!unread(&accounts, "c"), "nothing unread");
+        accounts.select(&id("b"));
+        assert!(unread(&accounts, "a"));
+        assert!(!unread(&accounts, "b"));
+    }
+
+    // ACCT-001
+    #[test]
+    fn a_row_is_fresh_until_the_account_says_who_it_is() {
+        let mut accounts = three();
+        let fresh = |accounts: &Accounts| -> Vec<bool> {
+            accounts.views().iter().map(|row| row.fresh).collect()
+        };
+        assert_eq!(fresh(&accounts), [true, true, true]);
+        accounts.apply(&id("a"), &identity("http://h", "alice"));
+        accounts.apply(&id("b"), &logged_in("http://h", "bob"));
+        assert_eq!(fresh(&accounts), [false, false, true]);
+        accounts.apply(&id("c"), &Event::Session(SessionState::Connecting));
+        assert_eq!(fresh(&accounts), [false, false, true]);
+    }
+
+    // ACCT-001
+    #[test]
+    fn the_tip_names_the_server_and_says_who_you_are_there() {
+        let mut accounts = three();
+        let tip = |accounts: &Accounts| {
+            let row = accounts.view(&id("a")).unwrap().1;
+            (row.tip_title, row.tip_line, row.label)
+        };
+        assert_eq!(
+            tip(&accounts),
+            (
+                "New server".into(),
+                "Log in to add it".into(),
+                "New server, Log in to add it".into()
+            )
+        );
+        accounts.apply(&id("a"), &identity("https://chat.example.com/", "alice"));
+        accounts.apply(&id("a"), &logged_in("https://chat.example.com/", "alice"));
+        let (title, line, label) = tip(&accounts);
+        assert_eq!(
+            (title.as_str(), line.as_str()),
+            ("chat.example.com", "alice")
+        );
+        assert_eq!(label, "chat.example.com, alice");
+        for (mentions, line) in [
+            (1, "alice \u{b7} 1 mention"),
+            (3, "alice \u{b7} 3 mentions"),
+        ] {
+            accounts.apply(&id("a"), &Event::Unread(Unread { rooms: 1, mentions }));
+            assert_eq!(tip(&accounts).1, line);
+        }
+        accounts.apply(&id("a"), &Event::Unread(Unread::default()));
+        accounts.apply(
+            &id("a"),
+            &Event::Session(SessionState::LoggedOut {
+                failure: Some(LoginFailure::SessionExpired),
+            }),
+        );
+        assert_eq!(tip(&accounts).1, "alice: log in again");
+    }
+
+    // ACCT-001
+    #[test]
+    fn the_session_is_adding_only_for_a_new_account_with_others() {
+        let mut accounts = Accounts::new();
+        let mode = |accounts: &Accounts| accounts.session_view().login_mode;
+        accounts.added(id("a"));
+        accounts.apply(&id("a"), &logged_out());
+        assert_eq!(mode(&accounts), LoginMode::Login);
+        accounts.added(id("b"));
+        accounts.apply(&id("b"), &logged_out());
+        accounts.select(&id("b"));
+        assert_eq!(mode(&accounts), LoginMode::Adding);
+        let view = accounts.session_view();
+        assert_eq!(view.login_title, "Add a server");
+        assert!(!view.login_lede.is_empty());
+        assert_eq!(view.account_id, "b");
+        accounts.removed(&id("a"));
+        assert_eq!(mode(&accounts), LoginMode::Login);
     }
 }

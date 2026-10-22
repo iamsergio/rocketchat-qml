@@ -436,8 +436,9 @@ impl<C: Connector> Actor<C> {
         self.stop().await
     }
 
-    /// Tells who the stored account is, if there is one, and resumes it if it holds a token. Else
-    /// it is logged out. Before any command is handled.
+    /// Tells who the stored account is, if there is one, and resumes it if it holds a token. A stored
+    /// account without one has expired: it starts logged out with `SessionExpired`. With nothing
+    /// stored it is logged out for no reason. Before any command is handled.
     fn start(&mut self, stored: Option<StoredAccount>) {
         let Some(stored) = stored else {
             self.set_state(SessionState::LoggedOut { failure: None });
@@ -449,7 +450,9 @@ impl<C: Connector> Actor<C> {
         });
         match stored.credentials() {
             Some(credentials) => self.resume(&stored.server, credentials),
-            None => self.set_state(SessionState::LoggedOut { failure: None }),
+            None => self.set_state(SessionState::LoggedOut {
+                failure: Some(LoginFailure::SessionExpired),
+            }),
         }
         self.stored = Some(stored);
     }

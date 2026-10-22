@@ -17,6 +17,24 @@ pub mod main_window {
     pub const LOGIN_BUTTON: &str = "mainWindow/loginButton";
     pub const LOGIN_ERROR: &str = "mainWindow/loginError";
     pub const LOGIN_BUSY: &str = "mainWindow/loginBusy";
+    /// The heading of the login page, as its `text`: "Log in to Rocket.Chat", "Add a server" (a
+    /// new account while others exist) or "Log in again" (the session of the account ended).
+    pub const LOGIN_TITLE: &str = "mainWindow/loginTitle";
+    /// The sentence under the heading while adding a server. Visible only then.
+    pub const LOGIN_LEDE: &str = "mainWindow/loginLede";
+    /// "Your session on <host> has ended...", as its `text`. Visible only while logging in again.
+    pub const LOGIN_NOTICE: &str = "mainWindow/loginNotice";
+    /// Goes back to the other accounts, forgetting the new one. Visible only while adding a server.
+    pub const LOGIN_CANCEL_BUTTON: &str = "mainWindow/loginCancelButton";
+    /// Forgets the account whose session ended. Visible only while logging in again.
+    pub const LOGIN_REMOVE_SERVER_BUTTON: &str = "mainWindow/loginRemoveServerButton";
+
+    /// The rail of servers at the left of the window. Visible except while the session state is
+    /// unknown, at startup.
+    pub const SERVER_RAIL: &str = "mainWindow/serverRail";
+    /// Adds an account and shows its login page. Hidden while a new account waits for its login:
+    /// its tile is where to go for it.
+    pub const ADD_SERVER_BUTTON: &str = "mainWindow/addServerButton";
 
     pub const ROOM_LIST: &str = "mainWindow/roomList";
     /// The section of the favorites in the room list. It is always there, with no height unless
@@ -57,7 +75,11 @@ pub mod main_window {
     /// In the confirmation: stays in the room.
     pub const ROOM_LEAVE_CANCEL: &str = "mainWindow/roomLeaveCancel";
     pub const CURRENT_USER: &str = "mainWindow/currentUser";
-    /// Opens the settings menu, above it.
+    /// The host of the server on screen, at the top of the sidebar, as its `text`.
+    pub const SERVER_NAME: &str = "mainWindow/serverName";
+    /// The username there, under the host, as its `text`.
+    pub const SERVER_USER: &str = "mainWindow/serverUser";
+    /// Opens the settings menu, at the bottom of the rail.
     pub const SETTINGS_BUTTON: &str = "mainWindow/settingsButton";
     /// An item of the open settings menu: logs what helps to diagnose problems (the DPI of the
     /// screens for now) to stderr.
@@ -177,6 +199,31 @@ pub mod main_window {
     pub const UNSENT_PENDING: &str = "mainWindow/msgPending";
     pub const UNSENT_FAILED: &str = "mainWindow/msgFailed";
     pub const UNSENT_RETRY: &str = "mainWindow/msgRetry";
+}
+
+/// The parts of a tile of the rail (see [`server_tile`]).
+pub mod server_tile_part {
+    /// The tile's letter, as its `text`. Hidden for a new account, which shows a plus.
+    pub const MONOGRAM: &str = "serverTileMonogram";
+    /// The number of mentions on that server, as its `text`. Visible only while there are some.
+    pub const MENTIONS: &str = "serverTileMentions";
+    /// The short pip: some room there is unread and the account is not on screen.
+    pub const UNREAD: &str = "serverTileUnread";
+    /// The warning dot: the login ended.
+    pub const EXPIRED: &str = "serverTileExpired";
+}
+
+/// The tile of the account at this position in the rail (from 0, in the order they were added), or
+/// one of its parts. Pass an empty `part` for the tile itself: it is a button, and its `checked`
+/// says whether it is the account on screen.
+#[must_use]
+pub fn server_tile(index: usize, part: &str) -> String {
+    let tile = format!("{}/serverTile_{index}", main_window::WINDOW);
+    if part.is_empty() {
+        tile
+    } else {
+        format!("{tile}/{part}")
+    }
 }
 
 /// The parts of a room row, for [`room`].

@@ -406,6 +406,16 @@ impl Admin {
         );
     }
 
+    /// Ends every login of this user but this one's (`users.logoutOtherClients`): a client that was
+    /// logged in as them finds its token refused, as when a session expires.
+    ///
+    /// # Panics
+    ///
+    /// If the server refuses.
+    pub fn logout_other_clients(&self) {
+        self.post("users.logoutOtherClients", &json!({}));
+    }
+
     /// Uploads a file to the room as admin and posts it as a message with the text `msg` (which
     /// may be empty) and the description `description`, the way the clients do: `rooms.media`, then
     /// `rooms.mediaConfirm`. Returns the message as the server stored it.
