@@ -161,6 +161,35 @@ fn a_reaction_is_added_through_the_message_menu_and_the_emoji_picker() {
 // ACT-003
 #[test]
 #[ignore = "needs the app and a Rocket.Chat server: run through ctest"]
+fn double_clicking_a_message_opens_the_emoji_picker_to_react_to_it() {
+    let admin = Admin::login();
+    let user = admin.create_user();
+    let (channel_id, _) = admin.create_channel(&[&user.username]);
+    let posted = admin.post_message(&channel_id, &format!("react to me {}", unique()));
+    let app = launch();
+    let gui = app.gui();
+    log_in_and_wait_for_room(gui, &user, &channel_id);
+    open_room(gui, &channel_id);
+    let body = message(&posted.id, message_row::BODY);
+    gui.wait_until_visible(&body, TIMEOUT).unwrap();
+
+    gui.mouse_double_click(&body).unwrap();
+    pick_emoji(gui, "tada");
+
+    let chip = reaction(&posted.id, 0, "");
+    gui.wait_until_visible(&chip, TIMEOUT).unwrap();
+    gui.wait_until_text(&reaction(&posted.id, 0, reaction_row::EMOJI), "🎉", TIMEOUT)
+        .unwrap();
+    assert!(gui.checked(&chip).unwrap());
+    assert!(
+        !gui.exists_and_visible(main_window::ROOM_ACTION_ERROR)
+            .unwrap()
+    );
+}
+
+// ACT-003
+#[test]
+#[ignore = "needs the app and a Rocket.Chat server: run through ctest"]
 fn clicking_the_chip_of_the_users_own_reaction_takes_it_back() {
     let admin = Admin::login();
     let user = admin.create_user();
