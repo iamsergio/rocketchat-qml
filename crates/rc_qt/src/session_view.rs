@@ -20,6 +20,19 @@ pub enum Status {
     LoggedIn,
 }
 
+/// What the login page is for. Mirrors the `LoginMode` Qt enum.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum LoginMode {
+    /// Log in: the only account, or an account that is logged out but not expired (a resume that
+    /// couldn't reach the server, a login that failed). Its identity, if any, is prefilled.
+    #[default]
+    Login,
+    /// A new account, with others to go back to.
+    Adding,
+    /// The session ended: its server is fixed, and the account can be removed.
+    Again,
+}
+
 /// The values of the `Session` properties.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct SessionView {
@@ -37,6 +50,19 @@ pub struct SessionView {
     /// What to tell the user while the realtime connection is down. Empty while it is up, and
     /// outside a session.
     pub connection_text: String,
+    /// The local id of the account shown. Changes when another account is shown, which is what
+    /// makes the login page start empty again.
+    pub account_id: String,
+    pub login_mode: LoginMode,
+    /// The heading of the login page, the sentence under it and the notice above the fields, for
+    /// `login_mode`. Empty where the mode has none.
+    pub login_title: String,
+    pub login_lede: String,
+    pub login_notice: String,
+    /// What the server and username fields of the login page start with: who the account is, if
+    /// it is logged out (or logging in) and says so. Empty otherwise.
+    pub login_server: String,
+    pub login_username: String,
 }
 
 /// The view of `state`, where `None` is the state before the first event, with the connection as
@@ -74,6 +100,40 @@ pub fn session_view(state: Option<&SessionState>, connection: Connection) -> Ses
             connection_text: connection_text(connection),
             ..SessionView::default()
         },
+    }
+}
+
+impl LoginMode {
+    /// The heading of the login page.
+    #[must_use]
+    pub const fn title(self) -> &'static str {
+        match self {
+            Self::Login => "Log in to Rocket.Chat",
+            Self::Adding => "Add a server",
+            Self::Again => "Log in again",
+        }
+    }
+
+    /// The sentence under the heading, if the mode has one.
+    #[must_use]
+    pub const fn lede(self) -> &'static str {
+        match self {
+            Self::Adding => {
+                "Log in to another Rocket.Chat server. You stay logged in to the others."
+            }
+            Self::Login | Self::Again => "",
+        }
+    }
+
+    /// The notice above the fields, if the mode has one, for the server at `host`.
+    #[must_use]
+    pub fn notice(self, host: &str) -> String {
+        match self {
+            Self::Again => {
+                format!("Your session on {host} has ended. Log in to see its rooms again.")
+            }
+            Self::Login | Self::Adding => String::new(),
+        }
     }
 }
 

@@ -89,6 +89,15 @@ impl Hub {
         {
             self.list
                 .queue(move |model| model.apply(&AccountChange::Inserted { index, view }));
+            self.show_session_count();
+        }
+    }
+
+    /// Tells the `Session` view model that the number of accounts changed, if it shows an account
+    /// that has said what state it is in. Whether other accounts exist is part of what it shows.
+    fn show_session_count(&mut self) {
+        if self.accounts.current_cache().session_known() {
+            self.views.show_session_view(&self.accounts);
         }
     }
 
@@ -115,7 +124,7 @@ impl Hub {
         // next account is added. An account added a moment ago is shown with its first `Session`
         // event (see `dispatch`): showing it before would flash the startup page.
         if current.is_some() && self.accounts.current_cache().session_known() {
-            self.views.show_all(self.accounts.current_cache());
+            self.views.show_all(&self.accounts);
         }
     }
 }
@@ -300,8 +309,8 @@ pub fn add_account() {
         tracing::warn!("add ignored: the core isn't running");
         return;
     };
-    let id = client.add_account();
     let before = hub.accounts.current().cloned();
+    let id = client.add_account();
     hub.add_row(&id);
     hub.accounts.select(&id);
     hub.switched_from(before.as_ref());
@@ -322,7 +331,7 @@ pub fn remove_account(id: &str) {
 pub fn register_session(thread: CxxQtThread<SessionVm>) -> SessionView {
     let mut hub = lock();
     hub.views.session.register(thread);
-    hub.accounts.current_cache().session_view()
+    hub.accounts.session_view()
 }
 
 /// Registers the `RoomList` model and returns the change that brings it up to date, and the
@@ -538,6 +547,7 @@ fn dispatch(account: AccountId, event: Event) {
             if let Some(index) = hub.accounts.removed(&account) {
                 hub.list
                     .queue(move |model| model.apply(&AccountChange::Removed { index }));
+                hub.show_session_count();
             }
         }
         _ => {
@@ -556,9 +566,9 @@ fn dispatch(account: AccountId, event: Event) {
                 hub.update_row(&account);
             }
             if applied.current && first_state {
-                hub.views.show_all(hub.accounts.current_cache());
+                hub.views.show_all(&hub.accounts);
             } else if applied.current {
-                hub.views.show(hub.accounts.current_cache(), event);
+                hub.views.show(&hub.accounts, event);
             } else if matches!(
                 event,
                 Event::MessageAction { .. } | Event::RoomAction { .. }
@@ -572,8 +582,9 @@ fn dispatch(account: AccountId, event: Event) {
 }
 
 impl Views {
-    /// Forwards the event of the current account, whose `cache` has taken it in already.
-    fn show(&mut self, cache: &Cache, event: Event) {
+    /// Forwards the event of the current account, whose cache has taken it in already.
+    fn show(&mut self, accounts: &Accounts, event: Event) {
+        let cache = accounts.current_cache();
         match event {
             Event::MessagePolicy(_) => self.show_viewer(cache),
             Event::MessageAction {
@@ -584,9 +595,10 @@ impl Views {
             Event::RoomAction { outcome, .. } => self.answer_room_action(outcome),
             Event::CustomEmoji(emoji) => {
                 self.show_emoji(&emoji);
-                self.show_session(cache);
+                self.show_session(accounts);
             }
-            Event::Session(_) | Event::Connection(_) => self.show_session(cache),
+            Event::Session(_) | Event::Connection(_) => self.show_session(accounts),
+            Event::Identity(_) => self.show_session_view(accounts),
             Event::Rooms(changes) => {
                 self.rooms.queue(move |model| model.apply(&changes));
                 // The open room's name may have changed.
@@ -608,9 +620,10 @@ impl Views {
         }
     }
 
-    /// Gives every view model the whole of what `cache` says, replacing what it showed: the
-    /// snapshot a view model gets when it registers.
-    fn show_all(&mut self, cache: &Cache) {
+    /// Gives every view model the whole of what the current account says, replacing what it
+    /// showed: the snapshot a view model gets when it registers.
+    fn show_all(&mut self, accounts: &Accounts) {
+        let cache = accounts.current_cache();
         let (rooms, avatars) = (cache.rooms_snapshot(), cache.avatars());
         self.rooms.queue(move |model| model.show(rooms, avatars));
         let (messages, viewer, avatars, images) = (
@@ -637,7 +650,7 @@ impl Views {
             vm.dismiss_action_error();
         });
         self.show_thread(cache);
-        self.show_session_view(cache);
+        self.show_session_view(accounts);
     }
 
     const fn new() -> Self {
@@ -652,15 +665,16 @@ impl Views {
         }
     }
 
-    /// Tells the `Session` view model, and the `MessageList` model, what `cache` says now.
-    fn show_session(&mut self, cache: &Cache) {
-        self.show_viewer(cache);
-        self.show_session_view(cache);
+    /// Tells the `Session` view model, and the `MessageList` model, what the current account says
+    /// now.
+    fn show_session(&mut self, accounts: &Accounts) {
+        self.show_viewer(accounts.current_cache());
+        self.show_session_view(accounts);
     }
 
-    /// Tells the `Session` view model what `cache` says now.
-    fn show_session_view(&mut self, cache: &Cache) {
-        let view = cache.session_view();
+    /// Tells the `Session` view model what the current account says now.
+    fn show_session_view(&mut self, accounts: &Accounts) {
+        let view = accounts.session_view();
         self.session.queue(move |vm| vm.show(&view));
     }
 

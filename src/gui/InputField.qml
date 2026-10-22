@@ -10,6 +10,7 @@ TextField {
     id: control
 
     bottomPadding: Theme.spacingNone
+    color: readOnly ? Theme.textMuted : Theme.text
     implicitHeight: Theme.fieldHeight
     leftPadding: Theme.fieldPaddingH
     opacity: enabled ? 1 : Theme.disabledOpacity
@@ -20,7 +21,7 @@ TextField {
     background: Rectangle {
         border.color: control.activeFocus ? Theme.own : Theme.raisedHover
         border.width: Theme.borderWidth
-        color: Theme.surface
+        color: control.readOnly ? Theme.base : Theme.surface
         radius: Theme.radiusControl
     }
 }

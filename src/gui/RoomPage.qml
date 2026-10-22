@@ -12,12 +12,6 @@ ColumnLayout {
     // The server without its scheme or path, as the sidebar names it.
     readonly property string host: Session.host
 
-    // The first letter of the host, for its mark: none for an IP address, which starts with a digit.
-    readonly property string hostInitial: {
-        const first = host.charAt(0);
-        return first.toLowerCase() !== first.toUpperCase() ? first.toUpperCase() : "";
-    }
-
     spacing: Theme.spacingNone
 
     Label {
@@ -46,33 +40,32 @@ ColumnLayout {
             Layout.preferredWidth: Theme.sidebarWidth
             spacing: Theme.spacingNone
 
-            // The server: its initial on the colour of the brand, and its name.
-            RowLayout {
+            // The server: its host, and who you are there.
+            ColumnLayout {
                 Layout.fillWidth: true
-                Layout.margins: Theme.spacingXXL
-                spacing: Theme.spacingXL
+                Layout.leftMargin: Theme.sidebarHeaderPaddingH
+                Layout.rightMargin: Theme.sidebarHeaderPaddingH
+                Layout.topMargin: Theme.spacingXXL
+                Layout.bottomMargin: Theme.spacingXL
+                spacing: Theme.spacingXXS
 
-                Rectangle {
-                    Layout.preferredHeight: Theme.serverMarkSize
-                    Layout.preferredWidth: Theme.serverMarkSize
-                    color: Theme.signal
-                    radius: Theme.radiusControl
-                    visible: root.hostInitial !== ""
-
-                    Label {
-                        anchors.centerIn: parent
-                        color: Theme.textOnSignal
-                        font.weight: Theme.fontWeightBold
-                        text: root.hostInitial
-                        textFormat: Text.PlainText
-                    }
+                Label {
+                    objectName: "serverName"
+                    Layout.fillWidth: true
+                    elide: Text.ElideRight
+                    font.pointSize: Theme.fontSizeHeading
+                    font.weight: Theme.fontWeightBold
+                    text: root.host
+                    textFormat: Text.PlainText
                 }
 
                 Label {
+                    objectName: "serverUser"
                     Layout.fillWidth: true
+                    color: Theme.textFaint
                     elide: Text.ElideRight
-                    font.weight: Theme.fontWeightSemibold
-                    text: root.host
+                    font.pointSize: Theme.fontSizeSmall
+                    text: Session.username
                     textFormat: Text.PlainText
                 }
             }
@@ -187,55 +180,6 @@ ColumnLayout {
                 }
 
                 ToolButton {
-                    id: settings
-
-                    objectName: "settingsButton"
-                    // Only the tool tip and the accessibility name show it.
-                    display: AbstractButton.IconOnly
-                    implicitHeight: Theme.iconButtonSize
-                    implicitWidth: Theme.iconButtonSize
-                    padding: Theme.spacingNone
-                    text: qsTr("Settings")
-                    // Above the button: it is at the bottom of the window.
-                    onClicked: settingsMenu.popup(this, 0, -settingsMenu.implicitHeight)
-
-                    ToolTip.delay: Theme.toolTipDelay
-                    ToolTip.text: text
-                    ToolTip.visible: hovered && !settingsMenu.visible
-
-                    background: Rectangle {
-                        color: settings.hovered ? Theme.raised : Theme.transparent
-                        radius: Theme.radiusControl
-                    }
-
-                    contentItem: Item {
-                        Icon {
-                            anchors.centerIn: parent
-                            height: Theme.iconButtonIconSize
-                            source: "icons/settings.svg"
-                            tint: settings.hovered ? Theme.text : Theme.textMuted
-                            width: Theme.iconButtonIconSize
-                        }
-                    }
-
-                    // The popup is parented to the window's overlay while open, so Spix finds its
-                    // items by name from the window (mainWindow/dumpInfoAction), and only while it
-                    // is open.
-                    Menu {
-                        id: settingsMenu
-
-                        // Keeps the menu inside the window when it opens near an edge.
-                        margins: Theme.spacingL
-
-                        MenuItem {
-                            objectName: "dumpInfoAction"
-                            text: qsTr("Dump info")
-                            onTriggered: DebugTools.dumpInfo()
-                        }
-                    }
-                }
-
-                ToolButton {
                     id: logout
 
                     objectName: "logoutButton"
@@ -248,7 +192,7 @@ ColumnLayout {
                     onClicked: Session.logout()
 
                     ToolTip.delay: Theme.toolTipDelay
-                    ToolTip.text: text
+                    ToolTip.text: qsTr("Log out of this server")
                     ToolTip.visible: hovered
 
                     background: Rectangle {

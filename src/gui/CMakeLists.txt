@@ -34,9 +34,12 @@ qt_add_qml_module(
   LoginPage.qml
   MessageDelegate.qml
   PrimaryButton.qml
+  RailTip.qml
   RoomDelegate.qml
   RoomPage.qml
   RoomView.qml
+  ServerRail.qml
+  ServerTile.qml
   StartupPage.qml
   ThreadPane.qml
   Theme.qml
@@ -46,11 +49,13 @@ qt_add_qml_module(
   fonts/InstrumentSans-Italic.ttf
   icons/channel.svg
   icons/check.svg
+  icons/clock.svg
   icons/close.svg
   icons/corner.svg
   icons/direct.svg
   icons/file.svg
   icons/logout.svg
+  icons/plus.svg
   icons/private.svg
   icons/settings.svg
   icons/thread.svg

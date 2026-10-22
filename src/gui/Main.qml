@@ -43,12 +43,32 @@ ApplicationWindow {
         brightText: Theme.text
     }
 
-    // One page per session state. A Loader, so that a page starts empty each time it shows: the
-    // login fields don't keep the password after a logout. While logging in the state is
-    // Connecting, which keeps the login page and its fields. Resuming a stored session at startup
-    // shows the startup page, so that the login page doesn't flash before the room list.
+    // The rail of servers is at the left of every page, except while the session state is unknown:
+    // until the core has said what the account is doing, there is nothing to put in it. It shows
+    // beside the startup page of a resume, so that the tile of the account shows its ring.
+    ServerRail {
+        id: rail
+
+        anchors.bottom: parent.bottom
+        anchors.left: parent.left
+        anchors.top: parent.top
+        visible: Session.state !== Session.Unknown
+        // Above the page, which the tool tips of the tiles overlap.
+        z: Theme.zAbove
+    }
+
+    // One page per session state, in the space right of the rail. A Loader, so that a page starts
+    // empty each time it shows: the login fields don't keep the password after a logout. While
+    // logging in the state is Connecting, which keeps the login page and its fields. Resuming a
+    // stored session at startup shows the startup page, so that the login page doesn't flash
+    // before the room list.
     Loader {
-        anchors.fill: parent
+        id: page
+
+        anchors.bottom: parent.bottom
+        anchors.left: rail.visible ? rail.right : parent.left
+        anchors.right: parent.right
+        anchors.top: parent.top
         source: {
             switch (Session.state) {
             case Session.LoggedIn:
@@ -59,6 +79,17 @@ ApplicationWindow {
             default:
                 return "LoginPage.qml";
             }
+        }
+
+        // Another account on screen starts its page again: what was typed for one account must not
+        // be sent to another's server.
+        Connections {
+            function onAccountIdChanged() {
+                page.active = false;
+                page.active = true;
+            }
+
+            target: Session
         }
     }
 }

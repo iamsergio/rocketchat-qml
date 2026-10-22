@@ -464,7 +464,10 @@ fn with_three_stored_accounts_the_ones_with_a_token_resume_and_a_logout_removes_
     store.save(&stored_as("third-id", "http://third")).unwrap();
     let harness = Harness::with_accounts(&fake, store.clone());
     // The signed-out account is the first.
-    assert_eq!(harness.first, logged_out(None));
+    assert_eq!(
+        harness.first,
+        logged_out(Some(LoginFailure::SessionExpired))
+    );
     let second = AccountId::from("second-id".to_owned());
     harness.expect_of(
         &second,
@@ -493,7 +496,10 @@ fn an_account_without_a_token_is_not_resumed_and_stays_stored() {
     signed_out.token = None;
     store.save(&signed_out).unwrap();
     let harness = Harness::with_store(&fake, store.clone());
-    assert_eq!(harness.first, logged_out(None));
+    assert_eq!(
+        harness.first,
+        logged_out(Some(LoginFailure::SessionExpired))
+    );
     assert!(fake.state().me_calls.is_empty());
     drop(harness);
     let accounts = store.load().unwrap();
