@@ -92,8 +92,8 @@ pub mod main_window {
     pub const ROOM_PLACEHOLDER: &str = "mainWindow/roomPlaceholder";
     /// The name of the open room.
     pub const ROOM_TITLE: &str = "mainWindow/roomTitle";
-    /// The topic of the open room, under its name, as its `text`. Visible only while the room has
-    /// one.
+    /// The topic of the open room, under its name, as its `text`: the style sheet and the HTML of
+    /// the topic. Visible only while the room has one.
     pub const ROOM_TOPIC: &str = "mainWindow/roomTopic";
     /// Why the messages of the open room couldn't be loaded.
     pub const ROOM_ERROR: &str = "mainWindow/roomError";

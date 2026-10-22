@@ -19,7 +19,7 @@ pub mod qobject {
         #[qml_singleton]
         #[qproperty(QString, room_id, cxx_name = "roomId", READ, NOTIFY)]
         #[qproperty(QString, name, READ, NOTIFY)]
-        #[qproperty(QString, topic, READ, NOTIFY)]
+        #[qproperty(QString, topic_html, cxx_name = "topicHtml", READ, NOTIFY)]
         #[qproperty(QString, kind, READ, NOTIFY)]
         #[qproperty(bool, loading, READ, NOTIFY)]
         #[qproperty(bool, loading_older, cxx_name = "loadingOlder", READ, NOTIFY)]
@@ -119,7 +119,7 @@ use crate::room_view::{RoomState, action_name, outgoing};
 pub struct RoomVmRust {
     room_id: QString,
     name: QString,
-    topic: QString,
+    topic_html: QString,
     kind: QString,
     loading: bool,
     loading_older: bool,
@@ -139,7 +139,7 @@ impl From<&RoomState> for RoomVmRust {
         Self {
             room_id: QString::from(&state.room_id),
             name: QString::from(&state.name),
-            topic: QString::from(&state.topic),
+            topic_html: QString::from(&state.topic_html),
             kind: QString::from(&state.kind),
             loading: state.loading,
             loading_older: state.loading_older,
@@ -164,7 +164,7 @@ impl qobject::RoomVm {
         let mut new = RoomVmRust::from(state);
         let room_id = self.room_id != new.room_id;
         let name = self.name != new.name;
-        let topic = self.topic != new.topic;
+        let topic_html = self.topic_html != new.topic_html;
         let kind = self.kind != new.kind;
         let loading = self.loading != new.loading;
         let loading_older = self.loading_older != new.loading_older;
@@ -182,8 +182,8 @@ impl qobject::RoomVm {
         if name {
             self.as_mut().name_changed();
         }
-        if topic {
-            self.as_mut().topic_changed();
+        if topic_html {
+            self.as_mut().topic_html_changed();
         }
         if kind {
             self.as_mut().kind_changed();

@@ -4,9 +4,13 @@
 //! What the `RoomList` model and the `Room` view model show for a room. Plain Rust, so it can be
 //! unit-tested without Qt.
 
+use jiff::tz::TimeZone;
 use rc_core::domain::{MessageId, Room, RoomId, RoomKind};
 use rc_core::policy::MessageAction;
+use rc_core::rich::RichText;
 use rc_core::timeline::TimelineStatus;
+
+use crate::rich_html::{Clock, Viewer, render};
 
 /// How QML sees the kind of a room. A string rather than another Qt enum, which keeps the role a
 /// plain `QVariant`.
@@ -57,8 +61,8 @@ pub struct RoomState {
     /// The name and kind the room list shows; empty while the room isn't in it.
     pub name: String,
     pub kind: String,
-    /// What the room is about, as the room list has it; empty for none.
-    pub topic: String,
+    /// What the room is about, as the HTML for `Text.RichText`; empty for none.
+    pub topic_html: String,
     pub loading: bool,
     pub loading_older: bool,
     pub reached_start: bool,
@@ -66,9 +70,18 @@ pub struct RoomState {
     pub error_text: String,
 }
 
+/// The HTML of a topic, which is markdown. Nothing in it depends on the time.
+fn topic_html(topic: &str, viewer: &Viewer) -> String {
+    let clock = Clock {
+        zone: &TimeZone::UTC,
+        now: jiff::Timestamp::UNIX_EPOCH,
+    };
+    render(&RichText::from_topic(topic), viewer, clock)
+}
+
 /// The state for the room `status` is about, with its name, kind and topic taken from `rooms`.
 #[must_use]
-pub fn room_state(rooms: &[Room], status: &TimelineStatus) -> RoomState {
+pub fn room_state(rooms: &[Room], status: &TimelineStatus, viewer: &Viewer) -> RoomState {
     let Some(id) = &status.room else {
         return RoomState::default();
     };
@@ -79,7 +92,7 @@ pub fn room_state(rooms: &[Room], status: &TimelineStatus) -> RoomState {
         kind: room
             .map(|room| kind_name(room.kind).to_owned())
             .unwrap_or_default(),
-        topic: room.map(|room| room.topic.clone()).unwrap_or_default(),
+        topic_html: room.map_or_else(String::new, |room| topic_html(&room.topic, viewer)),
         loading: status.loading,
         loading_older: status.loading_older,
         reached_start: status.reached_start,
@@ -213,7 +226,7 @@ mod tests {
     fn no_open_room_is_the_empty_state() {
         let rooms = [room("1", "general", RoomKind::Channel)];
         assert_eq!(
-            room_state(&rooms, &TimelineStatus::default()),
+            room_state(&rooms, &TimelineStatus::default(), &Viewer::default()),
             RoomState::default()
         );
     }
@@ -231,7 +244,7 @@ mod tests {
             ..TimelineStatus::default()
         };
         assert_eq!(
-            room_state(&rooms, &status),
+            room_state(&rooms, &status, &Viewer::default()),
             RoomState {
                 room_id: "2".into(),
                 name: "Bob".into(),
@@ -242,12 +255,14 @@ mod tests {
         );
     }
 
+    const LINE: &str = "<p style=\"margin-top:0px; margin-bottom:0px\">";
+
     // ROOM-009
     #[test]
-    fn the_open_room_takes_its_topic_from_the_list() {
+    fn the_open_room_takes_its_topic_from_the_list_as_html() {
         let rooms = [
             Room {
-                topic: "Plans".into(),
+                topic: "**Plans** for <b>May</b> & https://example.com :rocket:".into(),
                 ..room("1", "general", RoomKind::Channel)
             },
             room("2", "random", RoomKind::Channel),
@@ -257,11 +272,47 @@ mod tests {
                 room: Some(id.to_owned().into()),
                 ..TimelineStatus::default()
             };
-            room_state(&rooms, &status).topic
+            room_state(&rooms, &status, &Viewer::default()).topic_html
         };
-        assert_eq!(topic_of("1"), "Plans");
+        assert_eq!(
+            topic_of("1"),
+            format!(
+                "{LINE}<b>Plans</b> for &lt;b&gt;May&lt;/b&gt; &amp; \
+                 <a href=\"https://example.com\">https://example.com</a> \u{1F680}</p>"
+            )
+        );
         assert_eq!(topic_of("2"), "");
-        assert_eq!(room_state(&rooms, &TimelineStatus::default()).topic, "");
+        let none = room_state(&rooms, &TimelineStatus::default(), &Viewer::default());
+        assert_eq!(none.topic_html, "");
+    }
+
+    // ROOM-009
+    #[test]
+    fn a_topic_shows_the_custom_emoji_of_the_viewer() {
+        let rooms = [Room {
+            topic: ":party:".into(),
+            ..room("1", "general", RoomKind::Channel)
+        }];
+        let status = TimelineStatus {
+            room: Some("1".to_owned().into()),
+            ..TimelineStatus::default()
+        };
+        let viewer = Viewer {
+            emoji: rc_core::emoji::CustomEmojis::new(
+                "https://chat.example.com",
+                &[rc_api::CustomEmoji {
+                    name: "party".into(),
+                    aliases: Vec::new(),
+                    extension: "gif".into(),
+                }],
+            ),
+            ..Viewer::default()
+        };
+        let html = room_state(&rooms, &status, &viewer).topic_html;
+        assert!(
+            html.contains("<img src=\"https://chat.example.com/"),
+            "{html}"
+        );
     }
 
     // MSG-002
@@ -274,7 +325,7 @@ mod tests {
             reached_start: true,
             error: Some(TimelineError::Unreachable),
         };
-        let state = room_state(&[], &status);
+        let state = room_state(&[], &status, &Viewer::default());
         assert_eq!(state.room_id, "9");
         assert_eq!(state.name, "");
         assert!(state.loading_older && state.reached_start && !state.loading);
