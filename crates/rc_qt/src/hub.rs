@@ -19,9 +19,11 @@
 //! is fine.
 
 use std::path::PathBuf;
+use std::pin::Pin;
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use cxx_qt::CxxQtThread;
+use cxx_qt::Threading;
 use rc_core::adapters::{DiskFileCache, MemoryStore, default_store};
 use rc_core::domain::{AccountId, AvatarOwner, MessageId, RoomId};
 use rc_core::emoji::CustomEmojis;
@@ -61,13 +63,7 @@ struct Hub {
     /// the current account and the addition of the next.
     current: Option<AccountId>,
     cache: Cache,
-    session: Option<CxxQtThread<SessionVm>>,
-    rooms: Option<CxxQtThread<RoomListModel>>,
-    room: Option<CxxQtThread<RoomVm>>,
-    messages: Option<CxxQtThread<MessageListModel>>,
-    thread: Option<CxxQtThread<ThreadVm>>,
-    thread_messages: Option<CxxQtThread<ThreadMessageListModel>>,
-    picker: Option<CxxQtThread<EmojiPickerModel>>,
+    views: Views,
 }
 
 impl Hub {
@@ -76,15 +72,49 @@ impl Hub {
             client: None,
             current: None,
             cache: Cache::new(),
-            session: None,
-            rooms: None,
-            room: None,
-            messages: None,
-            thread: None,
-            thread_messages: None,
-            picker: None,
+            views: Views::new(),
         }
     }
+}
+
+/// A view model that registered, if it did: the way to queue work to it on the GUI thread.
+struct Registered<T: Threading> {
+    thread: Option<CxxQtThread<T>>,
+    /// The QML name of the object, for the log.
+    name: &'static str,
+}
+
+impl<T: Threading> Registered<T> {
+    const fn new(name: &'static str) -> Self {
+        Self { thread: None, name }
+    }
+
+    fn register(&mut self, thread: CxxQtThread<T>) {
+        self.thread = Some(thread);
+    }
+
+    /// Queues `update` to the object, if registered. Unregisters it if it is gone.
+    fn queue(&mut self, update: impl FnOnce(Pin<&mut T>) + Send + 'static) {
+        let gone = self
+            .thread
+            .as_ref()
+            .is_some_and(|thread| thread.queue(update).is_err());
+        if gone {
+            tracing::debug!("the {} object is gone, unregistered", self.name);
+            self.thread = None;
+        }
+    }
+}
+
+/// The view models that registered. What each one shows comes from the [`Cache`].
+struct Views {
+    session: Registered<SessionVm>,
+    rooms: Registered<RoomListModel>,
+    room: Registered<RoomVm>,
+    messages: Registered<MessageListModel>,
+    thread: Registered<ThreadVm>,
+    thread_messages: Registered<ThreadMessageListModel>,
+    picker: Registered<EmojiPickerModel>,
 }
 
 /// Locks the hub. A poisoned lock is recovered rather than skipped: every update of the hub is a
@@ -203,7 +233,7 @@ pub fn logout() {
 /// events that follow the returned view are queued to `thread`.
 pub fn register_session(thread: CxxQtThread<SessionVm>) -> SessionView {
     let mut hub = lock();
-    hub.session = Some(thread);
+    hub.views.session.register(thread);
     hub.cache.session_view()
 }
 
@@ -211,7 +241,7 @@ pub fn register_session(thread: CxxQtThread<SessionVm>) -> SessionView {
 /// avatars it shows. Call on the GUI thread; the events that follow are queued to `thread`.
 pub fn register_rooms(thread: CxxQtThread<RoomListModel>) -> (RoomChange, AvatarUrls) {
     let mut hub = lock();
-    hub.rooms = Some(thread);
+    hub.views.rooms.register(thread);
     (hub.cache.rooms_snapshot(), hub.cache.avatars())
 }
 
@@ -343,7 +373,7 @@ pub fn message_author(message_id: &str) -> String {
 /// events that follow the returned state are queued to `thread`.
 pub fn register_room(thread: CxxQtThread<RoomVm>) -> RoomState {
     let mut hub = lock();
-    hub.room = Some(thread);
+    hub.views.room.register(thread);
     hub.cache.room_state()
 }
 
@@ -354,7 +384,7 @@ pub fn register_messages(
     thread: CxxQtThread<MessageListModel>,
 ) -> (TimelineChange, Viewer, AvatarUrls, ImageUrls) {
     let mut hub = lock();
-    hub.messages = Some(thread);
+    hub.views.messages.register(thread);
     (
         hub.cache.timeline_snapshot(),
         hub.cache.viewer(),
@@ -367,7 +397,7 @@ pub fn register_messages(
 /// events that follow the returned state are queued to `thread`.
 pub fn register_thread(thread: CxxQtThread<ThreadVm>) -> ThreadState {
     let mut hub = lock();
-    hub.thread = Some(thread);
+    hub.views.thread.register(thread);
     hub.cache.thread_state()
 }
 
@@ -378,7 +408,7 @@ pub fn register_thread_messages(
     thread: CxxQtThread<ThreadMessageListModel>,
 ) -> (TimelineChange, Viewer, AvatarUrls, ImageUrls) {
     let mut hub = lock();
-    hub.thread_messages = Some(thread);
+    hub.views.thread_messages.register(thread);
     (
         hub.cache.thread_snapshot(),
         hub.cache.viewer(),
@@ -396,7 +426,7 @@ pub fn thread_state() -> ThreadState {
 /// thread; the changes that follow are queued to `thread`.
 pub fn register_emoji_picker(thread: CxxQtThread<EmojiPickerModel>) -> CustomEmojis {
     let mut hub = lock();
-    hub.picker = Some(thread);
+    hub.views.picker.register(thread);
     hub.cache.viewer().emoji
 }
 
@@ -419,232 +449,124 @@ fn dispatch(account: AccountId, event: Event) {
         return;
     }
     hub.cache.apply(&event);
+    let (cache, views) = (&hub.cache, &mut hub.views);
     match event {
-        Event::MessagePolicy(_) => show_viewer(hub),
+        Event::MessagePolicy(_) => views.show_viewer(cache),
         Event::MessageAction {
             id,
             action,
             outcome,
-        } => answer_action(hub, id, action, outcome),
-        Event::RoomAction { outcome, .. } => answer_room_action(hub, outcome),
+        } => views.answer_action(id, action, outcome),
+        Event::RoomAction { outcome, .. } => views.answer_room_action(outcome),
         Event::CustomEmoji(emoji) => {
-            show_emoji(hub, &emoji);
-            show_session(hub);
+            views.show_emoji(&emoji);
+            views.show_session(cache);
         }
-        Event::Session(_) | Event::Connection(_) => show_session(hub),
+        Event::Session(_) | Event::Connection(_) => views.show_session(cache),
         Event::Rooms(changes) => {
-            let gone = hub
-                .rooms
-                .as_ref()
-                .is_some_and(|thread| thread.queue(move |model| model.apply(&changes)).is_err());
-            if gone {
-                tracing::debug!("the RoomList object is gone, unregistered");
-                hub.rooms = None;
-            }
+            views.rooms.queue(move |model| model.apply(&changes));
             // The open room's name may have changed.
-            show_room(hub);
-            show_thread(hub);
+            views.show_room(cache);
+            views.show_thread(cache);
         }
-        Event::Timeline(changes) => {
-            let gone = hub
-                .messages
-                .as_ref()
-                .is_some_and(|thread| thread.queue(move |model| model.apply(&changes)).is_err());
-            if gone {
-                tracing::debug!("the MessageList object is gone, unregistered");
-                hub.messages = None;
-            }
-        }
+        Event::Timeline(changes) => views.messages.queue(move |model| model.apply(&changes)),
         Event::TimelineStatus(_) => {
-            show_room(hub);
-            show_thread(hub);
+            views.show_room(cache);
+            views.show_thread(cache);
         }
-        Event::ThreadTimeline(changes) => {
-            let gone = hub
-                .thread_messages
-                .as_ref()
-                .is_some_and(|thread| thread.queue(move |model| model.apply(&changes)).is_err());
-            if gone {
-                tracing::debug!("the ThreadMessageList object is gone, unregistered");
-                hub.thread_messages = None;
-            }
-        }
-        Event::ThreadStatus(_) => show_thread(hub),
-        Event::Avatars(updates) => {
-            let changes = hub.cache.avatar_changes(&updates);
-            show_avatars(hub, &changes);
-        }
-        Event::Images(updates) => {
-            let changes = hub.cache.image_changes(&updates);
-            show_images(hub, &changes);
-        }
+        Event::ThreadTimeline(changes) => views
+            .thread_messages
+            .queue(move |model| model.apply(&changes)),
+        Event::ThreadStatus(_) => views.show_thread(cache),
+        Event::Avatars(updates) => views.show_avatars(&cache.avatar_changes(&updates)),
+        Event::Images(updates) => views.show_images(&cache.image_changes(&updates)),
         _ => {}
     }
 }
 
-/// Tells the `Session` view model, and the `MessageList` model, what the cache says now.
-fn show_session(hub: &mut Hub) {
-    show_viewer(hub);
-    let view = hub.cache.session_view();
-    let gone = hub
-        .session
-        .as_ref()
-        .is_some_and(|thread| thread.queue(move |vm| vm.show(&view)).is_err());
-    if gone {
-        tracing::debug!("the Session object is gone, unregistered");
-        hub.session = None;
+impl Views {
+    const fn new() -> Self {
+        Self {
+            session: Registered::new("Session"),
+            rooms: Registered::new("RoomList"),
+            room: Registered::new("Room"),
+            messages: Registered::new("MessageList"),
+            thread: Registered::new("Thread"),
+            thread_messages: Registered::new("ThreadMessageList"),
+            picker: Registered::new("EmojiCatalog"),
+        }
     }
-}
 
-/// Tells the `EmojiCatalog` model which custom emoji the server has.
-fn show_emoji(hub: &mut Hub, emoji: &CustomEmojis) {
-    let emoji = emoji.clone();
-    let gone = hub
-        .picker
-        .as_ref()
-        .is_some_and(|thread| thread.queue(move |model| model.set_emoji(&emoji)).is_err());
-    if gone {
-        tracing::debug!("the EmojiCatalog object is gone, unregistered");
-        hub.picker = None;
+    /// Tells the `Session` view model, and the `MessageList` model, what `cache` says now.
+    fn show_session(&mut self, cache: &Cache) {
+        self.show_viewer(cache);
+        let view = cache.session_view();
+        self.session.queue(move |vm| vm.show(&view));
     }
-}
 
-/// Tells the `Room` view model how an edit, a deletion or a reaction ended.
-fn answer_action(
-    hub: &mut Hub,
-    id: MessageId,
-    action: MessageAction,
-    outcome: Result<(), ActionError>,
-) {
-    let gone = hub.room.as_ref().is_some_and(|thread| {
-        thread
-            .queue(move |vm| vm.finish_action(id.as_str(), action, &outcome))
-            .is_err()
-    });
-    if gone {
-        tracing::debug!("the Room object is gone, unregistered");
-        hub.room = None;
+    /// Tells the `EmojiCatalog` model which custom emoji the server has.
+    fn show_emoji(&mut self, emoji: &CustomEmojis) {
+        let emoji = emoji.clone();
+        self.picker.queue(move |model| model.set_emoji(&emoji));
     }
-}
 
-/// Tells the `RoomList` model how a command on a room ended.
-fn answer_room_action(hub: &mut Hub, outcome: Result<(), RoomActionError>) {
-    let gone = hub.rooms.as_ref().is_some_and(|thread| {
-        thread
-            .queue(move |model| model.finish_action(&outcome))
-            .is_err()
-    });
-    if gone {
-        tracing::debug!("the RoomList object is gone, unregistered");
-        hub.rooms = None;
+    /// Tells the `Room` view model how an edit, a deletion or a reaction ended.
+    fn answer_action(
+        &mut self,
+        id: MessageId,
+        action: MessageAction,
+        outcome: Result<(), ActionError>,
+    ) {
+        self.room
+            .queue(move |vm| vm.finish_action(id.as_str(), action, &outcome));
     }
-}
 
-/// Tells the message models which attachment images changed.
-fn show_images(hub: &mut Hub, changes: &[(String, String)]) {
-    let for_room = changes.to_vec();
-    let gone = hub.messages.as_ref().is_some_and(|thread| {
-        thread
-            .queue(move |model| model.set_images(&for_room))
-            .is_err()
-    });
-    if gone {
-        tracing::debug!("the MessageList object is gone, unregistered");
-        hub.messages = None;
+    /// Tells the `RoomList` model how a command on a room ended.
+    fn answer_room_action(&mut self, outcome: Result<(), RoomActionError>) {
+        self.rooms.queue(move |model| model.finish_action(&outcome));
     }
-    let for_thread = changes.to_vec();
-    let thread_gone = hub.thread_messages.as_ref().is_some_and(|thread| {
-        thread
-            .queue(move |model| model.set_images(&for_thread))
-            .is_err()
-    });
-    if thread_gone {
-        tracing::debug!("the ThreadMessageList object is gone, unregistered");
-        hub.thread_messages = None;
-    }
-}
 
-/// Tells the models that show avatars which ones changed.
-fn show_avatars(hub: &mut Hub, changes: &[(AvatarOwner, String)]) {
-    let for_rooms = changes.to_vec();
-    let rooms_gone = hub.rooms.as_ref().is_some_and(|thread| {
-        thread
-            .queue(move |model| model.set_avatars(&for_rooms))
-            .is_err()
-    });
-    if rooms_gone {
-        tracing::debug!("the RoomList object is gone, unregistered");
-        hub.rooms = None;
+    /// Tells the message models which attachment images changed.
+    fn show_images(&mut self, changes: &[(String, String)]) {
+        let for_room = changes.to_vec();
+        self.messages
+            .queue(move |model| model.set_images(&for_room));
+        let for_thread = changes.to_vec();
+        self.thread_messages
+            .queue(move |model| model.set_images(&for_thread));
     }
-    let for_messages = changes.to_vec();
-    let messages_gone = hub.messages.as_ref().is_some_and(|thread| {
-        thread
-            .queue(move |model| model.set_avatars(&for_messages))
-            .is_err()
-    });
-    if messages_gone {
-        tracing::debug!("the MessageList object is gone, unregistered");
-        hub.messages = None;
-    }
-    let for_thread = changes.to_vec();
-    let thread_gone = hub.thread_messages.as_ref().is_some_and(|thread| {
-        thread
-            .queue(move |model| model.set_avatars(&for_thread))
-            .is_err()
-    });
-    if thread_gone {
-        tracing::debug!("the ThreadMessageList object is gone, unregistered");
-        hub.thread_messages = None;
-    }
-}
 
-/// Tells the message models who they show the messages to now.
-fn show_viewer(hub: &mut Hub) {
-    let for_room = hub.cache.viewer();
-    let gone = hub.messages.as_ref().is_some_and(|thread| {
-        thread
-            .queue(move |model| model.set_viewer(for_room))
-            .is_err()
-    });
-    if gone {
-        tracing::debug!("the MessageList object is gone, unregistered");
-        hub.messages = None;
+    /// Tells the models that show avatars which ones changed.
+    fn show_avatars(&mut self, changes: &[(AvatarOwner, String)]) {
+        let for_rooms = changes.to_vec();
+        self.rooms.queue(move |model| model.set_avatars(&for_rooms));
+        let for_messages = changes.to_vec();
+        self.messages
+            .queue(move |model| model.set_avatars(&for_messages));
+        let for_thread = changes.to_vec();
+        self.thread_messages
+            .queue(move |model| model.set_avatars(&for_thread));
     }
-    let for_thread = hub.cache.viewer();
-    let thread_gone = hub.thread_messages.as_ref().is_some_and(|thread| {
-        thread
-            .queue(move |model| model.set_viewer(for_thread))
-            .is_err()
-    });
-    if thread_gone {
-        tracing::debug!("the ThreadMessageList object is gone, unregistered");
-        hub.thread_messages = None;
-    }
-}
 
-/// Sends the `Room` view model what the cache says it shows now.
-fn show_room(hub: &mut Hub) {
-    let state = hub.cache.room_state();
-    let gone = hub
-        .room
-        .as_ref()
-        .is_some_and(|thread| thread.queue(move |vm| vm.show(&state)).is_err());
-    if gone {
-        tracing::debug!("the Room object is gone, unregistered");
-        hub.room = None;
+    /// Tells the message models who they show the messages to now, as `cache` says.
+    fn show_viewer(&mut self, cache: &Cache) {
+        let for_room = cache.viewer();
+        self.messages.queue(move |model| model.set_viewer(for_room));
+        let for_thread = cache.viewer();
+        self.thread_messages
+            .queue(move |model| model.set_viewer(for_thread));
     }
-}
 
-/// Sends the `Thread` view model what the cache says it shows now.
-fn show_thread(hub: &mut Hub) {
-    let state = hub.cache.thread_state();
-    let gone = hub
-        .thread
-        .as_ref()
-        .is_some_and(|thread| thread.queue(move |vm| vm.show(&state)).is_err());
-    if gone {
-        tracing::debug!("the Thread object is gone, unregistered");
-        hub.thread = None;
+    /// Sends the `Room` view model what `cache` says it shows now.
+    fn show_room(&mut self, cache: &Cache) {
+        let state = cache.room_state();
+        self.room.queue(move |vm| vm.show(&state));
+    }
+
+    /// Sends the `Thread` view model what `cache` says it shows now.
+    fn show_thread(&mut self, cache: &Cache) {
+        let state = cache.thread_state();
+        self.thread.queue(move |vm| vm.show(&state));
     }
 }
 
