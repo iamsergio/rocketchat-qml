@@ -4,6 +4,8 @@
 //! The body of a message as blocks of formatted text, for any frontend to render. Built from the
 //! server's parsed markdown (`rc_api::md`), or from the plain text when the server sent none.
 
+use linkify::{LinkFinder, LinkKind};
+use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
 use rc_api::md;
 
 /// A message body: the text the author wrote and what it looks like formatted.
@@ -264,6 +266,216 @@ impl From<String> for RichText {
 impl From<&str> for RichText {
     fn from(text: &str) -> Self {
         Self::plain(text)
+    }
+}
+
+impl RichText {
+    /// A room's topic, as the markdown the server stores it in, which it doesn't parse for us:
+    /// one paragraph, as the web client shows it in a line. Bold, italic, strikethrough, code and
+    /// links are kept, as are bare `http(s)://` and `www.` addresses (made links) and emoji
+    /// shortcodes (left to the viewer, who knows the server's custom emoji). Newlines and block
+    /// markup (headings, lists, quotes...) end up as spaces and text, images as their description,
+    /// and raw HTML is text. There are no mentions.
+    #[must_use]
+    pub fn from_topic(markdown: &str) -> Self {
+        let mut parse = TopicParse::default();
+        let options = Options::ENABLE_STRIKETHROUGH;
+        for event in Parser::new_ext(markdown, options) {
+            parse.event(event);
+        }
+        let content = parse.finish();
+        Self {
+            text: markdown.to_owned(),
+            blocks: if content.is_empty() {
+                Vec::new()
+            } else {
+                vec![Block::Paragraph(content)]
+            },
+        }
+    }
+}
+
+/// What a span of inlines is inside of, until its end event closes it.
+enum Open {
+    Bold,
+    Italic,
+    Strike,
+    Link(String),
+}
+
+/// Turns the events of the markdown of a topic into inlines.
+#[derive(Default)]
+struct TopicParse {
+    /// The inlines of the spans that are open, outermost first; the last one is being filled.
+    stack: Vec<(Open, Vec<Inline>)>,
+    /// What is closed at the top level.
+    done: Vec<Inline>,
+    /// Text not yet turned into inlines: the parser splits text at characters that could be
+    /// markup, which would cut an address or a shortcode in two.
+    pending: String,
+    /// A code block: its text isn't searched for addresses.
+    in_code_block: bool,
+}
+
+impl TopicParse {
+    fn event(&mut self, event: Event) {
+        match event {
+            Event::Text(text) if self.in_code_block => {
+                self.flush();
+                self.push(Inline::Text(text.replace('\n', " ")));
+            }
+            Event::Text(text) | Event::Html(text) | Event::InlineHtml(text) => {
+                self.pending.push_str(&text.replace('\n', " "));
+            }
+            Event::SoftBreak | Event::HardBreak => self.pending.push(' '),
+            Event::Code(code) => {
+                self.flush();
+                self.push(Inline::Code(code.into_string()));
+            }
+            Event::Start(tag) => self.start(tag),
+            Event::End(end) => self.end(end),
+            // Other events (rules, task markers, footnotes...) have no text of their own.
+            _ => {}
+        }
+    }
+
+    fn start(&mut self, tag: Tag) {
+        let open = match tag {
+            Tag::Strong => Open::Bold,
+            Tag::Emphasis => Open::Italic,
+            Tag::Strikethrough => Open::Strike,
+            Tag::Link { dest_url, .. } => Open::Link(dest_url.into_string()),
+            Tag::CodeBlock(_) => {
+                self.flush();
+                self.in_code_block = true;
+                return;
+            }
+            // Everything else shows as the text it holds.
+            _ => return,
+        };
+        self.flush();
+        self.stack.push((open, Vec::new()));
+    }
+
+    fn end(&mut self, end: TagEnd) {
+        match end {
+            TagEnd::Strong | TagEnd::Emphasis | TagEnd::Strikethrough | TagEnd::Link => {
+                self.flush();
+                let Some((open, mut content)) = self.stack.pop() else {
+                    return;
+                };
+                self.push(match open {
+                    Open::Bold => Inline::Bold(content),
+                    Open::Italic => Inline::Italic(content),
+                    Open::Strike => Inline::Strike(content),
+                    Open::Link(url) => {
+                        if content.is_empty() {
+                            content.push(Inline::Text(url.clone()));
+                        }
+                        Inline::Link {
+                            url,
+                            label: content,
+                        }
+                    }
+                });
+            }
+            TagEnd::CodeBlock => {
+                self.in_code_block = false;
+                self.pending.push(' ');
+            }
+            // Where one block ends, the next one starts after a space.
+            TagEnd::Paragraph
+            | TagEnd::Heading(_)
+            | TagEnd::BlockQuote(_)
+            | TagEnd::Item
+            | TagEnd::List(_) => self.pending.push(' '),
+            _ => {}
+        }
+    }
+
+    /// Adds `inline` to the span that is open, else to the line.
+    fn push(&mut self, inline: Inline) {
+        if matches!(&inline, Inline::Text(text) if text.is_empty()) {
+            return;
+        }
+        let into = self.stack.last_mut().map_or(&mut self.done, |(_, c)| c);
+        match (into.last_mut(), inline) {
+            (Some(Inline::Text(last)), Inline::Text(text)) => last.push_str(&text),
+            (_, inline) => into.push(inline),
+        }
+    }
+
+    /// Turns the pending text into text, links and emoji.
+    fn flush(&mut self) {
+        let text = std::mem::take(&mut self.pending);
+        let in_link = self
+            .stack
+            .iter()
+            .any(|(open, _)| matches!(open, Open::Link(_)));
+        if in_link {
+            self.push_with_emoji(&text);
+            return;
+        }
+        let mut finder = LinkFinder::new();
+        finder.kinds(&[LinkKind::Url]).url_must_have_scheme(false);
+        for span in finder.spans(&text) {
+            let shown = span.as_str();
+            let lower = shown.to_ascii_lowercase();
+            let url = if span.kind().is_none() {
+                None
+            } else if lower.starts_with("http://") || lower.starts_with("https://") {
+                Some(shown.to_owned())
+            } else if lower.starts_with("www.") {
+                Some(format!("http://{shown}"))
+            } else {
+                None
+            };
+            match url {
+                Some(url) => self.push(Inline::Link {
+                    url,
+                    label: vec![Inline::Text(shown.to_owned())],
+                }),
+                None => self.push_with_emoji(shown),
+            }
+        }
+    }
+
+    /// Adds `text`, with each `:shortcode:` in it as an emoji.
+    fn push_with_emoji(&mut self, text: &str) {
+        let mut rest = text;
+        while let Some(start) = rest.find(':') {
+            let after = &rest[start + 1..];
+            let name_len = after
+                .find(|c: char| !(c.is_alphanumeric() || matches!(c, '_' | '+' | '-')))
+                .unwrap_or(after.len());
+            if name_len > 0 && after[name_len..].starts_with(':') {
+                self.push(Inline::Text(rest[..start].to_owned()));
+                self.push(Inline::Emoji(Emoji {
+                    short_code: Some(after[..name_len].to_owned()),
+                    unicode: None,
+                }));
+                rest = &after[name_len + 1..];
+            } else {
+                // Not a shortcode, but the colon after the name may open one.
+                self.push(Inline::Text(rest[..=start].to_owned()));
+                rest = after;
+            }
+        }
+        self.push(Inline::Text(rest.to_owned()));
+    }
+
+    /// The line, without the spaces the block ends left at its ends or the empty texts.
+    fn finish(mut self) -> Vec<Inline> {
+        self.flush();
+        let mut line = self.done;
+        if let Some(Inline::Text(first)) = line.first_mut() {
+            *first = first.trim_start().to_owned();
+        }
+        if let Some(Inline::Text(last)) = line.last_mut() {
+            *last = last.trim_end().to_owned();
+        }
+        line.retain(|inline| !matches!(inline, Inline::Text(text) if text.is_empty()));
+        line
     }
 }
 
@@ -1103,5 +1315,147 @@ mod tests {
         assert_eq!(stripped.text, "one\n[ ](http://s/a) two");
         assert_eq!(stripped.blocks[0], para(vec![t("one")]));
         assert_eq!(stripped.blocks.len(), 2);
+    }
+
+    fn topic(markdown: &str) -> Vec<Inline> {
+        match RichText::from_topic(markdown).blocks.as_slice() {
+            [Block::Paragraph(content)] => content.clone(),
+            [] => Vec::new(),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    fn text(text: &str) -> Inline {
+        Inline::Text(text.to_owned())
+    }
+
+    fn link(url: &str, label: &str) -> Inline {
+        Inline::Link {
+            url: url.to_owned(),
+            label: vec![text(label)],
+        }
+    }
+
+    // ROOM-009
+    #[test]
+    fn a_topic_keeps_bold_italic_strikethrough_and_code() {
+        assert_eq!(
+            topic("**a** __b__ *c* _d_ ~~e~~ ~f~ `g`"),
+            [
+                Inline::Bold(vec![text("a")]),
+                text(" "),
+                Inline::Bold(vec![text("b")]),
+                text(" "),
+                Inline::Italic(vec![text("c")]),
+                text(" "),
+                Inline::Italic(vec![text("d")]),
+                text(" "),
+                Inline::Strike(vec![text("e")]),
+                text(" "),
+                Inline::Strike(vec![text("f")]),
+                text(" "),
+                Inline::Code("g".into()),
+            ]
+        );
+        assert_eq!(
+            topic("**bold and _both_**"),
+            [Inline::Bold(vec![
+                text("bold and "),
+                Inline::Italic(vec![text("both")])
+            ])]
+        );
+    }
+
+    // ROOM-009
+    #[test]
+    fn a_topic_keeps_links_and_makes_bare_addresses_links() {
+        assert_eq!(
+            topic("[the plan](https://example.com/plan)"),
+            [link("https://example.com/plan", "the plan")]
+        );
+        assert_eq!(
+            topic("see https://example.com/a_b_c, or www.example.org."),
+            [
+                text("see "),
+                link("https://example.com/a_b_c", "https://example.com/a_b_c"),
+                text(", or "),
+                link("http://www.example.org", "www.example.org"),
+                text("."),
+            ]
+        );
+        // A word that is not an address stays text, and so does an address in a link's label.
+        assert_eq!(topic("notes.txt"), [text("notes.txt")]);
+        assert_eq!(
+            topic("[https://a.example](https://b.example)"),
+            [link("https://b.example", "https://a.example")]
+        );
+        assert_eq!(
+            topic("[ ](https://b.example)"),
+            [link("https://b.example", " ")]
+        );
+    }
+
+    // ROOM-009
+    #[test]
+    fn a_topic_leaves_emoji_shortcodes_to_the_viewer() {
+        let emoji = |name: &str| {
+            Inline::Emoji(Emoji {
+                short_code: Some(name.to_owned()),
+                unicode: None,
+            })
+        };
+        assert_eq!(
+            topic("Go :rocket: now :+1::smile: at 10:30 :"),
+            [
+                text("Go "),
+                emoji("rocket"),
+                text(" now "),
+                emoji("+1"),
+                emoji("smile"),
+                text(" at 10:30 :"),
+            ]
+        );
+        // Inside code they are what was typed.
+        assert_eq!(topic("`:smile:`"), [Inline::Code(":smile:".into())]);
+    }
+
+    // ROOM-009
+    #[test]
+    fn raw_html_in_a_topic_is_text() {
+        assert_eq!(
+            topic("a <b>bold</b> <script>x</script>"),
+            [text("a <b>bold</b> <script>x</script>")]
+        );
+        assert_eq!(topic("<div>\nblock\n</div>"), [text("<div> block </div>")]);
+    }
+
+    // ROOM-009
+    #[test]
+    fn a_topic_is_one_line() {
+        assert_eq!(
+            topic("one\ntwo  \nthree\n\nfour"),
+            [text("one two three four")]
+        );
+        assert_eq!(topic("  padded \n"), [text("padded")]);
+        assert!(topic("").is_empty());
+        assert!(topic(" \n ").is_empty());
+        assert!(RichText::from_topic("").blocks.is_empty());
+        assert_eq!(RichText::from_topic("**a**").text, "**a**");
+    }
+
+    // ROOM-009
+    #[test]
+    fn what_a_topic_cannot_show_degrades_to_its_text() {
+        assert_eq!(topic("# Title\nbody"), [text("Title body")]);
+        assert_eq!(topic("- one\n- two"), [text("one two")]);
+        assert_eq!(topic("1. one\n2. two"), [text("one two")]);
+        assert_eq!(topic("> quoted"), [text("quoted")]);
+        assert_eq!(topic("```\ncode here\n```"), [text("code here")]);
+        assert_eq!(
+            topic("![a cat](https://example.com/cat.png)"),
+            [text("a cat")]
+        );
+        assert_eq!(topic("@alice in #general"), [text("@alice in #general")]);
+        assert_eq!(topic("a \\*b\\* &amp; c"), [text("a *b* & c")]);
     }
 }
