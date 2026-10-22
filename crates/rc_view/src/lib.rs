@@ -19,5 +19,7 @@ pub mod reaction_view;
 pub mod room_view;
 pub mod row_ops;
 pub mod session_view;
+pub mod startup;
+pub mod switchboard;
 pub mod thread_view;
 pub mod viewer;

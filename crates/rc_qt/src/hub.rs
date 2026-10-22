@@ -22,17 +22,15 @@
 //! never waits for the runtime either (commands don't block). So queueing while holding the lock
 //! is fine.
 
-use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use cxx_qt::CxxQtThread;
 use cxx_qt::Threading;
-use rc_core::adapters::{DiskFileCache, MemoryStore, default_store};
+use rc_core::adapters::DiskFileCache;
 use rc_core::domain::{AccountId, AvatarOwner, MessageId, RoomId};
 use rc_core::emoji::CustomEmojis;
 use rc_core::policy::{ActionError, MessageAction};
-use rc_core::ports::SecretStore;
 use rc_core::rooms::{RoomActionError, RoomChange};
 use rc_core::timeline::TimelineChange;
 use rc_core::{AccountHandle, Client, Event};
@@ -47,28 +45,24 @@ use crate::room_vm::qobject::RoomVm;
 use crate::session_vm::qobject::SessionVm;
 use crate::thread_message_list_model::qobject::ThreadMessageListModel;
 use crate::thread_vm::qobject::ThreadVm;
-use rc_view::accounts::{AccountChange, AccountView, Accounts};
+use rc_view::accounts::{AccountView, Accounts};
 use rc_view::attachment_view::ImageUrls;
 use rc_view::avatar_view::AvatarUrls;
 use rc_view::cache::Cache;
 use rc_view::room_view::RoomState;
 use rc_view::session_view::SessionView;
+use rc_view::startup;
+use rc_view::switchboard::{Shown, Switchboard};
 use rc_view::thread_view::ThreadState;
 use rc_view::viewer::Viewer;
-
-/// Environment variable choosing where the session token is kept. `memory` keeps it in memory
-/// only, and `file:<path>` in a plain file (GUI tests, in builds with `test-file-store`); anything
-/// else, or unset, uses the OS keyring.
-const STORE_ENV: &str = "RC_SECRET_STORE";
 
 // There is exactly one core per process, so one hub.
 static HUB: Mutex<Hub> = Mutex::new(Hub::new());
 
 struct Hub {
     client: Option<Client>,
-    /// The accounts, each with its cache, and the current one: the one the view models show and
-    /// the commands go to.
-    accounts: Accounts,
+    /// The accounts, and what to show when they change: see [`Switchboard`].
+    switchboard: Switchboard,
     views: Views,
     list: Registered<AccountListModel>,
 }
@@ -77,55 +71,22 @@ impl Hub {
     const fn new() -> Self {
         Self {
             client: None,
-            accounts: Accounts::new(),
+            switchboard: Switchboard::new(),
             views: Views::new(),
             list: Registered::new("AccountList"),
         }
     }
 
-    /// Adds the account, unless it is known, and lists it.
-    fn add_row(&mut self, id: &AccountId) {
-        if self.accounts.added(id.clone()).is_some()
-            && let Some((index, view)) = self.accounts.view(id)
-        {
-            self.list
-                .queue(move |model| model.apply(&AccountChange::Inserted { index, view }));
-            self.show_session_count();
-        }
-    }
-
-    /// Tells the `Session` view model that the number of accounts changed, if it shows an account
-    /// that has said what state it is in. Whether other accounts exist is part of what it shows.
-    fn show_session_count(&mut self) {
-        if self.accounts.current_cache().session_known() {
-            self.views.show_session_view(&self.accounts);
-        }
-    }
-
-    /// Updates the account's row in the account list.
-    fn update_row(&mut self, id: &AccountId) {
-        if let Some((index, view)) = self.accounts.view(id) {
-            self.list
-                .queue(move |model| model.apply(&AccountChange::Updated { index, view }));
-        }
-    }
-
-    /// Brings the view models and the account list up to date if the current account is not
-    /// `before` any more. Call it after every change to the accounts.
-    fn switched_from(&mut self, before: Option<&AccountId>) {
-        let current = self.accounts.current().cloned();
-        if current.as_ref() == before {
-            return;
-        }
-        // The two rows whose `current` changed. The one that was current may be gone.
-        for id in before.into_iter().chain(&current) {
-            self.update_row(id);
-        }
-        // With no account left, the view models keep showing the last one, logged out, until the
-        // next account is added. An account added a moment ago is shown with its first `Session`
-        // event (see `dispatch`): showing it before would flash the startup page.
-        if current.is_some() && self.accounts.current_cache().session_known() {
-            self.views.show_all(&self.accounts);
+    /// Does what the switchboard says to show, in order.
+    fn carry_out(&mut self, shown: Vec<Shown>) {
+        let accounts = self.switchboard.accounts();
+        for one in shown {
+            match one {
+                Shown::AccountRow(change) => self.list.queue(move |model| model.apply(&change)),
+                Shown::SessionView(view) => self.views.queue_session_view(view),
+                Shown::All => self.views.show_all(accounts),
+                Shown::Event(event) => self.views.show(accounts, event),
+            }
         }
     }
 }
@@ -176,45 +137,6 @@ fn lock() -> MutexGuard<'static, Hub> {
     HUB.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
-/// Where `RC_SECRET_STORE` says the session is kept.
-#[derive(Debug, PartialEq, Eq)]
-enum StoreChoice {
-    Keyring,
-    Memory,
-    File(PathBuf),
-}
-
-/// Reads `RC_SECRET_STORE` (`value`, if set).
-fn store_choice(value: Option<&str>) -> StoreChoice {
-    match value {
-        Some("memory") => StoreChoice::Memory,
-        Some(value) => value
-            .strip_prefix("file:")
-            .map_or(StoreChoice::Keyring, |path| StoreChoice::File(path.into())),
-        None => StoreChoice::Keyring,
-    }
-}
-
-/// The plain-file store, which only builds with `test-file-store` have.
-#[cfg(feature = "test-file-store")]
-fn file_store(path: PathBuf) -> Box<dyn SecretStore> {
-    tracing::info!(path = %path.display(), "secret store: plain file ({STORE_ENV}=file:...)");
-    Box::new(rc_core::adapters::FileStore::new(path))
-}
-
-/// Without the feature the request can't be met. Never the keyring: whoever asked for a file
-/// didn't want the user's real keyring touched.
-#[cfg(not(feature = "test-file-store"))]
-fn file_store(_path: PathBuf) -> Box<dyn SecretStore> {
-    tracing::warn!("{STORE_ENV}=file:... needs a build with test-file-store: using memory");
-    Box::new(MemoryStore::default())
-}
-
-/// Where downloads go when the host gives no directory.
-fn fallback_cache_dir() -> PathBuf {
-    std::env::temp_dir().join("rocketchat-qml-cache")
-}
-
 /// Starts the core, unless it is running already. Downloaded files are kept in `cache_dir`. Call on
 /// the GUI thread.
 pub fn start(cache_dir: &str) {
@@ -222,25 +144,8 @@ pub fn start(cache_dir: &str) {
         tracing::info!("the core is already running");
         return;
     }
-    let value = std::env::var(STORE_ENV).ok();
-    let store: Box<dyn SecretStore> = match store_choice(value.as_deref()) {
-        StoreChoice::Memory => {
-            tracing::info!("secret store: memory ({STORE_ENV}=memory)");
-            Box::new(MemoryStore::default())
-        }
-        StoreChoice::File(path) => file_store(path),
-        StoreChoice::Keyring => {
-            tracing::info!("secret store: OS keyring, falling back to memory");
-            default_store()
-        }
-    };
-    let cache_dir = if cache_dir.is_empty() {
-        tracing::warn!("no cache directory given, using the temporary directory");
-        fallback_cache_dir()
-    } else {
-        PathBuf::from(cache_dir)
-    };
-    tracing::info!(dir = %cache_dir.display(), "file cache");
+    let store = startup::secret_store();
+    let cache_dir = startup::cache_dir(cache_dir);
     match Client::start(store, DiskFileCache::new(cache_dir), dispatch) {
         Ok(client) => lock().client = Some(client),
         Err(error) => tracing::error!(%error, "can't start the core"),
@@ -252,7 +157,7 @@ pub fn stop() {
     // Dropped outside the lock: it waits for a pending logout, and the callback locks the hub.
     let client = {
         let mut hub = lock();
-        hub.accounts = Accounts::new();
+        hub.switchboard.clear();
         hub.client.take()
     };
     drop(client);
@@ -261,7 +166,7 @@ pub fn stop() {
 /// Runs `command` for the current account, or logs that it was ignored: `what` names it.
 fn current_account(what: &str, command: impl FnOnce(AccountHandle<'_>)) {
     let hub = lock();
-    match (&hub.client, hub.accounts.current()) {
+    match (&hub.client, hub.switchboard.accounts().current()) {
         (Some(client), Some(id)) => command(client.account(id)),
         (Some(_), None) => tracing::warn!("{what} ignored: there is no current account"),
         (None, _) => tracing::warn!("{what} ignored: the core isn't running"),
@@ -276,7 +181,7 @@ pub fn login(server: &str, username: &str, password: SecretString) {
 /// logged-out one takes its place if it was the last.
 pub fn logout() {
     let hub = lock();
-    match (&hub.client, hub.accounts.current()) {
+    match (&hub.client, hub.switchboard.accounts().current()) {
         (Some(client), Some(id)) => client.remove_account(id),
         (Some(_), None) => tracing::warn!("logout ignored: there is no current account"),
         (None, _) => tracing::warn!("logout ignored: the core isn't running"),
@@ -288,17 +193,15 @@ pub fn logout() {
 pub fn register_accounts(thread: CxxQtThread<AccountListModel>) -> Vec<AccountView> {
     let mut hub = lock();
     hub.list.register(thread);
-    hub.accounts.views()
+    hub.switchboard.accounts().views()
 }
 
 /// Makes the account current: the view models show it from now on.
 pub fn select_account(id: &str) {
     let mut guard = lock();
     let hub = &mut *guard;
-    let before = hub.accounts.current().cloned();
-    if hub.accounts.select(&AccountId::from(id.to_owned())) {
-        hub.switched_from(before.as_ref());
-    }
+    let shown = hub.switchboard.select(&AccountId::from(id.to_owned()));
+    hub.carry_out(shown);
 }
 
 /// Adds an account, logged out, and makes it current, so that the login page shows for it. The
@@ -310,11 +213,9 @@ pub fn add_account() {
         tracing::warn!("add ignored: the core isn't running");
         return;
     };
-    let before = hub.accounts.current().cloned();
     let id = client.add_account();
-    hub.add_row(&id);
-    hub.accounts.select(&id);
-    hub.switched_from(before.as_ref());
+    let shown = hub.switchboard.add(&id);
+    hub.carry_out(shown);
 }
 
 /// Asks the core to forget the account, logging it out first if it is logged in. It leaves the
@@ -332,7 +233,7 @@ pub fn remove_account(id: &str) {
 pub fn register_session(thread: CxxQtThread<SessionVm>) -> SessionView {
     let mut hub = lock();
     hub.views.session.register(thread);
-    hub.accounts.session_view()
+    hub.switchboard.accounts().session_view()
 }
 
 /// Registers the `RoomList` model and returns the change that brings it up to date, and the
@@ -341,8 +242,8 @@ pub fn register_rooms(thread: CxxQtThread<RoomListModel>) -> (RoomChange, Avatar
     let mut hub = lock();
     hub.views.rooms.register(thread);
     (
-        hub.accounts.current_cache().rooms_snapshot(),
-        hub.accounts.current_cache().avatars(),
+        hub.switchboard.accounts().current_cache().rooms_snapshot(),
+        hub.switchboard.accounts().current_cache().avatars(),
     )
 }
 
@@ -440,7 +341,8 @@ pub fn delete_message(message_id: String) {
 /// The id of the newest message of the open room that the user can edit now, or empty.
 pub fn last_editable() -> String {
     lock()
-        .accounts
+        .switchboard
+        .accounts()
         .current_cache()
         .last_editable(jiff::Timestamp::now())
         .map_or_else(String::new, |message| message.id.to_string())
@@ -449,7 +351,8 @@ pub fn last_editable() -> String {
 /// The id of the newest message of the open thread that the user can edit now, or empty.
 pub fn last_editable_in_thread() -> String {
     lock()
-        .accounts
+        .switchboard
+        .accounts()
         .current_cache()
         .thread_last_editable(jiff::Timestamp::now())
         .map_or_else(String::new, |message| message.id.to_string())
@@ -458,7 +361,8 @@ pub fn last_editable_in_thread() -> String {
 /// The text of a message of the open room or thread as written, or empty if it isn't held.
 pub fn message_text(message_id: &str) -> String {
     lock()
-        .accounts
+        .switchboard
+        .accounts()
         .current_cache()
         .message_text(message_id)
         .map_or_else(String::new, str::to_owned)
@@ -468,7 +372,8 @@ pub fn message_text(message_id: &str) -> String {
 /// isn't held.
 pub fn message_author(message_id: &str) -> String {
     lock()
-        .accounts
+        .switchboard
+        .accounts()
         .current_cache()
         .message_author(message_id)
         .map_or_else(String::new, str::to_owned)
@@ -479,7 +384,7 @@ pub fn message_author(message_id: &str) -> String {
 pub fn register_room(thread: CxxQtThread<RoomVm>) -> (RoomState, String) {
     let mut hub = lock();
     hub.views.room.register(thread);
-    room_shown(hub.accounts.current_cache())
+    room_shown(hub.switchboard.accounts().current_cache())
 }
 
 /// What the `Room` view model shows for `cache`: the state, and its topic as HTML for that
@@ -499,10 +404,13 @@ pub fn register_messages(
     let mut hub = lock();
     hub.views.messages.register(thread);
     (
-        hub.accounts.current_cache().timeline_snapshot(),
-        hub.accounts.current_cache().viewer(),
-        hub.accounts.current_cache().avatars(),
-        hub.accounts.current_cache().images(),
+        hub.switchboard
+            .accounts()
+            .current_cache()
+            .timeline_snapshot(),
+        hub.switchboard.accounts().current_cache().viewer(),
+        hub.switchboard.accounts().current_cache().avatars(),
+        hub.switchboard.accounts().current_cache().images(),
     )
 }
 
@@ -511,7 +419,7 @@ pub fn register_messages(
 pub fn register_thread(thread: CxxQtThread<ThreadVm>) -> ThreadState {
     let mut hub = lock();
     hub.views.thread.register(thread);
-    hub.accounts.current_cache().thread_state()
+    hub.switchboard.accounts().current_cache().thread_state()
 }
 
 /// Registers the `ThreadMessageList` model and returns the change that brings it up to date, who
@@ -523,16 +431,16 @@ pub fn register_thread_messages(
     let mut hub = lock();
     hub.views.thread_messages.register(thread);
     (
-        hub.accounts.current_cache().thread_snapshot(),
-        hub.accounts.current_cache().viewer(),
-        hub.accounts.current_cache().avatars(),
-        hub.accounts.current_cache().images(),
+        hub.switchboard.accounts().current_cache().thread_snapshot(),
+        hub.switchboard.accounts().current_cache().viewer(),
+        hub.switchboard.accounts().current_cache().avatars(),
+        hub.switchboard.accounts().current_cache().images(),
     )
 }
 
 /// The thread's state now, for sending a reply.
 pub fn thread_state() -> ThreadState {
-    lock().accounts.current_cache().thread_state()
+    lock().switchboard.accounts().current_cache().thread_state()
 }
 
 /// Registers the `EmojiCatalog` model and returns the custom emoji it lists now. Call on the GUI
@@ -540,7 +448,7 @@ pub fn thread_state() -> ThreadState {
 pub fn register_emoji_picker(thread: CxxQtThread<EmojiPickerModel>) -> CustomEmojis {
     let mut hub = lock();
     hub.views.picker.register(thread);
-    hub.accounts.current_cache().viewer().emoji
+    hub.switchboard.accounts().current_cache().viewer().emoji
 }
 
 /// The core's event callback, on a runtime thread.
@@ -548,46 +456,8 @@ pub fn register_emoji_picker(thread: CxxQtThread<EmojiPickerModel>) -> CustomEmo
 fn dispatch(account: AccountId, event: Event) {
     let mut guard = lock();
     let hub = &mut *guard;
-    let before = hub.accounts.current().cloned();
-    match event {
-        Event::Added => hub.add_row(&account),
-        Event::Removed => {
-            // The logout's events came before, so the cache showed logged out already.
-            if let Some(index) = hub.accounts.removed(&account) {
-                hub.list
-                    .queue(move |model| model.apply(&AccountChange::Removed { index }));
-                hub.show_session_count();
-            }
-        }
-        _ => {
-            // The first state of an account that became current before it had one: show it whole.
-            let first_state = matches!(event, Event::Session(_))
-                && before.as_ref() == Some(&account)
-                && !hub.accounts.current_cache().session_known();
-            let Some(applied) = hub.accounts.apply(&account, &event) else {
-                tracing::debug!(%account, "event of an unknown account ignored");
-                return;
-            };
-            if matches!(
-                event,
-                Event::Identity(_) | Event::Unread(_) | Event::Session(_) | Event::Connection(_)
-            ) {
-                hub.update_row(&account);
-            }
-            if applied.current && first_state {
-                hub.views.show_all(&hub.accounts);
-            } else if applied.current {
-                hub.views.show(&hub.accounts, event);
-            } else if matches!(
-                event,
-                Event::MessageAction { .. } | Event::RoomAction { .. }
-            ) {
-                tracing::debug!(%account, "answer of another account dropped");
-            }
-            return;
-        }
-    }
-    hub.switched_from(before.as_ref());
+    let shown = hub.switchboard.dispatch(&account, event);
+    hub.carry_out(shown);
 }
 
 impl Views {
@@ -686,7 +556,11 @@ impl Views {
 
     /// Tells the `Session` view model what the current account says now.
     fn show_session_view(&mut self, accounts: &Accounts) {
-        let view = accounts.session_view();
+        self.queue_session_view(accounts.session_view());
+    }
+
+    /// Tells the `Session` view model to show `view`.
+    fn queue_session_view(&mut self, view: SessionView) {
         self.session.queue(move |vm| vm.show(&view));
     }
 
@@ -753,44 +627,5 @@ impl Views {
     fn show_thread(&mut self, cache: &Cache) {
         let state = cache.thread_state();
         self.thread.queue(move |vm| vm.show(&state));
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    // AUTH-004
-    #[test]
-    fn memory_selects_the_memory_store() {
-        assert_eq!(store_choice(Some("memory")), StoreChoice::Memory);
-    }
-
-    // AUTH-004
-    #[test]
-    fn file_selects_the_file_store_with_its_path() {
-        assert_eq!(
-            store_choice(Some("file:/tmp/session.json")),
-            StoreChoice::File("/tmp/session.json".into())
-        );
-        // Everything after the first colon is the path.
-        assert_eq!(
-            store_choice(Some("file:C:\\tmp\\s.json")),
-            StoreChoice::File("C:\\tmp\\s.json".into())
-        );
-    }
-
-    // AUTH-004
-    #[test]
-    fn anything_else_selects_the_keyring() {
-        for value in [
-            Some("keyring"),
-            Some(""),
-            Some("file"),
-            Some("Memory"),
-            None,
-        ] {
-            assert_eq!(store_choice(value), StoreChoice::Keyring, "{value:?}");
-        }
     }
 }
