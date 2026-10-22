@@ -86,6 +86,11 @@ pub mod main_window {
     /// The item of the open menu of a server tile that logs out of the account, or removes it once
     /// its login has ended. Open the menu with a right-click on the tile.
     pub const LOGOUT_ACTION: &str = "mainWindow/logoutAction";
+    /// The item of the open menu of a right-clicked link (in a message, a quote, an attachment or
+    /// the topic) that opens it in the browser.
+    pub const LINK_OPEN_ACTION: &str = "mainWindow/linkOpenAction";
+    /// The item of that menu that copies the address to the clipboard.
+    pub const LINK_COPY_ACTION: &str = "mainWindow/linkCopyAction";
     /// Shown while the realtime connection is down.
     pub const CONNECTION_BANNER: &str = "mainWindow/connectionBanner";
 

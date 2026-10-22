@@ -70,6 +70,8 @@ Item {
     signal quoteRequested(string messageId)
     // The user wants to add a reaction to the message: the emoji picker opens.
     signal reactRequested(string messageId)
+    // The user right-clicked a link, at `x`, `y` in `origin`: the menu of the link opens.
+    signal linkMenuRequested(string url, Item origin, real x, real y)
 
     // The thread opens from this message, here or in the pane.
     readonly property bool threadStartable: canStartThread && !inThreadPane
@@ -87,7 +89,13 @@ Item {
         id: rowHover
     }
 
-    // Right-click opens the same menu as the button.
+    // Opens the message's menu at `x`, `y` in `origin`, if it has anything to offer.
+    function openMenu(origin, x, y) {
+        if (hasMenu)
+            menu.popup(origin, x, y);
+    }
+
+    // Right-click opens the same menu as the button. The texts with links take the clicks on them.
     MouseArea {
         acceptedButtons: Qt.RightButton
         anchors.fill: parent
@@ -502,6 +510,12 @@ Item {
                                     textFormat: Text.RichText
                                     wrapMode: Text.Wrap
                                     onLinkActivated: link => Qt.openUrlExternally(link)
+
+                                    LinkArea {
+                                        label: quoteBodyText
+                                        onMenuRequested: (url, origin, x, y) => root.linkMenuRequested(url, origin, x, y)
+                                        onElsewhereClicked: (origin, x, y) => root.openMenu(origin, x, y)
+                                    }
                                 }
                             }
                         }
@@ -532,6 +546,12 @@ Item {
 
                         HoverHandler {
                             cursorShape: bodyText.hoveredLink ? Qt.PointingHandCursor : Qt.ArrowCursor
+                        }
+
+                        LinkArea {
+                            label: bodyText
+                            onMenuRequested: (url, origin, x, y) => root.linkMenuRequested(url, origin, x, y)
+                            onElsewhereClicked: (origin, x, y) => root.openMenu(origin, x, y)
                         }
                     }
                 }
@@ -585,6 +605,15 @@ Item {
 
                             TapHandler {
                                 onTapped: Qt.openUrlExternally(attachment.modelData.link)
+                            }
+
+                            // Right-click: the menu of the link.
+                            MouseArea {
+                                id: pictureMenuArea
+
+                                acceptedButtons: Qt.RightButton
+                                anchors.fill: parent
+                                onClicked: mouse => root.linkMenuRequested(attachment.modelData.link, pictureMenuArea, mouse.x, mouse.y)
                             }
 
                             HoverHandler {
@@ -647,6 +676,15 @@ Item {
 
                             TapHandler {
                                 onTapped: Qt.openUrlExternally(attachment.modelData.link)
+                            }
+
+                            // Right-click: the menu of the link.
+                            MouseArea {
+                                id: fileMenuArea
+
+                                acceptedButtons: Qt.RightButton
+                                anchors.fill: parent
+                                onClicked: mouse => root.linkMenuRequested(attachment.modelData.link, fileMenuArea, mouse.x, mouse.y)
                             }
 
                             HoverHandler {

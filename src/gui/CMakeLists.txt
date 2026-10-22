@@ -20,6 +20,8 @@ qt_add_qml_module(
   VERSION
   1.0
   SOURCES
+  clipboard.h
+  clipboard.cpp
   debugtools.h
   debugtools.cpp
   QML_FILES
@@ -31,6 +33,8 @@ qt_add_qml_module(
   FlatButton.qml
   Icon.qml
   InputField.qml
+  LinkArea.qml
+  LinkMenu.qml
   LoginPage.qml
   MessageDelegate.qml
   PrimaryButton.qml
