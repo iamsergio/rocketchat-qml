@@ -307,14 +307,14 @@ impl ServerApi for RestApi {
 
 /// Maps the connection's events until it ends or nobody listens any more. The task owns the client,
 /// so ending it closes the connection. It also follows the open room: when `watched` names a room,
-/// the previous room's deletions are unsubscribed from and the new one's subscribed to.
+/// the previous room's subscriptions are ended and the new one's started.
 async fn forward(
     ddp: DdpClient,
     mut events: DdpEvents,
     pushed: mpsc::UnboundedSender<Pushed>,
     mut watched: mpsc::UnboundedReceiver<Option<RoomId>>,
 ) {
-    let mut deletions: Option<SubscriptionId> = None;
+    let mut followed: Vec<SubscriptionId> = Vec::new();
     let mut watching = true;
     loop {
         tokio::select! {
@@ -323,14 +323,11 @@ async fn forward(
                     watching = false;
                     continue;
                 };
-                if let Some(previous) = deletions.take() {
+                for previous in followed.drain(..) {
                     ddp.unsubscribe(&previous);
                 }
                 if let Some(room) = room {
-                    match ddp.subscribe_room_deletions(room.as_str()).await {
-                        Ok(subscription) => deletions = Some(subscription),
-                        Err(error) => tracing::warn!(%error, %room, "deletions won't be pushed"),
-                    }
+                    followed = follow(&ddp, &room).await;
                 }
             }
             event = events.recv() => {
@@ -343,6 +340,21 @@ async fn forward(
         }
     }
     drop(ddp);
+}
+
+/// Subscribes to what the server pushes only for a room it was told about: its deletions and its
+/// users' activity. What can't be subscribed to is logged and nothing else.
+async fn follow(ddp: &DdpClient, room: &RoomId) -> Vec<SubscriptionId> {
+    let mut subscriptions = Vec::new();
+    match ddp.subscribe_room_deletions(room.as_str()).await {
+        Ok(subscription) => subscriptions.push(subscription),
+        Err(error) => tracing::warn!(%error, %room, "deletions won't be pushed"),
+    }
+    match ddp.subscribe_user_activity(room.as_str()).await {
+        Ok(subscription) => subscriptions.push(subscription),
+        Err(error) => tracing::warn!(%error, %room, "typing won't be pushed"),
+    }
+    subscriptions
 }
 
 fn pushed_from(event: DdpEvent) -> Pushed {

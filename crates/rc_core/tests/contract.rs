@@ -24,13 +24,15 @@ use rc_core::domain::{
 };
 use rc_core::emoji::{CustomEmojis, catalog};
 use rc_core::policy::{ActionError, MessageAction};
-use rc_core::ports::{CacheError, CacheKey, Connector, FileCache, SecretStore, ServerApi, Stored};
+use rc_core::ports::{
+    CacheError, CacheKey, Connector, FileCache, Pushed, SecretStore, ServerApi, Stored,
+};
 use rc_core::rich::{Block, Emoji, Inline, Mention, TaskItem};
 use rc_core::rooms::{RoomAction, RoomActionError, RoomChange};
 use rc_core::session::{LoginFailure, SessionState};
 use rc_core::timeline::{PAGE_SIZE, ThreadStatus, TimelineChange, TimelineStatus};
 use rc_core::{AccountHandle, Client, Event};
-use rc_test_server::{Admin, PIXEL_PNG, Proxy, TestUser, server_url, unique};
+use rc_test_server::{Admin, PIXEL_PNG, Proxy, TestUser, Typist, server_url, unique};
 use secrecy::SecretString;
 
 const TIMEOUT: Duration = Duration::from_secs(15);
@@ -1668,6 +1670,114 @@ fn a_deletion_follows_the_room_that_is_open_now() {
         text_of(mirror, &in_first.id).is_none()
     });
     assert_eq!(texts(&mirror), Vec::<&str>::new());
+}
+
+// ACT-006
+#[tokio::test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+async fn typing_comes_for_the_room_the_connection_follows_and_for_no_other() {
+    let admin = Admin::login();
+    let user = admin.create_user();
+    let typist_user = admin.create_user();
+    let members = [user.username.as_str(), typist_user.username.as_str()];
+    let (first, _) = admin.create_channel(&members);
+    let (second, _) = admin.create_channel(&members);
+    let thread = admin.post_message(&first, "a thread");
+    let api = RestConnector.connect(&server_url()).unwrap();
+    let (credentials, _) = api.login(&user.username, &password(&user)).await.unwrap();
+    let mut realtime = api.realtime(&credentials).await.unwrap();
+    let mut typist = Typist::connect(&typist_user);
+    let typing = |room: &str, typing: bool, thread: Option<&str>| Pushed::Typing {
+        room: room.to_owned().into(),
+        username: typist_user.username.clone(),
+        typing,
+        thread: thread.map(|t| t.to_owned().into()),
+    };
+
+    // The first room is followed: its typing and its threads' arrive, its stop too.
+    realtime.watch.send(Some(first.clone().into())).unwrap();
+    start_until_pushed(
+        &mut realtime,
+        &mut typist,
+        &first,
+        &typing(&first, true, None),
+    )
+    .await;
+    typist.start_in_thread(&first, &thread.id);
+    next_pushed(&mut realtime, |p| {
+        *p == typing(&first, true, Some(&thread.id))
+    })
+    .await;
+    typist.stop(&first);
+    next_pushed(&mut realtime, |p| *p == typing(&first, false, None)).await;
+
+    // The second is followed now: once its typing arrives the first has been left, since the
+    // server handles the connection's requests in order. Then the first's typing is not pushed,
+    // and the second's stop, sent after it, comes with none of the first's before it.
+    realtime.watch.send(Some(second.clone().into())).unwrap();
+    start_until_pushed(
+        &mut realtime,
+        &mut typist,
+        &second,
+        &typing(&second, true, None),
+    )
+    .await;
+    typist.start(&first);
+    typist.stop(&second);
+    // Repeated starts of the second may still be queued; none is of the first.
+    next_pushed(&mut realtime, |p| {
+        assert_ne!(
+            *p,
+            typing(&first, true, None),
+            "the first room is still followed"
+        );
+        *p == typing(&second, false, None)
+    })
+    .await;
+
+    // Nothing is followed once the room closes.
+    realtime.watch.send(None).unwrap();
+}
+
+/// Starts the typist typing in the room again until `expected` arrives: the connection was told to
+/// follow the room a moment ago, and the typing before it is done goes unheard.
+async fn start_until_pushed(
+    realtime: &mut rc_core::ports::Realtime,
+    typist: &mut Typist,
+    room: &str,
+    expected: &Pushed,
+) {
+    let deadline = Instant::now() + TIMEOUT;
+    while Instant::now() < deadline {
+        typist.start(room);
+        let heard = tokio::time::timeout(
+            Duration::from_millis(300),
+            next_pushed(realtime, |p| p == expected),
+        )
+        .await;
+        if heard.is_ok() {
+            return;
+        }
+    }
+    panic!("{expected:?} never came");
+}
+
+/// The first pushed event that `wanted` accepts.
+async fn next_pushed(
+    realtime: &mut rc_core::ports::Realtime,
+    mut wanted: impl FnMut(&Pushed) -> bool,
+) -> Pushed {
+    let wait = async {
+        while let Some(pushed) = realtime.events.recv().await {
+            if wanted(&pushed) {
+                return pushed;
+            }
+        }
+        panic!("the events ended");
+    };
+    tokio::time::timeout(TIMEOUT, wait)
+        .await
+        .expect("the event never came")
 }
 
 // RICH-006
