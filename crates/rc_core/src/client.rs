@@ -13,7 +13,6 @@ use tokio::sync::mpsc::{self, UnboundedSender};
 
 use crate::adapters::{RestConnector, SystemClock};
 use crate::avatars::AvatarUpdate;
-use crate::backoff::Backoff;
 use crate::core::{self, ActorSenders, CoreCommand};
 use crate::domain::{AccountId, Identity, MessageId, RoomId};
 use crate::emoji::{self, CustomEmojis};
@@ -24,6 +23,7 @@ use crate::ports::{Clock, Connector, FileCache, SecretStore};
 use crate::rooms::{RoomAction, RoomActionError, RoomChange, Unread};
 use crate::session::SessionState;
 use crate::timeline::{ThreadStatus, TimelineChange, TimelineStatus};
+use crate::tuning::Tuning;
 
 #[cfg(test)]
 mod tests;
@@ -176,7 +176,9 @@ pub struct Client {
 }
 
 impl Client {
-    /// A client for real servers. See [`with_ports`](Self::with_ports) for `on_event`.
+    /// A client for real servers. See [`with_ports`](Self::with_ports) for `on_event`. The
+    /// environment variable `RC_QUIET_AFTER_SECS` shortens the time after which a quiet direct
+    /// message leaves the room list: a testing aid, for the GUI tests.
     ///
     /// # Errors
     ///
@@ -186,7 +188,14 @@ impl Client {
         cache: impl FileCache,
         on_event: impl Fn(AccountId, Event) + Send + Sync + 'static,
     ) -> Result<Self, Error> {
-        Self::with_ports(RestConnector, store, cache, SystemClock, on_event)
+        Self::with_tuning(
+            RestConnector,
+            store,
+            cache,
+            SystemClock,
+            on_event,
+            Tuning::from_env(),
+        )
     }
 
     /// A client that reaches servers through `connector`, remembers the accounts in `store` and
@@ -210,18 +219,17 @@ impl Client {
         clock: impl Clock,
         on_event: impl Fn(AccountId, Event) + Send + Sync + 'static,
     ) -> Result<Self, Error> {
-        Self::with_backoff(connector, store, cache, clock, on_event, Backoff::default())
+        Self::with_tuning(connector, store, cache, clock, on_event, Tuning::default())
     }
 
-    /// [`with_ports`](Self::with_ports) with the waits between reconnects set, so that tests don't
-    /// wait for seconds.
-    fn with_backoff<C: Connector, S: SecretStore>(
+    /// [`with_ports`](Self::with_ports) with the timings set, so that tests don't wait for seconds.
+    fn with_tuning<C: Connector, S: SecretStore>(
         connector: C,
         store: S,
         cache: impl FileCache,
         clock: impl Clock,
         on_event: impl Fn(AccountId, Event) + Send + Sync + 'static,
-        backoff: Backoff,
+        tuning: Tuning,
     ) -> Result<Self, Error> {
         let runtime = Builder::new_multi_thread()
             .worker_threads(WORKER_THREADS)
@@ -239,7 +247,7 @@ impl Client {
                 clock: Arc::new(clock),
             },
             on_event,
-            backoff,
+            tuning,
             core::Link {
                 senders: Arc::clone(&senders),
                 commands: commands_rx,

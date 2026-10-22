@@ -139,41 +139,48 @@ mod tests {
     #[test]
     fn there_are_favorites_while_any_room_is_one() {
         let (mut list, mut mirror) = (RoomList::default(), Vec::new());
+        let now = jiff::Timestamp::UNIX_EPOCH;
         let mut check = |change: Option<RoomChange>, expected: bool| {
             if let Some(change) = change {
                 change.apply(&mut mirror);
             }
             assert_eq!(any_favorite(&mirror), expected, "{mirror:?}");
         };
-        check(Some(list.reset(Vec::new())), false);
-        check(list.upsert(room("a", "alpha", RoomKind::Channel)), false);
+        check(Some(list.reset(Vec::new(), now)), false);
         check(
-            list.upsert(favorite(room("b", "bravo", RoomKind::Direct))),
+            list.upsert(room("a", "alpha", RoomKind::Channel), now),
+            false,
+        );
+        check(
+            list.upsert(favorite(room("b", "bravo", RoomKind::Direct)), now),
             true,
         );
         // Moves: a bump of a room above the other one, and a favorite taken back and set again.
         check(
-            list.upsert(favorite(room("a", "alpha", RoomKind::Channel))),
+            list.upsert(favorite(room("a", "alpha", RoomKind::Channel)), now),
             true,
         );
-        check(list.upsert(room("b", "bravo", RoomKind::Direct)), true);
-        check(list.upsert(room("a", "alpha", RoomKind::Channel)), false);
+        check(list.upsert(room("b", "bravo", RoomKind::Direct), now), true);
         check(
-            list.upsert(favorite(room("c", "charlie", RoomKind::Private))),
+            list.upsert(room("a", "alpha", RoomKind::Channel), now),
+            false,
+        );
+        check(
+            list.upsert(favorite(room("c", "charlie", RoomKind::Private)), now),
             true,
         );
         // Updates in place.
         let mut busy = favorite(room("c", "charlie", RoomKind::Private));
         busy.unread = 2;
-        check(list.upsert(busy), true);
+        check(list.upsert(busy, now), true);
         // Removals.
         check(list.remove(&"a".to_owned().into()), true);
         check(list.remove(&"c".to_owned().into()), false);
         check(
-            Some(list.reset(vec![favorite(room("d", "delta", RoomKind::Channel))])),
+            Some(list.reset(vec![favorite(room("d", "delta", RoomKind::Channel))], now)),
             true,
         );
-        check(Some(list.reset(Vec::new())), false);
+        check(Some(list.reset(Vec::new(), now)), false);
     }
 
     // SEND-001

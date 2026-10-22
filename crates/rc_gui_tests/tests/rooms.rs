@@ -158,3 +158,32 @@ fn rooms_are_listed_with_the_most_recently_active_first() {
     // A room without messages comes after the ones with.
     assert!(row_y(gui, &newer_id) < row_y(gui, &quiet_id));
 }
+
+// ROOM-008
+#[test]
+#[ignore = "needs the app and a Rocket.Chat server: run through ctest"]
+fn a_quiet_direct_message_leaves_the_list_and_comes_back_with_a_message() {
+    let admin = Admin::login();
+    let user = admin.create_user();
+    let (channel_id, _) = admin.create_channel(&[&user.username]);
+    let dm_id = admin.create_dm(&user.username);
+    admin.post_message(&dm_id, "hello");
+    // Quiet after a few seconds, not ten days.
+    let app = App::launch_with(&[("RC_QUIET_AFTER_SECS", "3")]).unwrap();
+    let gui = app.gui();
+    log_in_and_wait_for_room(gui, &user, &dm_id);
+    gui.wait_until_text(&room(&dm_id, room_row::UNREAD), "1", TIMEOUT)
+        .unwrap();
+    gui.wait_until_visible(&room(&channel_id, room_row::NAME), TIMEOUT)
+        .unwrap();
+
+    // Read and left, the direct message goes once it is quiet.
+    open_room(gui, &dm_id);
+    open_room(gui, &channel_id);
+    gui.wait_until_hidden(&room(&dm_id, room_row::NAME), TIMEOUT)
+        .unwrap();
+
+    admin.post_message(&dm_id, "are you there?");
+    gui.wait_until_visible(&room(&dm_id, room_row::NAME), TIMEOUT)
+        .unwrap();
+}

@@ -157,10 +157,13 @@ impl<C: Connector> Actor<C> {
                         }
                         let room = self.seen_if_open(room);
                         let owner = room.avatar_to_fetch();
-                        if let Some(change) = self.rooms.upsert(room) {
+                        if let Some(change) = self.rooms.upsert(room, self.clock.now()) {
                             self.emit_rooms(vec![change]);
                         }
-                        self.want_avatars(owner);
+                        // A hidden room gets its avatar when it comes back.
+                        if self.rooms.is_shown(&id) {
+                            self.want_avatars(owner);
+                        }
                     }
                     // Hidden now, or not a kind we list.
                     None => self.remove_room(&id),
@@ -168,7 +171,7 @@ impl<C: Connector> Actor<C> {
             }
             Pushed::SubscriptionRemoved(id) => self.remove_room(&id),
             Pushed::Activity { room, at } => {
-                if let Some(change) = self.rooms.bump(&room, at) {
+                if let Some(change) = self.rooms.bump(&room, at, self.clock.now()) {
                     self.emit_rooms(vec![change]);
                 }
             }
@@ -178,8 +181,7 @@ impl<C: Connector> Actor<C> {
             // the rooms of the list, as a room that had no avatar may have one now.
             Pushed::AvatarChanged(owner) => {
                 let seen = self.avatars.invalidate(&owner);
-                let listed =
-                    matches!(&owner, AvatarOwner::Room(id) if self.rooms.get(id).is_some());
+                let listed = matches!(&owner, AvatarOwner::Room(id) if self.rooms.is_shown(id));
                 if seen || listed {
                     self.want_avatars([owner]);
                 }
@@ -235,9 +237,9 @@ impl<C: Connector> Actor<C> {
             .collect();
         let changes = if self.rooms_listed {
             // Reconnecting: the frontend keeps its rows, and gets what changed meanwhile.
-            self.rooms.sync(rooms)
+            self.rooms.sync(rooms, self.clock.now())
         } else {
-            vec![self.rooms.reset(rooms)]
+            vec![self.rooms.reset(rooms, self.clock.now())]
         };
         self.rooms_listed = true;
         if !changes.is_empty() {

@@ -966,35 +966,46 @@ impl ServerApi for Fake {
 }
 
 /// A clock that tells the time the test sets, and stands still otherwise. Clones share the time.
+/// A sleep ends when the test moves the time to its end.
 #[derive(Clone)]
-pub(super) struct FakeClock(Arc<Mutex<jiff::Timestamp>>);
+pub(super) struct FakeClock(Arc<tokio::sync::watch::Sender<jiff::Timestamp>>);
 
 impl FakeClock {
-    /// The time a harness starts at: well after the epoch, so that nothing is mistaken for "never".
+    /// The time a harness starts at: five days after the epoch, which is when the rooms and
+    /// messages of the tests date from. That is long enough for a message to be too old to change,
+    /// and short enough for no direct message to be quiet unless the test says so.
     pub(super) fn start() -> jiff::Timestamp {
-        jiff::Timestamp::from_second(1_800_000_000).expect("in range")
+        jiff::Timestamp::UNIX_EPOCH + Duration::from_hours(120)
     }
 
     pub(super) fn set(&self, time: jiff::Timestamp) {
-        *self.0.lock().unwrap() = time;
+        self.0.send_replace(time);
     }
 
     pub(super) fn advance(&self, by: Duration) {
-        let mut time = self.0.lock().unwrap();
-        *time = time.checked_add(by).expect("in range");
+        self.0
+            .send_modify(|time| *time = time.checked_add(by).expect("in range"));
     }
 }
 
 impl Default for FakeClock {
     /// At [`start`](Self::start).
     fn default() -> Self {
-        Self(Arc::new(Mutex::new(Self::start())))
+        Self(Arc::new(tokio::sync::watch::channel(Self::start()).0))
     }
 }
 
 impl Clock for FakeClock {
     fn now(&self) -> jiff::Timestamp {
-        *self.0.lock().unwrap()
+        *self.0.borrow()
+    }
+
+    fn sleep_until(&self, at: jiff::Timestamp) -> Pin<Box<dyn Future<Output = ()> + Send>> {
+        let mut time = self.0.subscribe();
+        Box::pin(async move {
+            // Fails only if the clock is gone, and then nothing is waiting any more.
+            let _ = time.wait_for(|now| *now >= at).await;
+        })
     }
 }
 
