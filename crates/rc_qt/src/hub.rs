@@ -615,7 +615,8 @@ impl Views {
             Event::ThreadTimeline(changes) => self
                 .thread_messages
                 .queue(move |model| model.apply(&changes)),
-            Event::ThreadStatus(_) => self.show_thread(cache),
+            Event::ThreadStatus(_) | Event::ThreadTyping { .. } => self.show_thread(cache),
+            Event::Typing { .. } => self.show_room(cache),
             Event::Avatars(updates) => self.show_avatars(&cache.avatar_changes(&updates)),
             Event::Images(updates) => self.show_images(&cache.image_changes(&updates)),
             _ => {}

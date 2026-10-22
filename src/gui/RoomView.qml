@@ -291,6 +291,22 @@ Rectangle {
             onPicked: shortcode => Room.react(messageId, shortcode, true)
         }
 
+        // Who is typing in the room. Empty most of the time, but its height is always taken.
+        Label {
+            objectName: "roomTyping"
+            Layout.fillWidth: true
+            Layout.leftMargin: Theme.spacingXXXL
+            Layout.preferredHeight: Theme.typingLineHeight
+            Layout.rightMargin: Theme.spacingXXXL
+            color: Theme.textMuted
+            elide: Text.ElideRight
+            font.pointSize: Theme.fontSizeSmall
+            text: Room.typing
+            textFormat: Text.PlainText
+            verticalAlignment: Text.AlignVCenter
+            visible: Room.roomId !== ""
+        }
+
         Composer {
             id: composer
 

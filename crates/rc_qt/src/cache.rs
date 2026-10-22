@@ -4,7 +4,7 @@
 //! What the hub remembers of the core's events, so that a view model created late can catch up.
 //! Plain Rust, so it can be unit-tested without Qt or a [`Client`](rc_core::Client).
 
-use rc_core::domain::{AccountId, AvatarOwner, Identity, Message, Room, RoomId, UserId};
+use rc_core::domain::{AccountId, AvatarOwner, Identity, Message, MessageId, Room, RoomId, UserId};
 use rc_core::emoji::CustomEmojis;
 use rc_core::policy::MessagePolicy;
 use rc_core::rooms::{RoomChange, Unread};
@@ -18,7 +18,7 @@ use crate::attachment_view::ImageUrls;
 use crate::avatar_view::AvatarUrls;
 use crate::message_view::{author_name, body, can_edit};
 use crate::rich_html::Viewer;
-use crate::room_view::{RoomState, room_state};
+use crate::room_view::{RoomState, room_state, typing_line};
 use crate::session_view::{LoginMode, SessionView, host, session_view};
 use crate::thread_view::{ThreadState, thread_state};
 
@@ -44,6 +44,10 @@ pub struct Cache {
     /// The open thread's messages: the parent, then the replies. Empty when none is open.
     thread_messages: Vec<Message>,
     thread_status: ThreadStatus,
+    /// Who the core says is typing, and where: in a room, in a thread (by its parent). Empty
+    /// names once nobody does.
+    typing: Option<(RoomId, Vec<String>)>,
+    thread_typing: Option<(MessageId, Vec<String>)>,
     /// The logged-in user, if any.
     username: Option<String>,
     user_id: Option<UserId>,
@@ -95,6 +99,8 @@ impl Cache {
                 reached_start: false,
                 error: None,
             },
+            typing: None,
+            thread_typing: None,
             username: None,
             user_id: None,
             server: None,
@@ -159,6 +165,10 @@ impl Cache {
                 }
             }
             Event::ThreadStatus(status) => self.thread_status = status.clone(),
+            Event::Typing { room, names } => self.typing = Some((room.clone(), names.clone())),
+            Event::ThreadTyping { thread, names } => {
+                self.thread_typing = Some((thread.clone(), names.clone()));
+            }
             _ => {}
         }
     }
@@ -372,13 +382,27 @@ impl Cache {
     /// What the `Room` view model shows now.
     #[must_use]
     pub fn room_state(&self) -> RoomState {
-        room_state(&self.rooms, &self.status, &self.viewer())
+        let mut state = room_state(&self.rooms, &self.status, &self.viewer());
+        // Only for the room the view model shows: a late event of another one means nothing.
+        if let (Some((room, names)), Some(open)) = (&self.typing, &self.status.room)
+            && room == open
+        {
+            state.typing = typing_line(names);
+        }
+        state
     }
 
     /// What the `Thread` view model shows now.
     #[must_use]
     pub fn thread_state(&self) -> ThreadState {
-        thread_state(&self.rooms, self.status.room.as_ref(), &self.thread_status)
+        let mut state = thread_state(&self.rooms, self.status.room.as_ref(), &self.thread_status);
+        if let (Some((thread, names)), Some(open)) =
+            (&self.thread_typing, &self.thread_status.parent)
+            && thread == open
+        {
+            state.typing = typing_line(names);
+        }
+        state
     }
 }
 
@@ -1011,6 +1035,67 @@ mod tests {
         assert_eq!(cache.thread_state().room_name, "beta");
         cache.apply(&Event::ThreadStatus(ThreadStatus::default()));
         assert_eq!(cache.thread_state().parent_id, "");
+    }
+
+    // ACT-006
+    #[test]
+    fn the_room_state_carries_the_line_of_the_open_rooms_typists_only() {
+        let mut cache = Cache::new();
+        let open = |room: Option<&str>| {
+            Event::TimelineStatus(TimelineStatus {
+                room: room.map(|id| id.to_owned().into()),
+                ..TimelineStatus::default()
+            })
+        };
+        let typing = |room: &str, names: &[&str]| Event::Typing {
+            room: room.to_owned().into(),
+            names: names.iter().map(|name| (*name).to_owned()).collect(),
+        };
+        cache.apply(&open(Some("a")));
+        cache.apply(&typing("a", &["alice"]));
+        assert_eq!(cache.room_state().typing, "alice is typing\u{2026}");
+        // Another room's typists are not this room's.
+        cache.apply(&typing("b", &["bob"]));
+        assert_eq!(cache.room_state().typing, "");
+        cache.apply(&typing("a", &["alice", "bob"]));
+        assert_eq!(
+            cache.room_state().typing,
+            "alice and bob are typing\u{2026}"
+        );
+        cache.apply(&typing("a", &[]));
+        assert_eq!(cache.room_state().typing, "");
+        // A line that outlives its room doesn't show in the next one.
+        cache.apply(&typing("a", &["alice"]));
+        cache.apply(&open(Some("c")));
+        assert_eq!(cache.room_state().typing, "");
+        cache.apply(&open(None));
+        assert_eq!(cache.room_state(), RoomState::default());
+    }
+
+    // ACT-006
+    #[test]
+    fn the_thread_state_carries_the_line_of_the_open_threads_typists_only() {
+        let mut cache = Cache::new();
+        let open = |parent: Option<&str>| {
+            Event::ThreadStatus(ThreadStatus {
+                parent: parent.map(|id| id.to_owned().into()),
+                ..ThreadStatus::default()
+            })
+        };
+        let typing = |thread: &str, names: &[&str]| Event::ThreadTyping {
+            thread: thread.to_owned().into(),
+            names: names.iter().map(|name| (*name).to_owned()).collect(),
+        };
+        cache.apply(&open(Some("p")));
+        cache.apply(&typing("p", &["alice"]));
+        assert_eq!(cache.thread_state().typing, "alice is typing\u{2026}");
+        cache.apply(&typing("q", &["bob"]));
+        assert_eq!(cache.thread_state().typing, "");
+        cache.apply(&typing("p", &[]));
+        assert_eq!(cache.thread_state().typing, "");
+        cache.apply(&typing("p", &["alice"]));
+        cache.apply(&open(None));
+        assert_eq!(cache.thread_state(), ThreadState::default());
     }
 
     fn avatar(username: &str, path: Option<&str>) -> AvatarUpdate {
