@@ -11,7 +11,7 @@ fn opening_a_room_marks_it_read_on_the_server_and_in_the_list() {
     let fake = Fake::new();
     let harness = logged_in_with_unread(&fake);
 
-    harness.client.open_room("1".to_owned().into());
+    harness.account().open_room("1".to_owned().into());
 
     harness.expect_events(vec![reset_event(Some("1"), Vec::new())]);
     expect_rooms_updated(&harness, 0, room("1", "general", RoomKind::Channel));
@@ -23,7 +23,7 @@ fn opening_a_room_marks_it_read_on_the_server_and_in_the_list() {
 fn opening_a_room_that_shows_read_still_tells_the_server() {
     let fake = Fake::new();
     let harness = logged_in_harness(&fake);
-    harness.client.open_room("1".to_owned().into());
+    harness.account().open_room("1".to_owned().into());
     harness.expect_events(vec![
         reset_event(Some("1"), Vec::new()),
         status("1", true, false, false, None),
@@ -36,13 +36,13 @@ fn opening_a_room_that_shows_read_still_tells_the_server() {
 fn only_the_opened_room_is_marked_read() {
     let fake = Fake::new();
     let harness = logged_in_with_unread(&fake);
-    harness.client.open_room("1".to_owned().into());
+    harness.account().open_room("1".to_owned().into());
     fake.wait_for_mark_read_calls(1);
-    harness.client.open_room("2".to_owned().into());
+    harness.account().open_room("2".to_owned().into());
 
     assert_eq!(fake.wait_for_mark_read_calls(2), ["1", "2"]);
     let mut changes_seen = 0;
-    while let Ok(event) = harness.events.recv_timeout(Duration::from_millis(300)) {
+    while let Ok(event) = harness.recv_timeout(Duration::from_millis(300)) {
         if let Event::Rooms(changes) = event {
             changes_seen += changes.len();
         }
@@ -141,7 +141,7 @@ fn a_snapshot_after_reconnecting_does_not_show_the_open_room_unread() {
 
     assert_eq!(fake.wait_for_mark_read_calls(2), ["1", "1"]);
     // The list needs no change: room 1 shows read already.
-    while let Ok(event) = harness.events.recv_timeout(Duration::from_millis(300)) {
+    while let Ok(event) = harness.recv_timeout(Duration::from_millis(300)) {
         assert!(!matches!(event, Event::Rooms(_)), "{event:?}");
     }
 }
@@ -172,7 +172,7 @@ fn an_expired_token_in_mark_read_ends_the_session() {
     fake.script_history(Some(Arc::clone(&gate)), page(Vec::new(), true));
     fake.script_mark_read(Err(ApiError::Unauthorized));
 
-    harness.client.open_room("1".to_owned().into());
+    harness.account().open_room("1".to_owned().into());
 
     harness.expect_events(vec![
         reset_event(Some("1"), Vec::new()),

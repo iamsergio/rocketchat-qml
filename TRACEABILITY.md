@@ -27,11 +27,11 @@ Every test carries a `// <ID>` comment. A feature can have tests at several leve
 
 | ID | Feature | Tests |
 |---|---|---|
-| ACCT-001 | Add an account on another server while signed in | todo |
-| ACCT-002 | Every stored account resumes at startup, independently of the others | unit (the store keeps a list; one account runs for now): `crates/rc_core/src/client/tests/login.rs`, `crates/rc_core/src/adapters/blob.rs`, `crates/rc_core/src/adapters/file.rs`, `crates/rc_core/src/adapters/memory.rs`, `crates/rc_core/src/adapters/keyring.rs` |
+| ACCT-001 | Add an account on another server while signed in | unit (rc_core only; no GUI yet): `crates/rc_core/src/client/tests/accounts.rs`; contract: `crates/rc_core/tests/contract.rs` |
+| ACCT-002 | Every stored account resumes at startup, independently of the others | unit (the store keeps a list; every stored account runs): `crates/rc_core/src/client/tests/accounts.rs`, `crates/rc_core/src/client/tests/login.rs`, `crates/rc_core/src/adapters/blob.rs`, `crates/rc_core/src/adapters/file.rs`, `crates/rc_core/src/adapters/memory.rs`, `crates/rc_core/src/adapters/keyring.rs` |
 | ACCT-003 | Switching accounts shows that account's rooms, open room and thread | todo |
 | ACCT-004 | Accounts in the background stay live, with their unread and mention totals | todo |
-| ACCT-005 | Logging out of one account removes it and leaves the others signed in | todo |
+| ACCT-005 | Logging out of one account removes it and leaves the others signed in | unit (rc_core only; no GUI yet): `crates/rc_core/src/client/tests/accounts.rs`; contract: `crates/rc_core/tests/contract.rs` |
 | ACCT-006 | An expired account stays listed and logs in again with the server and user filled in | todo |
 | ACCT-007 | The same user on the same server can't be added twice | todo |
 

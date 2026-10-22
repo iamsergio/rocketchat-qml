@@ -30,7 +30,7 @@ fn an_edit_replaces_the_message_and_is_answered() {
     fake.script_edit(None, Ok(2));
 
     harness
-        .client
+        .account()
         .edit_message("b".to_owned().into(), "  bee\n");
 
     harness.expect_events(vec![
@@ -58,7 +58,7 @@ fn a_refused_edit_is_reported_and_changes_nothing() {
     open_first_room(&fake, &harness, false);
     fake.script_edit(None, Err(refused()));
 
-    harness.client.edit_message("b".to_owned().into(), "bee");
+    harness.account().edit_message("b".to_owned().into(), "bee");
 
     harness.expect_events(vec![action_event(
         "b",
@@ -76,7 +76,7 @@ fn an_edit_that_cannot_reach_the_server_is_reported_as_such() {
     open_first_room(&fake, &harness, false);
     fake.script_edit(None, Err(ApiError::Unreachable("refused".into())));
 
-    harness.client.edit_message("b".to_owned().into(), "bee");
+    harness.account().edit_message("b".to_owned().into(), "bee");
 
     harness.expect_events(vec![action_event(
         "b",
@@ -92,8 +92,10 @@ fn a_blank_edit_is_refused_and_the_same_text_succeeds_without_a_request() {
     let harness = logged_in_harness(&fake);
     open_first_room(&fake, &harness, false);
 
-    harness.client.edit_message("b".to_owned().into(), " \n ");
-    harness.client.edit_message("b".to_owned().into(), " b ");
+    harness
+        .account()
+        .edit_message("b".to_owned().into(), " \n ");
+    harness.account().edit_message("b".to_owned().into(), " b ");
 
     harness.expect_events(vec![
         action_event("b", MessageAction::Edit, Err(ActionError::Empty)),
@@ -115,12 +117,12 @@ fn only_sent_text_messages_of_the_user_in_the_open_room_are_edited() {
     let gate = Arc::new(Notify::new());
     fake.script_send(Some(gate), Ok(7));
     harness
-        .client
+        .account()
         .send_message("1".to_owned().into(), "unsent", None, None, false);
     let pending = expect_pending(&harness);
 
     for id in ["c", pending.id.as_str(), "nope"] {
-        harness.client.edit_message(id.to_owned().into(), "x");
+        harness.account().edit_message(id.to_owned().into(), "x");
         harness.expect_events(vec![action_event(
             id,
             MessageAction::Edit,
@@ -138,7 +140,7 @@ fn a_message_of_a_room_that_is_not_open_is_not_edited() {
     open_first_room(&fake, &harness, false);
     open_the_other_room(&harness);
 
-    harness.client.edit_message("b".to_owned().into(), "bee");
+    harness.account().edit_message("b".to_owned().into(), "bee");
 
     harness.expect_events(vec![action_event(
         "b",
@@ -164,8 +166,8 @@ fn the_servers_settings_decide_what_can_be_changed() {
     open_first_room(&fake, &harness, false);
 
     // Editing is off, and the messages of 1970 are past the five minutes for deleting.
-    harness.client.edit_message("b".to_owned().into(), "bee");
-    harness.client.delete_message("b".to_owned().into());
+    harness.account().edit_message("b".to_owned().into(), "bee");
+    harness.account().delete_message("b".to_owned().into());
 
     harness.expect_events(vec![
         action_event(
@@ -203,7 +205,7 @@ fn the_policy_is_sent_when_it_changes_and_forgotten_at_logout() {
         Event::MessagePolicy(MessagePolicy::from(limited)),
     ]);
 
-    harness.client.logout();
+    harness.logout();
     harness.expect_events(vec![
         session_event(logged_out(None)),
         Event::MessagePolicy(MessagePolicy::default()),
@@ -219,7 +221,7 @@ fn a_failed_settings_fetch_keeps_the_policy_and_the_session() {
     open_first_room(&fake, &harness, false);
     fake.script_edit(None, Ok(2));
 
-    harness.client.edit_message("b".to_owned().into(), "bee");
+    harness.account().edit_message("b".to_owned().into(), "bee");
 
     harness.expect_events(vec![
         updated(1, edited_copy("b", "bee", 2)),
@@ -234,7 +236,7 @@ fn a_deletion_removes_the_message_and_is_answered() {
     let harness = logged_in_harness(&fake);
     open_first_room(&fake, &harness, false);
 
-    harness.client.delete_message("a".to_owned().into());
+    harness.account().delete_message("a".to_owned().into());
 
     harness.expect_events(vec![
         removal(0),
@@ -257,7 +259,7 @@ fn a_refused_deletion_is_reported_and_the_message_stays() {
     open_first_room(&fake, &harness, false);
     fake.script_delete(None, Err(refused()));
 
-    harness.client.delete_message("a".to_owned().into());
+    harness.account().delete_message("a".to_owned().into());
 
     harness.expect_events(vec![action_event(
         "a",
@@ -280,12 +282,12 @@ fn only_sent_messages_of_the_user_in_the_open_room_are_deleted() {
     let gate = Arc::new(Notify::new());
     fake.script_send(Some(gate), Ok(7));
     harness
-        .client
+        .account()
         .send_message("1".to_owned().into(), "unsent", None, None, false);
     let pending = expect_pending(&harness);
 
     for id in ["c", pending.id.as_str(), "nope"] {
-        harness.client.delete_message(id.to_owned().into());
+        harness.account().delete_message(id.to_owned().into());
         harness.expect_events(vec![action_event(
             id,
             MessageAction::Delete,
@@ -301,8 +303,8 @@ fn nothing_happens_when_logged_out() {
     let fake = Fake::new();
     let harness = Harness::new(&fake);
 
-    harness.client.edit_message("b".to_owned().into(), "bee");
-    harness.client.delete_message("b".to_owned().into());
+    harness.account().edit_message("b".to_owned().into(), "bee");
+    harness.account().delete_message("b".to_owned().into());
 
     // The first event after these is the login's.
     fake.script_login(None, Ok(()));
@@ -323,10 +325,10 @@ fn an_edit_answered_after_logout_is_dropped() {
     open_first_room(&fake, &harness, false);
     let gate = Arc::new(Notify::new());
     fake.script_edit(Some(Arc::clone(&gate)), Ok(2));
-    harness.client.edit_message("b".to_owned().into(), "bee");
+    harness.account().edit_message("b".to_owned().into(), "bee");
     wait_until(|| (!fake.state().edit_calls.is_empty()).then_some(()));
 
-    harness.client.logout();
+    harness.logout();
     harness.expect_events(vec![session_event(logged_out(None)), rooms_event(vec![])]);
     harness.expect_events(closed_events());
     gate.notify_one();
@@ -349,10 +351,10 @@ fn a_deletion_answered_after_logout_is_dropped() {
     open_first_room(&fake, &harness, false);
     let gate = Arc::new(Notify::new());
     fake.script_delete(Some(Arc::clone(&gate)), Ok(()));
-    harness.client.delete_message("a".to_owned().into());
+    harness.account().delete_message("a".to_owned().into());
     wait_until(|| (!fake.state().delete_calls.is_empty()).then_some(()));
 
-    harness.client.logout();
+    harness.logout();
     harness.expect_events(vec![session_event(logged_out(None)), rooms_event(vec![])]);
     harness.expect_events(closed_events());
     gate.notify_one();
@@ -375,10 +377,10 @@ fn a_dead_token_on_an_edit_or_a_deletion_expires_the_session() {
         open_first_room(&fake, &harness, false);
         if delete {
             fake.script_delete(None, Err(ApiError::Unauthorized));
-            harness.client.delete_message("a".to_owned().into());
+            harness.account().delete_message("a".to_owned().into());
         } else {
             fake.script_edit(None, Err(ApiError::Unauthorized));
-            harness.client.edit_message("b".to_owned().into(), "bee");
+            harness.account().edit_message("b".to_owned().into(), "bee");
         }
         harness.expect_events(vec![
             session_event(logged_out(Some(LoginFailure::SessionExpired))),
@@ -418,7 +420,7 @@ fn a_reaction_shows_in_the_message_at_once_and_is_answered() {
     open_first_room(&fake, &harness, false);
 
     // Colons or not, the request has them. Reacting to a message of somebody else works too.
-    harness.client.react("b".to_owned().into(), "tada", true);
+    harness.account().react("b".to_owned().into(), "tada", true);
 
     harness.expect_events(vec![
         updated(1, with_reactions("b", 2, &[(":tada:", &["alice"])])),
@@ -437,7 +439,7 @@ fn a_reaction_joins_the_users_of_the_emoji_and_starts_new_ones_at_the_end() {
     assert!(fake.push(0, Pushed::Message(held.clone())));
     harness.expect_events(vec![updated(1, held)]);
 
-    harness.client.react("b".to_owned().into(), ":a:", true);
+    harness.account().react("b".to_owned().into(), ":a:", true);
     harness.expect_events(vec![
         updated(
             1,
@@ -445,7 +447,7 @@ fn a_reaction_joins_the_users_of_the_emoji_and_starts_new_ones_at_the_end() {
         ),
         action_event("b", MessageAction::React, Ok(())),
     ]);
-    harness.client.react("b".to_owned().into(), ":c:", true);
+    harness.account().react("b".to_owned().into(), ":c:", true);
     harness.expect_events(vec![
         updated(
             1,
@@ -473,7 +475,7 @@ fn taking_a_reaction_back_removes_the_user_and_drops_an_emoji_nobody_is_left_wit
     assert!(fake.push(0, Pushed::Message(held.clone())));
     harness.expect_events(vec![updated(1, held)]);
 
-    harness.client.react("b".to_owned().into(), ":a:", false);
+    harness.account().react("b".to_owned().into(), ":a:", false);
     harness.expect_events(vec![
         updated(
             1,
@@ -481,7 +483,7 @@ fn taking_a_reaction_back_removes_the_user_and_drops_an_emoji_nobody_is_left_wit
         ),
         action_event("b", MessageAction::React, Ok(())),
     ]);
-    harness.client.react("b".to_owned().into(), ":b:", false);
+    harness.account().react("b".to_owned().into(), ":b:", false);
     harness.expect_events(vec![
         updated(1, with_reactions("b", 2, &[(":a:", &["bob"])])),
         action_event("b", MessageAction::React, Ok(())),
@@ -498,7 +500,9 @@ fn the_push_of_a_reaction_after_the_answer_changes_nothing() {
     let fake = Fake::new();
     let harness = logged_in_harness(&fake);
     open_first_room(&fake, &harness, false);
-    harness.client.react("b".to_owned().into(), ":tada:", true);
+    harness
+        .account()
+        .react("b".to_owned().into(), ":tada:", true);
     harness.expect_events(vec![
         updated(1, with_reactions("b", 2, &[(":tada:", &["alice"])])),
         action_event("b", MessageAction::React, Ok(())),
@@ -520,7 +524,9 @@ fn the_push_of_a_reaction_before_the_answer_leaves_nothing_for_the_answer_to_cha
     open_first_room(&fake, &harness, false);
     let gate = Arc::new(Notify::new());
     fake.script_react(Some(Arc::clone(&gate)), Ok(()));
-    harness.client.react("b".to_owned().into(), ":tada:", true);
+    harness
+        .account()
+        .react("b".to_owned().into(), ":tada:", true);
     wait_until(|| (!fake.state().react_calls.is_empty()).then_some(()));
 
     let pushed = with_reactions("b", 2, &[(":tada:", &["alice"])]);
@@ -540,7 +546,9 @@ fn an_answer_applies_to_the_message_as_it_is_by_then() {
     open_first_room(&fake, &harness, false);
     let gate = Arc::new(Notify::new());
     fake.script_react(Some(Arc::clone(&gate)), Ok(()));
-    harness.client.react("b".to_owned().into(), ":tada:", true);
+    harness
+        .account()
+        .react("b".to_owned().into(), ":tada:", true);
     wait_until(|| (!fake.state().react_calls.is_empty()).then_some(()));
 
     // Somebody else reacted meanwhile.
@@ -566,7 +574,9 @@ fn a_reaction_to_a_message_deleted_meanwhile_is_answered_and_changes_nothing() {
     open_first_room(&fake, &harness, false);
     let gate = Arc::new(Notify::new());
     fake.script_react(Some(Arc::clone(&gate)), Ok(()));
-    harness.client.react("b".to_owned().into(), ":tada:", true);
+    harness
+        .account()
+        .react("b".to_owned().into(), ":tada:", true);
     wait_until(|| (!fake.state().react_calls.is_empty()).then_some(()));
     assert!(fake.push(0, deleted("1", "b")));
     harness.expect_events(vec![removal(1)]);
@@ -584,13 +594,17 @@ fn a_refused_reaction_is_reported_and_changes_nothing() {
     fake.script_react(None, Err(refused()));
     fake.script_react(None, Err(ApiError::Unreachable("refused".into())));
 
-    harness.client.react("b".to_owned().into(), ":nope:", true);
+    harness
+        .account()
+        .react("b".to_owned().into(), ":nope:", true);
     harness.expect_events(vec![action_event(
         "b",
         MessageAction::React,
         Err(ActionError::Server(refused().to_string())),
     )]);
-    harness.client.react("b".to_owned().into(), ":nope:", true);
+    harness
+        .account()
+        .react("b".to_owned().into(), ":nope:", true);
     harness.expect_events(vec![action_event(
         "b",
         MessageAction::React,
@@ -616,19 +630,21 @@ fn only_sent_text_messages_of_the_open_room_are_reacted_to() {
     let gate = Arc::new(Notify::new());
     fake.script_send(Some(gate), Ok(7));
     harness
-        .client
+        .account()
         .send_message("1".to_owned().into(), "unsent", None, None, false);
     let pending = expect_pending(&harness);
 
     for id in ["s", pending.id.as_str(), "nope"] {
-        harness.client.react(id.to_owned().into(), ":tada:", true);
+        harness
+            .account()
+            .react(id.to_owned().into(), ":tada:", true);
         harness.expect_events(vec![action_event(
             id,
             MessageAction::React,
             Err(ActionError::NotAllowed(MessageAction::React)),
         )]);
     }
-    harness.client.react("b".to_owned().into(), " : ", true);
+    harness.account().react("b".to_owned().into(), " : ", true);
     harness.expect_events(vec![action_event(
         "b",
         MessageAction::React,
@@ -645,12 +661,12 @@ fn a_failed_message_is_not_reacted_to() {
     open_first_room(&fake, &harness, false);
     fake.script_send(None, Err(ApiError::Unreachable("refused".into())));
     harness
-        .client
+        .account()
         .send_message("1".to_owned().into(), "unsent", None, None, false);
     let pending = expect_pending(&harness);
     harness.expect_events(vec![updated(2, with_delivery(&pending, Delivery::Failed))]);
 
-    harness.client.react(pending.id.clone(), ":tada:", true);
+    harness.account().react(pending.id.clone(), ":tada:", true);
 
     harness.expect_events(vec![action_event(
         pending.id.as_str(),
@@ -668,7 +684,9 @@ fn a_message_of_a_room_that_is_not_open_is_not_reacted_to() {
     open_first_room(&fake, &harness, false);
     open_the_other_room(&harness);
 
-    harness.client.react("b".to_owned().into(), ":tada:", true);
+    harness
+        .account()
+        .react("b".to_owned().into(), ":tada:", true);
 
     harness.expect_events(vec![action_event(
         "b",
@@ -684,7 +702,9 @@ fn nothing_is_reacted_to_when_logged_out() {
     let fake = Fake::new();
     let harness = Harness::new(&fake);
 
-    harness.client.react("b".to_owned().into(), ":tada:", true);
+    harness
+        .account()
+        .react("b".to_owned().into(), ":tada:", true);
 
     // The first event after this is the login's.
     fake.script_login(None, Ok(()));
@@ -704,10 +724,12 @@ fn a_reaction_answered_after_logout_is_dropped() {
     open_first_room(&fake, &harness, false);
     let gate = Arc::new(Notify::new());
     fake.script_react(Some(Arc::clone(&gate)), Ok(()));
-    harness.client.react("b".to_owned().into(), ":tada:", true);
+    harness
+        .account()
+        .react("b".to_owned().into(), ":tada:", true);
     wait_until(|| (!fake.state().react_calls.is_empty()).then_some(()));
 
-    harness.client.logout();
+    harness.logout();
     harness.expect_events(vec![session_event(logged_out(None)), rooms_event(vec![])]);
     harness.expect_events(closed_events());
     gate.notify_one();
@@ -729,7 +751,9 @@ fn a_dead_token_on_a_reaction_expires_the_session() {
     open_first_room(&fake, &harness, false);
     fake.script_react(None, Err(ApiError::Unauthorized));
 
-    harness.client.react("b".to_owned().into(), ":tada:", true);
+    harness
+        .account()
+        .react("b".to_owned().into(), ":tada:", true);
 
     harness.expect_events(vec![
         session_event(logged_out(Some(LoginFailure::SessionExpired))),

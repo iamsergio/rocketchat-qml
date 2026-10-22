@@ -13,8 +13,8 @@ use tokio::sync::mpsc::{self, UnboundedSender};
 use crate::adapters::RestConnector;
 use crate::avatars::AvatarUpdate;
 use crate::backoff::Backoff;
-use crate::core;
-use crate::domain::{MessageId, RoomId};
+use crate::core::{self, CoreCommand};
+use crate::domain::{AccountId, MessageId, RoomId};
 use crate::emoji::{self, CustomEmojis};
 use crate::error::Error;
 use crate::images::ImageUpdate;
@@ -34,10 +34,15 @@ const SHUTDOWN_WAIT: Duration = Duration::from_secs(3);
 /// How long dropping a [`Client`] waits for the runtime's threads after that.
 const RUNTIME_WAIT: Duration = Duration::from_secs(1);
 
-/// What the core tells the frontend.
+/// What the core tells the frontend about an account. Every event comes with the account's id.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum Event {
+    /// The first event of an account. The accounts are listed in the order of their `Added`.
+    Added,
+    /// The last event of an account: it is gone, and nothing comes for it afterwards. Comes after
+    /// everything the account emitted, the events of its logout included.
+    Removed,
     Session(SessionState),
     /// Changes to the room list, to apply in order. After `LoggedIn` it carries the rooms; after
     /// `LoggedOut` it empties the list, unless the list was empty already. Reconnecting brings
@@ -107,6 +112,7 @@ pub(crate) enum Command {
         username: String,
         password: SecretString,
     },
+    /// Ends the session or the attempt, and forgets the stored account, logged in or not.
     Logout,
     OpenRoom(RoomId),
     LoadOlder,
@@ -141,13 +147,18 @@ pub(crate) enum Command {
 /// The core, as seen from a frontend: commands go in, events come out through the callback given
 /// at creation. Commands never block.
 ///
+/// The core runs any number of accounts, and there is always at least one: those stored, or else
+/// a new logged-out one at startup, and a new one when the last is removed. See
+/// [`add_account`](Self::add_account), [`remove_account`](Self::remove_account) and
+/// [`account`](Self::account).
+///
 /// Dropping the client stops the core. It first lets a pending logout finish (the token revocation
 /// and clearing the stored session), which blocks the dropping thread for two seconds at most, and
 /// a little longer in the worst case. Don't drop it from async code; the GUI thread owns it.
 pub struct Client {
-    // Ending the commands is what stops the actor.
-    commands: Option<UnboundedSender<Command>>,
-    /// Signalled by the actor when it has drained and is about to end.
+    // Ending the commands is what stops the core.
+    commands: Option<UnboundedSender<CoreCommand>>,
+    /// Signalled by the core when it has drained and is about to end.
     finished: std_mpsc::Receiver<()>,
     runtime: Option<Runtime>,
 }
@@ -161,19 +172,21 @@ impl Client {
     pub fn start(
         store: impl SecretStore,
         cache: impl FileCache,
-        on_event: impl Fn(Event) + Send + Sync + 'static,
+        on_event: impl Fn(AccountId, Event) + Send + Sync + 'static,
     ) -> Result<Self, Error> {
         Self::with_ports(RestConnector, store, cache, on_event)
     }
 
-    /// A client that reaches servers through `connector`, remembers the session in `store` and
-    /// keeps downloaded files in `cache`; tests pass fakes. If the store holds a session, the
-    /// client tries to resume it.
+    /// A client that reaches servers through `connector`, remembers the accounts in `store` and
+    /// keeps downloaded files in `cache`; tests pass fakes. Every stored account is added, and
+    /// resumed if it holds a token.
     ///
-    /// `on_event` is called once per state change, in order, from a runtime thread. The first event
-    /// always comes: `Resuming` if a stored session is being resumed, `LoggedOut` otherwise.
-    /// Until then the state is unknown. It must return quickly and must not touch GUI objects: a Qt
-    /// frontend hops to its GUI thread inside it, e.g. with `CxxQtThread::queue`.
+    /// `on_event` is called once per event, with the account it belongs to, from a runtime thread.
+    /// The events of one account come in order, from `Added` to `Removed`; those of different
+    /// accounts may interleave. An account's first session state follows its `Added`: `Resuming`
+    /// if a stored session is being resumed, `LoggedOut` otherwise. Until then the state is
+    /// unknown. It must return quickly and must not touch GUI objects: a Qt frontend hops to its
+    /// GUI thread inside it, e.g. with `CxxQtThread::queue`.
     ///
     /// # Errors
     ///
@@ -182,7 +195,7 @@ impl Client {
         connector: C,
         store: S,
         cache: impl FileCache,
-        on_event: impl Fn(Event) + Send + Sync + 'static,
+        on_event: impl Fn(AccountId, Event) + Send + Sync + 'static,
     ) -> Result<Self, Error> {
         Self::with_backoff(connector, store, cache, on_event, Backoff::default())
     }
@@ -193,7 +206,7 @@ impl Client {
         connector: C,
         store: S,
         cache: impl FileCache,
-        on_event: impl Fn(Event) + Send + Sync + 'static,
+        on_event: impl Fn(AccountId, Event) + Send + Sync + 'static,
         backoff: Backoff,
     ) -> Result<Self, Error> {
         let runtime = Builder::new_multi_thread()
@@ -218,6 +231,49 @@ impl Client {
         })
     }
 
+    /// Adds an account that is logged out, and returns its id. `Added` comes, then the session
+    /// state `LoggedOut`. Log in with [`account`](Self::account).
+    pub fn add_account(&self) -> AccountId {
+        let id = AccountId::generate();
+        self.send(CoreCommand::Add(id.clone()));
+        id
+    }
+
+    /// Ends an account: cancels a login in progress, or logs out and revokes the token, and
+    /// forgets the stored account, whether it was logged in or not. The events of the logout
+    /// come, then `Removed`, once the account is gone. If it was the last account, a new
+    /// logged-out one is added after that. Ignored if there is no such account.
+    pub fn remove_account(&self, id: &AccountId) {
+        self.send(CoreCommand::Remove(id.clone()));
+    }
+
+    /// The commands for one account. They are dropped, with a message in the log, if the id isn't
+    /// an account (any more).
+    #[must_use]
+    pub fn account<'a>(&'a self, id: &'a AccountId) -> AccountHandle<'a> {
+        AccountHandle { client: self, id }
+    }
+
+    fn send(&self, command: CoreCommand) {
+        let sent = self
+            .commands
+            .as_ref()
+            .is_some_and(|c| c.send(command).is_ok());
+        if !sent {
+            tracing::error!("the core is gone, command dropped");
+        }
+    }
+}
+
+/// The commands for one account, borrowed from the [`Client`]. They never block, and their
+/// effects arrive as that account's events.
+#[derive(Clone, Copy)]
+pub struct AccountHandle<'a> {
+    client: &'a Client,
+    id: &'a AccountId,
+}
+
+impl AccountHandle<'_> {
     /// Starts logging in. `server` may lack the scheme, https is assumed. The outcome arrives as
     /// events. Ignored unless logged out.
     pub fn login(&self, server: &str, username: &str, password: SecretString) {
@@ -226,12 +282,6 @@ impl Client {
             username: username.to_owned(),
             password,
         });
-    }
-
-    /// Cancels a login in progress, or logs out and forgets the stored session. Ignored when logged
-    /// out.
-    pub fn logout(&self) {
-        self.send(Command::Logout);
     }
 
     /// Shows the room's messages: what is held of them at once, then the newest ones as they
@@ -392,13 +442,8 @@ impl Client {
     }
 
     fn send(&self, command: Command) {
-        let sent = self
-            .commands
-            .as_ref()
-            .is_some_and(|c| c.send(command).is_ok());
-        if !sent {
-            tracing::error!("the session actor is gone, command dropped");
-        }
+        self.client
+            .send(CoreCommand::Account(self.id.clone(), command));
     }
 }
 

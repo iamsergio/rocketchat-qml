@@ -43,7 +43,8 @@ use thread::OpenThread;
 
 /// How long, once the actor is told to end, it and the store worker may take to finish what the
 /// user asked already: the token revocations and the queued store writes. One bound for both: the
-/// actor's deadline is also the store worker's (see [`crate::core::spawn`]).
+/// actor's deadline is also the store worker's (see [`crate::core::spawn`]). The core stops all
+/// the actors at once, so it is one bound for all of them.
 pub(crate) const DRAIN_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// A login or resume task's answer.
@@ -576,7 +577,10 @@ impl<C: Connector> Actor<C> {
         }
     }
 
+    /// Ends the session or the attempt in flight, and forgets the stored account, which is no
+    /// error if there is none. Logged out already, it changes nothing else.
     fn logout(&mut self) {
+        self.remove_from_store();
         if self.state.attempting() {
             if let Some(task) = self.login_task.take() {
                 task.abort();
@@ -585,17 +589,13 @@ impl<C: Connector> Actor<C> {
             self.attempt += 1;
             self.set_state(SessionState::LoggedOut { failure: None });
             // Cancelling a resume is a logout of the stored session.
-            if let Some(stored) = self.resuming.take() {
-                self.remove_from_store();
-                if let (Some(credentials), Ok(api)) =
+            if let Some(stored) = self.resuming.take()
+                && let (Some(credentials), Ok(api)) =
                     (stored.credentials(), self.connector.connect(&stored.server))
-                {
-                    self.revoke(api, credentials);
-                }
+            {
+                self.revoke(api, credentials);
             }
-            return;
-        }
-        if matches!(self.state, SessionState::LoggedIn(_)) {
+        } else if matches!(self.state, SessionState::LoggedIn(_)) {
             self.abort_rooms_task();
             self.abort_realtime_task();
             self.set_state(SessionState::LoggedOut { failure: None });
@@ -605,12 +605,9 @@ impl<C: Connector> Actor<C> {
             self.clear_avatars();
             self.clear_images();
             self.clear_timeline();
-            self.remove_from_store();
             if let Some(session) = self.session.take() {
                 self.revoke(session.api, session.credentials);
             }
-        } else {
-            tracing::debug!("logout ignored: not logged in");
         }
     }
 

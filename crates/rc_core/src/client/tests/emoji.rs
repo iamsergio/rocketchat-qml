@@ -45,14 +45,9 @@ fn a_server_without_custom_emoji_sends_no_event_for_them() {
         session_event(logged_in("http://h", "alice")),
         rooms_event(vec![]),
     ]);
-    harness.client.logout();
+    harness.logout();
     harness.expect_events(vec![session_event(logged_out(None))]);
-    assert!(
-        harness
-            .events
-            .recv_timeout(Duration::from_millis(100))
-            .is_err()
-    );
+    assert!(harness.recv_timeout(Duration::from_millis(100)).is_err());
 }
 
 // RICH-003
@@ -69,7 +64,7 @@ fn logout_forgets_the_custom_emoji() {
         rooms_event(vec![]),
         Event::CustomEmoji(party_emoji("http://h")),
     ]);
-    harness.client.logout();
+    harness.logout();
     harness.expect_events(vec![
         session_event(logged_out(None)),
         Event::CustomEmoji(CustomEmojis::default()),

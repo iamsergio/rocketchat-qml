@@ -116,7 +116,7 @@ fn a_new_favorite_moves_to_the_top_at_once_and_is_answered() {
     let fake = Fake::new();
     let harness = logged_in_with_a_dm(&fake);
 
-    harness.client.set_favorite("2".to_owned().into(), true);
+    harness.account().set_favorite("2".to_owned().into(), true);
 
     harness.expect_events(vec![
         rooms_change(RoomChange::Moved {
@@ -135,7 +135,7 @@ fn a_favorite_taken_back_moves_down_at_once_and_is_answered() {
     let fake = Fake::new();
     let harness = logged_in_with_a_favorite(&fake);
 
-    harness.client.set_favorite("2".to_owned().into(), false);
+    harness.account().set_favorite("2".to_owned().into(), false);
 
     harness.expect_events(vec![
         rooms_change(RoomChange::Moved {
@@ -154,7 +154,7 @@ fn asking_for_a_favorite_that_is_one_already_asks_the_server_and_changes_nothing
     let fake = Fake::new();
     let harness = logged_in_with_a_favorite(&fake);
 
-    harness.client.set_favorite("2".to_owned().into(), true);
+    harness.account().set_favorite("2".to_owned().into(), true);
 
     harness.expect_events(vec![room_action_event("2", RoomAction::Favorite, Ok(()))]);
     assert_eq!(fake.state().room_calls, [favorite_call("2", true)]);
@@ -167,7 +167,7 @@ fn a_favorite_that_stays_first_updates_in_place() {
     let fake = Fake::new();
     let harness = logged_in_with_a_dm(&fake);
 
-    harness.client.set_favorite("1".to_owned().into(), true);
+    harness.account().set_favorite("1".to_owned().into(), true);
 
     harness.expect_events(vec![
         rooms_change(RoomChange::Updated {
@@ -183,7 +183,7 @@ fn a_favorite_that_stays_first_updates_in_place() {
 fn the_push_of_a_favorite_after_the_answer_changes_nothing() {
     let fake = Fake::new();
     let harness = logged_in_with_a_dm(&fake);
-    harness.client.set_favorite("2".to_owned().into(), true);
+    harness.account().set_favorite("2".to_owned().into(), true);
     harness.expect_events(vec![
         rooms_change(RoomChange::Moved {
             from: 1,
@@ -212,7 +212,7 @@ fn the_push_of_a_favorite_before_the_answer_leaves_nothing_for_the_answer_to_cha
     let harness = logged_in_with_a_dm(&fake);
     let gate = Arc::new(Notify::new());
     fake.script_room_action(Some(Arc::clone(&gate)), Ok(()));
-    harness.client.set_favorite("2".to_owned().into(), true);
+    harness.account().set_favorite("2".to_owned().into(), true);
     wait_until(|| (!fake.state().room_calls.is_empty()).then_some(()));
 
     let moved = RoomChange::Moved {
@@ -286,13 +286,13 @@ fn a_refused_favorite_is_reported_and_changes_nothing() {
     fake.script_room_action(None, Err(refused()));
     fake.script_room_action(None, Err(ApiError::Unreachable("refused".into())));
 
-    harness.client.set_favorite("2".to_owned().into(), true);
+    harness.account().set_favorite("2".to_owned().into(), true);
     harness.expect_events(vec![room_action_event(
         "2",
         RoomAction::Favorite,
         Err(RoomActionError::Server(refused().to_string())),
     )]);
-    harness.client.set_favorite("2".to_owned().into(), true);
+    harness.account().set_favorite("2".to_owned().into(), true);
     harness.expect_events(vec![room_action_event(
         "2",
         RoomAction::Favorite,
@@ -307,7 +307,7 @@ fn marking_a_room_read_clears_its_counts_at_once_and_is_answered() {
     let fake = Fake::new();
     let harness = logged_in_with_unread(&fake);
 
-    harness.client.mark_read("1".to_owned().into());
+    harness.account().mark_read("1".to_owned().into());
 
     harness.expect_events(vec![
         rooms_change(RoomChange::Updated {
@@ -324,7 +324,7 @@ fn marking_a_room_read_clears_its_counts_at_once_and_is_answered() {
 fn the_push_of_a_mark_read_after_the_answer_changes_nothing() {
     let fake = Fake::new();
     let harness = logged_in_with_unread(&fake);
-    harness.client.mark_read("1".to_owned().into());
+    harness.account().mark_read("1".to_owned().into());
     harness.expect_events(vec![
         rooms_change(RoomChange::Updated {
             index: 0,
@@ -349,7 +349,7 @@ fn a_refused_mark_read_is_reported_and_changes_nothing() {
     let harness = logged_in_with_unread(&fake);
     fake.script_mark_read(Err(refused()));
 
-    harness.client.mark_read("1".to_owned().into());
+    harness.account().mark_read("1".to_owned().into());
 
     harness.expect_events(vec![room_action_event(
         "1",
@@ -364,7 +364,7 @@ fn marking_a_room_unread_shows_one_unread_message_and_the_alert_at_once() {
     let fake = Fake::new();
     let harness = logged_in_with_a_dm(&fake);
 
-    harness.client.mark_unread("2".to_owned().into());
+    harness.account().mark_unread("2".to_owned().into());
 
     let mut unread = room("2", "secret", RoomKind::Private);
     unread.unread = 1;
@@ -389,7 +389,7 @@ fn the_push_of_a_mark_unread_before_or_after_the_answer_changes_nothing() {
     let harness = logged_in_with_a_dm(&fake);
     let gate = Arc::new(Notify::new());
     fake.script_room_action(Some(Arc::clone(&gate)), Ok(()));
-    harness.client.mark_unread("2".to_owned().into());
+    harness.account().mark_unread("2".to_owned().into());
     wait_until(|| (!fake.state().room_calls.is_empty()).then_some(()));
 
     // What the server pushes: one unread message and the alert.
@@ -423,7 +423,7 @@ fn marking_unread_keeps_the_mentions_and_a_room_that_shows_unread_already_does_n
         ],
     );
 
-    harness.client.mark_unread("1".to_owned().into());
+    harness.account().mark_unread("1".to_owned().into());
     let mut general = room("1", "general", RoomKind::Channel);
     general.user_mentions = 2;
     general.unread = 1;
@@ -437,7 +437,7 @@ fn marking_unread_keeps_the_mentions_and_a_room_that_shows_unread_already_does_n
     ]);
 
     // Two unread messages stay two, and the room needs no change.
-    harness.client.mark_unread("2".to_owned().into());
+    harness.account().mark_unread("2".to_owned().into());
     harness.expect_events(vec![room_action_event("2", RoomAction::MarkUnread, Ok(()))]);
 }
 
@@ -448,7 +448,7 @@ fn a_room_opened_while_it_was_being_marked_unread_stays_read() {
     let harness = logged_in_harness(&fake);
     let gate = Arc::new(Notify::new());
     fake.script_room_action(Some(Arc::clone(&gate)), Ok(()));
-    harness.client.mark_unread("1".to_owned().into());
+    harness.account().mark_unread("1".to_owned().into());
     wait_until(|| (!fake.state().room_calls.is_empty()).then_some(()));
     open_first_room(&fake, &harness, false);
 
@@ -466,7 +466,7 @@ fn the_open_room_is_not_marked_unread() {
     let harness = logged_in_harness(&fake);
     open_first_room(&fake, &harness, false);
 
-    harness.client.mark_unread("1".to_owned().into());
+    harness.account().mark_unread("1".to_owned().into());
 
     harness.expect_events(vec![room_action_event(
         "1",
@@ -475,7 +475,7 @@ fn the_open_room_is_not_marked_unread() {
     )]);
     assert!(fake.state().room_calls.is_empty());
     // Another room can be.
-    harness.client.mark_unread("2".to_owned().into());
+    harness.account().mark_unread("2".to_owned().into());
     let Event::Rooms(_) = harness.next_event() else {
         panic!("not a room change");
     };
@@ -487,7 +487,7 @@ fn leaving_a_room_removes_it_at_once_and_is_answered() {
     let fake = Fake::new();
     let harness = logged_in_with_a_dm(&fake);
 
-    harness.client.leave_room("2".to_owned().into());
+    harness.account().leave_room("2".to_owned().into());
 
     harness.expect_events(vec![
         rooms_change(RoomChange::Removed { index: 1 }),
@@ -512,7 +512,7 @@ fn the_removal_pushed_before_the_answer_leaves_nothing_for_the_answer_to_change(
     let harness = logged_in_with_a_dm(&fake);
     let gate = Arc::new(Notify::new());
     fake.script_room_action(Some(Arc::clone(&gate)), Ok(()));
-    harness.client.leave_room("1".to_owned().into());
+    harness.account().leave_room("1".to_owned().into());
     wait_until(|| (!fake.state().room_calls.is_empty()).then_some(()));
 
     assert!(fake.push(0, removed("1")));
@@ -544,7 +544,7 @@ fn leaving_the_open_room_closes_it() {
     let harness = logged_in_harness(&fake);
     open_first_room(&fake, &harness, false);
 
-    harness.client.leave_room("1".to_owned().into());
+    harness.account().leave_room("1".to_owned().into());
 
     let mut events = vec![rooms_change(RoomChange::Removed { index: 0 })];
     events.extend(closed_events());
@@ -565,7 +565,7 @@ fn leaving_a_room_the_server_refuses_to_let_go_is_reported_and_keeps_the_room() 
     };
     fake.script_room_action(None, Err(last_owner.clone()));
 
-    harness.client.leave_room("2".to_owned().into());
+    harness.account().leave_room("2".to_owned().into());
 
     harness.expect_events(vec![room_action_event(
         "2",
@@ -581,7 +581,7 @@ fn a_direct_message_is_not_left_and_the_server_is_not_asked() {
     let fake = Fake::new();
     let harness = logged_in_with_a_dm(&fake);
 
-    harness.client.leave_room("3".to_owned().into());
+    harness.account().leave_room("3".to_owned().into());
 
     harness.expect_events(vec![room_action_event(
         "3",
@@ -596,7 +596,7 @@ fn a_direct_message_is_not_left_and_the_server_is_not_asked() {
 fn a_room_that_is_not_in_the_list_gets_no_command_and_the_server_is_not_asked() {
     let fake = Fake::new();
     let harness = logged_in_with_a_dm(&fake);
-    let client = &harness.client;
+    let client = harness.account();
 
     client.set_favorite("nope".to_owned().into(), true);
     client.set_favorite("nope".to_owned().into(), false);
@@ -625,10 +625,10 @@ fn room_commands_are_ignored_when_logged_out() {
     let fake = Fake::new();
     let harness = Harness::new(&fake);
 
-    harness.client.set_favorite("1".to_owned().into(), true);
-    harness.client.mark_read("1".to_owned().into());
-    harness.client.mark_unread("1".to_owned().into());
-    harness.client.leave_room("1".to_owned().into());
+    harness.account().set_favorite("1".to_owned().into(), true);
+    harness.account().mark_read("1".to_owned().into());
+    harness.account().mark_unread("1".to_owned().into());
+    harness.account().leave_room("1".to_owned().into());
 
     // The first event after this is the login's.
     fake.script_login(None, Ok(()));
@@ -648,10 +648,10 @@ fn a_room_command_answered_after_logout_is_dropped() {
     let harness = logged_in_with_a_dm(&fake);
     let gate = Arc::new(Notify::new());
     fake.script_room_action(Some(Arc::clone(&gate)), Ok(()));
-    harness.client.leave_room("1".to_owned().into());
+    harness.account().leave_room("1".to_owned().into());
     wait_until(|| (!fake.state().room_calls.is_empty()).then_some(()));
 
-    harness.client.logout();
+    harness.logout();
     harness.expect_events(vec![session_event(logged_out(None)), rooms_event(vec![])]);
     gate.notify_one();
     fake.wait_for_room_actions_returned(1);
@@ -671,7 +671,7 @@ fn a_dead_token_on_a_room_command_expires_the_session() {
     let harness = logged_in_with_a_dm(&fake);
     fake.script_room_action(None, Err(ApiError::Unauthorized));
 
-    harness.client.set_favorite("2".to_owned().into(), true);
+    harness.account().set_favorite("2".to_owned().into(), true);
 
     harness.expect_events(vec![
         session_event(logged_out(Some(LoginFailure::SessionExpired))),

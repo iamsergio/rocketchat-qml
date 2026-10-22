@@ -127,7 +127,7 @@ fn removing_the_open_room_closes_it() {
     harness.expect_events(vec![rooms_change(RoomChange::Removed { index: 0 })]);
     harness.expect_events(closed_events());
     // The room is gone: it can't be opened.
-    harness.client.open_room("1".to_owned().into());
+    harness.account().open_room("1".to_owned().into());
     assert!(fake.push(0, removed("2")));
     harness.expect_events(vec![rooms_change(RoomChange::Removed { index: 0 })]);
 }
@@ -142,13 +142,13 @@ fn a_live_message_is_appended_to_the_open_room_and_kept() {
     harness.expect_events(vec![appended("c", 3)]);
 
     // Kept: it's there when the room opens again.
-    harness.client.open_room("2".to_owned().into());
+    harness.account().open_room("2".to_owned().into());
     harness.expect_events(vec![
         reset_event(Some("2"), Vec::new()),
         status("2", true, false, false, None),
         status("2", false, false, true, None),
     ]);
-    harness.client.open_room("1".to_owned().into());
+    harness.account().open_room("1".to_owned().into());
     harness.expect_events(vec![
         reset_event(
             Some("1"),
@@ -183,7 +183,7 @@ fn a_message_pushed_while_the_room_loads_joins_the_page() {
         Some(Arc::clone(&gate)),
         page(vec![message("b", 2), message("a", 1)], false),
     );
-    harness.client.open_room("1".to_owned().into());
+    harness.account().open_room("1".to_owned().into());
     harness.expect_events(vec![
         reset_event(Some("1"), Vec::new()),
         status("1", true, false, false, None),
@@ -470,7 +470,7 @@ fn logout_cancels_a_pending_reconnect() {
     let fake = Fake::new();
     let harness = logged_in_harness_with(&fake, Backoff::new(BASE * 2, BASE * 2, NEVER));
     fake.end_connection(0);
-    harness.client.logout();
+    harness.logout();
     harness.expect_events(vec![session_event(logged_out(None)), rooms_event(vec![])]);
     // Past the wait, even with the jitter at its least.
     std::thread::sleep(BASE * 4);
@@ -534,7 +534,7 @@ fn a_failed_room_fetch_ends_the_cycle_and_is_retried_after_a_wait() {
 fn logout_ends_the_connection_and_the_next_session_gets_its_own() {
     let fake = Fake::new();
     let harness = logged_in_harness(&fake);
-    harness.client.logout();
+    harness.logout();
     harness.expect_events(vec![session_event(logged_out(None)), rooms_event(vec![])]);
     // The client dropped its end: the connection is closed.
     fake.wait_for_connection_closed(0);
@@ -577,7 +577,7 @@ fn a_connection_that_opens_after_logout_is_dropped() {
     ]);
     fake.wait_for_connections(1);
 
-    harness.client.logout();
+    harness.logout();
     harness.expect_events(vec![session_event(logged_out(None))]);
     fake.wait_for_connection_closed(0);
     gate.notify_one();
@@ -646,9 +646,9 @@ fn a_connection_that_is_never_lost_reports_nothing() {
     let fake = Fake::new();
     let harness = logged_in_harness(&fake);
     fake.wait_for_connections(1);
-    harness.client.logout();
+    harness.logout();
     loop {
-        match harness.events.recv_timeout(TIMEOUT).expect("no event") {
+        match harness.recv_timeout(TIMEOUT).expect("no event") {
             Event::Connection(connection) => panic!("{connection:?}"),
             Event::Session(SessionState::LoggedOut { .. }) => break,
             _ => {}

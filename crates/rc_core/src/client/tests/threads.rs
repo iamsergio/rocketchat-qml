@@ -85,7 +85,7 @@ impl Harness {
 /// Opens the thread of `b` of room 1, which has `replies` (newest first) in its first page.
 fn open_thread_with(fake: &Fake, harness: &Harness, replies: Vec<Message>, reached_start: bool) {
     fake.script_thread(None, page(replies, reached_start));
-    harness.client.open_thread("b".to_owned().into());
+    harness.account().open_thread("b".to_owned().into());
 }
 
 /// Room 1 is open and so is the thread of `b`, whose replies are `r1` and `r2`; its events are
@@ -131,7 +131,7 @@ fn only_a_sent_text_message_of_the_open_room_can_be_opened_as_a_thread() {
     let fake = Fake::new();
     let harness = logged_in_harness(&fake);
     // No room is open.
-    harness.client.open_thread("b".to_owned().into());
+    harness.account().open_thread("b".to_owned().into());
     fake.script_history(
         None,
         page(
@@ -139,7 +139,7 @@ fn only_a_sent_text_message_of_the_open_room_can_be_opened_as_a_thread() {
             true,
         ),
     );
-    harness.client.open_room("1".to_owned().into());
+    harness.account().open_room("1".to_owned().into());
     harness.expect_events(vec![
         reset_event(Some("1"), Vec::new()),
         status("1", true, false, false, None),
@@ -149,15 +149,18 @@ fn only_a_sent_text_message_of_the_open_room_can_be_opened_as_a_thread() {
         ),
         status("1", false, false, true, None),
     ]);
+    // The send is held, so that the message stays pending.
+    let gate = Arc::new(Notify::new());
+    fake.script_send(Some(Arc::clone(&gate)), Ok(7));
     harness
-        .client
+        .account()
         .send_message("1".to_owned().into(), "unsent", None, None, false);
     let pending = expect_pending(&harness);
     // Unknown, a reply, and not sent yet.
     for id in ["zzz", "s", pending.id.as_str()] {
-        harness.client.open_thread(id.to_owned().into());
+        harness.account().open_thread(id.to_owned().into());
     }
-    harness.client.open_thread("a".to_owned().into());
+    harness.account().open_thread("a".to_owned().into());
     // The first event about a thread is the one for `a`, and only that one asked the server.
     harness.expect_thread(vec![
         thread_reset(Some("1"), Vec::new()),
@@ -166,6 +169,7 @@ fn only_a_sent_text_message_of_the_open_room_can_be_opened_as_a_thread() {
     let calls = fake.wait_for_thread_calls(1);
     assert_eq!(calls.len(), 1);
     assert_eq!(calls[0].thread, "a");
+    gate.notify_one();
 }
 
 // ACT-004
@@ -191,7 +195,7 @@ fn older_replies_are_fetched_by_offset_and_the_parent_comes_with_the_start() {
         None,
         page(vec![reply("r2", 4, "b"), reply("r1", 3, "b")], true),
     );
-    harness.client.load_older_thread();
+    harness.account().load_older_thread();
     harness.expect_thread(vec![
         thread_status("b", false, true, false, None),
         Event::ThreadTimeline(vec![TimelineChange::Prepended(vec![
@@ -205,8 +209,8 @@ fn older_replies_are_fetched_by_offset_and_the_parent_comes_with_the_start() {
     assert_eq!(offsets, [0, 2]);
 
     // The start is reached: nothing more is asked.
-    harness.client.load_older_thread();
-    harness.client.close_thread();
+    harness.account().load_older_thread();
+    harness.account().close_thread();
     harness.expect_thread(thread_closed_events());
     assert_eq!(fake.state().thread_calls.len(), 2);
 }
@@ -217,20 +221,20 @@ fn loading_older_replies_is_ignored_without_a_thread_and_while_a_fetch_runs() {
     let fake = Fake::new();
     let harness = logged_in_harness(&fake);
     open_first_room(&fake, &harness, false);
-    harness.client.load_older_thread();
+    harness.account().load_older_thread();
     let gate = Arc::new(Notify::new());
     fake.script_thread(
         Some(Arc::clone(&gate)),
         page(vec![reply("r1", 3, "b")], true),
     );
-    harness.client.open_thread("b".to_owned().into());
+    harness.account().open_thread("b".to_owned().into());
     harness.expect_thread(vec![
         thread_reset(Some("1"), Vec::new()),
         thread_status("b", true, false, false, None),
     ]);
     fake.wait_for_thread_calls(1);
     // Nothing is held yet, and a fetch runs.
-    harness.client.load_older_thread();
+    harness.account().load_older_thread();
     gate.notify_one();
     harness.expect_thread(vec![
         thread_reset(Some("1"), vec![message("b", 2), reply("r1", 3, "b")]),
@@ -250,11 +254,11 @@ fn the_answer_of_a_thread_that_was_closed_or_replaced_is_dropped() {
         Some(Arc::clone(&gate)),
         page(vec![reply("old", 9, "b")], true),
     );
-    harness.client.open_thread("b".to_owned().into());
+    harness.account().open_thread("b".to_owned().into());
     fake.wait_for_thread_calls(1);
     // `a` replaces `b` before `b`'s answer, which is then stale.
     fake.script_thread(None, page(vec![reply("mine", 3, "a")], true));
-    harness.client.open_thread("a".to_owned().into());
+    harness.account().open_thread("a".to_owned().into());
     fake.wait_for_thread_calls(2);
     gate.notify_one();
     harness.expect_thread(vec![
@@ -267,7 +271,7 @@ fn the_answer_of_a_thread_that_was_closed_or_replaced_is_dropped() {
     ]);
     // The late answer of `b` is gone for good: closing shows nothing else came.
     std::thread::sleep(Duration::from_millis(50));
-    harness.client.close_thread();
+    harness.account().close_thread();
     harness.expect_thread(thread_closed_events());
 }
 
@@ -279,14 +283,14 @@ fn a_failed_thread_fetch_shows_the_error_and_opening_again_retries() {
     open_first_room(&fake, &harness, false);
     let error = ApiError::Unreachable("down".into());
     fake.script_thread(None, Err(error));
-    harness.client.open_thread("b".to_owned().into());
+    harness.account().open_thread("b".to_owned().into());
     harness.expect_thread(vec![
         thread_reset(Some("1"), Vec::new()),
         thread_status("b", true, false, false, None),
         thread_status("b", false, false, false, Some(TimelineError::Unreachable)),
     ]);
     fake.script_thread(None, page(vec![reply("r1", 3, "b")], true));
-    harness.client.open_thread("b".to_owned().into());
+    harness.account().open_thread("b".to_owned().into());
     harness.expect_thread(vec![
         thread_reset(Some("1"), Vec::new()),
         thread_status("b", true, false, false, None),
@@ -336,7 +340,7 @@ fn a_reply_pushed_while_the_thread_loads_joins_the_page() {
         Some(Arc::clone(&gate)),
         page(vec![reply("r1", 3, "b")], true),
     );
-    harness.client.open_thread("b".to_owned().into());
+    harness.account().open_thread("b".to_owned().into());
     harness.expect_thread(vec![
         thread_reset(Some("1"), Vec::new()),
         thread_status("b", true, false, false, None),
@@ -392,7 +396,7 @@ fn a_parent_that_changes_while_the_thread_loads_comes_in_its_new_form() {
         Some(Arc::clone(&gate)),
         page(vec![reply("r1", 3, "b")], true),
     );
-    harness.client.open_thread("b".to_owned().into());
+    harness.account().open_thread("b".to_owned().into());
     harness.expect_thread(vec![
         thread_reset(Some("1"), Vec::new()),
         thread_status("b", true, false, false, None),
@@ -423,7 +427,7 @@ fn deleting_a_reply_removes_it_and_counts_one_less_in_the_parent() {
         None,
         page(vec![reply("r2", 4, "b"), reply("r1", 3, "b")], true),
     );
-    harness.client.open_thread("b".to_owned().into());
+    harness.account().open_thread("b".to_owned().into());
     harness.expect_thread(vec![
         thread_reset(Some("1"), Vec::new()),
         thread_status("b", true, false, false, None),
@@ -525,7 +529,7 @@ fn another_room_closes_the_thread() {
     let fake = Fake::new();
     let harness = logged_in_harness(&fake);
     open_thread_of_b(&fake, &harness);
-    harness.client.open_room("2".to_owned().into());
+    harness.account().open_room("2".to_owned().into());
     let mut expected = thread_closed_events();
     expected.extend([
         reset_event(Some("2"), Vec::new()),
@@ -554,7 +558,7 @@ fn logout_closes_the_thread() {
     let fake = Fake::new();
     let harness = logged_in_harness(&fake);
     open_thread_of_b(&fake, &harness);
-    harness.client.logout();
+    harness.logout();
     let mut closed = false;
     while !closed {
         closed = harness.next_event() == thread_reset(None, Vec::new());
@@ -637,7 +641,7 @@ fn a_reply_shows_pending_in_the_thread_only_and_becomes_sent() {
     open_thread_of_b(&fake, &harness);
     let gate = Arc::new(Notify::new());
     fake.script_send(Some(Arc::clone(&gate)), Ok(1_000));
-    harness.client.send_message(
+    harness.account().send_message(
         "1".to_owned().into(),
         "in the thread",
         None,
@@ -690,7 +694,7 @@ fn a_reply_also_sent_to_the_channel_is_pending_in_both_and_settles_in_both() {
     open_thread_of_b(&fake, &harness);
     let gate = Arc::new(Notify::new());
     fake.script_send(Some(Arc::clone(&gate)), Ok(1_000));
-    harness.client.send_message(
+    harness.account().send_message(
         "1".to_owned().into(),
         "for everybody",
         None,
@@ -737,7 +741,7 @@ fn a_reply_to_a_thread_that_is_not_open_is_not_sent() {
     let fake = Fake::new();
     let harness = logged_in_harness(&fake);
     open_thread_of_b(&fake, &harness);
-    harness.client.send_message(
+    harness.account().send_message(
         "1".to_owned().into(),
         "astray",
         None,
@@ -746,7 +750,7 @@ fn a_reply_to_a_thread_that_is_not_open_is_not_sent() {
     );
     // Nothing comes out for it, and the next send is the first the server hears of.
     harness
-        .client
+        .account()
         .send_message("1".to_owned().into(), "plain", None, None, false);
     let pending = expect_pending(&harness);
     assert_eq!(fake.wait_for_send_calls(1)[0].id, pending.id.to_string());
@@ -766,7 +770,7 @@ fn a_failed_reply_fails_in_the_thread_and_retries_as_a_reply() {
             message: "nope".into(),
         }),
     );
-    harness.client.send_message(
+    harness.account().send_message(
         "1".to_owned().into(),
         "in the thread",
         None,
@@ -785,7 +789,7 @@ fn a_failed_reply_fails_in_the_thread_and_retries_as_a_reply() {
         message: with_delivery(&pending, Delivery::Failed),
     }])]);
 
-    harness.client.retry_message(pending.id.clone());
+    harness.account().retry_message(pending.id.clone());
     harness.expect_events(vec![Event::ThreadTimeline(vec![TimelineChange::Updated {
         index: 3,
         message: pending.clone(),
@@ -810,7 +814,7 @@ fn a_reply_in_the_thread_can_be_edited_reacted_to_and_deleted() {
     let id: MessageId = "r1".to_owned().into();
 
     fake.script_edit(None, Ok(3));
-    harness.client.edit_message(id.clone(), "r1 edited");
+    harness.account().edit_message(id.clone(), "r1 edited");
     let Event::ThreadTimeline(changes) = harness.next_event() else {
         panic!("not about the thread");
     };
@@ -826,7 +830,7 @@ fn a_reply_in_the_thread_can_be_edited_reacted_to_and_deleted() {
         outcome: Ok(()),
     }]);
 
-    harness.client.react(id.clone(), "smile", true);
+    harness.account().react(id.clone(), "smile", true);
     let Event::ThreadTimeline(changes) = harness.next_event() else {
         panic!("not about the thread");
     };
@@ -841,7 +845,7 @@ fn a_reply_in_the_thread_can_be_edited_reacted_to_and_deleted() {
         outcome: Ok(()),
     }]);
 
-    harness.client.delete_message(id.clone());
+    harness.account().delete_message(id.clone());
     assert_eq!(
         harness.next_thread(),
         Event::ThreadTimeline(vec![TimelineChange::Removed { index: 1 }])
@@ -864,7 +868,7 @@ fn a_reply_in_the_thread_can_be_quoted() {
     fake.state().site_url = Some(Ok(Some(SITE.to_owned())));
     let harness = logged_in_harness(&fake);
     open_thread_of_b(&fake, &harness);
-    harness.client.send_message(
+    harness.account().send_message(
         "1".to_owned().into(),
         "agreed",
         Some("r1".to_owned().into()),

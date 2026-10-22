@@ -3,6 +3,9 @@
 
 //! The test client, and the builders and waits the tests share.
 
+use std::cell::{Cell, RefCell};
+use std::sync::mpsc::RecvTimeoutError;
+
 use super::*;
 
 pub(super) const TIMEOUT: Duration = Duration::from_secs(5);
@@ -119,8 +122,14 @@ pub(super) fn wait_for_empty(store: &MemoryStore) {
 
 pub(super) struct Harness {
     pub(super) client: Client,
-    pub(super) events: Receiver<Event>,
-    /// The first event, which every client sends.
+    events: Receiver<(AccountId, Event)>,
+    /// The account the harness follows: the first one added.
+    account: AccountId,
+    /// Events read while looking for another account's, kept for when it is asked for.
+    held: RefCell<HashMap<AccountId, VecDeque<Event>>>,
+    /// The test uses more than one account: events of the others are held, not a failure.
+    several: Cell<bool>,
+    /// The first session state of the account, which every account has.
     pub(super) first: SessionState,
 }
 
@@ -145,42 +154,139 @@ impl Harness {
         Self::build(fake, MemoryStore::default(), cache, backoff)
     }
 
+    /// A harness for a store that holds several accounts: the events of the others are held
+    /// (see [`allow_other_accounts`](Self::allow_other_accounts)) from the start.
+    pub(super) fn with_accounts(fake: &Fake, store: impl SecretStore) -> Self {
+        Self::build_for(
+            fake,
+            store,
+            FakeCache::default(),
+            Backoff::new(NEVER, NEVER, NEVER),
+            true,
+        )
+    }
+
     pub(super) fn build(
         fake: &Fake,
         store: impl SecretStore,
         cache: FakeCache,
         backoff: Backoff,
     ) -> Self {
+        Self::build_for(fake, store, cache, backoff, false)
+    }
+
+    fn build_for(
+        fake: &Fake,
+        store: impl SecretStore,
+        cache: FakeCache,
+        backoff: Backoff,
+        several: bool,
+    ) -> Self {
         let (tx, events) = mpsc::channel();
         let client = Client::with_backoff(
             fake.clone(),
             store,
             cache,
-            move |event| {
-                let _ = tx.send(event);
+            move |id, event| {
+                let _ = tx.send((id, event));
             },
             backoff,
         )
         .unwrap();
+        let (account, added) = events.recv_timeout(TIMEOUT).expect("no event");
+        assert_eq!(added, Event::Added);
         let mut harness = Self {
             client,
             events,
+            account,
+            held: RefCell::default(),
+            several: Cell::new(several),
             first: SessionState::Connecting,
         };
         harness.first = harness.next();
         harness
     }
 
+    /// The account the harness follows.
+    pub(super) fn id(&self) -> &AccountId {
+        &self.account
+    }
+
+    /// The commands for the account the harness follows.
+    pub(super) fn account(&self) -> AccountHandle<'_> {
+        self.client.account(&self.account)
+    }
+
+    /// Lets the test use other accounts: their events are held until the test asks for them with
+    /// [`recv_of`](Self::recv_of) and the like, instead of failing the test.
+    pub(super) fn allow_other_accounts(&self) {
+        self.several.set(true);
+    }
+
+    /// Tells the account's actor to log out, which leaves the account in place, logged out. Not
+    /// [`Client::remove_account`], which ends the account too.
+    pub(super) fn logout(&self) {
+        self.logout_account(&self.account);
+    }
+
+    /// [`logout`](Self::logout) for the account `id`.
+    pub(super) fn logout_account(&self, id: &AccountId) {
+        self.client.send(CoreCommand::Account(
+            id.clone(),
+            crate::client::Command::Logout,
+        ));
+    }
+
     pub(super) fn login(&self, server: &str, username: &str) {
-        self.client
+        self.account()
             .login(server, username, SecretString::from("secret"));
+    }
+
+    /// The next event of the account, within `timeout`. Every event of another account is a
+    /// failure, unless the test allowed them (see
+    /// [`allow_other_accounts`](Self::allow_other_accounts)).
+    pub(super) fn recv_timeout(&self, timeout: Duration) -> Result<Event, RecvTimeoutError> {
+        self.recv_of(&self.account, timeout)
+    }
+
+    /// The next event of the account `id`, within `timeout`.
+    pub(super) fn recv_of(
+        &self,
+        id: &AccountId,
+        timeout: Duration,
+    ) -> Result<Event, RecvTimeoutError> {
+        if let Some(event) = (self.held.borrow_mut().get_mut(id)).and_then(VecDeque::pop_front) {
+            return Ok(event);
+        }
+        let deadline = Instant::now() + timeout;
+        loop {
+            let left = deadline.saturating_duration_since(Instant::now());
+            let (from, event) = self.events.recv_timeout(left)?;
+            if from == *id {
+                return Ok(event);
+            }
+            assert!(
+                self.several.get() || from == self.account,
+                "event of another account {from}: {event:?}"
+            );
+            self.held
+                .borrow_mut()
+                .entry(from)
+                .or_default()
+                .push_back(event);
+        }
     }
 
     /// The next event, connection changes aside: the tests that don't look at them don't wait for
     /// them either. See [`next_connection`](Self::next_connection).
     pub(super) fn next_event(&self) -> Event {
+        self.next_event_of(&self.account)
+    }
+
+    /// [`next_event`](Self::next_event) of the account `id`.
+    pub(super) fn next_event_of(&self, id: &AccountId) -> Event {
         loop {
-            match self.events.recv_timeout(TIMEOUT).expect("no event") {
+            match self.recv_of(id, TIMEOUT).expect("no event") {
                 Event::Connection(_) => {}
                 event => return event,
             }
@@ -190,7 +296,7 @@ impl Harness {
     /// The updates of the next `Avatars` event, skipping the other events.
     pub(super) fn next_avatars(&self) -> Vec<AvatarUpdate> {
         loop {
-            if let Event::Avatars(updates) = self.events.recv_timeout(TIMEOUT).expect("no event") {
+            if let Event::Avatars(updates) = self.recv_timeout(TIMEOUT).expect("no event") {
                 return updates;
             }
         }
@@ -200,7 +306,7 @@ impl Harness {
     pub(super) fn assert_no_avatars(&self) {
         let deadline = Instant::now() + Duration::from_millis(200);
         while let Some(left) = deadline.checked_duration_since(Instant::now()) {
-            if let Ok(Event::Avatars(updates)) = self.events.recv_timeout(left) {
+            if let Ok(Event::Avatars(updates)) = self.recv_timeout(left) {
                 panic!("unexpected avatars: {updates:?}");
             }
         }
@@ -209,7 +315,7 @@ impl Harness {
     /// The updates of the next `Images` event, skipping the other events.
     pub(super) fn next_images(&self) -> Vec<ImageUpdate> {
         loop {
-            if let Event::Images(updates) = self.events.recv_timeout(TIMEOUT).expect("no event") {
+            if let Event::Images(updates) = self.recv_timeout(TIMEOUT).expect("no event") {
                 return updates;
             }
         }
@@ -219,7 +325,7 @@ impl Harness {
     pub(super) fn assert_no_images(&self) {
         let deadline = Instant::now() + Duration::from_millis(200);
         while let Some(left) = deadline.checked_duration_since(Instant::now()) {
-            if let Ok(Event::Images(updates)) = self.events.recv_timeout(left) {
+            if let Ok(Event::Images(updates)) = self.recv_timeout(left) {
                 panic!("unexpected images: {updates:?}");
             }
         }
@@ -228,7 +334,7 @@ impl Harness {
     /// Skips events until the open room's messages gain the one with this id.
     pub(super) fn wait_for_appended(&self, id: &str) {
         loop {
-            if let Event::Timeline(changes) = self.events.recv_timeout(TIMEOUT).expect("no event")
+            if let Event::Timeline(changes) = self.recv_timeout(TIMEOUT).expect("no event")
                 && changes.iter().any(|change| {
                     matches!(change, TimelineChange::Appended(messages)
                         if messages.iter().any(|m| m.id.as_str() == id))
@@ -242,9 +348,7 @@ impl Harness {
     /// The next connection change, skipping the other events.
     pub(super) fn next_connection(&self) -> Connection {
         loop {
-            if let Event::Connection(connection) =
-                self.events.recv_timeout(TIMEOUT).expect("no event")
-            {
+            if let Event::Connection(connection) = self.recv_timeout(TIMEOUT).expect("no event") {
                 return connection;
             }
         }
@@ -253,8 +357,13 @@ impl Harness {
     /// The next session state. Room events in between are skipped: the session tests don't care
     /// about them, the room tests use [`next_event`](Self::next_event).
     pub(super) fn next(&self) -> SessionState {
+        self.next_of(&self.account)
+    }
+
+    /// [`next`](Self::next) of the account `id`.
+    pub(super) fn next_of(&self, id: &AccountId) -> SessionState {
         loop {
-            if let Event::Session(state) = self.next_event() {
+            if let Event::Session(state) = self.next_event_of(id) {
                 return state;
             }
         }
@@ -262,15 +371,41 @@ impl Harness {
 
     /// Checks the next session states, in order.
     pub(super) fn expect(&self, states: &[SessionState]) {
+        self.expect_of(&self.account, states);
+    }
+
+    /// [`expect`](Self::expect) for the account `id`.
+    pub(super) fn expect_of(&self, id: &AccountId, states: &[SessionState]) {
         for expected in states {
-            assert_eq!(&self.next(), expected);
+            assert_eq!(&self.next_of(id), expected);
         }
     }
 
     /// Checks the next events, in order, room events included.
     pub(super) fn expect_events(&self, events: Vec<Event>) {
+        self.expect_events_of(&self.account, events);
+    }
+
+    /// [`expect_events`](Self::expect_events) for the account `id`.
+    pub(super) fn expect_events_of(&self, id: &AccountId, events: Vec<Event>) {
         for expected in events {
-            assert_eq!(self.next_event(), expected);
+            assert_eq!(self.next_event_of(id), expected);
+        }
+    }
+
+    /// The account whose `Added` comes next in the stream, which the test can't know yet because
+    /// the core made it up. The events read on the way are held.
+    pub(super) fn next_added(&self) -> AccountId {
+        loop {
+            let (id, event) = self.events.recv_timeout(TIMEOUT).expect("no event");
+            if event == Event::Added {
+                return id;
+            }
+            self.held
+                .borrow_mut()
+                .entry(id)
+                .or_default()
+                .push_back(event);
         }
     }
 }
@@ -380,7 +515,7 @@ pub(super) fn open_first_room(fake: &Fake, harness: &Harness, reached_start: boo
         None,
         page(vec![message("b", 2), message("a", 1)], reached_start),
     );
-    harness.client.open_room("1".to_owned().into());
+    harness.account().open_room("1".to_owned().into());
     harness.expect_events(vec![
         reset_event(Some("1"), Vec::new()),
         status("1", true, false, false, None),
@@ -472,7 +607,7 @@ pub(super) fn expect_pending(harness: &Harness) -> Message {
 
 /// Opens room 2, which has nothing, and takes its events.
 pub(super) fn open_the_other_room(harness: &Harness) {
-    harness.client.open_room("2".to_owned().into());
+    harness.account().open_room("2".to_owned().into());
     harness.expect_events(vec![
         reset_event(Some("2"), Vec::new()),
         status("2", true, false, false, None),
@@ -579,7 +714,7 @@ pub(super) fn logged_in_with_cache(fake: &Fake, cache: &FakeCache) -> Harness {
 /// Opens room 1 with an empty page, which wants no avatar.
 pub(super) fn open_first_room_of(fake: &Fake, harness: &Harness) {
     fake.script_history(None, page(Vec::new(), true));
-    harness.client.open_room("1".to_owned().into());
+    harness.account().open_room("1".to_owned().into());
     harness.expect_events(vec![
         reset_event(Some("1"), Vec::new()),
         status("1", true, false, false, None),

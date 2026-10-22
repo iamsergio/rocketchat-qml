@@ -113,7 +113,7 @@ fn logout_revokes_the_token() {
     let harness = Harness::new(&fake);
     harness.login("http://h", "alice");
     harness.expect(&[SessionState::Connecting, logged_in("http://h", "alice")]);
-    harness.client.logout();
+    harness.logout();
     harness.expect(&[logged_out(None)]);
     assert_eq!(
         fake.wait_for_logout_call(),
@@ -130,7 +130,7 @@ fn logout_ends_logged_out_even_if_the_server_call_fails() {
     let harness = Harness::new(&fake);
     harness.login("http://h", "alice");
     harness.expect(&[SessionState::Connecting, logged_in("http://h", "alice")]);
-    harness.client.logout();
+    harness.logout();
     harness.expect(&[logged_out(None)]);
     fake.wait_for_logout_call();
 }
@@ -148,7 +148,7 @@ fn logout_while_connecting_cancels_the_login() {
     // Cancel only once the attempt is really waiting at the gate.
     fake.wait_for_login_calls(1);
 
-    harness.client.logout();
+    harness.logout();
     harness.expect(&[logged_out(None)]);
 
     // The cancelled attempt must not surface, whatever it does now.
@@ -174,7 +174,7 @@ fn login_while_connecting_is_ignored() {
     gate.notify_one();
     harness.expect(&[logged_in("http://h", "alice")]);
     // Nothing extra came in between: the next event is the logout's.
-    harness.client.logout();
+    harness.logout();
     harness.expect(&[logged_out(None)]);
     assert_eq!(fake.login_calls().len(), 1);
 }
@@ -324,7 +324,7 @@ fn login_saves_the_account_under_the_actors_id() {
     assert_eq!(saved.user_id.as_str(), "uid");
     assert_eq!(saved.token.as_ref().unwrap().expose_secret(), "tok");
     // A fresh actor has an id of its own, and the next login of the same actor reuses it.
-    harness.client.logout();
+    harness.logout();
     harness.expect(&[logged_out(None)]);
     fake.script_login(None, Ok(()));
     harness.login("chat.example.com", "alice");
@@ -361,7 +361,7 @@ fn logout_forgets_the_stored_session() {
     let harness = Harness::with_store(&fake, store.clone());
     harness.login("http://h", "alice");
     harness.expect(&[SessionState::Connecting, logged_in("http://h", "alice")]);
-    harness.client.logout();
+    harness.logout();
     harness.expect(&[logged_out(None)]);
     // The save and the clear are applied in order, so the store ends up empty.
     wait_for_empty(&store);
@@ -378,7 +378,7 @@ fn dropping_the_client_after_logout_finishes_the_logout() {
     let harness = Harness::with_store(&fake, store.clone());
     harness.login("http://h", "alice");
     harness.expect(&[SessionState::Connecting, logged_in("http://h", "alice")]);
-    harness.client.logout();
+    harness.logout();
     harness.expect(&[logged_out(None)]);
 
     drop(harness);
@@ -398,7 +398,7 @@ fn logout_while_resuming_cancels_and_forgets() {
     assert_eq!(harness.first, SessionState::Resuming);
     fake.wait_for_me_call();
 
-    harness.client.logout();
+    harness.logout();
 
     harness.expect(&[logged_out(None)]);
     wait_for_empty(&store);
@@ -415,9 +415,10 @@ fn logout_removes_the_account_of_the_actor_and_leaves_the_others() {
     let fake = Fake::new();
     let store = store_with("http://h");
     store.save(&stored_as("other-id", "http://other")).unwrap();
-    let harness = Harness::with_store(&fake, store.clone());
+    // The other account runs too.
+    let harness = Harness::with_accounts(&fake, store.clone());
     harness.expect(&[logged_in("http://h", "alice")]);
-    harness.client.logout();
+    harness.logout();
     harness.expect(&[logged_out(None)]);
     drop(harness);
     let ids: Vec<String> = store
@@ -439,7 +440,7 @@ fn a_resume_uses_the_stored_id() {
     let harness = Harness::with_store(&fake, store.clone());
     harness.expect(&[logged_in("http://h", "alice")]);
     // Nothing is saved by a resume, and logging out removes the account that was resumed.
-    harness.client.logout();
+    harness.logout();
     harness.expect(&[logged_out(None)]);
     wait_for_empty(&store);
 }
@@ -447,7 +448,7 @@ fn a_resume_uses_the_stored_id() {
 // AUTH-004
 // ACCT-002
 #[test]
-fn with_two_stored_accounts_the_first_with_a_token_is_resumed() {
+fn with_three_stored_accounts_the_ones_with_a_token_resume_and_a_logout_removes_only_its_own() {
     let fake = Fake::new();
     let store = MemoryStore::default();
     let mut signed_out = stored_as("signed-out-id", "http://signed-out");
@@ -457,13 +458,18 @@ fn with_two_stored_accounts_the_first_with_a_token_is_resumed() {
         .save(&stored_as("second-id", "http://second"))
         .unwrap();
     store.save(&stored_as("third-id", "http://third")).unwrap();
-    let harness = Harness::with_store(&fake, store.clone());
-    assert_eq!(harness.first, SessionState::Resuming);
-    harness.expect(&[logged_in("http://second", "alice")]);
-    harness.client.logout();
-    harness.expect(&[logged_out(None)]);
+    let harness = Harness::with_accounts(&fake, store.clone());
+    // The signed-out account is the first.
+    assert_eq!(harness.first, logged_out(None));
+    let second = AccountId::from("second-id".to_owned());
+    harness.expect_of(
+        &second,
+        &[SessionState::Resuming, logged_in("http://second", "alice")],
+    );
+    harness.logout_account(&second);
+    harness.expect_of(&second, &[logged_out(None)]);
     drop(harness);
-    // Only the resumed account went; the signed-out one and the other are untouched.
+    // Only the account that logged out went; the signed-out one and the other are untouched.
     let ids: Vec<String> = store
         .load()
         .unwrap()

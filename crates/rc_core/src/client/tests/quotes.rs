@@ -24,7 +24,7 @@ fn logged_in_with_site_url(fake: &Fake) -> Harness {
 }
 
 fn quote_send(harness: &Harness, room: &str, text: &str, quoted: &str) {
-    harness.client.send_message(
+    harness.account().send_message(
         room.to_owned().into(),
         text,
         Some(quoted.to_owned().into()),
@@ -77,7 +77,7 @@ fn a_quote_in_a_private_group_is_linked_by_the_name_of_the_group() {
         ..message("g", 1)
     };
     fake.script_history(None, page(vec![held.clone()], true));
-    harness.client.open_room("2".to_owned().into());
+    harness.account().open_room("2".to_owned().into());
     harness.expect_events(vec![
         reset_event(Some("2"), Vec::new()),
         status("2", true, false, false, None),
@@ -116,7 +116,7 @@ fn a_quote_in_a_direct_message_is_linked_by_the_id_of_the_room() {
         ..message("d", 1)
     };
     fake.script_history(None, page(vec![held.clone()], true));
-    harness.client.open_room("3".to_owned().into());
+    harness.account().open_room("3".to_owned().into());
     harness.expect_events(vec![
         reset_event(Some("3"), Vec::new()),
         status("3", true, false, false, None),
@@ -195,7 +195,7 @@ fn each_login_asks_the_server_for_its_site_url() {
         session_event(logged_in("http://h", "alice")),
         rooms_event(vec![room("1", "general", RoomKind::Channel)]),
     ]);
-    harness.client.logout();
+    harness.logout();
     harness.expect_events(vec![session_event(logged_out(None)), rooms_event(vec![])]);
     // The next server has none to tell.
     fake.state().site_url = None;
@@ -251,7 +251,7 @@ fn only_a_sent_text_message_of_the_open_room_can_be_quoted() {
         fake.script_send(Some(Arc::clone(&gate)), Ok(7));
     }
     harness
-        .client
+        .account()
         .send_message("1".to_owned().into(), "unsent", None, None, false);
     let unsent = expect_pending(&harness);
     let joined = Message {
@@ -299,7 +299,7 @@ fn a_retry_sends_the_link_of_the_quote_again() {
     harness.expect_events(vec![updated(2, with_delivery(&pending, Delivery::Failed))]);
 
     fake.script_send(None, Ok(9));
-    harness.client.retry_message(pending.id.clone());
+    harness.account().retry_message(pending.id.clone());
     harness.expect_events(vec![updated(2, pending.clone())]);
 
     let calls = fake.wait_for_send_calls(2);
@@ -322,7 +322,7 @@ fn reply_to_a(id: &str, text: &str, secs: i64) -> Message {
 fn open_with_reply(fake: &Fake, harness: &Harness) {
     let reply = reply_to_a("r", "reply", 3);
     fake.script_history(None, page(vec![reply.clone(), message("a", 1)], true));
-    harness.client.open_room("1".to_owned().into());
+    harness.account().open_room("1".to_owned().into());
     harness.expect_events(vec![
         reset_event(Some("1"), Vec::new()),
         status("1", true, false, false, None),
@@ -340,7 +340,7 @@ fn an_edit_sends_the_links_of_the_quotes_with_the_new_text() {
     fake.script_edit(None, Ok(5));
 
     harness
-        .client
+        .account()
         .edit_message("r".to_owned().into(), "  changed\n");
 
     // The server keeps the quote only if the link stays in the text.
@@ -365,7 +365,9 @@ fn an_edit_to_the_text_that_is_shown_asks_nothing_though_the_server_text_has_lin
     let harness = logged_in_harness(&fake);
     open_with_reply(&fake, &harness);
 
-    harness.client.edit_message("r".to_owned().into(), "reply");
+    harness
+        .account()
+        .edit_message("r".to_owned().into(), "reply");
 
     harness.expect_events(vec![action_event("r", MessageAction::Edit, Ok(()))]);
     assert!(fake.state().edit_calls.is_empty());
