@@ -17,7 +17,9 @@ use rc_gui_tests::paths::{
 use rc_gui_tests::{App, Gui};
 use rc_test_server::{Admin, Proxy, TestUser, server_url};
 
-use common::{SessionFile, TIMEOUT, launch, log_in, log_in_at_and_wait_for_room, open_room};
+use common::{
+    SessionFile, TIMEOUT, launch, log_in, log_in_at_and_wait_for_room, log_out_of, open_room,
+};
 
 /// A user with a channel of their own, which nobody else is in.
 fn user_with_channel(admin: &Admin) -> (TestUser, String) {
@@ -133,14 +135,14 @@ fn clicking_a_tile_shows_the_rooms_of_that_account() {
     gui.wait_until_hidden(&room_name(&b.1), TIMEOUT).unwrap();
     wait_until_checked(gui, &server_tile(0, ""), true);
     assert!(!gui.checked(&server_tile(1, "")).unwrap());
-    let current = gui.text(main_window::CURRENT_USER).unwrap();
+    let current = gui.text(main_window::SERVER_USER).unwrap();
     assert!(current.contains(&a.0.username), "{current:?}");
 
     gui.mouse_click(&server_tile(1, "")).unwrap();
     gui.wait_until_visible(&room_name(&b.1), TIMEOUT).unwrap();
     gui.wait_until_hidden(&room_name(&a.1), TIMEOUT).unwrap();
     wait_until_checked(gui, &server_tile(1, ""), true);
-    let current = gui.text(main_window::CURRENT_USER).unwrap();
+    let current = gui.text(main_window::SERVER_USER).unwrap();
     assert!(current.contains(&b.0.username), "{current:?}");
 }
 
@@ -213,14 +215,14 @@ fn logging_out_removes_the_tile_and_shows_the_next_account() {
     log_in_both(gui, &proxy, &a, &b);
 
     // Out of B, who is on screen: A is back.
-    gui.mouse_click(main_window::LOGOUT_BUTTON).unwrap();
+    log_out_of(gui, &server_tile(1, ""));
     gui.wait_until_visible(&room_name(&a.1), TIMEOUT).unwrap();
     gui.wait_until_hidden(&server_tile(1, ""), TIMEOUT).unwrap();
     wait_until_checked(gui, &server_tile(0, ""), true);
     assert!(!gui.exists_and_visible(main_window::LOGIN_BUTTON).unwrap());
 
     // Out of A, the last one: a login page for a new account, with a tile holding its place.
-    gui.mouse_click(main_window::LOGOUT_BUTTON).unwrap();
+    log_out_of(gui, &server_tile(0, ""));
     gui.wait_until_visible(main_window::LOGIN_BUTTON, TIMEOUT)
         .unwrap();
     gui.wait_until_text(main_window::LOGIN_TITLE, "Log in to Rocket.Chat", TIMEOUT)
@@ -235,6 +237,28 @@ fn logging_out_removes_the_tile_and_shows_the_next_account() {
     assert!(gui.exists_and_visible(&server_tile(0, "")).unwrap());
     assert!(!gui.exists_and_visible(&server_tile(1, "")).unwrap());
     assert!(!gui.exists_and_visible(&room_name(&a.1)).unwrap());
+}
+
+// ACCT-005
+#[test]
+#[ignore = "needs the app and a Rocket.Chat server: run through ctest"]
+fn logging_out_from_the_tile_of_an_account_that_is_not_on_screen_leaves_the_other() {
+    let admin = Admin::login();
+    let a = user_with_channel(&admin);
+    let b = user_with_channel(&admin);
+    let proxy = Proxy::start();
+    let app = launch();
+    let gui = app.gui();
+    log_in_both(gui, &proxy, &a, &b);
+
+    // Out of A, while B is on screen: B stays, and takes the first place in the rail.
+    log_out_of(gui, &server_tile(0, ""));
+    gui.wait_until_hidden(&server_tile(1, ""), TIMEOUT).unwrap();
+    gui.wait_until_text(main_window::SERVER_USER, &b.0.username, TIMEOUT)
+        .unwrap();
+    wait_until_checked(gui, &server_tile(0, ""), true);
+    gui.wait_until_visible(&room_name(&b.1), TIMEOUT).unwrap();
+    assert!(!gui.exists_and_visible(main_window::LOGIN_BUTTON).unwrap());
 }
 
 // ACCT-007
@@ -298,7 +322,7 @@ fn every_account_comes_back_after_a_restart() {
         TIMEOUT,
     )
     .unwrap();
-    let current = gui.text(main_window::CURRENT_USER).unwrap();
+    let current = gui.text(main_window::SERVER_USER).unwrap();
     assert!(current.contains(&a.0.username), "{current:?}");
 
     // The other one resumed in the background, so it is there at once.

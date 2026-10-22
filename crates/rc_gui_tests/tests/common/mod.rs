@@ -16,7 +16,7 @@ use std::{env, fs};
 use rc_gui_tests::paths::{
     emoji_pick, main_window, message, message_row, room, room_row, thread_message,
 };
-use rc_gui_tests::{App, Gui, Key, Modifiers};
+use rc_gui_tests::{App, Gui, Key, Modifiers, MouseButton};
 use rc_test_server::{Admin, Posted, TestUser, server_url, unique};
 
 /// The core works asynchronously, against a real server: tests wait this long for the UI to catch
@@ -35,6 +35,16 @@ pub fn log_in(gui: &Gui, server: &str, username: &str, password: &str) {
     gui.set_text(main_window::LOGIN_PASSWORD_FIELD, password)
         .unwrap();
     gui.mouse_click(main_window::LOGIN_BUTTON).unwrap();
+}
+
+/// Logs out of the account of the tile at `tile` (see `server_tile`): opens its menu with a
+/// right-click and chooses the item.
+pub fn log_out_of(gui: &Gui, tile: &str) {
+    gui.mouse_click_with(tile, MouseButton::Right, Modifiers::NONE)
+        .unwrap();
+    gui.wait_until_visible(main_window::LOGOUT_ACTION, TIMEOUT)
+        .unwrap();
+    gui.mouse_click(main_window::LOGOUT_ACTION).unwrap();
 }
 
 /// Starts the app with the time zone set to UTC, so that the times it shows are the ones the

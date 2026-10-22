@@ -12,7 +12,9 @@ import RocketChat.Bridge
 // under the pointer, like that button. Named by
 // position, as `serverTile_<index>`: two accounts can have one host. `checked` says it is the one on
 // screen. It tells the rail when its tool tip is due (`tipShown`), which the rail draws: a tile in a
-// scrolling list can't show a tip outside the list.
+// scrolling list can't show a tip outside the list. A right-click opens the menu of the account,
+// which is where to log out of it, or to remove it once its login has ended; the tile of an
+// account that isn't added yet has none.
 AbstractButton {
     id: root
 
@@ -51,8 +53,35 @@ AbstractButton {
 
     Timer {
         interval: Theme.toolTipDelay
-        running: root.hovered
+        running: root.hovered && !menu.visible
         onTriggered: root.tipShown = true
+    }
+
+    // A MouseArea, as Spix clicks don't reach a TapHandler. It takes the right button only, so the
+    // left one still selects the account.
+    MouseArea {
+        acceptedButtons: Qt.RightButton
+        anchors.fill: parent
+        enabled: !root.fresh
+        onClicked: mouse => menu.popup(root, mouse.x, mouse.y)
+    }
+
+    // The popup is parented to the window's overlay while open, so Spix finds its item by name from
+    // the window (mainWindow/logoutAction), and only while it is open.
+    Menu {
+        id: menu
+
+        // Keeps the menu inside the window when it opens near an edge.
+        margins: Theme.spacingL
+
+        // The tool tip of the tile would stay over the menu.
+        onAboutToShow: root.tipShown = false
+
+        MenuItem {
+            objectName: "logoutAction"
+            text: root.expired ? qsTr("Remove this server") : qsTr("Log out")
+            onTriggered: AccountList.remove(root.accountId)
+        }
     }
 
     background: Item {

@@ -146,8 +146,7 @@ fn the_cache_keeps_the_avatars_for_the_next_session_and_logging_out_keeps_the_fi
     log_in_and_wait_for_room(gui, &user, &channel_id);
     let before = loaded_avatar(gui, &room(&channel_id, room_row::AVATAR));
 
-    gui.mouse_click(rc_gui_tests::paths::main_window::LOGOUT_BUTTON)
-        .unwrap();
+    common::log_out_of(gui, &rc_gui_tests::paths::server_tile(0, ""));
     gui.wait_until_visible(rc_gui_tests::paths::main_window::LOGIN_BUTTON, TIMEOUT)
         .unwrap();
 

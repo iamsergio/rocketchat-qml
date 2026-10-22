@@ -7,11 +7,11 @@
 mod common;
 
 use rc_gui_tests::App;
-use rc_gui_tests::paths::main_window;
+use rc_gui_tests::paths::{main_window, server_tile};
 use rc_test_server::{Admin, server_url};
 use std::net::TcpListener;
 
-use common::{SessionFile, TIMEOUT, log_in};
+use common::{SessionFile, TIMEOUT, log_in, log_out_of};
 
 // AUTH-001
 #[test]
@@ -25,7 +25,7 @@ fn logging_in_shows_the_rooms_and_the_user() {
 
     gui.wait_until_visible(main_window::ROOM_LIST, TIMEOUT)
         .unwrap();
-    let current = gui.text(main_window::CURRENT_USER).unwrap();
+    let current = gui.text(main_window::SERVER_USER).unwrap();
     assert!(current.contains(&user.username), "{current:?}");
     assert!(!gui.exists_and_visible(main_window::LOGIN_BUTTON).unwrap());
 }
@@ -105,7 +105,7 @@ fn the_session_resumes_after_a_restart() {
         gui.exists_and_visible(main_window::ROOM_LIST)
     })
     .unwrap();
-    let current = gui.text(main_window::CURRENT_USER).unwrap();
+    let current = gui.text(main_window::SERVER_USER).unwrap();
     assert!(current.contains(&user.username), "{current:?}");
     assert!(!gui.exists_and_visible(main_window::LOGIN_BUTTON).unwrap());
 }
@@ -121,7 +121,7 @@ fn logging_out_returns_to_the_login_page() {
     gui.wait_until_visible(main_window::ROOM_LIST, TIMEOUT)
         .unwrap();
 
-    gui.mouse_click(main_window::LOGOUT_BUTTON).unwrap();
+    log_out_of(gui, &server_tile(0, ""));
 
     gui.wait_until_visible(main_window::LOGIN_BUTTON, TIMEOUT)
         .unwrap();
