@@ -116,18 +116,18 @@ struct RoomsBody {
     update: Vec<RoomBody>,
 }
 
-/// A room as `rooms.get` and the `rooms-changed` event send it: the parts that tell when it was
-/// last active.
+/// A room as `rooms.get` and the `rooms-changed` event send it: the parts of it that the
+/// subscription lacks.
 #[derive(Deserialize)]
-struct RoomBody {
+pub(crate) struct RoomBody {
     #[serde(rename = "_id")]
     id: String,
     /// The time of the last message; absent in a room without messages.
     #[serde(default, deserialize_with = "optional_timestamp")]
-    lm: Option<jiff::Timestamp>,
+    pub(crate) lm: Option<jiff::Timestamp>,
     /// Present once the room has an avatar of its own.
     #[serde(default, rename = "avatarETag")]
-    avatar_etag: Option<String>,
+    pub(crate) avatar_etag: Option<String>,
 }
 
 /// The `user` of `users.info` and the `room` of `rooms.info`: whether it has an avatar of its own.
@@ -589,27 +589,13 @@ pub(crate) fn parse_site_url(bytes: &[u8]) -> Result<Option<String>, serde_json:
         .map(str::to_owned))
 }
 
-/// The time of each room's last message, by room id, for the rooms that have messages.
-pub(crate) fn parse_room_activity(
-    bytes: &[u8],
-) -> Result<HashMap<String, jiff::Timestamp>, serde_json::Error> {
+/// The rooms of a `rooms.get` answer, by room id.
+pub(crate) fn parse_rooms(bytes: &[u8]) -> Result<HashMap<String, RoomBody>, serde_json::Error> {
     let body: RoomsBody = serde_json::from_slice(bytes)?;
     Ok(body
         .update
         .into_iter()
-        .filter_map(|room| Some((room.id, room.lm?)))
-        .collect())
-}
-
-/// The avatar etag of each room that has an avatar of its own, by room id.
-pub(crate) fn parse_room_avatars(
-    bytes: &[u8],
-) -> Result<HashMap<String, String>, serde_json::Error> {
-    let body: RoomsBody = serde_json::from_slice(bytes)?;
-    Ok(body
-        .update
-        .into_iter()
-        .filter_map(|room| Some((room.id, room.avatar_etag?)))
+        .map(|room| (room.id.clone(), room))
         .collect())
 }
 
@@ -693,13 +679,13 @@ pub(crate) fn parse_stream_event(
                 _ => None,
             })
         }
-        // What happened, then the room. Rooms without a last message (just created) say nothing.
+        // What happened, then the room.
         "stream-notify-user" if fields.event_name.ends_with("/rooms-changed") => {
             next_arg()?;
             let room: RoomBody = serde_json::from_value(next_arg()?)?;
-            Ok(room.lm.map(|last_message| DdpEvent::RoomActivity {
+            Ok(Some(DdpEvent::RoomChanged {
                 room_id: room.id,
-                last_message,
+                last_message: room.lm,
             }))
         }
         "stream-notify-logged" if fields.event_name == "updateAvatar" => {
@@ -1466,9 +1452,9 @@ mod tests {
     #[test]
     fn only_the_rooms_with_an_avatar_of_their_own_have_an_etag() {
         let rooms = br#"{"update":[{"_id":"r1","avatarETag":"e1"},{"_id":"r2"}],"remove":[]}"#;
-        let etags = parse_room_avatars(rooms).unwrap();
-        assert_eq!(etags.len(), 1);
-        assert_eq!(etags["r1"], "e1");
+        let rooms = parse_rooms(rooms).unwrap();
+        assert_eq!(rooms["r1"].avatar_etag.as_deref(), Some("e1"));
+        assert_eq!(rooms["r2"].avatar_etag, None);
     }
 
     // RICH-004
@@ -1498,18 +1484,18 @@ mod tests {
     // ROOM-005
     #[test]
     fn rooms_have_the_time_of_their_last_message_unless_empty() {
-        let activity = parse_room_activity(ROOMS.as_bytes()).unwrap();
-        assert_eq!(activity.len(), 3);
-        assert_eq!(activity["GENERAL"], ts("2026-10-19T22:38:04.040Z"));
+        let rooms = parse_rooms(ROOMS.as_bytes()).unwrap();
+        let last = |id: &str| rooms[id].lm;
+        assert_eq!(last("GENERAL"), Some(ts("2026-10-19T22:38:04.040Z")));
         assert_eq!(
-            activity["6ad69bcccaea8883e7e075fe"],
-            ts("2026-10-19T22:38:04.360Z")
+            last("6ad69bcccaea8883e7e075fe"),
+            Some(ts("2026-10-19T22:38:04.360Z"))
         );
         assert_eq!(
-            activity["6ad69bcccaea8883e7e07604"],
-            ts("2026-10-19T22:38:04.420Z")
+            last("6ad69bcccaea8883e7e07604"),
+            Some(ts("2026-10-19T22:38:04.420Z"))
         );
-        assert!(!activity.contains_key("6ad69bcccaea8883e7e07601"));
+        assert_eq!(last("6ad69bcccaea8883e7e07601"), None);
     }
 
     // ROOM-001
@@ -1800,20 +1786,23 @@ mod tests {
     fn a_room_change_with_a_last_message_is_activity() {
         assert_eq!(
             stream_event("stream-notify-user", DDP_ROOMS_CHANGED_MESSAGE).unwrap(),
-            Some(DdpEvent::RoomActivity {
+            Some(DdpEvent::RoomChanged {
                 room_id: "6ad7a58d3a2871a71ede2062".into(),
-                last_message: ts("2026-10-20T17:31:59.831Z"),
+                last_message: Some(ts("2026-10-20T17:31:59.831Z")),
             })
         );
     }
 
     // ROOM-005
     #[test]
-    fn a_room_change_without_a_last_message_is_not_activity() {
-        assert_eq!(
+    fn a_room_change_without_a_last_message_has_none() {
+        assert!(matches!(
             stream_event("stream-notify-user", DDP_ROOMS_CHANGED).unwrap(),
-            None
-        );
+            Some(DdpEvent::RoomChanged {
+                last_message: None,
+                ..
+            })
+        ));
     }
 
     // RT-002

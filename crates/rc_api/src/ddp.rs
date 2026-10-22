@@ -109,7 +109,7 @@ impl DdpClient {
         Ok(())
     }
 
-    /// When the user's rooms have new messages, as [`DdpEvent::RoomActivity`]
+    /// When the user's rooms have new messages, as [`DdpEvent::RoomChanged`]
     /// (`stream-notify-user` with `<user id>/rooms-changed`). Needs a login as `user_id` first.
     ///
     /// # Errors
@@ -798,7 +798,7 @@ mod tests {
 
     // ROOM-005
     #[tokio::test]
-    async fn a_room_change_with_a_last_message_arrives_as_activity() {
+    async fn a_room_change_with_a_last_message_arrives_with_it() {
         let (_client, mut events, mut peer) = connected().await;
         peer.send(
             json!({ "msg": "changed", "collection": "stream-notify-user", "id": "id",
@@ -807,12 +807,12 @@ mod tests {
         )
         .await;
 
-        let Some(DdpEvent::RoomActivity {
+        let Some(DdpEvent::RoomChanged {
             room_id,
-            last_message,
+            last_message: Some(last_message),
         }) = events.recv().await
         else {
-            panic!("expected room activity");
+            panic!("expected a room change with a last message");
         };
         assert_eq!(room_id, "r1");
         assert_eq!(last_message.as_millisecond(), 1_792_517_519_831);
@@ -1022,7 +1022,7 @@ mod tests {
         // Known streams, but not events this crate follows or can read.
         peer.send(
             json!({ "msg": "changed", "collection": "stream-notify-user", "id": "id",
-            "fields": { "eventName": "u1/rooms-changed", "args": ["inserted", { "_id": "r1" }] } }),
+            "fields": { "eventName": "u1/notification", "args": [{ "title": "x" }] } }),
         )
         .await;
         peer.send(
