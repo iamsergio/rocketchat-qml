@@ -17,80 +17,6 @@ At the end of every phase the app builds, runs against the local test server (`s
 - Every feature gets a unit test, a contract test against the local test server, or both. Every user-visible flow also gets a GUI test.
 - Commit hygiene: `cargo fmt`, clippy, `cargo test` and the GUI tests all pass before each commit.
 
-## Phase 0: Skeleton
-
-Done when: the app opens a window showing the version string, which comes from Rust. One GUI smoke test passes locally and in CI.
-
-- [x] Cargo workspace at the repo root (`crates/`), `rust-toolchain.toml`, workspace lints, `rustfmt.toml`
-- [x] Empty crates: `rc_api`, `rc_core`, `rc_qt`, `rc_gui_tests`
-- [x] CMake: Corrosion + cxx-qt, `find_package(Qt6 6.12 ...)`. `rc_qt` builds as a static lib and is linked into the existing `src/gui` executable
-- [x] `AppInfo` QObject (version) exposed to QML and shown in `Main.qml`
-- [x] vcpkg as a submodule in `3rdparty/vcpkg` (the iamsergio fork, same commit Spix pins). Root `vcpkg.json` in manifest mode, with AnyRPC under a `spix` feature so builds without Spix pull nothing. The presets set the vcpkg toolchain
-- [x] Spix: CMake option `ROCKETCHATQML_SPIX` (ON in `dev`), declared before `project()` so it can add `spix` to `VCPKG_MANIFEST_FEATURES`. `add_subdirectory(3rdparty/spix)` with only the QtQuick scene, no examples or tests. The host starts the test server on the port given by `--spix-port`
-- [x] `rc_gui_tests`: harness that launches the app binary (`QT_QPA_PLATFORM=offscreen`) on a free port, waits for Spix, and kills the app on drop. The binary is configurable, so the same tests can target the Slint app later. Smoke test APP-001
-- [x] `rc_gui_tests`: `Gui` client wrapper that exposes only the Spix calls both servers support, and the path constants module
-- [x] `tracing` setup: stderr, plus a log file in dev builds
-- [x] `ctest` runs `cargo test` for the workspace and the GUI tests
-- [x] CI: fmt, clippy, `cargo test`, `cargo deny` (licenses/advisories), `reuse lint`, CMake build, GUI tests
-- [x] `.mcp.json` entry for QtCommander (dev only)
-- [x] `scripts/run_test_server.sh`: local Rocket.Chat (docker by default, podman with `RC_ENGINE=podman`) with MongoDB and NATS, admin preset, wizard and rate limits off
-- [x] Update README (build requirements: Rust, Qt ≥ 6.12, `git submodule update --init`)
-
-## Phase 1: Log in, list rooms
-
-Done when: you can log in to the local test server with a username and password, see your rooms, restart without logging in again, and log out.
-
-- [x] `rc_api`: REST client with auth headers, `GET /api/info` (server version check), `login`, `me`, `logout`, `subscriptions.get`
-- [x] `rc_core`: `Client` handle plus session actor. Session state machine: `LoggedOut → Connecting → LoggedIn` (`Resuming` instead of `Connecting` for a stored session), with failure reasons
-- [x] `rc_core`: `SecretStore` port with keyring and in-memory adapters. Resume the session from the stored token at startup
-- [x] `rc_core`: room domain model (channel/group/DM, name, unread, mention count)
-- [x] CI runs the `rc_api` and `rc_core` contract tests against the local test server (the runner joins its network)
-- [x] `rc_qt`: `SessionVm` (state, error, login/logout invokables), `RoomListModel`
-- [x] QML: login page (server URL, user, password, error text, busy state), room list, logout
-- [x] Features AUTH-001…AUTH-005, ROOM-001…ROOM-003 tested
-
-## Phase 2: Read messages
-
-Done when: clicking a room shows its history with authors and times, and scrolling up loads older messages.
-
-- [x] `rc_api`: room history (`channels/groups/im.history`, depending on room type). Covered by contract tests that post their own messages
-- [x] `rc_core`: message domain model (plain text body for now), `MessageStore` port with an in-memory adapter, pagination cursor per room
-- [x] `rc_core`: system messages (join, leave, topic changed) as their own kind
-- [x] `rc_qt`: `MessageListModel` (prepend for older messages, append for newer), `RoomVm` (current room)
-- [x] QML: room view, message delegate, day separators, load older on reaching the top
-- [x] Features MSG-001…MSG-005 tested
-
-## Phase 3: Realtime and sending
-
-Done when: messages from others appear live, unread badges update, you can send messages, and the client recovers after the network drops.
-
-- [x] `rc_api`: DDP client (connect, ping/pong, method calls, subscriptions, resume-token login)
-- [x] `rc_core`: sync engine. Subscribe to `__my_messages__` and `stream-notify-user` (subscriptions/rooms changed), route events into state
-- [x] `rc_core`: reconnect with exponential backoff and jitter. Catch up on missed messages after reconnecting
-- [x] `rc_core`: send with an optimistic local echo (pending → sent / failed), retry
-- [x] `rc_core`: mark a room read when it's opened. Room list ordered by last activity
-- [x] Tests: a small TCP proxy in front of the test server to drop connections on demand
-- [x] `rc_qt` / QML: composer, pending/failed indicators with retry
-- [x] `rc_qt` / QML: connection status banner
-- [x] Contract tests for DDP and realtime. The REST contract tests already exist and run in CI (since Phase 1) on the shared server
-- [x] Contract tests must pass on a dirty server, in any order and in parallel:
-  - each test creates its own users and rooms with unique names (per-run random suffix) through the admin API
-  - tests never change server settings. A setting tests need goes into the script's `OVERWRITE_SETTING_*` list, so it's part of the server definition
-  - tests assert only on objects they created (no "the room list has exactly N rooms")
-- [x] Features RT-001…RT-004, SEND-001, SEND-002, ROOM-004, ROOM-005 tested
-
-## Phase 4: Rich content
-
-Done when: messages render formatting, mentions, emoji, avatars, images and reactions, and live edits/deletes show up.
-
-- [x] `rc_core`: convert the server's parsed-markdown (`md`) AST into a GUI-agnostic rich-text block model. Each frontend renders that model. Fall back to `msg` text when there is no `md`
-- [x] `rc_qt`: render blocks to the subset of rich text that Qt supports (links, code, quotes, lists)
-- [x] Mentions (highlight @me), unicode emoji shortcodes, custom server emoji. Custom emoji images are public (`/emoji-custom/<name>.<ext>`), so the message shows them straight from the server; the file-cache item can take them over later. The emoji list is fetched per sync cycle, not kept live by `updateEmojiCustom`
-- [x] `rc_core`: file cache port. Avatars are downloaded to the cache directory and exposed to the GUI as local file URLs. They are kept between sessions and refreshed once per session; the server pushes changes. Only avatars somebody uploaded are shown (`avatarETag`); the others show initials. The test server serves the drawn avatar whatever is uploaded, so the picture of a custom avatar isn't tested
-- [x] `rc_core`: images through the file cache port, for the attachments below. An uploaded file never changes, so an image is downloaded only if the cache lacks it
-- [x] Image attachments shown inline, other attachments as links
-- [x] Realtime message edits and deletes, plus a reactions display. The connection follows the open room's deletions (`stream-notify-room`), and `chat.syncMessages` brings a reopened or reconnected room up to date. Bulk deletions (`deleteMessageBulk`, an admin pruning a room) are not followed yet: see Issues
-- [x] Features RICH-001…RICH-007 tested
 
 ## Phase 5: Interacting
 
@@ -102,36 +28,22 @@ Done when: day-to-day use works. Edit, delete, react, threads, DMs, search and u
 - [x] Room menu: favorite, mark as read or unread, leave
 - [x] Threads: open a thread panel, reply, see thread counts in the main timeline
 - [x] Reply/quote a message
-- [ ] Typing indicators (send and receive)
+- [ ] Typing indicators, received only: see [Typing indicators](#typing-indicators)
 - [ ] Start a DM, search the directory, join a channel
 - [ ] File upload with progress
 - [ ] Features ACT-001…ACT-009 tested
 
-## Multiple accounts
+## Typing indicators
 
-Done when: you can be signed in to several servers at once, switch between them from a rail of servers, and see the unread counts of the ones in the background. Restarting resumes every account.
+Done when: the open room shows who is typing in it, under its messages, and the open thread shows who is typing in that thread. The app never says that its own user is typing.
 
-One session actor per account under a thin accounts layer: the actor already holds exactly one session, so it barely changes. One account is on screen at a time.
+The server relays what the other clients emit on `stream-notify-room` as `<room id>/user-activity`, with the arguments `[username, activities, extras]`. Here `activities` holds `user-typing` while the user types, it is empty once they stop, and `extras.tmid` names the thread. The server refuses an emit under someone else's username. It accepts the legacy `<room id>/typing` but doesn't relay it. The web client emits again every 5 s while its user types and forgets a typist after 15 s without an event, so a stop that never comes still ends. All this was checked on the RC 8.0 test server.
 
-- [x] `rc_core`: split `client.rs` into the handle and the account actor (its `impl` blocks by concern), and the actor tests into a harness plus one file per topic. No behaviour change
-- [x] `rc_core`: one shared core (runtime, connector, file cache, store worker) separate from the account actor. Still one account
-- [x] `rc_core`: the `SecretStore` port keeps a list of accounts (`AccountId`, server, user, token or none), with memory, file and keyring adapters (one keyring entry per account plus an index). The session stored by earlier builds is dropped: log in again
-- [x] `rc_core`: accounts layer. Add, log in, remove; events tagged with the account; unread and mention totals per account; all accounts resumed at startup, independently; logging out removes the account; an expired one stays listed without a token, for a prefilled login; the same server and user can't be added twice. Two users on one server are fine
-- [x] `rc_qt`: refactor the hub first, so that routing to an account is one place, not one per command: a single way to reach the client (today each of the twenty-odd commands repeats "find the client, else warn"), and the cache and the registered view models as separate parts. No behaviour change
-- [x] `rc_qt`: one cache per account and a current account that the existing view models show; an `Accounts` model; commands go to the current account
-- [x] QML: mockup first, then a rail of servers with badges and an add button, the login page in add-account mode with Cancel, and a prefilled login for an expired account
-- [x] Features ACCT-001…ACCT-007 tested. The second server in tests is the test server behind `rc_test_server::Proxy`
-
-## Quiet direct messages
-
-Done when: the room list leaves out the direct messages that had no activity for 10 days, unless they are favorites, unread or open, and one comes back as soon as it has a message.
-
-A hidden direct message can't be reached until it has a message: "Start a DM" (Phase 5) will open it.
-
-- [x] `rc_core`: split `RoomList` into the shown rooms (in display order, the only positions `RoomChange` indices refer to) and the hidden ones (by id, without a position). Nothing is hidden yet. No behaviour change
-- [x] `rc_core`: a `Clock` port (system and fake adapters) in place of the actor's `jiff::Timestamp::now()` calls, so the tests control the time. No behaviour change
-- [x] `rc_core`: the rule. A direct message is hidden once its last activity is older than the limit (10 days), unless it is a favorite, has something unread or is open. A timer wakes the actor at the next time a shown one goes quiet; opening another room re-checks the one left. A dev-only environment variable shortens the limit, for the GUI test
-- [x] Feature ROOM-008 tested. No contract test: the real server stamps every message itself, so it can't give a quiet direct message
+- [ ] `rc_api`: `subscribe_user_activity(room)` and `DdpEvent::UserActivity { room_id, username, typing, thread_id }`. Uploading or recording counts as not typing. Unit tests on frames taken from the server. `rc_test_server`: a `Typist`, a small synchronous DDP connection logged in as a test user, which starts and stops typing in a room or a thread the way the web client does (the `stream-notify-room` method). Contract test: a typist's start, thread and stop reach a connection that follows the room
+- [ ] `rc_core`: the realtime connection follows the open room's activity next to its deletions (`Pushed::Typing`). `Realtime::watch` stops being about deletions only. Contract test
+- [ ] `rc_core`: who is typing, kept with the open room: per typist, the room or the thread, and when they expire (15 s after their last event, through the `Clock`, which wakes the actor like the quiet-DM timer does). A typist ends on their stop, on a message of theirs in the same room or thread, or on expiry. Everyone ends on another room, a lost connection or a logout. Only the open room counts, and the user's own username is ignored, since their other clients are typing. `Event::Typing` and `Event::ThreadTyping` (the open thread's) carry the names in the order they started, only when they change. The name is the display name if a held message of the room has it, else the username. Unit tests with the fake clock
+- [ ] `rc_qt` / QML: `RoomVm.typing`, the line itself, written in Rust (`alice is typing…`, `alice and bob are typing…`, `alice, bob and 2 others are typing…`), with unit tests. A line between the messages and the composer, whose height is always reserved so the messages don't jump. Every size comes from Theme. Then the same for `ThreadVm` in the thread pane
+- [ ] Feature ACT-006 tested: GUI tests with a `Typist` in the open room, then in the open thread, that see the line come and go
 
 ## Phase 6: Persistence and desktop integration
 
@@ -152,6 +64,10 @@ Done when: you can log in to servers that enforce 2FA or use SSO.
 - [ ] Personal access token login
 - [ ] OAuth/SSO login through the browser
 - [ ] Features AUTH-006…AUTH-008 tested
+
+## Phase 8: personal nice to haves
+- [ ] Move logout icon. Logout is seldom used. right lcick on the server rail on a server tile can have the logout option.
+- [ ] Channels are not showing description
 
 ## Later
 
