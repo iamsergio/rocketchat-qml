@@ -74,7 +74,6 @@ pub mod main_window {
     pub const ROOM_LEAVE_CONFIRM: &str = "mainWindow/roomLeaveConfirm";
     /// In the confirmation: stays in the room.
     pub const ROOM_LEAVE_CANCEL: &str = "mainWindow/roomLeaveCancel";
-    pub const CURRENT_USER: &str = "mainWindow/currentUser";
     /// The host of the server on screen, at the top of the sidebar, as its `text`.
     pub const SERVER_NAME: &str = "mainWindow/serverName";
     /// The username there, under the host, as its `text`.
@@ -84,7 +83,9 @@ pub mod main_window {
     /// An item of the open settings menu: logs what helps to diagnose problems (the DPI of the
     /// screens for now) to stderr.
     pub const DUMP_INFO_ACTION: &str = "mainWindow/dumpInfoAction";
-    pub const LOGOUT_BUTTON: &str = "mainWindow/logoutButton";
+    /// The item of the open menu of a server tile that logs out of the account, or removes it once
+    /// its login has ended. Open the menu with a right-click on the tile.
+    pub const LOGOUT_ACTION: &str = "mainWindow/logoutAction";
     /// Shown while the realtime connection is down.
     pub const CONNECTION_BANNER: &str = "mainWindow/connectionBanner";
 

@@ -54,7 +54,6 @@ qt_add_qml_module(
   icons/corner.svg
   icons/direct.svg
   icons/file.svg
-  icons/logout.svg
   icons/plus.svg
   icons/private.svg
   icons/settings.svg
