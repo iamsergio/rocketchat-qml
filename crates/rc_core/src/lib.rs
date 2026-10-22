@@ -25,6 +25,7 @@ pub mod rooms;
 pub mod session;
 mod store_worker;
 pub mod timeline;
+mod users;
 
 pub use avatars::AvatarUpdate;
 pub use client::{AccountHandle, Client, Connection, Event};

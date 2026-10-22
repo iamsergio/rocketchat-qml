@@ -19,6 +19,7 @@ use crate::client::{Command, Event};
 use crate::domain::{AccountId, StoredAccount};
 use crate::ports::{Connector, FileCache, SecretStore};
 use crate::store_worker::{StoreHandle, run_store_worker};
+use crate::users::Users;
 
 /// The services shared by the accounts. An actor takes clones of them when it is built.
 pub(crate) struct Shared<C: Connector> {
@@ -26,6 +27,8 @@ pub(crate) struct Shared<C: Connector> {
     pub(crate) cache: Arc<dyn FileCache>,
     /// Queues calls for the store worker, which ends once every clone is dropped.
     pub(crate) store: StoreHandle,
+    /// Who each account is, to refuse a user who is another account's already.
+    pub(crate) users: Arc<Users>,
 }
 
 /// What a [`Client`](crate::Client) tells the core task.
@@ -68,6 +71,7 @@ pub(crate) fn spawn<C: Connector, S: SecretStore>(
             connector: Arc::new(connector),
             cache: Arc::new(cache),
             store: StoreHandle(store_tx),
+            users: Arc::default(),
         },
         on_event: Arc::new(on_event),
         backoff,
@@ -120,6 +124,9 @@ impl<C: Connector> Core<C> {
             self.add(AccountId::generate(), None);
         }
         for account in stored {
+            self.shared
+                .users
+                .claim(&account.id, &account.server, &account.user_id);
             self.add(account.id.clone(), Some(account));
         }
         loop {

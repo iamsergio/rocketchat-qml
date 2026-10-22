@@ -133,6 +133,8 @@ pub(super) struct FakeState {
     pub(super) version: Option<Result<ServerVersion, ApiError>>,
     pub(super) connect_error: Option<ApiError>,
     pub(super) logins: VecDeque<LoginScript>,
+    /// The id the server gives a user who logs in, by username; `uid` for the others.
+    pub(super) user_ids: HashMap<String, String>,
     pub(super) logout_result: Option<Result<(), ApiError>>,
     /// How long `logout` takes.
     pub(super) logout_delay: Duration,
@@ -565,12 +567,17 @@ impl ServerApi for Fake {
             gate.notified().await;
         }
         script.result?;
+        let user_id =
+            (self.state().user_ids.get(username).cloned()).unwrap_or_else(|| "uid".into());
         Ok((
             Credentials {
-                user_id: "uid".to_owned().into(),
+                user_id: user_id.clone().into(),
                 token: SecretString::from("tok"),
             },
-            user(username),
+            User {
+                id: user_id.into(),
+                ..user(username)
+            },
         ))
     }
 

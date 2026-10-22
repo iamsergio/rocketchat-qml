@@ -205,7 +205,7 @@ impl<C: Connector> Actor<C> {
             return;
         };
         if let Some(change) = self.rooms.upsert(room.clone().read()) {
-            (self.on_event)(Event::Rooms(vec![change]));
+            self.emit_rooms(vec![change]);
         }
     }
 

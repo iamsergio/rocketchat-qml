@@ -21,9 +21,9 @@ use crate::backoff::Backoff;
 use crate::client::{AccountHandle, Client, Connection, Event};
 use crate::core::CoreCommand;
 use crate::domain::{
-    Account, AccountId, Attachment, Author, AvatarOwner, Credentials, Delivery, ImageAttachment,
-    Message, MessageId, MessageKind, Quote, Reaction, Room, RoomId, RoomKind, StoredAccount,
-    SystemEvent, User, room_from,
+    Account, AccountId, Attachment, Author, AvatarOwner, Credentials, Delivery, Identity,
+    ImageAttachment, Message, MessageId, MessageKind, Quote, Reaction, Room, RoomId, RoomKind,
+    StoredAccount, SystemEvent, User, room_from,
 };
 use crate::emoji::CustomEmojis;
 use crate::images::ImageUpdate;
@@ -32,7 +32,7 @@ use crate::ports::{
     ApiError, CacheError, CacheKey, Changes, Connector, FileCache, Image, Page, Pushed, Realtime,
     SecretStore, ServerApi, StoreError, Stored, ThreadTarget, image_extension,
 };
-use crate::rooms::{RoomAction, RoomActionError, RoomChange};
+use crate::rooms::{RoomAction, RoomActionError, RoomChange, Unread};
 use crate::session::{LoginFailure, SessionState};
 use crate::timeline::{ThreadStatus, TimelineChange, TimelineError, TimelineStatus};
 

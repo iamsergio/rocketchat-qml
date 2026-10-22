@@ -18,7 +18,8 @@ use crate::backoff::Backoff;
 use crate::client::{Command, Connection, Event};
 use crate::core::Shared;
 use crate::domain::{
-    AccountId, AvatarOwner, Credentials, Message, MessageId, RoomId, RoomKind, StoredAccount, User,
+    AccountId, AvatarOwner, Credentials, Identity, Message, MessageId, RoomId, RoomKind,
+    StoredAccount, User,
 };
 use crate::emoji::CustomEmojis;
 use crate::images::{self, Images};
@@ -26,10 +27,11 @@ use crate::policy::{MessageAction, MessagePolicy};
 use crate::ports::{
     ApiError, Changes, Connector, FileCache, MessageStore, Page, Pushed, ServerApi,
 };
-use crate::rooms::{RoomAction, RoomList};
+use crate::rooms::{RoomAction, RoomList, Unread};
 use crate::session::{Established, LoginFailure, SessionState, log_in, resume};
 use crate::store_worker::StoreHandle;
 use crate::timeline::{Timeline, TimelineError};
+use crate::users::Users;
 
 mod media;
 mod message_actions;
@@ -249,8 +251,15 @@ struct Actor<C: Connector> {
     connector: Arc<C>,
     state: SessionState,
     session: Option<Session<C::Api>>,
-    /// The stored account being resumed while `Resuming`.
-    resuming: Option<StoredAccount>,
+    /// What is stored about the account, if anything: what it was started with, or what its last
+    /// login saved. Kept so that an expired account can be saved again without its token.
+    stored: Option<StoredAccount>,
+    /// Who the frontend was last told the account is.
+    identity: Option<Identity>,
+    /// The users of all the accounts, to claim the one who logs in.
+    users: Arc<Users>,
+    /// What the frontend was last told the unread totals are.
+    unread: Unread,
     /// Identifies the current attempt, so that the answer of a cancelled one is dropped.
     attempt: u64,
     login_task: Option<JoinHandle<()>>,
@@ -350,7 +359,10 @@ impl<C: Connector> Actor<C> {
             connector: Arc::clone(&shared.connector),
             state: SessionState::LoggedOut { failure: None },
             session: None,
-            resuming: None,
+            stored: None,
+            identity: None,
+            users: Arc::clone(&shared.users),
+            unread: Unread::default(),
             attempt: 0,
             login_task: None,
             rooms_task: None,
@@ -424,11 +436,29 @@ impl<C: Connector> Actor<C> {
         self.stop().await
     }
 
-    /// Resumes the stored account, if there is one, before any command is handled.
+    /// Tells who the stored account is, if there is one, and resumes it if it holds a token. Else
+    /// it is logged out. Before any command is handled.
     fn start(&mut self, stored: Option<StoredAccount>) {
-        match stored.and_then(|account| Some((account.credentials()?, account))) {
-            Some((credentials, account)) => self.resume(account, credentials),
+        let Some(stored) = stored else {
+            self.set_state(SessionState::LoggedOut { failure: None });
+            return;
+        };
+        self.announce(Identity {
+            server: stored.server.clone(),
+            username: stored.username.clone(),
+        });
+        match stored.credentials() {
+            Some(credentials) => self.resume(&stored.server, credentials),
             None => self.set_state(SessionState::LoggedOut { failure: None }),
+        }
+        self.stored = Some(stored);
+    }
+
+    /// Tells the frontend who the account is, unless it knows already.
+    fn announce(&mut self, identity: Identity) {
+        if self.identity.as_ref() != Some(&identity) {
+            self.identity = Some(identity.clone());
+            (self.on_event)(Event::Identity(identity));
         }
     }
 
@@ -505,10 +535,9 @@ impl<C: Connector> Actor<C> {
         });
     }
 
-    fn resume(&mut self, stored: StoredAccount, credentials: Credentials) {
+    fn resume(&mut self, server: &str, credentials: Credentials) {
         let connector = Arc::clone(&self.connector);
-        let server = stored.server.clone();
-        self.resuming = Some(stored);
+        let server = server.to_owned();
         self.begin_attempt(SessionState::Resuming, false, async move {
             resume(&*connector, &server, &credentials).await
         });
@@ -542,33 +571,12 @@ impl<C: Connector> Actor<C> {
             return;
         }
         self.login_task = None;
-        self.resuming = None;
         match done.outcome {
-            Ok(established) => {
-                if done.persist
-                    && let Some(store) = &self.store
-                {
-                    store.save(StoredAccount {
-                        id: self.id.clone(),
-                        server: established.account.server.clone(),
-                        username: established.account.user.username.clone(),
-                        user_id: established.credentials.user_id.clone(),
-                        token: Some(established.credentials.token.clone()),
-                    });
-                }
-                self.session = Some(Session {
-                    api: established.api,
-                    credentials: established.credentials,
-                    site_url: established.site_url,
-                });
-                self.backoff.reset();
-                self.set_state(SessionState::LoggedIn(established.account));
-                self.open_realtime();
-            }
+            Ok(established) => self.logged_in(established, done.persist),
             Err(failure) => {
                 // The server refused the stored token for good; other failures may pass.
                 if failure == LoginFailure::SessionExpired {
-                    self.remove_from_store();
+                    self.keep_without_token();
                 }
                 self.set_state(SessionState::LoggedOut {
                     failure: Some(failure),
@@ -577,19 +585,68 @@ impl<C: Connector> Actor<C> {
         }
     }
 
-    /// Ends the session or the attempt in flight, and forgets the stored account, which is no
-    /// error if there is none. Logged out already, it changes nothing else.
+    /// The login or the resume succeeded. A login of a user another account is already is undone:
+    /// the new token is revoked and nothing is saved.
+    fn logged_in(&mut self, established: Established<C::Api>, persist: bool) {
+        let Established {
+            api,
+            credentials,
+            account,
+            site_url,
+        } = established;
+        if persist
+            && !self
+                .users
+                .claim(&self.id, &account.server, &credentials.user_id)
+        {
+            self.revoke(api, credentials);
+            self.set_state(SessionState::LoggedOut {
+                failure: Some(LoginFailure::AlreadyAdded),
+            });
+            return;
+        }
+        self.announce(Identity {
+            server: account.server.clone(),
+            username: account.user.username.clone(),
+        });
+        if persist {
+            let stored = StoredAccount {
+                id: self.id.clone(),
+                server: account.server.clone(),
+                username: account.user.username.clone(),
+                user_id: credentials.user_id.clone(),
+                token: Some(credentials.token.clone()),
+            };
+            if let Some(store) = &self.store {
+                store.save(stored.clone());
+            }
+            self.stored = Some(stored);
+        }
+        self.session = Some(Session {
+            api,
+            credentials,
+            site_url,
+        });
+        self.backoff.reset();
+        self.set_state(SessionState::LoggedIn(account));
+        self.open_realtime();
+    }
+
+    /// Ends the session or the attempt in flight, and forgets the account, which is no error if
+    /// it isn't stored. Logged out already, it changes nothing else.
     fn logout(&mut self) {
-        self.remove_from_store();
+        let stored = self.forget();
         if self.state.attempting() {
             if let Some(task) = self.login_task.take() {
                 task.abort();
             }
             // Whatever the aborted task still sends is stale.
             self.attempt += 1;
+            let resuming = matches!(self.state, SessionState::Resuming);
             self.set_state(SessionState::LoggedOut { failure: None });
             // Cancelling a resume is a logout of the stored session.
-            if let Some(stored) = self.resuming.take()
+            if resuming
+                && let Some(stored) = stored
                 && let (Some(credentials), Ok(api)) =
                     (stored.credentials(), self.connector.connect(&stored.server))
             {
@@ -611,13 +668,13 @@ impl<C: Connector> Actor<C> {
         }
     }
 
-    /// The server refused the token of a logged-in session: forget it, and everything it showed.
-    /// It's dead already, so there's nothing to revoke.
+    /// The server refused the token of a logged-in session: drop it, and everything it showed.
+    /// It's dead already, so there's nothing to revoke. The account stays listed without a token.
     fn expire_session(&mut self) {
         self.abort_rooms_task();
         self.abort_realtime_task();
         self.session = None;
-        self.remove_from_store();
+        self.keep_without_token();
         self.set_state(SessionState::LoggedOut {
             failure: Some(LoginFailure::SessionExpired),
         });
@@ -637,10 +694,23 @@ impl<C: Connector> Actor<C> {
         }
     }
 
-    fn remove_from_store(&self) {
+    /// The server refused the token: the account stays stored, without it, so that the frontend
+    /// can list it and prefill its login.
+    fn keep_without_token(&mut self) {
+        if let (Some(store), Some(stored)) = (&self.store, &mut self.stored) {
+            stored.token = None;
+            store.save(stored.clone());
+        }
+    }
+
+    /// Forgets the account: its stored entry and its user, so that another account may be that
+    /// user. Returns what was stored.
+    fn forget(&mut self) -> Option<StoredAccount> {
         if let Some(store) = &self.store {
             store.remove(self.id.clone());
         }
+        self.users.release(&self.id);
+        self.stored.take()
     }
 
     /// Revokes the token on the server. Best effort: we're logged out locally either way.

@@ -158,7 +158,7 @@ impl<C: Connector> Actor<C> {
                         let room = self.seen_if_open(room);
                         let owner = room.avatar_to_fetch();
                         if let Some(change) = self.rooms.upsert(room) {
-                            (self.on_event)(Event::Rooms(vec![change]));
+                            self.emit_rooms(vec![change]);
                         }
                         self.want_avatars(owner);
                     }
@@ -169,7 +169,7 @@ impl<C: Connector> Actor<C> {
             Pushed::SubscriptionRemoved(id) => self.remove_room(&id),
             Pushed::Activity { room, at } => {
                 if let Some(change) = self.rooms.bump(&room, at) {
-                    (self.on_event)(Event::Rooms(vec![change]));
+                    self.emit_rooms(vec![change]);
                 }
             }
             Pushed::Message(message) => self.add_live_message(message),
@@ -241,7 +241,7 @@ impl<C: Connector> Actor<C> {
         };
         self.rooms_listed = true;
         if !changes.is_empty() {
-            (self.on_event)(Event::Rooms(changes));
+            self.emit_rooms(changes);
         }
         self.want_avatars(
             self.rooms

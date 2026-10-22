@@ -216,15 +216,19 @@ fn a_stored_session_is_resumed_without_logging_in() {
     assert!(fake.login_calls().is_empty());
 }
 
-// AUTH-004
+// AUTH-004, ACCT-006
 #[test]
-fn a_rejected_stored_session_expires_and_is_forgotten() {
+fn a_rejected_stored_session_expires_and_the_account_is_kept_without_a_token() {
     let fake = Fake::new();
     fake.state().me_result = Some(Err(ApiError::Unauthorized));
     let store = store_with("http://h");
     let harness = Harness::with_store(&fake, store.clone());
     harness.expect(&[logged_out(Some(LoginFailure::SessionExpired))]);
-    wait_for_empty(&store);
+    let kept = wait_for_expired(&store);
+    assert_eq!(kept.id.as_str(), STORED_ID);
+    assert_eq!(kept.server, "http://h");
+    assert_eq!(kept.username, "alice");
+    assert_eq!(kept.user_id.as_str(), "uid");
 }
 
 // AUTH-004

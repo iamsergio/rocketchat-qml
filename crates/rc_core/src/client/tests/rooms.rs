@@ -107,9 +107,9 @@ fn logout_empties_the_room_list() {
     harness.expect_events(vec![session_event(logged_out(None)), rooms_event(vec![])]);
 }
 
-// AUTH-004
+// AUTH-004, ACCT-006
 #[test]
-fn a_token_that_dies_before_the_fetch_expires_the_session() {
+fn a_token_that_dies_before_the_fetch_expires_the_session_and_keeps_the_account() {
     let fake = Fake::new();
     fake.script_login(None, Ok(()));
     fake.script_fetch(None, Err(ApiError::Unauthorized));
@@ -121,7 +121,7 @@ fn a_token_that_dies_before_the_fetch_expires_the_session() {
         session_event(logged_in("http://h", "alice")),
         session_event(logged_out(Some(LoginFailure::SessionExpired))),
     ]);
-    wait_for_empty(&store);
+    wait_for_expired(&store);
     // Dropping flushes the actor's work: a revoke would show by now.
     drop(harness);
     assert!(fake.state().logout_calls.is_empty());
