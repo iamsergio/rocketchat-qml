@@ -264,6 +264,7 @@ fn activity_in_another_room_does_not_lift_it_above_the_favorites() {
         Pushed::RoomChanged {
             room: "3".to_owned().into(),
             last_message: Some(at(50)),
+            topic: None,
         }
     ));
 

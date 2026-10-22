@@ -273,6 +273,24 @@ impl RoomList {
         )
     }
 
+    /// Gives the room its new topic, empty for none. `None` if the room isn't known, already has
+    /// that topic, or stays hidden.
+    pub fn set_topic(
+        &mut self,
+        id: &RoomId,
+        topic: String,
+        now: jiff::Timestamp,
+    ) -> Option<RoomChange> {
+        let room = self.get(id).filter(|room| room.topic != topic)?;
+        self.upsert(
+            Room {
+                topic,
+                ..room.clone()
+            },
+            now,
+        )
+    }
+
     /// Records which room the user has open, `None` for none. The open room is always shown, so
     /// one that was hidden comes back; the room that was open before is checked again and may go.
     pub fn set_open(&mut self, id: Option<RoomId>, now: jiff::Timestamp) -> Vec<RoomChange> {
@@ -370,6 +388,7 @@ mod tests {
             name: name.to_owned(),
             peer: None,
             avatar_etag: None,
+            topic: String::new(),
             unread: 0,
             user_mentions: 0,
             group_mentions: 0,
@@ -864,6 +883,39 @@ mod tests {
         assert_eq!(list.bump(&"b".to_owned().into(), at(5), now()), None);
         assert_eq!(list.bump(&"zzz".to_owned().into(), at(99), now()), None);
         assert_eq!(names(&list), ["a", "b"]);
+    }
+
+    // ROOM-009
+    #[test]
+    fn set_topic_updates_the_room_in_place_and_ignores_the_same_one_and_unknown_rooms() {
+        let mut list = list_of(vec![active("a", "a", 30), active("b", "b", 20)]);
+        let with_topic = Room {
+            topic: "Plans".to_owned(),
+            ..active("b", "b", 20)
+        };
+        assert_eq!(
+            list.set_topic(&"b".to_owned().into(), "Plans".to_owned(), now()),
+            Some(RoomChange::Updated {
+                index: 1,
+                room: with_topic
+            })
+        );
+        assert_eq!(
+            list.set_topic(&"b".to_owned().into(), "Plans".to_owned(), now()),
+            None
+        );
+        assert_eq!(
+            list.set_topic(&"zzz".to_owned().into(), "Plans".to_owned(), now()),
+            None
+        );
+        // Taking it away is a change too.
+        assert_eq!(
+            list.set_topic(&"b".to_owned().into(), String::new(), now()),
+            Some(RoomChange::Updated {
+                index: 1,
+                room: active("b", "b", 20)
+            })
+        );
     }
 
     // ROOM-005

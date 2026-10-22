@@ -52,6 +52,7 @@ pub(super) fn subscription(
         created: None,
         last_message: None,
         avatar_etag: None,
+        topic: String::new(),
     }
 }
 
@@ -63,6 +64,7 @@ pub(super) fn room(id: &str, name: &str, kind: RoomKind) -> Room {
         // A direct message is called after the other user.
         peer: (kind == RoomKind::Direct).then(|| name.to_owned()),
         avatar_etag: None,
+        topic: String::new(),
         unread: 0,
         user_mentions: 0,
         group_mentions: 0,

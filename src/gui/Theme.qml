@@ -153,7 +153,8 @@ QtObject {
     readonly property int menuButtonHeight: 22
     readonly property int menuButtonWidth: 28
     readonly property int roomAvatarSize: 22
-    readonly property int roomHeaderHeight: 52
+    // Two lines fit: the name and the topic.
+    readonly property int roomHeaderHeight: 56
     readonly property int roomHeaderIconSize: 18
     readonly property int roomIconSize: 14
     readonly property int roomRowHeight: 34

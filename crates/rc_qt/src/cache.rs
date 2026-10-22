@@ -410,6 +410,7 @@ mod tests {
             name: name.to_owned(),
             peer: None,
             avatar_etag: None,
+            topic: String::new(),
             unread: 0,
             user_mentions: 0,
             group_mentions: 0,
@@ -801,6 +802,33 @@ mod tests {
         assert_eq!(cache.room_state().name, "beta");
         cache.apply(&Event::TimelineStatus(TimelineStatus::default()));
         assert_eq!(cache.room_state(), RoomState::default());
+    }
+
+    // ROOM-009
+    #[test]
+    fn the_room_state_follows_the_topic_of_the_open_room_live() {
+        let mut cache = Cache::new();
+        cache.apply(&Event::Rooms(vec![RoomChange::Reset(vec![room(
+            "a", "alpha",
+        )])]));
+        cache.apply(&Event::TimelineStatus(TimelineStatus {
+            room: Some("a".to_owned().into()),
+            ..TimelineStatus::default()
+        }));
+        assert_eq!(cache.room_state().topic, "");
+        let with_topic = |topic: &str| {
+            Event::Rooms(vec![RoomChange::Updated {
+                index: 0,
+                room: Room {
+                    topic: topic.to_owned(),
+                    ..room("a", "alpha")
+                },
+            }])
+        };
+        cache.apply(&with_topic("Plans"));
+        assert_eq!(cache.room_state().topic, "Plans");
+        cache.apply(&with_topic(""));
+        assert_eq!(cache.room_state().topic, "");
     }
 
     /// A reply to `parent` in the thread, sent by somebody else.

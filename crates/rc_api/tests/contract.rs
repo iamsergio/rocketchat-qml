@@ -313,10 +313,45 @@ async fn a_message_arrives_as_room_activity_with_its_time() {
 
     let event = event_where(
         &mut events,
-        |e| matches!(e, DdpEvent::RoomChanged { room_id: r, last_message } if *r == room_id && *last_message == Some(posted.ts.parse::<jiff::Timestamp>().unwrap())),
+        |e| matches!(e, DdpEvent::RoomChanged { room_id: r, last_message, .. } if *r == room_id && *last_message == Some(posted.ts.parse::<jiff::Timestamp>().unwrap())),
     )
     .await;
     assert!(matches!(event, DdpEvent::RoomChanged { .. }));
+}
+
+// ROOM-009
+#[tokio::test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+async fn the_topic_of_a_room_is_listed_and_a_change_of_it_is_pushed() {
+    let fixture = Fixture::new();
+    let (room_id, _) = fixture.create_channel();
+    fixture.admin.set_topic(&room_id, "Plans for May");
+    let login = fixture.login().await;
+    let session = fixture.client.session(login.credentials.clone());
+    assert_eq!(
+        find(&session.subscriptions().await.unwrap(), &room_id).topic,
+        "Plans for May"
+    );
+    let (client, mut events) = connect_and_login(&login.credentials).await;
+    client
+        .subscribe_room_activity(&fixture.user.id)
+        .await
+        .unwrap();
+
+    fixture.admin.set_topic(&room_id, "Plans for June");
+    event_where(
+        &mut events,
+        |e| matches!(e, DdpEvent::RoomChanged { room_id: r, topic, .. } if *r == room_id && topic.as_deref() == Some("Plans for June")),
+    )
+    .await;
+
+    // Taking it away is a topic too, however the server says it.
+    fixture.admin.set_topic(&room_id, "");
+    event_where(
+        &mut events,
+        |e| matches!(e, DdpEvent::RoomChanged { room_id: r, topic, .. } if *r == room_id && topic.as_deref() == Some("")),
+    )
+    .await;
 }
 
 // ROOM-004

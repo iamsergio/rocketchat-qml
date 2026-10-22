@@ -128,6 +128,9 @@ pub(crate) struct RoomBody {
     /// Present once the room has an avatar of its own.
     #[serde(default, rename = "avatarETag")]
     pub(crate) avatar_etag: Option<String>,
+    /// Present once the room has had a topic. Empty when the topic was taken away.
+    #[serde(default)]
+    pub(crate) topic: Option<String>,
 }
 
 /// The `user` of `users.info` and the `room` of `rooms.info`: whether it has an avatar of its own.
@@ -422,6 +425,7 @@ impl From<SubscriptionBody> for Subscription {
             created: body.ts,
             last_message: None,
             avatar_etag: None,
+            topic: String::new(),
         }
     }
 }
@@ -686,6 +690,7 @@ pub(crate) fn parse_stream_event(
             Ok(Some(DdpEvent::RoomChanged {
                 room_id: room.id,
                 last_message: room.lm,
+                topic: room.topic,
             }))
         }
         "stream-notify-logged" if fields.event_name == "updateAvatar" => {
@@ -1419,6 +1424,7 @@ mod tests {
                 created: None,
                 last_message: None,
                 avatar_etag: None,
+                topic: String::new(),
             }]
         );
     }
@@ -1455,6 +1461,36 @@ mod tests {
         let rooms = parse_rooms(rooms).unwrap();
         assert_eq!(rooms["r1"].avatar_etag.as_deref(), Some("e1"));
         assert_eq!(rooms["r2"].avatar_etag, None);
+    }
+
+    // ROOM-009
+    #[test]
+    fn rooms_have_a_topic_unless_it_is_empty_or_missing() {
+        let rooms = br#"{"update":[{"_id":"r1","topic":"Plans for May"},{"_id":"r2","topic":""},
+            {"_id":"r3"}],"remove":[]}"#;
+        let rooms = parse_rooms(rooms).unwrap();
+        assert_eq!(rooms["r1"].topic.as_deref(), Some("Plans for May"));
+        assert_eq!(rooms["r2"].topic.as_deref(), Some(""));
+        assert_eq!(rooms["r3"].topic, None);
+    }
+
+    // ROOM-009
+    #[test]
+    fn a_room_push_says_the_topic_it_carries_and_an_empty_one_is_a_cleared_topic() {
+        let topic = |fixture: &str| match stream_event("stream-notify-user", fixture).unwrap() {
+            Some(DdpEvent::RoomChanged { topic, .. }) => topic,
+            other => panic!("{other:?}"),
+        };
+        let with = |topic: &str| {
+            DDP_ROOMS_CHANGED_MESSAGE.replacen(
+                r#""msgs": 1,"#,
+                &format!(r#""msgs": 1, "topic": "{topic}","#),
+                1,
+            )
+        };
+        assert_eq!(topic(&with("Plans")).as_deref(), Some("Plans"));
+        assert_eq!(topic(&with("")).as_deref(), Some(""));
+        assert_eq!(topic(DDP_ROOMS_CHANGED_MESSAGE), None);
     }
 
     // RICH-004
@@ -1789,6 +1825,7 @@ mod tests {
             Some(DdpEvent::RoomChanged {
                 room_id: "6ad7a58d3a2871a71ede2062".into(),
                 last_message: Some(ts("2026-10-20T17:31:59.831Z")),
+                topic: None,
             })
         );
     }
