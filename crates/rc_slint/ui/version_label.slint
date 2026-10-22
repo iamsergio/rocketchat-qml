@@ -1,0 +1,17 @@
+// SPDX-FileCopyrightText: 2026 Sergio Martins
+// SPDX-License-Identifier: MIT
+
+import { Theme } from "theme.slint";
+
+// The version of the app, for the pages that show before a session: the startup page and the login
+// page.
+export component VersionLabel inherits Text {
+    // Set from Rust (`rc_core::VERSION`).
+    in property <string> version;
+
+    accessible-id: "versionLabel";
+    color: Theme.text-faint;
+    font-size: Theme.font-size-tiny;
+    text: @tr("RocketChatQml {}", version);
+    horizontal-alignment: center;
+}

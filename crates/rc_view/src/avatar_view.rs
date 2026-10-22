@@ -7,7 +7,7 @@
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 use std::hash::BuildHasher;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use rc_core::AvatarUpdate;
 use rc_core::domain::{AvatarOwner, Message, MessageKind, Room};
@@ -80,6 +80,39 @@ pub fn file_url(path: &Path, version: u64) -> String {
     }
     let _ = write!(url, "?v={version}");
     url
+}
+
+/// The file a URL of [`file_url`] names: without its `?v=` query, the percent escapes decoded, and
+/// without the slash before a Windows drive. For a GUI that loads images from paths, where Qt takes
+/// the URL as it is. `None` for anything else than a `file://` URL.
+#[must_use]
+pub fn file_path(url: &str) -> Option<PathBuf> {
+    let path = url.strip_prefix("file://")?;
+    let path = path.split_once('?').map_or(path, |(path, _)| path);
+    let bytes = path.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut at = 0;
+    while let Some(&byte) = bytes.get(at) {
+        let escaped = (byte == b'%')
+            .then(|| path.get(at + 1..at + 3))
+            .flatten()
+            .and_then(|digits| u8::from_str_radix(digits, 16).ok());
+        if let Some(value) = escaped {
+            decoded.push(value);
+            at += 3;
+        } else {
+            decoded.push(byte);
+            at += 1;
+        }
+    }
+    let text = String::from_utf8(decoded).ok()?;
+    let mut chars = text.chars();
+    let drive = chars.next() == Some('/')
+        && chars
+            .next()
+            .is_some_and(|letter| letter.is_ascii_alphabetic())
+        && chars.next() == Some(':');
+    Some(PathBuf::from(if drive { &text[1..] } else { &text[..] }))
 }
 
 /// Whose avatar the author of the message shows; none for a system message.
@@ -188,6 +221,24 @@ mod tests {
             owner,
             path: path.map(PathBuf::from),
         }
+    }
+
+    // RICH-004
+    #[test]
+    fn a_file_url_gives_its_file_back() {
+        for path in [
+            "/home/me/.cache/app/h%3A3000/avatars/user/a b.svg",
+            "/tmp/\u{e9}.png",
+        ] {
+            let url = file_url(Path::new(path), 4);
+            assert_eq!(file_path(&url), Some(PathBuf::from(path)), "{url}");
+        }
+        // A Windows drive loses the slash before it; other URLs aren't files.
+        assert_eq!(
+            file_path("file:///C:/Users/me/a.png?v=1"),
+            Some(PathBuf::from("C:/Users/me/a.png"))
+        );
+        assert_eq!(file_path("https://h/a.png"), None);
     }
 
     // RICH-004

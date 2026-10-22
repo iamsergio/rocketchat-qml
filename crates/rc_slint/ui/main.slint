@@ -1,23 +1,139 @@
 // SPDX-FileCopyrightText: 2026 Sergio Martins
 // SPDX-License-Identifier: MIT
 
+// The font of the app, which the QML app ships too. Loading it registers its families.
+import "../../../src/gui/fonts/InstrumentSans.ttf";
+import "../../../src/gui/fonts/InstrumentSans-Italic.ttf";
+
+import { LoginPage } from "login_page.slint";
+import { RoomPage } from "room_page.slint";
+import { ServerRail } from "server_rail.slint";
+import { StartupPage } from "startup_page.slint";
+import { AccountTile, LoginMode, RoomRow, RoomSection, SessionStatus } from "structs.slint";
 import { Theme } from "theme.slint";
+
+export { AccountTile, LoginMode, RoomRow, RoomSection, SessionStatus }
 
 export component MainWindow inherits Window {
     // The version of the app, set from Rust (`rc_core::VERSION`).
     in property <string> version;
 
+    // The session of the account on screen: the values of `rc_view::session_view::SessionView`.
+    in property <SessionStatus> status: SessionStatus.unknown;
+    in property <bool> busy;
+    in property <string> error-text;
+    in property <string> username;
+    // The server without its scheme or path.
+    in property <string> host;
+    // Empty while the realtime connection is up.
+    in property <string> connection-text;
+    in property <string> account-id;
+    in property <LoginMode> login-mode;
+    in property <string> login-title;
+    in property <string> login-lede;
+    in property <string> login-notice;
+    in property <string> login-server;
+    in property <string> login-username;
+    // What the password field starts with: empty, unless a developer-mode build got `--dev`.
+    in property <string> prefill-password;
+
+    // The rail of servers.
+    in property <[AccountTile]> tiles;
+    in property <bool> has-new-account;
+
+    // The room list, and the open room.
+    in property <[RoomRow]> rooms;
+    in property <string> room-id;
+    in property <string> room-name;
+    in property <string> room-kind;
+    in property <string> room-topic;
+
+    callback login(string, string, string);
+    // Removes the account on screen: Cancel, Remove this server and Log out in the settings menu.
+    callback logout();
+    callback select-account(string);
+    callback add-account();
+    callback remove-account(string);
+    callback open-room(string);
+
     title: @tr("RocketChatQml");
     background: Theme.base;
+    default-font-family: Theme.font-family;
+    default-font-size: Theme.font-size-base;
+    default-font-weight: Theme.font-weight-normal;
     preferred-width: Theme.window-width;
     preferred-height: Theme.window-height;
 
-    Text {
-        accessible-id: "versionLabel";
-        color: Theme.text-faint;
-        font-size: Theme.font-size-tiny;
-        text: @tr("RocketChatQml {}", root.version);
-        horizontal-alignment: left;
-        vertical-alignment: top;
+    // The rail of servers is at the left of every page, except while the session state is unknown:
+    // until the core has said what the account is doing, there is nothing to put in it. It shows
+    // beside the startup page of a resume, so that the tile of the account shows its ring.
+    rail := ServerRail {
+        x: Theme.spacing-none;
+        y: Theme.spacing-none;
+        height: parent.height;
+        visible: root.status != SessionStatus.unknown;
+        z: Theme.z-above;
+        tiles: root.tiles;
+        has-new: root.has-new-account;
+        select-account(id) => {
+            root.select-account(id);
+        }
+        add-account => {
+            root.add-account();
+        }
+        remove-account(id) => {
+            root.remove-account(id);
+        }
+        logout => {
+            root.logout();
+        }
+    }
+
+    // One page per session state, in the space right of the rail. While logging in the state is
+    // Connecting, which keeps the login page and its fields. Resuming a stored session at startup
+    // shows the startup page, so that the login page doesn't flash before the room list.
+    page := Rectangle {
+        x: rail.visible ? rail.width : Theme.spacing-none;
+        y: Theme.spacing-none;
+        width: parent.width - self.x;
+        height: parent.height;
+
+        if root.status == SessionStatus.logged-in: RoomPage {
+            connection-text: root.connection-text;
+            host: root.host;
+            username: root.username;
+            rooms: root.rooms;
+            room-id: root.room-id;
+            room-name: root.room-name;
+            room-kind: root.room-kind;
+            room-topic: root.room-topic;
+            open-room(id) => {
+                root.open-room(id);
+            }
+        }
+
+        if root.status == SessionStatus.unknown || root.status == SessionStatus.resuming: StartupPage {
+            version: root.version;
+        }
+
+        if root.status == SessionStatus.logged-out || root.status == SessionStatus.connecting: LoginPage {
+            version: root.version;
+            login-mode: root.login-mode;
+            login-title: root.login-title;
+            login-lede: root.login-lede;
+            login-notice: root.login-notice;
+            login-server: root.login-server;
+            login-username: root.login-username;
+            prefill-password: root.prefill-password;
+            error-text: root.error-text;
+            busy: root.busy;
+            account-id: root.account-id;
+            login(server, username, password) => {
+                root.login(server, username, password);
+            }
+            logout => {
+                root.logout();
+            }
+        }
     }
 }

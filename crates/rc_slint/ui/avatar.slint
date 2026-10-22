@@ -1,0 +1,48 @@
+// SPDX-FileCopyrightText: 2026 Sergio Martins
+// SPDX-License-Identifier: MIT
+
+import { Theme } from "theme.slint";
+
+// A rounded avatar: the image once there is one, the initials on a colour until then. The user of
+// the component names the image and the placeholder, as `roomAvatar` and `roomAvatarPlaceholder`.
+export component Avatar inherits Rectangle {
+    in property <image> source;
+    in property <bool> has-image;
+    // The `file://` URL of the image, which is what the GUI tests read.
+    in property <string> url;
+    in property <string> initials;
+    in property <color> fill-color;
+    in property <string> image-name;
+    in property <string> placeholder-name;
+    in property <string> initials-name;
+
+    width: Theme.avatar-size;
+    height: Theme.avatar-size;
+    border-radius: self.width * Theme.avatar-radius-ratio;
+    clip: true;
+
+    Rectangle {
+        accessible-id: root.placeholder-name;
+        accessible-role: image;
+        background: root.fill-color;
+        visible: !root.has-image;
+
+        Text {
+            accessible-id: root.initials-name;
+            color: Theme.on-avatar;
+            font-size: root.height * Theme.avatar-font-scale;
+            font-weight: Theme.font-weight-bold;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+            text: root.initials;
+        }
+    }
+
+    Image {
+        accessible-id: root.image-name;
+        accessible-label: root.url;
+        source: root.source;
+        image-fit: cover;
+        visible: root.has-image;
+    }
+}
