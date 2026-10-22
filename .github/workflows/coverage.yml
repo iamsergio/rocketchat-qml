@@ -4,8 +4,6 @@
 name: Coverage
 
 on:
-  push:
-    branches: [ main ]
   workflow_dispatch:
   # Only to try out changes to this workflow: running it on every pull request would double the CI.
   pull_request:
