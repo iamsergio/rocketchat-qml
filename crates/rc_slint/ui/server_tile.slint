@@ -1,0 +1,203 @@
+// SPDX-FileCopyrightText: 2026 Sergio Martins
+// SPDX-License-Identifier: MIT
+
+import { BusyIndicator } from "busy_indicator.slint";
+import { Icon } from "icon.slint";
+import { MenuItem } from "menu_item.slint";
+import { AccountTile } from "structs.slint";
+import { Theme } from "theme.slint";
+
+// One account in the rail: the letter of its server, a pip at the left edge (short for unread, tall
+// for the account on screen), the number of mentions, a dot when the login ended and a ring while
+// it connects. The tile of an account that isn't added yet (`fresh`) is a plus, with the separator
+// above it that otherwise sits before the add button, and is lit only while on screen or under the
+// pointer, like that button. Named by position, as `serverTile_<index>`: two accounts can have one
+// host. A right-click opens the menu of the account, which is where to log out of it, or to remove
+// it once its login has ended; the tile of an account that isn't added yet has none.
+export component ServerTile inherits Rectangle {
+    in property <AccountTile> tile;
+    in property <int> index;
+    callback selected();
+    callback removed();
+
+    // What a fresh tile adds above itself for the separator.
+    property <length> fresh-inset: root.tile.fresh ? Theme.separator-width + Theme.spacing-l : Theme.spacing-none;
+    property <bool> lit: root.tile.current || touch.has-hover;
+
+    accessible-id: "serverTile_" + root.index;
+    accessible-role: button;
+    accessible-checkable: true;
+    accessible-checked: root.tile.current;
+    accessible-label: root.tile.label;
+    accessible-action-default => {
+        root.selected();
+    }
+
+    width: Theme.rail-width;
+    height: Theme.rail-tile-size + root.fresh-inset;
+
+    if root.tile.fresh: Rectangle {
+        y: Theme.spacing-none;
+        x: (parent.width - self.width) / 2;
+        width: Theme.rail-separator-width;
+        height: Theme.separator-width;
+        background: Theme.line;
+    }
+
+    // Unread: a short pip. Rounded on the right only: the left half is off the rail.
+    if root.tile.unread: Rectangle {
+        accessible-id: "serverTileUnread";
+        accessible-role: image;
+        accessible-label: @tr("Unread rooms");
+        x: -Theme.rail-pip-width;
+        y: tile-body.y + (tile-body.height - self.height) / 2;
+        width: 2 * Theme.rail-pip-width;
+        height: Theme.rail-pip-unread;
+        background: Theme.text;
+        border-radius: Theme.rail-pip-width;
+    }
+
+    // On screen: a tall pip.
+    if root.tile.current: Rectangle {
+        accessible-id: "serverTileCurrent";
+        accessible-role: image;
+        accessible-label: @tr("On screen");
+        x: -Theme.rail-pip-width;
+        y: tile-body.y + (tile-body.height - self.height) / 2;
+        width: 2 * Theme.rail-pip-width;
+        height: Theme.rail-pip-current;
+        background: Theme.own;
+        border-radius: Theme.rail-pip-width;
+    }
+
+    tile-body := Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: parent.height - self.height;
+        width: Theme.rail-tile-size;
+        height: Theme.rail-tile-size;
+        border-radius: Theme.rail-tile-radius;
+        border-width: root.tile.fresh ? Theme.rail-new-border-width : Theme.border-width;
+        border-color: root.tile.fresh ? (root.lit ? Theme.own : Theme.raised-hover) : root.tile.current ? Theme.own-border : root.tile.expired ? Theme.raised-hover : Theme.transparent;
+        background: root.tile.fresh ? Theme.transparent : root.tile.current ? Theme.own-wash : root.tile.expired ? Theme.base : touch.has-hover ? Theme.raised-hover : Theme.raised;
+
+        // Connecting or resuming: an arc turns around the tile.
+        if root.tile.busy: BusyIndicator {
+            accessible-id: "serverTileBusy";
+            accessible-role: progress-indicator;
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            width: Theme.rail-tile-size + 2 * (Theme.rail-ring-gap + Theme.rail-ring-width);
+            height: self.width;
+        }
+
+        // The number of mentions, in the signal colour, cut out of the rail's.
+        if root.tile.mentions > 0: Rectangle {
+            width: max(Theme.rail-badge-height, mention-count.preferred-width + 2 * Theme.rail-badge-padding-h) + 2 * Theme.rail-cutout-width;
+            height: Theme.rail-badge-height + 2 * Theme.rail-cutout-width;
+            x: parent.width - self.width + Theme.rail-badge-overhang-x + Theme.rail-cutout-width;
+            y: parent.height - self.height + Theme.rail-badge-overhang-y + Theme.rail-cutout-width;
+            background: Theme.rail;
+            border-radius: self.height / 2;
+
+            Rectangle {
+                x: Theme.rail-cutout-width;
+                y: Theme.rail-cutout-width;
+                width: parent.width - 2 * Theme.rail-cutout-width;
+                height: parent.height - 2 * Theme.rail-cutout-width;
+                background: Theme.signal;
+                border-radius: self.height / 2;
+
+                mention-count := Text {
+                    accessible-id: "serverTileMentions";
+                    color: Theme.text-on-signal;
+                    font-size: Theme.font-size-tiny;
+                    font-weight: Theme.font-weight-bold;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                    text: root.tile.mentions;
+                }
+            }
+        }
+
+        // The login ended.
+        if root.tile.expired: Rectangle {
+            accessible-id: "serverTileExpired";
+            accessible-role: image;
+            accessible-label: @tr("Login ended");
+            width: Theme.rail-dot-size + 2 * Theme.rail-cutout-width;
+            height: self.width;
+            x: parent.width - self.width + Theme.rail-dot-overhang + Theme.rail-cutout-width;
+            y: -Theme.rail-dot-overhang - Theme.rail-cutout-width;
+            background: Theme.rail;
+            border-radius: self.height / 2;
+
+            Rectangle {
+                x: Theme.rail-cutout-width;
+                y: Theme.rail-cutout-width;
+                width: parent.width - 2 * Theme.rail-cutout-width;
+                height: parent.height - 2 * Theme.rail-cutout-width;
+                background: Theme.warning;
+                border-radius: self.height / 2;
+            }
+        }
+
+        if !root.tile.fresh: Text {
+            accessible-id: "serverTileMonogram";
+            color: root.tile.current ? Theme.own : root.tile.expired ? Theme.text-faint : touch.has-hover ? Theme.text : Theme.text-muted;
+            font-size: Theme.font-size-rail-tile;
+            font-weight: Theme.font-weight-bold;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+            text: root.tile.monogram;
+        }
+
+        if root.tile.fresh: Icon {
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            width: Theme.rail-add-icon-size;
+            height: Theme.rail-add-icon-size;
+            source: @image-url("../../../src/gui/icons/plus.svg");
+            tint: root.lit ? Theme.own : Theme.text-faint;
+        }
+    }
+
+    touch := TouchArea {
+        clicked => {
+            root.selected();
+        }
+        pointer-event(event) => {
+            if !root.tile.fresh && event.button == PointerEventButton.right && event.kind == PointerEventKind.up {
+                menu.show();
+            }
+        }
+    }
+
+    // Opens at the pointer.
+    menu := PopupWindow {
+        x: touch.mouse-x;
+        y: touch.mouse-y;
+        width: Theme.menu-width;
+        height: Theme.menu-item-height + 2 * Theme.menu-padding + 2 * Theme.border-width;
+
+        Rectangle {
+            background: Theme.raised;
+            border-color: Theme.raised-hover;
+            border-width: Theme.border-width;
+            border-radius: Theme.radius-control;
+
+            VerticalLayout {
+                padding: Theme.menu-padding;
+                spacing: Theme.spacing-none;
+
+                MenuItem {
+                    accessible-id: "logoutAction";
+                    text: root.tile.expired ? @tr("Remove this server") : @tr("Log out");
+                    triggered => {
+                        menu.close();
+                        root.removed();
+                    }
+                }
+            }
+        }
+    }
+}

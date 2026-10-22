@@ -1,0 +1,240 @@
+// SPDX-FileCopyrightText: 2026 Sergio Martins
+// SPDX-License-Identifier: MIT
+
+import { BusyIndicator } from "busy_indicator.slint";
+import { FieldLabel } from "field_label.slint";
+import { FlatButton } from "flat_button.slint";
+import { Icon } from "icon.slint";
+import { InputField } from "input_field.slint";
+import { PrimaryButton } from "primary_button.slint";
+import { LoginMode } from "structs.slint";
+import { Theme } from "theme.slint";
+import { VersionLabel } from "version_label.slint";
+
+// The login page of the account on screen, in one of three modes (`login-mode`, with the texts).
+// Login: the fields start with who the account is, if it says so, else empty, or filled in for the
+// local test server when a developer build got --dev. Adding: the account is a new one, and there
+// are others to go back to with Cancel. Again: the session of the account ended, so the server
+// can't be changed and the account can be removed. The page is made anew whenever the session
+// leaves the login pages, and its fields start again whenever another account is on screen.
+export component LoginPage inherits Rectangle {
+    in property <string> version;
+    in property <LoginMode> login-mode;
+    in property <string> login-title;
+    in property <string> login-lede;
+    in property <string> login-notice;
+    // What the fields start with.
+    in property <string> login-server;
+    in property <string> login-username;
+    in property <string> prefill-password;
+    in property <string> error-text;
+    in property <bool> busy;
+    // The local id of the account shown: the fields start again when it changes, so that what was
+    // typed for one account isn't sent to another's server.
+    in property <string> account-id;
+    callback login(string, string, string);
+    // Cancel, and Remove this server: both remove the account on screen.
+    callback logout();
+
+    property <bool> again: root.login-mode == LoginMode.again;
+    property <bool> adding: root.login-mode == LoginMode.adding;
+
+    init => {
+        if root.again {
+            password.focus-field();
+        }
+    }
+
+    changed account-id => {
+        server.text = root.login-server;
+        username.text = root.login-username;
+        password.text = root.prefill-password;
+    }
+
+    VerticalLayout {
+        alignment: center;
+        padding: Theme.spacing-none;
+        spacing: Theme.spacing-none;
+
+        HorizontalLayout {
+            alignment: center;
+            padding: Theme.spacing-none;
+            spacing: Theme.spacing-none;
+
+            VerticalLayout {
+                width: min(root.width - Theme.page-margin, Theme.login-form-width);
+                padding: Theme.spacing-none;
+                spacing: Theme.spacing-xxl;
+
+                Text {
+                    accessible-id: "loginTitle";
+                    color: Theme.text;
+                    font-size: Theme.font-size-title;
+                    font-weight: Theme.font-weight-bold;
+                    wrap: word-wrap;
+                    text: root.login-title;
+                }
+
+                if !root.login-lede.is-empty: Text {
+                    accessible-id: "loginLede";
+                    color: Theme.text-muted;
+                    wrap: word-wrap;
+                    text: root.login-lede;
+                }
+
+                // The session ended: say where.
+                if !root.login-notice.is-empty: Rectangle {
+                    background: Theme.warning-wash;
+                    border-radius: Theme.radius-control;
+                    preferred-height: notice-row.preferred-height;
+
+                    notice-row := HorizontalLayout {
+                        padding-left: Theme.spacing-xxl;
+                        padding-right: Theme.spacing-xxl;
+                        padding-top: Theme.spacing-xl;
+                        padding-bottom: Theme.spacing-xl;
+                        spacing: Theme.spacing-xl;
+
+                        VerticalLayout {
+                            alignment: start;
+                            padding: Theme.spacing-none;
+                            padding-top: Theme.spacing-xxs;
+                            spacing: Theme.spacing-none;
+
+                            Icon {
+                                width: Theme.room-icon-size;
+                                height: Theme.room-icon-size;
+                                source: @image-url("../../../src/gui/icons/clock.svg");
+                                tint: Theme.warning;
+                            }
+                        }
+
+                        Text {
+                            accessible-id: "loginNotice";
+                            color: Theme.warning;
+                            font-size: Theme.font-size-small;
+                            wrap: word-wrap;
+                            text: root.login-notice;
+                        }
+                    }
+                }
+
+                // A label above each field. Its name says what the field takes, where the
+                // placeholder gives an example.
+                VerticalLayout {
+                    padding: Theme.spacing-none;
+                    spacing: Theme.spacing-m;
+
+                    FieldLabel {
+                        text: @tr("Server");
+                    }
+
+                    server := InputField {
+                        field-id: "loginServerField";
+                        text: root.login-server;
+                        enabled: !root.busy;
+                        read-only: root.again;
+                        placeholder-text: @tr("Server, e.g. https://chat.example.com");
+                    }
+                }
+
+                VerticalLayout {
+                    padding: Theme.spacing-none;
+                    spacing: Theme.spacing-m;
+
+                    FieldLabel {
+                        text: @tr("Username");
+                    }
+
+                    username := InputField {
+                        field-id: "loginUsernameField";
+                        text: root.login-username;
+                        enabled: !root.busy;
+                        placeholder-text: @tr("Username");
+                    }
+                }
+
+                VerticalLayout {
+                    padding: Theme.spacing-none;
+                    spacing: Theme.spacing-m;
+
+                    FieldLabel {
+                        text: @tr("Password");
+                    }
+
+                    password := InputField {
+                        field-id: "loginPasswordField";
+                        text: root.prefill-password;
+                        enabled: !root.busy;
+                        password: true;
+                        placeholder-text: @tr("Password");
+                        accepted => {
+                            root.login(server.text, username.text, password.text);
+                        }
+                    }
+                }
+
+                if !root.error-text.is-empty: Text {
+                    accessible-id: "loginError";
+                    color: Theme.error;
+                    font-size: Theme.font-size-small;
+                    wrap: word-wrap;
+                    text: root.error-text;
+                }
+
+                HorizontalLayout {
+                    padding: Theme.spacing-none;
+                    spacing: Theme.spacing-l;
+
+                    if root.adding: FlatButton {
+                        accessible-id: "loginCancelButton";
+                        button-height: Theme.field-height;
+                        text: @tr("Cancel");
+                        clicked => {
+                            root.logout();
+                        }
+                    }
+
+                    PrimaryButton {
+                        accessible-id: "loginButton";
+                        height: Theme.field-height;
+                        text: @tr("Log in");
+                        enabled: !root.busy;
+                        clicked => {
+                            root.login(server.text, username.text, password.text);
+                        }
+                    }
+
+                    if root.busy: BusyIndicator {
+                        accessible-id: "loginBusy";
+                        accessible-role: progress-indicator;
+                        width: Theme.busy-indicator-size;
+                        height: Theme.busy-indicator-size;
+                    }
+                }
+
+                if root.again: HorizontalLayout {
+                    alignment: center;
+                    padding: Theme.spacing-none;
+                    spacing: Theme.spacing-none;
+
+                    FlatButton {
+                        accessible-id: "loginRemoveServerButton";
+                        enabled: !root.busy;
+                        text: @tr("Remove this server");
+                        clicked => {
+                            root.logout();
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    VersionLabel {
+        version: root.version;
+        x: (parent.width - self.width) / 2;
+        y: parent.height - self.height - Theme.spacing-xxl;
+        width: self.preferred-width;
+    }
+}

@@ -1,0 +1,176 @@
+// SPDX-FileCopyrightText: 2026 Sergio Martins
+// SPDX-License-Identifier: MIT
+
+import { KindIcon } from "icon.slint";
+import { ListView } from "list_view.slint";
+import { RoomDelegate } from "room_delegate.slint";
+import { RoomRow } from "structs.slint";
+import { Theme } from "theme.slint";
+
+// The page of a logged-in account: the sidebar with the server, the user and the room list, and
+// the open room beside it. For now the room shows its header only.
+export component RoomPage inherits Rectangle {
+    // Empty while the realtime connection is up.
+    in property <string> connection-text;
+    // The server without its scheme or path, and who is logged in there.
+    in property <string> host;
+    in property <string> username;
+    // The room list, with the headings of its sections.
+    in property <[RoomRow]> rooms;
+    // The open room, empty for none: its name, its kind (the name of its icon) and its topic.
+    in property <string> room-id;
+    in property <string> room-name;
+    in property <string> room-kind;
+    in property <string> room-topic;
+    callback open-room(string);
+
+    VerticalLayout {
+        padding: Theme.spacing-none;
+        spacing: Theme.spacing-none;
+
+        if !root.connection-text.is-empty: Rectangle {
+            background: Theme.warning-wash;
+            preferred-height: banner.preferred-height + 2 * Theme.spacing-m;
+
+            banner := Text {
+                accessible-id: "connectionBanner";
+                x: Theme.spacing-m;
+                y: Theme.spacing-m;
+                width: parent.width - 2 * Theme.spacing-m;
+                color: Theme.warning;
+                font-size: Theme.font-size-small;
+                horizontal-alignment: center;
+                wrap: word-wrap;
+                text: root.connection-text;
+            }
+        }
+
+        HorizontalLayout {
+            padding: Theme.spacing-none;
+            spacing: Theme.spacing-none;
+
+            VerticalLayout {
+                width: Theme.sidebar-width;
+                padding: Theme.spacing-none;
+                spacing: Theme.spacing-none;
+
+                // The server: its host, and who you are there.
+                VerticalLayout {
+                    padding-left: Theme.sidebar-header-padding-h;
+                    padding-right: Theme.sidebar-header-padding-h;
+                    padding-top: Theme.spacing-xxl;
+                    padding-bottom: Theme.spacing-xl;
+                    spacing: Theme.spacing-xxs;
+
+                    Text {
+                        accessible-id: "serverName";
+                        color: Theme.text;
+                        font-size: Theme.font-size-heading;
+                        font-weight: Theme.font-weight-bold;
+                        overflow: elide;
+                        text: root.host;
+                    }
+
+                    Text {
+                        accessible-id: "serverUser";
+                        color: Theme.text-faint;
+                        font-size: Theme.font-size-small;
+                        overflow: elide;
+                        text: root.username;
+                    }
+                }
+
+                // One list, so that everything scrolls together: the favorites come first, and the
+                // headings of the sections are rows of it, there only while there are favorites.
+                ListView {
+                    accessible-id: "roomList";
+                    accessible-role: list;
+
+                    for room in root.rooms: RoomDelegate {
+                        room: room;
+                        highlighted: room.id == root.room-id;
+                        clicked => {
+                            root.open-room(room.id);
+                        }
+                    }
+                }
+            }
+
+            Rectangle {
+                width: Theme.separator-width;
+                background: Theme.line;
+            }
+
+            // The open room: its kind, its name and under it its topic, over a hairline.
+            Rectangle {
+                background: Theme.surface;
+                horizontal-stretch: 1;
+
+                if !root.room-id.is-empty: Rectangle {
+                    y: Theme.spacing-none;
+                    height: Theme.room-header-height;
+
+                    HorizontalLayout {
+                        padding-left: Theme.spacing-xxxl;
+                        padding-right: Theme.spacing-xxxl;
+                        padding-top: Theme.spacing-none;
+                        padding-bottom: Theme.spacing-none;
+                        spacing: Theme.spacing-xl;
+
+                        VerticalLayout {
+                            alignment: center;
+                            width: Theme.room-header-icon-size;
+                            padding: Theme.spacing-none;
+                            spacing: Theme.spacing-none;
+
+                            KindIcon {
+                                width: Theme.room-header-icon-size;
+                                height: Theme.room-header-icon-size;
+                                kind: root.room-kind;
+                                tint: Theme.own;
+                            }
+                        }
+
+                        // Centred, so that the name of a room without a topic is in the middle.
+                        VerticalLayout {
+                            alignment: center;
+                            padding: Theme.spacing-none;
+                            spacing: Theme.spacing-xxs;
+
+                            Text {
+                                accessible-id: "roomTitle";
+                                color: Theme.text;
+                                font-size: Theme.font-size-heading;
+                                font-weight: Theme.font-weight-bold;
+                                overflow: elide;
+                                text: root.room-name;
+                            }
+
+                            if !root.room-topic.is-empty: Text {
+                                accessible-id: "roomTopic";
+                                color: Theme.text-muted;
+                                font-size: Theme.font-size-small;
+                                overflow: elide;
+                                text: root.room-topic;
+                            }
+                        }
+                    }
+
+                    Rectangle {
+                        y: parent.height - self.height;
+                        height: Theme.separator-width;
+                        background: Theme.line;
+                    }
+                }
+
+                if root.room-id.is-empty: Text {
+                    accessible-id: "roomPlaceholder";
+                    color: Theme.text-faint;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                    text: @tr("Select a room");
+                }
+            }
+        }
+    }
+}

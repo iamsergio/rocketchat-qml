@@ -2,7 +2,12 @@
 // SPDX-License-Identifier: MIT
 
 //! The Slint frontend: a pure Rust app on `rc_core`, with no Qt. The `rocketchat_slint` binary
-//! (`main.rs`) runs it; the window is built here so that the tests build the same one.
+//! (`main.rs`) runs it; the window is built here so that the tests build the same one, without a
+//! core.
+
+pub mod app;
+mod room_model;
+mod rows;
 
 // The code Slint generates doesn't follow the workspace's lints (it unwraps).
 #[allow(
@@ -21,7 +26,7 @@ mod ui {
 
 pub use ui::MainWindow;
 
-/// The main window, with what Rust provides set.
+/// The main window, with what Rust provides without a core set.
 ///
 /// # Errors
 ///

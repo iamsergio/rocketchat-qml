@@ -1,0 +1,40 @@
+// SPDX-FileCopyrightText: 2026 Sergio Martins
+// SPDX-License-Identifier: MIT
+
+import { Theme } from "theme.slint";
+
+// An arc that turns around its centre: something is going on. The arc is a quarter of the circle
+// that touches the edges of the item, minus the width of its line.
+export component BusyIndicator inherits Rectangle {
+    in property <color> ring-color: Theme.text-muted;
+    in property <length> line-width: Theme.rail-ring-width;
+
+    // The radius, and the centre, in the unit of the path.
+    property <float> radius: (min(self.width, self.height) - root.line-width) / 2 / Theme.path-unit;
+    property <float> centre-x: self.width / 2 / Theme.path-unit;
+    property <float> centre-y: self.height / 2 / Theme.path-unit;
+
+    // The arc turns by moving its ends.
+    property <angle> turn: animation-tick() / Theme.rail-ring-duration * Theme.rail-ring-turn;
+
+    Path {
+        viewbox-width: root.width / Theme.path-unit;
+        viewbox-height: root.height / Theme.path-unit;
+        stroke: root.ring-color;
+        stroke-width: root.line-width;
+        stroke-line-cap: round;
+
+        MoveTo {
+            x: root.centre-x + root.radius * cos(Theme.rail-ring-arc-start + root.turn);
+            y: root.centre-y + root.radius * sin(Theme.rail-ring-arc-start + root.turn);
+        }
+
+        ArcTo {
+            radius-x: root.radius;
+            radius-y: root.radius;
+            x: root.centre-x + root.radius * cos(Theme.rail-ring-arc-end + root.turn);
+            y: root.centre-y + root.radius * sin(Theme.rail-ring-arc-end + root.turn);
+            sweep: true;
+        }
+    }
+}

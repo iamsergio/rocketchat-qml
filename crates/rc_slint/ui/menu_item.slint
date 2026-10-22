@@ -1,0 +1,42 @@
+// SPDX-FileCopyrightText: 2026 Sergio Martins
+// SPDX-License-Identifier: MIT
+
+import { Theme } from "theme.slint";
+
+// One entry of a menu. Its `accessible-id` is set by the user of the component.
+export component MenuItem inherits Rectangle {
+    in property <string> text;
+    callback triggered();
+
+    accessible-role: button;
+    accessible-label: root.text;
+    accessible-action-default => {
+        root.triggered();
+    }
+
+    height: Theme.menu-item-height;
+    background: touch.has-hover ? Theme.raised-hover : Theme.transparent;
+    border-radius: Theme.radius-control;
+
+    HorizontalLayout {
+        padding-left: Theme.menu-item-padding-h;
+        padding-right: Theme.menu-item-padding-h;
+        padding-top: Theme.spacing-none;
+        padding-bottom: Theme.spacing-none;
+        spacing: Theme.spacing-none;
+
+        Text {
+            color: Theme.text;
+            font-size: Theme.font-size-base;
+            overflow: elide;
+            text: root.text;
+            vertical-alignment: center;
+        }
+    }
+
+    touch := TouchArea {
+        clicked => {
+            root.triggered();
+        }
+    }
+}

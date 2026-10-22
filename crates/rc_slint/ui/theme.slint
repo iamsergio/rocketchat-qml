@@ -2,17 +2,157 @@
 // SPDX-License-Identifier: MIT
 
 // Every size, spacing, radius, font size, opacity and colour of the GUI, so it can be themed in one
-// place. The values mirror `src/gui/Theme.qml`.
+// place. The values mirror `src/gui/Theme.qml`, and the colours it feeds into the Controls palette
+// (`Main.qml`), which the menus and popups of the QML app take. Slint colours are `#rrggbbaa`
+// where Qt's are `#aarrggbb`.
 export global Theme {
-    // Colours
+    // Colours: ink-slate neutrals with a slight blue bias, and two accents with fixed meanings.
+    // Signal (Rocket.Chat red) marks what needs the user: mentions of them. Own (periwinkle) marks
+    // what is the user's or where they are: the open room, links, the main button, the focused
+    // field.
+    // The sidebar and the window.
     out property <color> base: #15181e;
+    // The rail of servers at the left of the window: darker than the sidebar.
+    out property <color> rail: #111319;
+    // The conversation, and the input fields.
+    out property <color> surface: #1b1f26;
+    // What sits on the surface: menus and popups.
+    out property <color> raised: #242933;
+    // Hover on raised, and the borders that must show against it. Also the unread badge.
+    out property <color> raised-hover: #2f3541;
+    // The hairlines between regions.
+    out property <color> line: #262b34;
+    out property <color> text: #e6e8ed;
+    out property <color> text-muted: #949bab;
     out property <color> text-faint: #626a7a;
+    out property <color> signal: #f5455c;
+    // The text on signal and on own.
+    out property <color> text-on-signal: #fff4f5;
+    out property <color> own: #7f9cff;
+    out property <color> text-on-own: #0f1424;
+    // Own at 14%.
+    out property <color> own-wash: #7f9cff24;
+    // Own at 50%: the border of the account on screen.
+    out property <color> own-border: #7f9cff80;
+    out property <color> warning: #e8b44f;
+    // Warning at 12%.
+    out property <color> warning-wash: #e8b44f1f;
+    out property <color> error: #ff8a66;
+    out property <color> on-avatar: Colors.white;
+    out property <color> transparent: Colors.transparent;
 
     // Fonts
+    // The font of the app, which `main.slint` loads from the one the QML app has.
+    out property <string> font-family: "Instrument Sans";
     out property <length> font-size-base: 15px;
     out property <length> font-size-tiny: font-size-base * 0.82;
+    out property <length> font-size-small: font-size-base * 0.89;
+    out property <length> font-size-heading: font-size-base * 1.2;
+    // The letter of a server's tile.
+    out property <length> font-size-rail-tile: font-size-base * 1.13;
+    out property <length> font-size-title: font-size-base * 1.7;
+    out property <float> avatar-font-scale: 0.4;
+    out property <int> font-weight-normal: 400;
+    out property <int> font-weight-semibold: 600;
+    out property <int> font-weight-bold: 650;
 
-    // Window
+    // Spacing, margins and paddings
+    out property <length> spacing-none: 0px;
+    out property <length> spacing-xxs: 1px;
+    out property <length> spacing-xs: 2px;
+    out property <length> spacing-s: 4px;
+    out property <length> spacing-m: 6px;
+    out property <length> spacing-l: 8px;
+    out property <length> spacing-xl: 10px;
+    out property <length> spacing-xxl: 12px;
+    out property <length> spacing-xxxl: 20px;
+    out property <length> page-margin: 32px;
+    out property <length> badge-padding-h: 12px;
+    out property <length> button-padding-h: 14px;
+    out property <length> field-padding-h: 12px;
+    out property <length> row-padding-h: 8px;
+    // How far the rounded background of a room row is from the edges of the list.
+    out property <length> room-row-inset: 8px;
+    // How far a menu is from the edges of the window, and its inner padding.
+    out property <length> menu-padding: 4px;
+    out property <length> menu-item-padding-h: 12px;
+
+    // Shapes
+    out property <float> avatar-radius-ratio: 0.25;
+    out property <length> radius-control: 7px;
+
+    // Lines
+    out property <length> border-width: 1px;
+    out property <length> separator-width: 1px;
+
+    // Sizes
+    out property <length> avatar-size: 36px;
+    out property <length> busy-indicator-large-size: 40px;
+    out property <length> busy-indicator-size: 32px;
+    out property <length> button-height: 30px;
+    out property <length> field-height: 38px;
+    out property <length> icon-button-size: 30px;
+    out property <length> icon-button-icon-size: 17px;
+    out property <length> login-form-width: 340px;
+    out property <length> menu-item-height: 30px;
+    out property <length> menu-width: 160px;
+    out property <length> room-avatar-size: 22px;
+    // Two lines fit: the name and the topic.
+    out property <length> room-header-height: 56px;
+    out property <length> room-header-icon-size: 18px;
+    out property <length> room-icon-size: 14px;
+    out property <length> room-row-height: 34px;
+    // A heading of the room list: its text and the space around it.
+    out property <length> room-section-height: 29px;
+    // The space each side of the server's name at the top of the sidebar.
+    out property <length> sidebar-header-padding-h: 16px;
+    out property <length> sidebar-width: 264px;
+    out property <length> unread-badge-height: 18px;
+    out property <length> unread-badge-min-width: 20px;
     out property <length> window-height: 600px;
     out property <length> window-width: 964px;
+
+    // The rail of servers: one tile per account, a pip at the left edge, a badge for mentions
+    // (bottom right) and a dot for a login that ended (top right), both cut out of the rail's
+    // colour, and a ring that turns while the account connects.
+    out property <length> rail-width: 64px;
+    out property <length> rail-tile-size: 40px;
+    out property <length> rail-tile-radius: 12px;
+    // The pip: short for unread, tall for the account on screen.
+    out property <length> rail-pip-width: 4px;
+    out property <length> rail-pip-unread: 8px;
+    out property <length> rail-pip-current: 24px;
+    // The mentions badge: its height (also its minimum width), the space each side of its text, how
+    // far it sticks out of the tile's corner, and the width of the cut-out around it and the dot.
+    out property <length> rail-badge-height: 18px;
+    out property <length> rail-badge-padding-h: 5px;
+    out property <length> rail-badge-overhang-x: 5px;
+    out property <length> rail-badge-overhang-y: 4px;
+    out property <length> rail-cutout-width: 3px;
+    out property <length> rail-dot-size: 11px;
+    out property <length> rail-dot-overhang: 3px;
+    // The ring around a connecting tile: its distance from the tile, width and turn time.
+    out property <length> rail-ring-gap: 4px;
+    out property <length> rail-ring-width: 2px;
+    out property <duration> rail-ring-duration: 1000ms;
+    out property <length> rail-separator-width: 28px;
+    out property <length> rail-add-icon-size: 18px;
+    // The border of the tile of a server that isn't added yet.
+    out property <length> rail-new-border-width: 1.5px;
+    // The ring's arc: a quarter of the circle, from the top left to the top right; the angle of the
+    // full turn; and the unit that the coordinates of a path are in.
+    out property <angle> rail-ring-arc-start: -135deg;
+    out property <angle> rail-ring-arc-end: -45deg;
+    out property <angle> rail-ring-turn: 360deg;
+    out property <length> path-unit: 1px;
+
+    // Opacity
+    out property <float> disabled-opacity: 0.6;
+    out property <float> opaque: 1;
+
+    // The factor that makes the main button brighter under the pointer.
+    out property <float> hover-brighter: 0.08;
+
+    // Stacking: what shows above its siblings, like the rail above the page.
+    out property <float> z-above: 1;
 }

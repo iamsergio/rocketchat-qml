@@ -1,0 +1,66 @@
+// SPDX-FileCopyrightText: 2026 Sergio Martins
+// SPDX-License-Identifier: MIT
+
+import { Theme } from "theme.slint";
+
+// A line of text on its own: the login fields. The border says which one has the focus.
+export component InputField inherits Rectangle {
+    in-out property <string> text <=> input.text;
+    in property <string> placeholder-text;
+    in property <bool> read-only;
+    in property <bool> password;
+    in property <bool> enabled: true;
+    // The name the GUI tests find the field by: the element that holds the text has it.
+    in property <string> field-id;
+    callback accepted();
+
+    public function focus-field() {
+        input.focus();
+    }
+
+    height: Theme.field-height;
+    background: root.read-only ? Theme.base : Theme.surface;
+    border-width: Theme.border-width;
+    border-color: input.has-focus ? Theme.own : Theme.raised-hover;
+    border-radius: Theme.radius-control;
+    opacity: root.enabled ? Theme.opaque : Theme.disabled-opacity;
+
+    HorizontalLayout {
+        padding-left: Theme.field-padding-h;
+        padding-right: Theme.field-padding-h;
+        padding-top: Theme.spacing-none;
+        padding-bottom: Theme.spacing-none;
+        spacing: Theme.spacing-none;
+
+        Rectangle {
+            clip: true;
+
+            input := TextInput {
+                accessible-id: root.field-id;
+                accessible-enabled: root.enabled;
+                accessible-placeholder-text: root.placeholder-text;
+                width: parent.width;
+                height: parent.height;
+                color: root.read-only ? Theme.text-muted : Theme.text;
+                font-size: Theme.font-size-base;
+                single-line: true;
+                enabled: root.enabled;
+                read-only: root.read-only;
+                input-type: root.password ? InputType.password : InputType.text;
+                vertical-alignment: center;
+                accepted => {
+                    root.accepted();
+                }
+            }
+
+            Text {
+                color: Theme.text-faint;
+                font-size: Theme.font-size-base;
+                text: root.placeholder-text;
+                vertical-alignment: center;
+                height: parent.height;
+                visible: input.text.is-empty;
+            }
+        }
+    }
+}

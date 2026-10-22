@@ -1,0 +1,172 @@
+// SPDX-FileCopyrightText: 2026 Sergio Martins
+// SPDX-License-Identifier: MIT
+
+import { Avatar } from "avatar.slint";
+import { KindIcon } from "icon.slint";
+import { RoomRow, RoomSection } from "structs.slint";
+import { Theme } from "theme.slint";
+
+// One row of the room list: a room, or the heading of a section (`roomSection_favorites` or
+// `roomSection_rooms`, with the heading `roomSectionHeader`). A room is named by its id: room names
+// aren't unique. Its icon is named after the room kind: `roomKind_channel`, `roomKind_private`,
+// `roomKind_direct`.
+export component RoomDelegate inherits Rectangle {
+    in property <RoomRow> room;
+    // Whether this is the open room.
+    in property <bool> highlighted;
+    callback clicked();
+
+    property <bool> is-room: root.room.section == RoomSection.room;
+
+    accessible-id: root.is-room ? "room_" + root.room.id : root.room.section == RoomSection.favorites ? "roomSection_favorites" : "roomSection_rooms";
+    accessible-role: button;
+    accessible-label: root.room.name;
+    accessible-action-default => {
+        root.clicked();
+    }
+
+    height: root.is-room ? Theme.room-row-height : Theme.room-section-height;
+
+    if !root.is-room: Rectangle {
+        background: Theme.base;
+
+        Text {
+            accessible-id: "roomSectionHeader";
+            x: Theme.room-row-inset + Theme.row-padding-h;
+            y: (parent.height - self.height) / 2;
+            color: Theme.text-faint;
+            font-size: Theme.font-size-small;
+            font-weight: Theme.font-weight-semibold;
+            text: root.room.section == RoomSection.favorites ? @tr("Favorites") : @tr("Rooms");
+        }
+    }
+
+    if root.is-room: Rectangle {
+        // The row is as wide as the list; the background floats inside.
+        Rectangle {
+            x: Theme.room-row-inset;
+            width: parent.width - 2 * Theme.room-row-inset;
+            background: root.highlighted ? Theme.own-wash : touch.has-hover ? Theme.surface : Theme.transparent;
+            border-radius: Theme.radius-control;
+        }
+
+        HorizontalLayout {
+            padding-left: Theme.room-row-inset + Theme.row-padding-h;
+            padding-right: Theme.room-row-inset + Theme.row-padding-h;
+            padding-top: Theme.spacing-none;
+            padding-bottom: Theme.spacing-none;
+            spacing: Theme.spacing-l;
+
+            VerticalLayout {
+                alignment: center;
+                width: Theme.room-avatar-size;
+                padding: Theme.spacing-none;
+                spacing: Theme.spacing-none;
+
+                Avatar {
+                    width: Theme.room-avatar-size;
+                    height: Theme.room-avatar-size;
+                    source: root.room.avatar;
+                    has-image: root.room.has-avatar;
+                    url: root.room.avatar-url;
+                    initials: root.room.initials;
+                    fill-color: root.room.initials-color;
+                    image-name: "roomAvatar";
+                    placeholder-name: "roomAvatarPlaceholder";
+                    initials-name: "roomAvatarInitials";
+                }
+            }
+
+            Text {
+                accessible-id: "roomName";
+                horizontal-stretch: 1;
+                color: root.highlighted || root.room.has-unread ? Theme.text : Theme.text-muted;
+                font-weight: root.room.has-unread ? Theme.font-weight-semibold : Theme.font-weight-normal;
+                overflow: elide;
+                vertical-alignment: center;
+                text: root.room.name;
+            }
+
+            VerticalLayout {
+                alignment: center;
+                width: Theme.room-icon-size;
+                padding: Theme.spacing-none;
+                spacing: Theme.spacing-none;
+
+                KindIcon {
+                    accessible-id: "roomKind_" + root.room.kind;
+                    width: Theme.room-icon-size;
+                    height: Theme.room-icon-size;
+                    kind: root.room.kind;
+                    tint: root.highlighted ? Theme.own : Theme.text-faint;
+                }
+            }
+
+            // Mentions of the user.
+            if root.room.mentions > 0: VerticalLayout {
+                alignment: center;
+                width: max(mention-row.preferred-width + Theme.badge-padding-h, Theme.unread-badge-min-width);
+                padding: Theme.spacing-none;
+                spacing: Theme.spacing-none;
+
+                Rectangle {
+                    height: Theme.unread-badge-height;
+                    background: Theme.signal;
+                    border-radius: self.height / 2;
+
+                    mention-row := HorizontalLayout {
+                        alignment: center;
+                        padding: Theme.spacing-none;
+                        spacing: Theme.spacing-none;
+
+                        Text {
+                            color: Theme.text-on-signal;
+                            font-size: Theme.font-size-tiny;
+                            font-weight: Theme.font-weight-bold;
+                            vertical-alignment: center;
+                            text: "@";
+                        }
+
+                        Text {
+                            accessible-id: "roomMentions";
+                            color: Theme.text-on-signal;
+                            font-size: Theme.font-size-tiny;
+                            font-weight: Theme.font-weight-bold;
+                            vertical-alignment: center;
+                            text: root.room.mentions;
+                        }
+                    }
+                }
+            }
+
+            if root.room.unread > 0: VerticalLayout {
+                alignment: center;
+                width: max(unread-label.preferred-width + Theme.badge-padding-h, Theme.unread-badge-min-width);
+                padding: Theme.spacing-none;
+                spacing: Theme.spacing-none;
+
+                Rectangle {
+                    height: Theme.unread-badge-height;
+                    background: Theme.raised-hover;
+                    border-radius: self.height / 2;
+
+                    unread-label := Text {
+                        accessible-id: "roomUnread";
+                        color: Theme.text;
+                        font-size: Theme.font-size-tiny;
+                        font-weight: Theme.font-weight-bold;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                        text: root.room.unread;
+                    }
+                }
+            }
+        }
+
+        touch := TouchArea {
+            clicked => {
+                root.clicked();
+            }
+        }
+    }
+}
