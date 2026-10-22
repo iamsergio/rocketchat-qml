@@ -60,7 +60,7 @@ impl<C: Connector> Actor<C> {
                 username: me.username.clone(),
                 display_name: me.display_name.clone(),
             },
-            ts: jiff::Timestamp::now(),
+            ts: self.clock.now(),
             kind: MessageKind::Text(text.into()),
             delivery: Delivery::Pending,
             attachments: Vec::new(),

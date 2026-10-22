@@ -137,6 +137,7 @@ pub(super) fn raw_client(
     fake: &Fake,
     store: impl SecretStore,
     cache: FakeCache,
+    clock: FakeClock,
     backoff: Backoff,
 ) -> (Client, Receiver<(AccountId, Event)>) {
     let (tx, events) = mpsc::channel();
@@ -144,6 +145,7 @@ pub(super) fn raw_client(
         fake.clone(),
         store,
         cache,
+        clock,
         move |id, event| {
             let _ = tx.send((id, event));
         },
@@ -162,6 +164,8 @@ pub(super) fn raw_events(events: &Receiver<(AccountId, Event)>, count: usize) ->
 
 pub(super) struct Harness {
     pub(super) client: Client,
+    /// The time the accounts see. Starts at [`FakeClock::start`].
+    pub(super) clock: FakeClock,
     events: Receiver<(AccountId, Event)>,
     /// The account the harness follows: the first one added.
     account: AccountId,
@@ -222,11 +226,13 @@ impl Harness {
         backoff: Backoff,
         several: bool,
     ) -> Self {
-        let (client, events) = raw_client(fake, store, cache, backoff);
+        let clock = FakeClock::default();
+        let (client, events) = raw_client(fake, store, cache, clock.clone(), backoff);
         let (account, added) = events.recv_timeout(TIMEOUT).expect("no event");
         assert_eq!(added, Event::Added);
         let mut harness = Self {
             client,
+            clock,
             events,
             account,
             held: RefCell::default(),

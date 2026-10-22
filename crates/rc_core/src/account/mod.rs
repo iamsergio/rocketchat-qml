@@ -25,7 +25,7 @@ use crate::emoji::CustomEmojis;
 use crate::images::{self, Images};
 use crate::policy::{MessageAction, MessagePolicy};
 use crate::ports::{
-    ApiError, Changes, Connector, FileCache, MessageStore, Page, Pushed, ServerApi,
+    ApiError, Changes, Clock, Connector, FileCache, MessageStore, Page, Pushed, ServerApi,
 };
 use crate::rooms::{RoomAction, RoomList, Unread};
 use crate::session::{Established, LoginFailure, SessionState, log_in, resume};
@@ -302,6 +302,8 @@ struct Actor<C: Connector> {
     /// The message settings fetch of the current cycle, while it runs.
     policy_task: Option<JoinHandle<()>>,
     cache: Arc<dyn FileCache>,
+    /// The time of day.
+    clock: Arc<dyn Clock>,
     /// Which avatars are wanted, queued and shown.
     avatars: Avatars,
     /// The avatar downloads in flight.
@@ -382,6 +384,7 @@ impl<C: Connector> Actor<C> {
             policy: MessagePolicy::default(),
             policy_task: None,
             cache: Arc::clone(&shared.cache),
+            clock: Arc::clone(&shared.clock),
             avatars: Avatars::default(),
             avatar_tasks: JoinSet::new(),
             images: Images::default(),

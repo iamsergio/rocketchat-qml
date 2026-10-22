@@ -260,9 +260,7 @@ fn a_room_that_was_never_up_to_date_asks_for_no_changes() {
 fn reopening_a_room_catches_up_with_what_changed_while_it_was_closed() {
     let fake = Fake::new();
     let harness = logged_in_harness(&fake);
-    let before = jiff::Timestamp::now();
     open_first_room(&fake, &harness, false);
-    let after = jiff::Timestamp::now();
     fake.script_changes("1", None, changes(vec![edited_message("a", 1)], &["b"]));
 
     let gate = Arc::new(Notify::new());
@@ -287,7 +285,7 @@ fn reopening_a_room_catches_up_with_what_changed_while_it_was_closed() {
     let calls = fake.wait_for_changes_calls("1", 1);
     assert_eq!(calls[0].room, "1");
     let margin = Duration::from_secs(60);
-    assert!(calls[0].since >= before - margin && calls[0].since <= after - margin);
+    assert_eq!(calls[0].since, harness.clock.now() - margin);
     gate.notify_one();
     // The page, made after the deletion, has the new copy only.
     harness.expect_events(vec![status("1", false, false, false, None)]);
@@ -477,6 +475,8 @@ fn a_failed_catch_up_is_tried_again_from_the_same_time_and_a_successful_one_move
     ]);
     // A successful one must be taken in before the room is left, or it is stale: it brings an
     // edit, which shows when it has come, and the page waits for it.
+    // Time passes, so that the page the successful one is made after is newer than the first's.
+    harness.clock.advance(Duration::from_secs(1));
     fake.script_changes("1", None, changes(vec![edited_message("b", 2)], &[]));
     let gate = Arc::new(Notify::new());
     leave_and_come_back(

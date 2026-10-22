@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Sergio Martins
 // SPDX-License-Identifier: MIT
 
-//! The core task: what every account uses (the connector, the file cache and the store worker), and
-//! the account actors it runs, one per account.
+//! The core task: what every account uses (the connector, the file cache, the clock and the store
+//! worker), and the account actors it runs, one per account.
 
 use std::collections::HashMap;
 use std::sync::mpsc as std_mpsc;
@@ -18,7 +18,7 @@ use crate::account;
 use crate::backoff::Backoff;
 use crate::client::{Command, Event};
 use crate::domain::{AccountId, StoredAccount};
-use crate::ports::{Connector, FileCache, SecretStore};
+use crate::ports::{Clock, Connector, FileCache, SecretStore};
 use crate::store_worker::{StoreHandle, run_store_worker};
 use crate::users::Users;
 
@@ -26,6 +26,8 @@ use crate::users::Users;
 pub(crate) struct Shared<C: Connector> {
     pub(crate) connector: Arc<C>,
     pub(crate) cache: Arc<dyn FileCache>,
+    /// The time of day.
+    pub(crate) clock: Arc<dyn Clock>,
     /// Queues calls for the store worker, which ends once every clone is dropped.
     pub(crate) store: StoreHandle,
     /// Who each account is, to refuse a user who is another account's already.
@@ -94,6 +96,14 @@ pub(crate) struct Link {
     pub(crate) commands: UnboundedReceiver<CoreCommand>,
 }
 
+/// The services the core is given, which every account uses.
+pub(crate) struct Ports<C, S> {
+    pub(crate) connector: C,
+    pub(crate) store: S,
+    pub(crate) cache: Arc<dyn FileCache>,
+    pub(crate) clock: Arc<dyn Clock>,
+}
+
 /// Calls the frontend's callback, tagged with the account.
 type OnEvent = Arc<dyn Fn(AccountId, Event) + Send + Sync>;
 
@@ -109,20 +119,19 @@ type OnEvent = Arc<dyn Fn(AccountId, Event) + Send + Sync>;
 /// `DRAIN_TIMEOUT` at most.
 pub(crate) fn spawn<C: Connector, S: SecretStore>(
     runtime: &Runtime,
-    connector: C,
-    store: S,
-    cache: impl FileCache,
+    ports: Ports<C, S>,
     on_event: impl Fn(AccountId, Event) + Send + Sync + 'static,
     backoff: Backoff,
     link: Link,
 ) -> std_mpsc::Receiver<()> {
     let (finished_tx, finished) = std_mpsc::channel();
     let (store_tx, store_rx) = mpsc::unbounded_channel();
-    let store_worker = runtime.spawn(run_store_worker(Arc::new(store), store_rx));
+    let store_worker = runtime.spawn(run_store_worker(Arc::new(ports.store), store_rx));
     let core = Core {
         shared: Shared {
-            connector: Arc::new(connector),
-            cache: Arc::new(cache),
+            connector: Arc::new(ports.connector),
+            cache: ports.cache,
+            clock: ports.clock,
             store: StoreHandle(store_tx),
             users: Arc::default(),
         },

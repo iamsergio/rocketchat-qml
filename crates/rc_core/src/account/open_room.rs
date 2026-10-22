@@ -223,7 +223,7 @@ impl<C: Connector> Actor<C> {
         };
         self.history_attempt += 1;
         let attempt = self.history_attempt;
-        let started = jiff::Timestamp::now();
+        let started = self.clock.now();
         // Only the newest page of a room that was up to date once needs the catch-up.
         let with_changes = !older && open.timeline.history().synced_at.is_some();
         open.fetch = Some(Fetch {
@@ -274,7 +274,7 @@ impl<C: Connector> Actor<C> {
         self.history_attempt += 1;
         let attempt = self.history_attempt;
         open.changes = Some(attempt);
-        let started = jiff::Timestamp::now();
+        let started = self.clock.now();
         let since = synced_at.checked_sub(CATCH_UP_MARGIN).unwrap_or(synced_at);
         let room = open.timeline.room().clone();
         let api = session.api.clone();

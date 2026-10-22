@@ -32,7 +32,7 @@ impl<C: Connector> Actor<C> {
     fn changeable(&self, id: &MessageId, action: MessageAction) -> Option<&Message> {
         let me = self.own_user()?;
         let message = self.find_message(id).filter(|message| {
-            let now = jiff::Timestamp::now();
+            let now = self.clock.now();
             match action {
                 MessageAction::Edit => self.policy.can_edit(message, &me.id, now),
                 MessageAction::Delete => self.policy.can_delete(message, &me.id, now),
