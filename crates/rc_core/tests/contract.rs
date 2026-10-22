@@ -10,12 +10,15 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
+use std::collections::HashMap;
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 use std::sync::mpsc::{self, Receiver};
 use std::time::{Duration, Instant};
 
 use rc_core::adapters::{DiskFileCache, MemoryStore, RestConnector};
+use rc_core::domain::AccountId;
 use rc_core::domain::{
     AvatarOwner, Delivery, Message, MessageId, MessageKind, Room, RoomId, RoomKind,
 };
@@ -26,7 +29,7 @@ use rc_core::rich::{Block, Emoji, Inline, Mention, TaskItem};
 use rc_core::rooms::{RoomAction, RoomActionError, RoomChange};
 use rc_core::session::{LoginFailure, SessionState};
 use rc_core::timeline::{PAGE_SIZE, ThreadStatus, TimelineChange, TimelineStatus};
-use rc_core::{Client, Event};
+use rc_core::{AccountHandle, Client, Event};
 use rc_test_server::{Admin, PIXEL_PNG, Proxy, TestUser, server_url, unique};
 use secrecy::SecretString;
 
@@ -41,8 +44,25 @@ fn password(user: &TestUser) -> SecretString {
     SecretString::from(user.password.clone())
 }
 
+/// A client and the account that the test drives: the first one added.
+struct Session {
+    client: Client,
+    id: AccountId,
+}
+
+impl Session {
+    fn account(&self) -> AccountHandle<'_> {
+        self.client.account(&self.id)
+    }
+
+    /// Logs the account out and removes it.
+    fn remove(&self) {
+        self.client.remove_account(&self.id);
+    }
+}
+
 /// A client with nothing stored, past its first event.
-fn start() -> (Client, Receiver<Event>) {
+fn start() -> (Session, Receiver<Event>) {
     let (client, events) = start_with(MemoryStore::default());
     assert_eq!(next(&events), SessionState::LoggedOut { failure: None });
     (client, events)
@@ -71,17 +91,25 @@ impl FileCache for NoCache {
 }
 
 /// A client on `store`; the first event is left to the caller.
-fn start_with(store: MemoryStore) -> (Client, Receiver<Event>) {
+fn start_with(store: MemoryStore) -> (Session, Receiver<Event>) {
     start_with_cache(store, NoCache)
 }
 
-fn start_with_cache(store: MemoryStore, cache: impl FileCache) -> (Client, Receiver<Event>) {
+fn start_with_cache(store: MemoryStore, cache: impl FileCache) -> (Session, Receiver<Event>) {
     let (tx, rx) = mpsc::channel();
-    let client = Client::start(store, cache, move |event| {
-        let _ = tx.send(event);
+    let (added_tx, added) = mpsc::channel();
+    let client = Client::start(store, cache, move |id, event| {
+        // Whoever starts a client follows its first account. The others' events are for the
+        // tests that add accounts (see `start_tagged`).
+        let _ = if event == Event::Added {
+            added_tx.send(id).is_ok()
+        } else {
+            tx.send(event).is_ok()
+        };
     })
     .unwrap();
-    (client, rx)
+    let id = added.recv_timeout(TIMEOUT).expect("no account added");
+    (Session { client, id }, rx)
 }
 
 /// The next session state. Room events are skipped: only the room test looks at them.
@@ -114,7 +142,9 @@ fn assert_failure(state: &SessionState, expected: &LoginFailure) {
 fn a_user_logs_in() {
     let user = new_user();
     let (client, events) = start();
-    client.login(&server_url(), &user.username, password(&user));
+    client
+        .account()
+        .login(&server_url(), &user.username, password(&user));
     let SessionState::LoggedIn(account) = outcome(&events) else {
         panic!("login failed");
     };
@@ -128,7 +158,9 @@ fn a_user_logs_in() {
 fn unknown_user_is_refused() {
     let (client, events) = start();
     let username = format!("ct-nobody-{}", unique());
-    client.login(&server_url(), &username, SecretString::from("whatever"));
+    client
+        .account()
+        .login(&server_url(), &username, SecretString::from("whatever"));
     assert_failure(&outcome(&events), &LoginFailure::InvalidCredentials);
 }
 
@@ -142,7 +174,7 @@ fn closed_port_is_unreachable() {
         .unwrap()
         .port();
     let (client, events) = start();
-    client.login(
+    client.account().login(
         &format!("http://127.0.0.1:{port}"),
         "u",
         SecretString::from("p"),
@@ -156,9 +188,11 @@ fn closed_port_is_unreachable() {
 fn a_user_logs_out() {
     let user = new_user();
     let (client, events) = start();
-    client.login(&server_url(), &user.username, password(&user));
+    client
+        .account()
+        .login(&server_url(), &user.username, password(&user));
     assert!(matches!(outcome(&events), SessionState::LoggedIn(_)));
-    client.logout();
+    client.remove();
     assert_eq!(next(&events), SessionState::LoggedOut { failure: None });
 }
 
@@ -171,7 +205,9 @@ fn a_new_client_resumes_the_stored_session() {
 
     let (first, events) = start_with(store.clone());
     assert_eq!(next(&events), SessionState::LoggedOut { failure: None });
-    first.login(&server_url(), &user.username, password(&user));
+    first
+        .account()
+        .login(&server_url(), &user.username, password(&user));
     assert!(matches!(outcome(&events), SessionState::LoggedIn(_)));
     // Dropping flushes the queued save, like quitting the app.
     drop(first);
@@ -185,7 +221,7 @@ fn a_new_client_resumes_the_stored_session() {
     };
     assert_eq!(account.user.username, user.username);
 
-    second.logout();
+    second.remove();
     assert_eq!(next(&events), SessionState::LoggedOut { failure: None });
     // Dropping flushes the queued removal.
     drop(second);
@@ -202,7 +238,9 @@ fn a_user_gets_their_rooms_after_logging_in() {
     let user = admin.create_user();
     let (id, name) = admin.create_channel(&[&user.username]);
     let (client, events) = start();
-    client.login(&server_url(), &user.username, password(&user));
+    client
+        .account()
+        .login(&server_url(), &user.username, password(&user));
     assert!(matches!(outcome(&events), SessionState::LoggedIn(_)));
     let Event::Rooms(changes) = events.recv_timeout(TIMEOUT).expect("no rooms event") else {
         panic!("expected the rooms right after logging in");
@@ -220,14 +258,16 @@ fn a_user_gets_their_rooms_after_logging_in() {
 }
 
 /// Logs `user` in and waits for the room list. Everything the client reports meanwhile is dropped.
-fn logged_in(user: &TestUser) -> (Client, Receiver<Event>) {
+fn logged_in(user: &TestUser) -> (Session, Receiver<Event>) {
     logged_in_at(&server_url(), user)
 }
 
 /// As [`logged_in`], through the server at `server`.
-fn logged_in_at(server: &str, user: &TestUser) -> (Client, Receiver<Event>) {
+fn logged_in_at(server: &str, user: &TestUser) -> (Session, Receiver<Event>) {
     let (client, events) = start();
-    client.login(server, &user.username, password(user));
+    client
+        .account()
+        .login(server, &user.username, password(user));
     assert!(matches!(outcome(&events), SessionState::LoggedIn(_)));
     loop {
         if let Event::Rooms(_) = events.recv_timeout(TIMEOUT).expect("no rooms event") {
@@ -275,7 +315,7 @@ fn the_whole_history_loads_page_by_page_in_order() {
     }
     let (client, events) = logged_in(&user);
 
-    client.open_room(id.clone().into());
+    client.account().open_room(id.clone().into());
     let mut mirror = Vec::new();
     let status = settle(&events, &mut mirror);
     // Just the newest page: the older messages are still to load, and the order is oldest first.
@@ -302,11 +342,11 @@ fn the_whole_history_loads_page_by_page_in_order() {
 }
 
 fn settle_after_load_older(
-    client: &Client,
+    client: &Session,
     events: &Receiver<Event>,
     mirror: &mut Vec<Message>,
 ) -> TimelineStatus {
-    client.load_older();
+    client.account().load_older();
     settle(events, mirror)
 }
 
@@ -352,7 +392,7 @@ fn a_message_posted_to_the_open_room_arrives() {
     let user = admin.create_user();
     let (id, _) = admin.create_channel(&[&user.username]);
     let (client, events) = logged_in(&user);
-    client.open_room(id.clone().into());
+    client.account().open_room(id.clone().into());
     let mut mirror = Vec::new();
     settle(&events, &mut mirror);
 
@@ -399,7 +439,7 @@ fn formatted_messages_arrive_as_blocks_from_history_and_live() {
     admin.post_message(&id, formatted);
     admin.post_message(&id, "just text");
     let (client, events) = logged_in(&user);
-    client.open_room(id.clone().into());
+    client.account().open_room(id.clone().into());
     let mut mirror = Vec::new();
     settle(&events, &mut mirror);
 
@@ -466,7 +506,9 @@ fn logging_in_brings_the_custom_emoji_of_the_server() {
     let name = format!("ct_emoji_{}", unique().replace('-', "_"));
     admin.create_emoji(&name);
     let (client, events) = start();
-    client.login(&server_url(), &user.username, password(&user));
+    client
+        .account()
+        .login(&server_url(), &user.username, password(&user));
 
     let url = wait_for(&events, |event| match event {
         Event::CustomEmoji(emoji) => emoji.url(&name).map(str::to_owned),
@@ -480,7 +522,7 @@ fn logging_in_brings_the_custom_emoji_of_the_server() {
             server_url().trim_end_matches('/')
         )
     );
-    client.logout();
+    client.remove();
     wait_for(&events, |event| match event {
         Event::CustomEmoji(emoji) => emoji.url(&name).is_none().then_some(()),
         _ => None,
@@ -548,21 +590,27 @@ fn the_avatars_that_users_and_rooms_have_are_downloaded_and_kept_for_the_next_se
     let channel = AvatarOwner::Room(channel_id.clone().into());
     let cache = CacheDir::new();
     let (client, events) = start_with_cache(MemoryStore::default(), DiskFileCache::new(&cache.0));
-    client.login(&server_url(), &user.username, password(&user));
+    client
+        .account()
+        .login(&server_url(), &user.username, password(&user));
 
     // The room's own avatar, from the etag of the room list.
     let first = avatars_until(&events, std::slice::from_ref(&channel));
     assert_cached_image(&first[&channel], &cache.0);
     // The author of a message, once the room is open: the user's own message is one.
-    client.open_room(channel_id.clone().into());
-    client.send_message(channel_id.into(), "hello", None, None, false);
+    client.account().open_room(channel_id.clone().into());
+    client
+        .account()
+        .send_message(channel_id.into(), "hello", None, None, false);
     let mine = avatars_until(&events, std::slice::from_ref(&me));
     assert_cached_image(&mine[&me], &cache.0);
     drop(client);
 
     // A new session starts from the files.
     let (client, events) = start_with_cache(MemoryStore::default(), DiskFileCache::new(&cache.0));
-    client.login(&server_url(), &user.username, password(&user));
+    client
+        .account()
+        .login(&server_url(), &user.username, password(&user));
     let second = avatars_until(&events, std::slice::from_ref(&channel));
     assert_eq!(second[&channel], first[&channel]);
 }
@@ -578,12 +626,16 @@ fn rooms_and_users_with_the_generated_avatar_get_none() {
     admin.post_message(&dm_id, "hi");
     let cache = CacheDir::new();
     let (client, events) = start_with_cache(MemoryStore::default(), DiskFileCache::new(&cache.0));
-    client.login(&server_url(), &user.username, password(&user));
+    client
+        .account()
+        .login(&server_url(), &user.username, password(&user));
     wait_for(&events, |event| {
         matches!(event, Event::Rooms(_)).then_some(())
     });
-    client.open_room(channel_id.clone().into());
-    client.send_message(channel_id.into(), "who am I", None, None, false);
+    client.account().open_room(channel_id.clone().into());
+    client
+        .account()
+        .send_message(channel_id.into(), "who am I", None, None, false);
     wait_for(&events, |event| match event {
         Event::Timeline(changes) => changes
             .iter()
@@ -647,12 +699,14 @@ fn the_attachments_of_a_room_are_read_and_its_image_is_downloaded_into_the_cache
     let file = admin.upload_file(&channel_id, "notes.txt", "text/plain", b"hello\n", "", "");
     let cache = CacheDir::new();
     let (client, events) = start_with_cache(MemoryStore::default(), DiskFileCache::new(&cache.0));
-    client.login(&server_url(), &user.username, password(&user));
+    client
+        .account()
+        .login(&server_url(), &user.username, password(&user));
     wait_for(&events, |event| {
         matches!(event, Event::Rooms(_)).then_some(())
     });
 
-    client.open_room(channel_id.into());
+    client.account().open_room(channel_id.into());
     let messages = loaded_messages(&events);
 
     let find = |id: &str| messages.iter().find(|m| m.id.as_str() == id).unwrap();
@@ -684,11 +738,13 @@ fn an_image_in_the_cache_is_shown_in_the_next_session_without_a_download() {
     admin.upload_file(&channel_id, "pixel.png", "image/png", &PIXEL_PNG, "", "");
     let cache = CacheDir::new();
     let (client, events) = start_with_cache(MemoryStore::default(), DiskFileCache::new(&cache.0));
-    client.login(&server_url(), &user.username, password(&user));
+    client
+        .account()
+        .login(&server_url(), &user.username, password(&user));
     wait_for(&events, |event| {
         matches!(event, Event::Rooms(_)).then_some(())
     });
-    client.open_room(channel_id.clone().into());
+    client.account().open_room(channel_id.clone().into());
     let messages = loaded_messages(&events);
     let path = messages
         .iter()
@@ -700,11 +756,13 @@ fn an_image_in_the_cache_is_shown_in_the_next_session_without_a_download() {
     drop(client);
 
     let (client, events) = start_with_cache(MemoryStore::default(), DiskFileCache::new(&cache.0));
-    client.login(&server_url(), &user.username, password(&user));
+    client
+        .account()
+        .login(&server_url(), &user.username, password(&user));
     wait_for(&events, |event| {
         matches!(event, Event::Rooms(_)).then_some(())
     });
-    client.open_room(channel_id.into());
+    client.account().open_room(channel_id.into());
     let second = images_until(&events, std::slice::from_ref(&path));
 
     assert_eq!(second[&path], first[&path]);
@@ -757,7 +815,9 @@ fn a_direct_message_raises_the_unread_count() {
 /// The room `id` as a freshly logged-in client of `user` lists it.
 fn listed_room(user: &TestUser, id: &str) -> Room {
     let (client, events) = start();
-    client.login(&server_url(), &user.username, password(user));
+    client
+        .account()
+        .login(&server_url(), &user.username, password(user));
     assert!(matches!(outcome(&events), SessionState::LoggedIn(_)));
     wait_for(&events, |event| {
         let Event::Rooms(changes) = event else {
@@ -782,7 +842,7 @@ fn opening_a_room_marks_it_read_on_the_server() {
     let (client, events) = logged_in(&user);
     assert_eq!(listed_room(&user, &dm).unread, 2);
 
-    client.open_room(dm.clone().into());
+    client.account().open_room(dm.clone().into());
 
     let room = wait_for(&events, |event| {
         room_changed(event, |room| room.id.as_str() == dm)
@@ -806,7 +866,7 @@ fn a_message_in_the_open_room_stays_read() {
     // The user's side of a direct message is hidden until the first message.
     admin.post_message(&dm, "before");
     let (client, events) = logged_in(&user);
-    client.open_room(dm.clone().into());
+    client.account().open_room(dm.clone().into());
     let mut mirror = Vec::new();
     settle(&events, &mut mirror);
 
@@ -852,7 +912,9 @@ fn room_action_outcome(events: &Receiver<Event>, id: &str) -> Result<(), RoomAct
 /// Whether a freshly logged-in client of `user` lists the room `id`.
 fn lists_room(user: &TestUser, id: &str) -> bool {
     let (client, events) = start();
-    client.login(&server_url(), &user.username, password(user));
+    client
+        .account()
+        .login(&server_url(), &user.username, password(user));
     assert!(matches!(outcome(&events), SessionState::LoggedIn(_)));
     wait_for(&events, |event| {
         let Event::Rooms(changes) = event else {
@@ -886,13 +948,13 @@ fn a_favorite_is_kept_by_the_server_and_moves_the_room_to_the_top() {
     admin.post_message(&first, "newer");
     let (client, events) = logged_in(&user);
 
-    client.set_favorite(second.clone().into(), true);
+    client.account().set_favorite(second.clone().into(), true);
 
     assert_eq!(room_action_outcome(&events, &second), Ok(()));
     wait_for_listed(&user, &second, |room| room.favorite);
     assert!(!listed_room(&user, &first).favorite);
 
-    client.set_favorite(second.clone().into(), false);
+    client.account().set_favorite(second.clone().into(), false);
 
     assert_eq!(room_action_outcome(&events, &second), Ok(()));
     wait_for_listed(&user, &second, |room| !room.favorite);
@@ -938,7 +1000,7 @@ fn a_favorite_of_a_room_that_left_the_list_is_refused_at_once() {
         _ => None,
     });
 
-    client.set_favorite(id.clone().into(), true);
+    client.account().set_favorite(id.clone().into(), true);
 
     assert_eq!(
         room_action_outcome(&events, &id),
@@ -958,12 +1020,12 @@ fn marking_a_room_read_and_unread_is_kept_by_the_server() {
     let (client, events) = logged_in(&user);
     assert_eq!(listed_room(&user, &dm).unread, 2);
 
-    client.mark_read(dm.clone().into());
+    client.account().mark_read(dm.clone().into());
 
     assert_eq!(room_action_outcome(&events, &dm), Ok(()));
     wait_for_listed(&user, &dm, |room| !room.has_unread());
 
-    client.mark_unread(dm.clone().into());
+    client.account().mark_unread(dm.clone().into());
 
     assert_eq!(room_action_outcome(&events, &dm), Ok(()));
     // The server counts one unread message and raises the alert.
@@ -985,7 +1047,7 @@ fn marking_a_room_without_messages_unread_is_refused_with_the_servers_text() {
     let (id, _) = admin.create_channel(&[&user.username]);
     let (client, events) = logged_in(&user);
 
-    client.mark_unread(id.clone().into());
+    client.account().mark_unread(id.clone().into());
 
     assert_eq!(
         room_action_outcome(&events, &id),
@@ -1009,7 +1071,7 @@ fn leaving_a_channel_and_a_group_removes_them_from_the_list_and_from_the_server(
     let (client, events) = logged_in(&user);
 
     for id in [&channel, &group] {
-        client.leave_room(id.clone().into());
+        client.account().leave_room(id.clone().into());
         assert_eq!(room_action_outcome(&events, id), Ok(()));
     }
 
@@ -1027,10 +1089,10 @@ fn leaving_the_open_room_closes_it() {
     let (id, _) = admin.create_channel(&[&user.username]);
     admin.post_message(&id, "hello");
     let (client, events) = logged_in(&user);
-    client.open_room(id.clone().into());
+    client.account().open_room(id.clone().into());
     settle(&events, &mut Vec::new());
 
-    client.leave_room(id.clone().into());
+    client.account().leave_room(id.clone().into());
 
     wait_for(&events, |event| match event {
         Event::Timeline(changes) => changes
@@ -1061,7 +1123,7 @@ fn the_last_owner_cannot_leave_and_the_room_stays() {
             .to_owned(),
     );
     for id in [&group, &channel] {
-        client.leave_room(id.clone().into());
+        client.account().leave_room(id.clone().into());
         assert_eq!(room_action_outcome(&events, id), Err(refusal.clone()));
     }
 
@@ -1088,7 +1150,9 @@ fn rooms_are_listed_by_last_message_and_a_new_message_moves_its_room_up() {
     admin.post_message(&first, "older");
     admin.post_message(&second, "newer");
     let (client, events) = start();
-    client.login(&server_url(), &user.username, password(&user));
+    client
+        .account()
+        .login(&server_url(), &user.username, password(&user));
     assert!(matches!(outcome(&events), SessionState::LoggedIn(_)));
     let mut mirror = Vec::new();
     wait_for(&events, |event| {
@@ -1135,7 +1199,7 @@ fn a_client_catches_up_after_the_connection_was_cut() {
     admin.post_message(&id, "said before");
     let proxy = Proxy::start();
     let (client, events) = logged_in_at(&proxy.url(), &user);
-    client.open_room(id.clone().into());
+    client.account().open_room(id.clone().into());
     let mut mirror = Vec::new();
     settle(&events, &mut mirror);
 
@@ -1266,11 +1330,11 @@ fn a_sent_message_is_stored_under_the_id_it_was_shown_with() {
     let (room, _) = admin.create_channel(&[&user.username]);
     admin.post_message(&room, "said before");
     let (client, events) = logged_in(&user);
-    client.open_room(room.clone().into());
+    client.account().open_room(room.clone().into());
     let mut mirror = Vec::new();
     settle(&events, &mut mirror);
 
-    client.send_message(
+    client.account().send_message(
         room.clone().into(),
         "hello from the client",
         None,
@@ -1303,13 +1367,15 @@ fn a_message_sent_to_a_room_that_is_not_open_any_more_is_sent_all_the_same() {
     let (other, _) = admin.create_channel(&[&user.username]);
     admin.post_message(&room, "said before");
     let (client, events) = logged_in(&user);
-    client.open_room(room.clone().into());
+    client.account().open_room(room.clone().into());
     let mut mirror = Vec::new();
     settle(&events, &mut mirror);
 
     let before = admin.last_message(&room).id;
-    client.send_message(room.clone().into(), "sent and left", None, None, false);
-    client.open_room(other.clone().into());
+    client
+        .account()
+        .send_message(room.clone().into(), "sent and left", None, None, false);
+    client.account().open_room(other.clone().into());
     settle(&events, &mut mirror);
     // Nothing is shown of it here; it arrives on the server all the same.
     let deadline = Instant::now() + TIMEOUT;
@@ -1318,7 +1384,7 @@ fn a_message_sent_to_a_room_that_is_not_open_any_more_is_sent_all_the_same() {
         std::thread::sleep(Duration::from_millis(100));
     }
 
-    client.open_room(room.clone().into());
+    client.account().open_room(room.clone().into());
     follow_until(&events, &mut mirror, |mirror| {
         mirror.iter().any(|m| {
             m.delivery == Delivery::Sent && texts(std::slice::from_ref(m)) == ["sent and left"]
@@ -1412,13 +1478,15 @@ fn a_message_that_fails_while_the_server_is_out_of_reach_is_retried_under_its_id
     let (room, _) = admin.create_channel(&[&user.username]);
     let proxy = Proxy::start();
     let (client, events) = logged_in_at(&proxy.url(), &user);
-    client.open_room(room.clone().into());
+    client.account().open_room(room.clone().into());
     let mut mirror = Vec::new();
     settle(&events, &mut mirror);
 
     proxy.set_accepting(false);
     proxy.drop_connections();
-    client.send_message(room.clone().into(), "sent in the dark", None, None, false);
+    client
+        .account()
+        .send_message(room.clone().into(), "sent in the dark", None, None, false);
     follow_until(&events, &mut mirror, |mirror| {
         mirror.iter().any(|m| m.delivery == Delivery::Failed)
     });
@@ -1426,7 +1494,7 @@ fn a_message_that_fails_while_the_server_is_out_of_reach_is_retried_under_its_id
     assert_eq!(texts(&mirror), ["sent in the dark"]);
 
     proxy.set_accepting(true);
-    client.retry_message(id.clone().into());
+    client.account().retry_message(id.clone().into());
     follow_until(&events, &mut mirror, |mirror| is_sent(mirror, &id));
 
     assert_eq!(texts(&mirror), ["sent in the dark"]);
@@ -1451,7 +1519,7 @@ fn open_channel_with(
     Admin,
     String,
     Vec<String>,
-    Client,
+    Session,
     Receiver<Event>,
     Vec<Message>,
 ) {
@@ -1463,7 +1531,7 @@ fn open_channel_with(
         .map(|text| admin.post_message(&room, text).id)
         .collect();
     let (client, events) = logged_in(&user);
-    client.open_room(room.clone().into());
+    client.account().open_room(room.clone().into());
     let mut mirror = Vec::new();
     settle(&events, &mut mirror);
     (admin, room, ids, client, events, mirror)
@@ -1557,9 +1625,9 @@ fn a_deletion_follows_the_room_that_is_open_now() {
     let mut mirror = Vec::new();
 
     // Open the first, then the second: only the second is followed now.
-    client.open_room(first.clone().into());
+    client.account().open_room(first.clone().into());
     settle(&events, &mut mirror);
-    client.open_room(second.clone().into());
+    client.account().open_room(second.clone().into());
     settle(&events, &mut mirror);
     admin.delete_message(&second, &in_second.id);
     follow_until(&events, &mut mirror, |mirror| {
@@ -1567,7 +1635,7 @@ fn a_deletion_follows_the_room_that_is_open_now() {
     });
 
     // And back: the first is followed again.
-    client.open_room(first.clone().into());
+    client.account().open_room(first.clone().into());
     settle(&events, &mut mirror);
     admin.delete_message(&first, &in_first.id);
     follow_until(&events, &mut mirror, |mirror| {
@@ -1589,15 +1657,15 @@ fn what_changed_while_a_room_was_closed_shows_when_it_opens_again() {
     let deleted = admin.post_message(&room, "to delete");
     let (client, events) = logged_in(&user);
     let mut mirror = Vec::new();
-    client.open_room(room.clone().into());
+    client.account().open_room(room.clone().into());
     settle(&events, &mut mirror);
     assert_eq!(texts(&mirror), ["kept", "to edit", "to delete"]);
 
-    client.open_room(other.into());
+    client.account().open_room(other.into());
     settle(&events, &mut mirror);
     admin.edit_message(&room, &edited.id, "edited meanwhile");
     admin.delete_message(&room, &deleted.id);
-    client.open_room(room.clone().into());
+    client.account().open_room(room.clone().into());
 
     // It opens with what was held, and the changes arrive as updates.
     follow_until(&events, &mut mirror, |mirror| {
@@ -1624,7 +1692,7 @@ fn a_client_catches_up_with_edits_reactions_and_deletions_after_the_connection_w
     let deleted = admin.post_message(&room, "to delete");
     let proxy = Proxy::start();
     let (client, events) = logged_in_at(&proxy.url(), &user);
-    client.open_room(room.clone().into());
+    client.account().open_room(room.clone().into());
     let mut mirror = Vec::new();
     settle(&events, &mut mirror);
 
@@ -1655,7 +1723,7 @@ struct OwnMessages {
     room_name: String,
     /// The ids of the messages in `texts`' order.
     ids: Vec<String>,
-    client: Client,
+    client: Session,
     events: Receiver<Event>,
     mirror: Vec<Message>,
 }
@@ -1674,7 +1742,7 @@ fn open_channel_with_own_and_others(texts: &[&str]) -> OwnMessages {
         })
         .collect();
     let (client, events) = logged_in(&user);
-    client.open_room(room.clone().into());
+    client.account().open_room(room.clone().into());
     let mut mirror = Vec::new();
     settle(&events, &mut mirror);
     OwnMessages {
@@ -1718,7 +1786,9 @@ fn a_user_edits_their_own_message_and_it_shows_edited() {
     let mut open = open_channel_with_own_and_others(&["mine", "theirs"]);
     let id = open.ids[0].clone();
 
-    open.client.edit_message(id.clone().into(), "mine, edited");
+    open.client
+        .account()
+        .edit_message(id.clone().into(), "mine, edited");
 
     let outcome = action_outcome(&open.events, &mut open.mirror, &id);
     assert_eq!(outcome, Ok(()));
@@ -1740,7 +1810,7 @@ fn a_user_deletes_their_own_message_and_it_is_gone() {
     let mut open = open_channel_with_own_and_others(&["mine", "theirs"]);
     let id = open.ids[0].clone();
 
-    open.client.delete_message(id.clone().into());
+    open.client.account().delete_message(id.clone().into());
 
     let outcome = action_outcome(&open.events, &mut open.mirror, &id);
     assert_eq!(outcome, Ok(()));
@@ -1754,9 +1824,11 @@ fn the_message_of_somebody_else_is_refused_without_a_request_and_stays() {
     let mut open = open_channel_with_own_and_others(&["mine", "theirs"]);
     let id = open.ids[1].clone();
 
-    open.client.edit_message(id.clone().into(), "mine now");
+    open.client
+        .account()
+        .edit_message(id.clone().into(), "mine now");
     let edit = action_outcome(&open.events, &mut open.mirror, &id);
-    open.client.delete_message(id.clone().into());
+    open.client.account().delete_message(id.clone().into());
     let delete = action_outcome(&open.events, &mut open.mirror, &id);
 
     assert_eq!(edit, Err(ActionError::NotAllowed(MessageAction::Edit)));
@@ -1771,7 +1843,7 @@ fn a_user_reacts_to_a_message_of_somebody_else_and_takes_the_reaction_back() {
     let mut open = open_channel_with_own_and_others(&["mine", "theirs"]);
     let id = open.ids[1].clone();
 
-    open.client.react(id.clone().into(), "tada", true);
+    open.client.account().react(id.clone().into(), "tada", true);
 
     let outcome = action_outcome(&open.events, &mut open.mirror, &id);
     assert_eq!(outcome, Ok(()));
@@ -1785,7 +1857,9 @@ fn a_user_reacts_to_a_message_of_somebody_else_and_takes_the_reaction_back() {
     assert_eq!(open.mirror[1].reactions.len(), 1);
     assert_eq!(open.mirror[1].reactions[0].usernames.len(), 1);
 
-    open.client.react(id.clone().into(), ":tada:", false);
+    open.client
+        .account()
+        .react(id.clone().into(), ":tada:", false);
 
     let outcome = action_outcome(&open.events, &mut open.mirror, &id);
     assert_eq!(outcome, Ok(()));
@@ -1803,6 +1877,7 @@ fn an_unknown_emoji_is_refused_by_the_server_and_leaves_no_reaction() {
     let id = open.ids[1].clone();
 
     open.client
+        .account()
         .react(id.clone().into(), "no_such_emoji_here", true);
 
     let outcome = action_outcome(&open.events, &mut open.mirror, &id);
@@ -1827,7 +1902,7 @@ fn a_reply_that_quotes_a_message_shows_the_quote_and_not_the_link() {
     let mut open = open_channel_with_own_and_others(&["mine", "theirs"]);
     let theirs = open.ids[1].clone();
 
-    open.client.send_message(
+    open.client.account().send_message(
         open.room.clone().into(),
         "my reply",
         Some(theirs.clone().into()),
@@ -1881,7 +1956,7 @@ fn a_quote_made_by_somebody_else_arrives_live_and_editing_the_reply_keeps_it() {
     assert_eq!(reply.quotes[0].text.text, "mine");
 
     // The user replies to the admin's reply and then edits their own reply.
-    open.client.send_message(
+    open.client.account().send_message(
         open.room.clone().into(),
         "quoting a quote",
         Some(posted.id.clone().into()),
@@ -1897,6 +1972,7 @@ fn a_quote_made_by_somebody_else_arrives_live_and_editing_the_reply_keeps_it() {
     let own_id = own.id.to_string();
 
     open.client
+        .account()
         .edit_message(own_id.clone().into(), "quoting a quote, edited");
 
     assert_eq!(
@@ -1920,11 +1996,11 @@ fn a_quote_sent_right_away_works_when_the_server_is_reached_by_another_address()
     // The proxy's address is not the server's `Site_Url`, as the container's name is not in CI.
     let proxy = Proxy::start();
     let (client, events) = logged_in_at(&proxy.url(), &user);
-    client.open_room(room.clone().into());
+    client.account().open_room(room.clone().into());
     let mut mirror = Vec::new();
     settle(&events, &mut mirror);
 
-    client.send_message(
+    client.account().send_message(
         room.clone().into(),
         "right away",
         Some(theirs.id.clone().into()),
@@ -1981,7 +2057,7 @@ fn open_thread_with_replies(replies: usize) -> (OwnMessages, Mirrors) {
         open.admin
             .post_in_thread(&open.room, &parent, &format!("r{n}"), false);
     }
-    open.client.open_thread(parent.into());
+    open.client.account().open_thread(parent.into());
     let mut mirrors = Mirrors {
         room: std::mem::take(&mut open.mirror),
         ..Mirrors::default()
@@ -2001,7 +2077,7 @@ fn a_thread_loads_page_by_page_with_the_parent_first() {
     assert!(!mirrors.status.reached_start);
     assert_eq!(texts(&mirrors.thread).len(), PAGE_SIZE);
 
-    open.client.load_older_thread();
+    open.client.account().load_older_thread();
     follow_both(&open.events, &mut mirrors, |m| m.status.reached_start);
 
     let expected: Vec<String> = std::iter::once("theirs".to_owned())
@@ -2025,7 +2101,7 @@ fn a_reply_sent_from_the_client_settles_in_the_thread_and_counts_in_the_parent()
     let (open, mut mirrors) = open_thread_with_replies(1);
     let parent = open.ids[1].clone();
 
-    open.client.send_message(
+    open.client.account().send_message(
         open.room.clone().into(),
         "my reply",
         None,
@@ -2052,7 +2128,7 @@ fn a_reply_also_sent_to_the_channel_settles_in_the_thread_and_in_the_room() {
     let (open, mut mirrors) = open_thread_with_replies(0);
     let parent = open.ids[1].clone();
 
-    open.client.send_message(
+    open.client.account().send_message(
         open.room.clone().into(),
         "for everybody",
         None,
@@ -2141,7 +2217,7 @@ fn deleting_the_parent_closes_the_thread_and_so_does_another_room() {
     follow_both(&open.events, &mut mirrors, |m| {
         message_saying(&m.room, "another parent").is_some()
     });
-    open.client.open_thread(parent.id.into());
+    open.client.account().open_thread(parent.id.into());
     follow_both(&open.events, &mut mirrors, |m| m.status.parent.is_some());
     let (other, _) = open.admin.create_channel(&[&open.username]);
     wait_for(&open.events, |event| match event {
@@ -2151,7 +2227,7 @@ fn deleting_the_parent_closes_the_thread_and_so_does_another_room() {
             .then_some(()),
         _ => None,
     });
-    open.client.open_room(other.into());
+    open.client.account().open_room(other.into());
     follow_both(&open.events, &mut mirrors, |m| {
         m.status.parent.is_none() && m.thread.is_empty()
     });
@@ -2168,12 +2244,12 @@ fn a_thread_is_fetched_again_after_the_connection_comes_back() {
     admin.post_in_thread(&room, &parent.id, "before", false);
     let proxy = Proxy::start();
     let (client, events) = logged_in_at(&proxy.url(), &user);
-    client.open_room(room.clone().into());
+    client.account().open_room(room.clone().into());
     let mut mirrors = Mirrors::default();
     follow_both(&events, &mut mirrors, |m| {
         message_saying(&m.room, "parent").is_some()
     });
-    client.open_thread(parent.id.clone().into());
+    client.account().open_thread(parent.id.clone().into());
     follow_both(&events, &mut mirrors, |m| {
         message_saying(&m.thread, "before").is_some()
     });
@@ -2186,4 +2262,107 @@ fn a_thread_is_fetched_again_after_the_connection_comes_back() {
     follow_both(&events, &mut mirrors, |m| {
         texts(&m.thread) == ["parent", "before", "while away"]
     });
+}
+
+/// A client with nothing stored whose accounts each have a receiver for their own events, which
+/// comes with their `Added`.
+fn start_accounts() -> (Client, Receiver<(AccountId, Receiver<Event>)>) {
+    let (new_tx, new_rx) = mpsc::channel();
+    let senders = Mutex::new(HashMap::new());
+    let client = Client::start(MemoryStore::default(), NoCache, move |id, event| {
+        let mut senders = senders.lock().unwrap();
+        if event == Event::Added {
+            let (tx, rx) = mpsc::channel();
+            senders.insert(id.clone(), tx);
+            let _ = new_tx.send((id, rx));
+        } else if let Some(tx) = senders.get(&id) {
+            let _ = tx.send(event);
+        }
+    })
+    .unwrap();
+    (client, new_rx)
+}
+
+/// The room list, once it holds the room `wanted`.
+fn rooms_with(events: &Receiver<Event>, wanted: &str) -> Vec<Room> {
+    let mut rooms = Vec::new();
+    wait_for(events, |event| {
+        let Event::Rooms(changes) = event else {
+            return None;
+        };
+        for change in changes {
+            change.apply(&mut rooms);
+        }
+        rooms
+            .iter()
+            .any(|room| room.id.as_str() == wanted)
+            .then_some(())
+    });
+    rooms
+}
+
+// ACCT-001
+// ACCT-005
+#[test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+fn two_accounts_see_their_own_rooms_and_removing_one_leaves_the_other_working() {
+    let admin = Admin::login();
+    let alice = admin.create_user();
+    let bob = admin.create_user();
+    let (alice_room, _) = admin.create_channel(&[&alice.username]);
+    let (bob_room, _) = admin.create_channel(&[&bob.username]);
+    // The second account reaches the same server by another address.
+    let proxy = Proxy::start();
+    let (client, accounts) = start_accounts();
+
+    let (a, a_events) = accounts.recv_timeout(TIMEOUT).expect("no account");
+    assert_eq!(next(&a_events), SessionState::LoggedOut { failure: None });
+    client
+        .account(&a)
+        .login(&server_url(), &alice.username, password(&alice));
+    assert!(matches!(outcome(&a_events), SessionState::LoggedIn(_)));
+    let alice_rooms = rooms_with(&a_events, &alice_room);
+
+    let b = client.add_account();
+    let (added, b_events) = accounts.recv_timeout(TIMEOUT).expect("no account");
+    assert_eq!(added, b);
+    assert_eq!(next(&b_events), SessionState::LoggedOut { failure: None });
+    client
+        .account(&b)
+        .login(&proxy.url(), &bob.username, password(&bob));
+    let SessionState::LoggedIn(account) = outcome(&b_events) else {
+        panic!("login failed");
+    };
+    assert_eq!(account.user.username, bob.username);
+    let bob_rooms = rooms_with(&b_events, &bob_room);
+
+    // Each has its own rooms.
+    assert!(alice_rooms.iter().all(|room| room.id.as_str() != bob_room));
+    assert!(bob_rooms.iter().all(|room| room.id.as_str() != alice_room));
+
+    // Removing one logs it out first, and leaves the other alone: no new account is added.
+    client.remove_account(&a);
+    let mut logged_out = false;
+    wait_for(&a_events, |event| match event {
+        Event::Session(SessionState::LoggedOut { failure: None }) => {
+            logged_out = true;
+            None
+        }
+        Event::Removed => {
+            assert!(logged_out, "Removed came before the logout");
+            Some(())
+        }
+        _ => None,
+    });
+    client.account(&b).open_room(bob_room.clone().into());
+    let mut mirror = Vec::new();
+    settle(&b_events, &mut mirror);
+    client
+        .account(&b)
+        .send_message(bob_room.clone().into(), "from bob", None, None, false);
+    follow_until(&b_events, &mut mirror, |mirror| {
+        texts(mirror) == ["from bob"] && mirror.iter().all(|m| m.delivery == Delivery::Sent)
+    });
+    assert_eq!(admin.last_message(&bob_room).id, mirror[0].id.as_str());
+    assert!(accounts.try_recv().is_err(), "an account was added");
 }

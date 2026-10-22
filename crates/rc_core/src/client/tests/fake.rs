@@ -128,6 +128,8 @@ pub(super) struct HistoryCall {
 
 #[derive(Default)]
 pub(super) struct FakeState {
+    /// The fakes that answer for other servers than this one's, which stands in for the rest.
+    pub(super) servers: HashMap<String, Fake>,
     pub(super) version: Option<Result<ServerVersion, ApiError>>,
     pub(super) connect_error: Option<ApiError>,
     pub(super) logins: VecDeque<LoginScript>,
@@ -226,6 +228,13 @@ impl Fake {
         fake.state().version = Some(Ok(ServerVersion { major: 8, minor: 0 }));
         fake.state().me_result = Some(Ok(user("alice")));
         fake
+    }
+
+    /// Makes `other` answer for `server`, so that two accounts can be scripted apart.
+    pub(super) fn serve(&self, server: &str, other: &Self) {
+        self.state()
+            .servers
+            .insert(server.to_owned(), other.clone());
     }
 
     pub(super) fn state(&self) -> MutexGuard<'_, FakeState> {
@@ -524,11 +533,10 @@ impl Fake {
 impl Connector for Fake {
     type Api = Self;
 
-    fn connect(&self, _server: &str) -> Result<Self, ApiError> {
-        match self.state().connect_error.clone() {
-            Some(error) => Err(error),
-            None => Ok(self.clone()),
-        }
+    fn connect(&self, server: &str) -> Result<Self, ApiError> {
+        let fake = self.state().servers.get(server).unwrap_or(self).clone();
+        let error = fake.state().connect_error.clone();
+        error.map_or(Ok(fake), Err)
     }
 }
 

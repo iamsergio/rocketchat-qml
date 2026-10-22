@@ -27,7 +27,7 @@ mod store_worker;
 pub mod timeline;
 
 pub use avatars::AvatarUpdate;
-pub use client::{Client, Connection, Event};
+pub use client::{AccountHandle, Client, Connection, Event};
 pub use error::Error;
 pub use images::ImageUpdate;
 

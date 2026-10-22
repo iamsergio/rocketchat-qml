@@ -59,7 +59,7 @@ fn the_image_of_an_attachment_is_downloaded_and_sent_once_it_is_stored() {
     let cache = FakeCache::default();
     let harness = logged_in_with_cache(&fake, &cache);
     fake.script_history(None, page(vec![message_with_images("m", 1, &["a"])], true));
-    harness.client.open_room("1".to_owned().into());
+    harness.account().open_room("1".to_owned().into());
 
     assert_eq!(harness.next_images(), [image_update("a")]);
     assert_eq!(
@@ -76,7 +76,7 @@ fn a_cached_image_is_sent_at_once_and_never_downloaded() {
     cache.seed_attachment("h", &image_path("a"), "png", b"cached");
     let harness = logged_in_with_cache(&fake, &cache);
     fake.script_history(None, page(vec![message_with_images("m", 1, &["a"])], true));
-    harness.client.open_room("1".to_owned().into());
+    harness.account().open_room("1".to_owned().into());
 
     assert_eq!(harness.next_images(), [image_update("a")]);
     harness.assert_no_images();
@@ -244,7 +244,7 @@ fn logging_out_forgets_the_images_and_drops_what_was_still_downloading() {
     assert_eq!(harness.next_images(), [image_update("a")]);
     fake.wait_for_file_calls(1);
 
-    harness.client.logout();
+    harness.logout();
     gate.notify_waiters();
 
     assert_eq!(

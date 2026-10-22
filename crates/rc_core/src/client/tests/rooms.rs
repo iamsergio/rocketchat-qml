@@ -103,7 +103,7 @@ fn logout_empties_the_room_list() {
         session_event(logged_in("http://h", "alice")),
         rooms_event(vec![room("1", "general", RoomKind::Channel)]),
     ]);
-    harness.client.logout();
+    harness.logout();
     harness.expect_events(vec![session_event(logged_out(None)), rooms_event(vec![])]);
 }
 
@@ -142,7 +142,7 @@ fn a_failed_fetch_leaves_the_session_logged_in_without_rooms() {
     fake.wait_for_subscriptions_calls(1);
     // No rooms event so far, and none for the empty list on logout: the next event is the
     // logout's own, and the one after it is the next login's.
-    harness.client.logout();
+    harness.logout();
     fake.script_login(None, Ok(()));
     harness.login("http://h", "alice");
     harness.expect_events(vec![
@@ -176,7 +176,7 @@ fn a_fetch_that_finishes_after_logout_is_dropped() {
     ]);
     fake.wait_for_subscriptions_calls(1);
 
-    harness.client.logout();
+    harness.logout();
     harness.expect_events(vec![session_event(logged_out(None))]);
     gate.notify_one();
 

@@ -3,6 +3,11 @@
 
 //! Connects the one `rc_core::Client` to the view models.
 //!
+//! The core can run several accounts, but the view models show one: the current account, the first
+//! one added. The events and the commands of the others are ignored for now, and when the current
+//! account is removed the next one added becomes current. A logout removes the account, and the
+//! core adds a new logged-out one after it, so the app goes on with that one.
+//!
 //! `Session`, `RoomList`, `Room`, `MessageList`, `Thread` and `ThreadMessageList` need the events
 //! of the same client, and QML creates them on its own schedule. The hub owns the client,
 //! remembers what the events said (see [`Cache`]), and queues each event to the view models that
@@ -18,13 +23,13 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use cxx_qt::CxxQtThread;
 use rc_core::adapters::{DiskFileCache, MemoryStore, default_store};
-use rc_core::domain::{AvatarOwner, MessageId, RoomId};
+use rc_core::domain::{AccountId, AvatarOwner, MessageId, RoomId};
 use rc_core::emoji::CustomEmojis;
 use rc_core::policy::{ActionError, MessageAction};
 use rc_core::ports::SecretStore;
 use rc_core::rooms::{RoomActionError, RoomChange};
 use rc_core::timeline::TimelineChange;
-use rc_core::{Client, Event};
+use rc_core::{AccountHandle, Client, Event};
 use secrecy::SecretString;
 
 use crate::attachment_view::ImageUrls;
@@ -52,6 +57,9 @@ static HUB: Mutex<Hub> = Mutex::new(Hub::new());
 
 struct Hub {
     client: Option<Client>,
+    /// The account the view models show, and the commands go to. `None` between the removal of
+    /// the current account and the addition of the next.
+    current: Option<AccountId>,
     cache: Cache,
     session: Option<CxxQtThread<SessionVm>>,
     rooms: Option<CxxQtThread<RoomListModel>>,
@@ -66,6 +74,7 @@ impl Hub {
     const fn new() -> Self {
         Self {
             client: None,
+            current: None,
             cache: Cache::new(),
             session: None,
             rooms: None,
@@ -158,23 +167,35 @@ pub fn start(cache_dir: &str) {
 /// Stops the core. Call on the GUI thread, once the event loop has ended.
 pub fn stop() {
     // Dropped outside the lock: it waits for a pending logout, and the callback locks the hub.
-    let client = lock().client.take();
+    let client = {
+        let mut hub = lock();
+        hub.current = None;
+        hub.client.take()
+    };
     drop(client);
 }
 
-pub fn login(server: &str, username: &str, password: SecretString) {
-    if let Some(client) = &lock().client {
-        client.login(server, username, password);
-    } else {
-        tracing::warn!("login ignored: the core isn't running");
+/// Runs `command` for the current account, or logs that it was ignored: `what` names it.
+fn current_account(what: &str, command: impl FnOnce(AccountHandle<'_>)) {
+    let hub = lock();
+    match (&hub.client, &hub.current) {
+        (Some(client), Some(id)) => command(client.account(id)),
+        (Some(_), None) => tracing::warn!("{what} ignored: there is no current account"),
+        (None, _) => tracing::warn!("{what} ignored: the core isn't running"),
     }
 }
 
+pub fn login(server: &str, username: &str, password: SecretString) {
+    current_account("login", |account| account.login(server, username, password));
+}
+
+/// Logs out and forgets the current account. A new logged-out one takes its place.
 pub fn logout() {
-    if let Some(client) = &lock().client {
-        client.logout();
-    } else {
-        tracing::warn!("logout ignored: the core isn't running");
+    let hub = lock();
+    match (&hub.client, &hub.current) {
+        (Some(client), Some(id)) => client.remove_account(id),
+        (Some(_), None) => tracing::warn!("logout ignored: there is no current account"),
+        (None, _) => tracing::warn!("logout ignored: the core isn't running"),
     }
 }
 
@@ -195,27 +216,19 @@ pub fn register_rooms(thread: CxxQtThread<RoomListModel>) -> (RoomChange, Avatar
 }
 
 pub fn open_room(room_id: String) {
-    if let Some(client) = &lock().client {
-        client.open_room(RoomId::from(room_id));
-    } else {
-        tracing::warn!("open_room ignored: the core isn't running");
-    }
+    current_account("open_room", |account| {
+        account.open_room(RoomId::from(room_id));
+    });
 }
 
 pub fn load_older() {
-    if let Some(client) = &lock().client {
-        client.load_older();
-    } else {
-        tracing::warn!("load_older ignored: the core isn't running");
-    }
+    current_account("load_older", |account| account.load_older());
 }
 
 pub fn send_message(room: RoomId, text: &str, quote: Option<MessageId>) {
-    if let Some(client) = &lock().client {
-        client.send_message(room, text, quote, None, false);
-    } else {
-        tracing::warn!("send_message ignored: the core isn't running");
-    }
+    current_account("send_message", |account| {
+        account.send_message(room, text, quote, None, false);
+    });
 }
 
 /// Sends a reply in the open thread `parent`, also to the room if `also_to_channel`.
@@ -226,99 +239,71 @@ pub fn send_reply(
     parent: MessageId,
     also_to_channel: bool,
 ) {
-    if let Some(client) = &lock().client {
-        client.send_message(room, text, quote, Some(parent), also_to_channel);
-    } else {
-        tracing::warn!("send_reply ignored: the core isn't running");
-    }
+    current_account("send_reply", |account| {
+        account.send_message(room, text, quote, Some(parent), also_to_channel);
+    });
 }
 
 pub fn open_thread(message_id: String) {
-    if let Some(client) = &lock().client {
-        client.open_thread(MessageId::from(message_id));
-    } else {
-        tracing::warn!("open_thread ignored: the core isn't running");
-    }
+    current_account("open_thread", |account| {
+        account.open_thread(MessageId::from(message_id));
+    });
 }
 
 pub fn close_thread() {
-    if let Some(client) = &lock().client {
-        client.close_thread();
-    } else {
-        tracing::warn!("close_thread ignored: the core isn't running");
-    }
+    current_account("close_thread", |account| account.close_thread());
 }
 
 pub fn load_older_thread() {
-    if let Some(client) = &lock().client {
-        client.load_older_thread();
-    } else {
-        tracing::warn!("load_older_thread ignored: the core isn't running");
-    }
+    current_account("load_older_thread", |account| account.load_older_thread());
 }
 
 pub fn retry_message(message_id: String) {
-    if let Some(client) = &lock().client {
-        client.retry_message(MessageId::from(message_id));
-    } else {
-        tracing::warn!("retry_message ignored: the core isn't running");
-    }
+    current_account("retry_message", |account| {
+        account.retry_message(MessageId::from(message_id));
+    });
 }
 
 pub fn edit_message(message_id: String, text: &str) {
-    if let Some(client) = &lock().client {
-        client.edit_message(MessageId::from(message_id), text);
-    } else {
-        tracing::warn!("edit_message ignored: the core isn't running");
-    }
+    current_account("edit_message", |account| {
+        account.edit_message(MessageId::from(message_id), text);
+    });
 }
 
 pub fn react(message_id: String, emoji: &str, react: bool) {
-    if let Some(client) = &lock().client {
-        client.react(MessageId::from(message_id), emoji, react);
-    } else {
-        tracing::warn!("react ignored: the core isn't running");
-    }
+    current_account("react", |account| {
+        account.react(MessageId::from(message_id), emoji, react);
+    });
 }
 
 pub fn set_favorite(room_id: String, favorite: bool) {
-    if let Some(client) = &lock().client {
-        client.set_favorite(RoomId::from(room_id), favorite);
-    } else {
-        tracing::warn!("set_favorite ignored: the core isn't running");
-    }
+    current_account("set_favorite", |account| {
+        account.set_favorite(RoomId::from(room_id), favorite);
+    });
 }
 
 pub fn mark_room_read(room_id: String) {
-    if let Some(client) = &lock().client {
-        client.mark_read(RoomId::from(room_id));
-    } else {
-        tracing::warn!("mark_read ignored: the core isn't running");
-    }
+    current_account("mark_read", |account| {
+        account.mark_read(RoomId::from(room_id));
+    });
 }
 
 pub fn mark_room_unread(room_id: String) {
-    if let Some(client) = &lock().client {
-        client.mark_unread(RoomId::from(room_id));
-    } else {
-        tracing::warn!("mark_unread ignored: the core isn't running");
-    }
+    current_account("mark_unread", |account| {
+        account.mark_unread(RoomId::from(room_id));
+    });
 }
 
 pub fn leave_room(room_id: String) {
-    if let Some(client) = &lock().client {
-        client.leave_room(RoomId::from(room_id));
-    } else {
-        tracing::warn!("leave_room ignored: the core isn't running");
-    }
+    current_account("leave_room", |account| {
+        account.leave_room(RoomId::from(room_id));
+    });
 }
 
 pub fn delete_message(message_id: String) {
-    if let Some(client) = &lock().client {
-        client.delete_message(MessageId::from(message_id));
-    } else {
-        tracing::warn!("delete_message ignored: the core isn't running");
-    }
+    current_account("delete_message", |account| {
+        account.delete_message(MessageId::from(message_id));
+    });
 }
 
 /// The id of the newest message of the open room that the user can edit now, or empty.
@@ -416,9 +401,23 @@ pub fn register_emoji_picker(thread: CxxQtThread<EmojiPickerModel>) -> CustomEmo
 }
 
 /// The core's event callback, on a runtime thread.
-fn dispatch(event: Event) {
+fn dispatch(account: AccountId, event: Event) {
     let mut guard = lock();
     let hub = &mut *guard;
+    if hub.current.is_none() && event == Event::Added {
+        hub.current = Some(account);
+        return;
+    }
+    if hub.current.as_ref() != Some(&account) {
+        tracing::debug!(%account, "event of another account ignored");
+        return;
+    }
+    if event == Event::Removed {
+        // The logout's events came before, so the cache shows logged out already; the account
+        // that replaces this one starts it over with its own.
+        hub.current = None;
+        return;
+    }
     hub.cache.apply(&event);
     match event {
         Event::MessagePolicy(_) => show_viewer(hub),

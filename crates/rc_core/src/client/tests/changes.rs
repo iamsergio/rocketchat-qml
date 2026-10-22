@@ -45,14 +45,14 @@ fn leave_and_come_back(
         .history_calls
         .iter()
         .any(|call| call.room == "2");
-    harness.client.open_room("2".to_owned().into());
+    harness.account().open_room("2".to_owned().into());
     harness.expect_events(vec![
         reset_event(Some("2"), Vec::new()),
         status("2", true, false, visited, None),
         status("2", false, false, true, None),
     ]);
     fake.script_history(page_gate, page(newest, false));
-    harness.client.open_room("1".to_owned().into());
+    harness.account().open_room("1".to_owned().into());
 }
 
 // RICH-006
@@ -63,7 +63,7 @@ fn the_connection_follows_the_open_room() {
     // Nothing is open yet: nothing to tell.
     assert_eq!(fake.watched(0), []);
     open_first_room(&fake, &harness, false);
-    harness.client.open_room("2".to_owned().into());
+    harness.account().open_room("2".to_owned().into());
     harness.expect_events(vec![
         reset_event(Some("2"), Vec::new()),
         status("2", true, false, false, None),
@@ -137,7 +137,7 @@ fn a_deletion_in_a_room_that_is_not_open_is_applied_to_what_is_kept() {
     let fake = Fake::new();
     let harness = logged_in_harness(&fake);
     open_first_room(&fake, &harness, false);
-    harness.client.open_room("2".to_owned().into());
+    harness.account().open_room("2".to_owned().into());
     harness.expect_events(vec![
         reset_event(Some("2"), Vec::new()),
         status("2", true, false, false, None),
@@ -153,7 +153,7 @@ fn a_deletion_in_a_room_that_is_not_open_is_applied_to_what_is_kept() {
         },
     ])])]);
 
-    harness.client.open_room("1".to_owned().into());
+    harness.account().open_room("1".to_owned().into());
     harness.expect_events(vec![
         reset_event(Some("1"), vec![message("a", 1)]),
         status("1", true, false, false, None),
@@ -174,7 +174,7 @@ fn a_message_deleted_while_the_page_loads_does_not_come_back_with_the_page() {
             false,
         ),
     );
-    harness.client.open_room("1".to_owned().into());
+    harness.account().open_room("1".to_owned().into());
     harness.expect_events(vec![
         reset_event(Some("1"), Vec::new()),
         status("1", true, false, false, None),
@@ -246,7 +246,7 @@ fn a_live_edit_of_a_message_further_back_than_what_is_held_is_not_shown() {
 fn a_room_that_was_never_up_to_date_asks_for_no_changes() {
     let fake = Fake::new();
     let harness = logged_in_harness(&fake);
-    harness.client.open_room("2".to_owned().into());
+    harness.account().open_room("2".to_owned().into());
     harness.expect_events(vec![
         reset_event(Some("2"), Vec::new()),
         status("2", true, false, false, None),
@@ -420,13 +420,13 @@ fn a_catch_up_answer_for_a_room_that_was_closed_or_a_previous_request_is_dropped
     // And one for a room that is not open any more.
     let closed = Arc::new(Notify::new());
     fake.script_changes("1", Some(Arc::clone(&closed)), changes(vec![], &["b"]));
-    harness.client.open_room("2".to_owned().into());
+    harness.account().open_room("2".to_owned().into());
     harness.expect_events(vec![
         reset_event(Some("2"), Vec::new()),
         status("2", true, false, true, None),
         status("2", false, false, true, None),
     ]);
-    harness.client.open_room("1".to_owned().into());
+    harness.account().open_room("1".to_owned().into());
     harness.expect_events(vec![
         reset_event(
             Some("1"),
@@ -436,7 +436,7 @@ fn a_catch_up_answer_for_a_room_that_was_closed_or_a_previous_request_is_dropped
         status("1", false, false, true, None),
     ]);
     fake.wait_for_changes_calls("1", 3);
-    harness.client.open_room("2".to_owned().into());
+    harness.account().open_room("2".to_owned().into());
     harness.expect_events(vec![
         reset_event(Some("2"), Vec::new()),
         status("2", true, false, true, None),

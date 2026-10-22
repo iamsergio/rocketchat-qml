@@ -121,7 +121,7 @@ fn the_authors_of_the_open_room_get_their_avatars() {
             true,
         ),
     );
-    harness.client.open_room("1".to_owned().into());
+    harness.account().open_room("1".to_owned().into());
 
     let mut sent = harness.next_avatars();
     sent.extend(harness.next_avatars());
@@ -164,7 +164,7 @@ fn an_avatar_is_downloaded_once_per_session_however_often_it_is_wanted() {
             true,
         ),
     );
-    harness.client.open_room("1".to_owned().into());
+    harness.account().open_room("1".to_owned().into());
     fake.wait_for_avatar_calls(3);
     // Held by the gate: a live message from the same author finds the download in flight.
     fake.push(0, Pushed::Message(message_by("c", 3, "bob")));
@@ -370,7 +370,7 @@ fn logging_out_forgets_the_avatars_and_drops_what_was_still_downloading() {
     );
     fake.wait_for_avatar_calls(2);
 
-    harness.client.logout();
+    harness.logout();
     gate.notify_waiters();
 
     assert_eq!(
