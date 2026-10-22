@@ -31,6 +31,7 @@ use crate::rooms::{RoomAction, RoomList, Unread};
 use crate::session::{Established, LoginFailure, SessionState, log_in, resume};
 use crate::store_worker::StoreHandle;
 use crate::timeline::{Timeline, TimelineError};
+use crate::tuning::Tuning;
 use crate::users::Users;
 
 mod media;
@@ -341,11 +342,11 @@ pub(crate) fn run<C: Connector>(
     id: AccountId,
     stored: Option<StoredAccount>,
     on_event: impl Fn(Event) + Send + Sync + 'static,
-    backoff: Backoff,
+    tuning: Tuning,
     commands: UnboundedReceiver<Command>,
 ) -> impl Future<Output = Instant> + Send + 'static {
     let (done_tx, done_rx) = mpsc::unbounded_channel();
-    Actor::new(shared, id, on_event, backoff, done_tx).run(stored, commands, done_rx)
+    Actor::new(shared, id, on_event, tuning, done_tx).run(stored, commands, done_rx)
 }
 
 impl<C: Connector> Actor<C> {
@@ -353,7 +354,7 @@ impl<C: Connector> Actor<C> {
         shared: &Shared<C>,
         id: AccountId,
         on_event: impl Fn(Event) + Send + Sync + 'static,
-        backoff: Backoff,
+        tuning: Tuning,
         done_tx: UnboundedSender<Done<C::Api>>,
     ) -> Self {
         Self {
@@ -373,12 +374,12 @@ impl<C: Connector> Actor<C> {
             realtime_watch: None,
             cycle: 0,
             reconnect_task: None,
-            backoff,
+            backoff: tuning.backoff,
             connection: Connection::Connected,
             succeeded_at: None,
             rooms_listed: false,
             backlog: None,
-            rooms: RoomList::default(),
+            rooms: RoomList::new(tuning.quiet_after),
             emoji: CustomEmojis::default(),
             emoji_task: None,
             policy: MessagePolicy::default(),
@@ -411,6 +412,9 @@ impl<C: Connector> Actor<C> {
     ) -> Instant {
         self.start(stored);
         loop {
+            // Woken when the next shown direct message goes quiet. Made anew every time round, as
+            // anything can move that time.
+            let mut quiet = self.rooms.next_quiet().map(|at| self.clock.sleep_until(at));
             tokio::select! {
                 biased;
                 command = commands.recv() => match command {
@@ -434,6 +438,12 @@ impl<C: Connector> Actor<C> {
                     Done::Action(done) => self.handle_action_done(done),
                     Done::RoomAction(done) => self.handle_room_action_done(done),
                 },
+                () = async {
+                    match &mut quiet {
+                        Some(sleep) => sleep.await,
+                        None => std::future::pending().await,
+                    }
+                } => self.hide_quiet_rooms(),
             }
         }
         self.stop().await

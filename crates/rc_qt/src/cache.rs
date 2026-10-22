@@ -423,18 +423,19 @@ mod tests {
     /// rooms, and logs out.
     fn script() -> Vec<Event> {
         let mut list = RoomList::default();
+        let now = jiff::Timestamp::UNIX_EPOCH;
         let rooms = |change: Option<RoomChange>| Event::Rooms(change.into_iter().collect());
         vec![
             Event::Session(SessionState::LoggedOut { failure: None }),
             Event::Session(SessionState::Connecting),
             Event::Rooms(vec![
-                list.reset(vec![room("a", "alpha"), room("c", "charlie")]),
+                list.reset(vec![room("a", "alpha"), room("c", "charlie")], now),
             ]),
-            rooms(list.upsert(room("b", "bravo"))),
-            rooms(list.upsert(room("a", "zulu"))),
+            rooms(list.upsert(room("b", "bravo"), now)),
+            rooms(list.upsert(room("a", "zulu"), now)),
             rooms(list.remove(&"c".to_owned().into())),
             Event::Session(SessionState::LoggedOut { failure: None }),
-            Event::Rooms(vec![list.reset(Vec::new())]),
+            Event::Rooms(vec![list.reset(Vec::new(), now)]),
         ]
     }
 

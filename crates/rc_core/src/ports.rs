@@ -4,7 +4,9 @@
 //! What the core needs from the outside world. Use cases depend on these traits only; adapters
 //! implement them for real I/O and tests implement them with fakes.
 
+use std::future::Future;
 use std::path::PathBuf;
+use std::pin::Pin;
 
 use rc_api::ServerVersion;
 use secrecy::SecretString;
@@ -511,6 +513,10 @@ pub struct Stored {
 pub trait Clock: Send + Sync + 'static {
     /// The current time.
     fn now(&self) -> jiff::Timestamp;
+
+    /// Completes once [`now`](Self::now) has reached `at`; at once if it has. Dropping the future
+    /// cancels the wait.
+    fn sleep_until(&self, at: jiff::Timestamp) -> Pin<Box<dyn Future<Output = ()> + Send>>;
 }
 
 /// Downloaded files, kept where the frontend can open them. The calls block: the core runs them off

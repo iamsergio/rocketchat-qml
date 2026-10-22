@@ -141,7 +141,7 @@ pub(super) fn raw_client(
     backoff: Backoff,
 ) -> (Client, Receiver<(AccountId, Event)>) {
     let (tx, events) = mpsc::channel();
-    let client = Client::with_backoff(
+    let client = Client::with_tuning(
         fake.clone(),
         store,
         cache,
@@ -149,7 +149,10 @@ pub(super) fn raw_client(
         move |id, event| {
             let _ = tx.send((id, event));
         },
-        backoff,
+        Tuning {
+            backoff,
+            ..Tuning::default()
+        },
     )
     .unwrap();
     (client, events)

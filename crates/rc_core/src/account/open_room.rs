@@ -182,6 +182,7 @@ impl<C: Connector> Actor<C> {
             changes: None,
             deleted: HashSet::new(),
         });
+        self.track_open_room(Some(id.clone()));
         self.watch_room(Some(id));
         self.mark_open_room_read();
         self.fetch_history(false);
@@ -198,7 +199,7 @@ impl<C: Connector> Actor<C> {
         let Some(room) = self.rooms.get(&id).filter(|room| room.has_unread()) else {
             return;
         };
-        if let Some(change) = self.rooms.upsert(room.clone().read()) {
+        if let Some(change) = self.rooms.upsert(room.clone().read(), self.clock.now()) {
             self.emit_rooms(vec![change]);
         }
     }
@@ -508,6 +509,7 @@ impl<C: Connector> Actor<C> {
                 messages: Vec::new(),
             }]));
             self.emit_timeline_status();
+            self.track_open_room(None);
         }
     }
 }

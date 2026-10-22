@@ -5,7 +5,9 @@
 //! client owns its runtime and can't be dropped inside one. Nothing here touches the OS keyring.
 
 use std::collections::{HashMap, VecDeque};
+use std::future::Future;
 use std::path::PathBuf;
+use std::pin::Pin;
 use std::sync::mpsc::{self, Receiver};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
@@ -34,6 +36,7 @@ use crate::ports::{
 use crate::rooms::{RoomAction, RoomActionError, RoomChange, Unread};
 use crate::session::{LoginFailure, SessionState};
 use crate::timeline::{ThreadStatus, TimelineChange, TimelineError, TimelineStatus};
+use crate::tuning::Tuning;
 
 mod accounts;
 mod activity;
@@ -46,6 +49,7 @@ mod images;
 mod login;
 mod mark_read;
 mod message_actions;
+mod quiet;
 mod quotes;
 mod realtime;
 mod room_actions;

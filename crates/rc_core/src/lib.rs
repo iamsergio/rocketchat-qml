@@ -25,6 +25,7 @@ pub mod rooms;
 pub mod session;
 mod store_worker;
 pub mod timeline;
+mod tuning;
 mod users;
 
 pub use avatars::AvatarUpdate;

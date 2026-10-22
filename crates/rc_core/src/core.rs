@@ -15,11 +15,11 @@ use tokio::time::Instant;
 use tracing::Instrument;
 
 use crate::account;
-use crate::backoff::Backoff;
 use crate::client::{Command, Event};
 use crate::domain::{AccountId, StoredAccount};
 use crate::ports::{Clock, Connector, FileCache, SecretStore};
 use crate::store_worker::{StoreHandle, run_store_worker};
+use crate::tuning::Tuning;
 use crate::users::Users;
 
 /// The services shared by the accounts. An actor takes clones of them when it is built.
@@ -121,7 +121,7 @@ pub(crate) fn spawn<C: Connector, S: SecretStore>(
     runtime: &Runtime,
     ports: Ports<C, S>,
     on_event: impl Fn(AccountId, Event) + Send + Sync + 'static,
-    backoff: Backoff,
+    tuning: Tuning,
     link: Link,
 ) -> std_mpsc::Receiver<()> {
     let (finished_tx, finished) = std_mpsc::channel();
@@ -136,7 +136,7 @@ pub(crate) fn spawn<C: Connector, S: SecretStore>(
             users: Arc::default(),
         },
         on_event: Arc::new(on_event),
-        backoff,
+        tuning,
         senders: link.senders,
         accounts: Vec::new(),
         actors: JoinSet::new(),
@@ -166,7 +166,7 @@ pub(crate) fn spawn<C: Connector, S: SecretStore>(
 struct Core<C: Connector> {
     shared: Shared<C>,
     on_event: OnEvent,
-    backoff: Backoff,
+    tuning: Tuning,
     /// The senders of the actors' commands, shared with the client.
     senders: Arc<ActorSenders>,
     /// The accounts in the order they were added, until they are removed.
@@ -237,7 +237,7 @@ impl<C: Connector> Core<C> {
             id.clone(),
             stored,
             move |event| on_event(tagged.clone(), event),
-            self.backoff.clone(),
+            self.tuning.clone(),
             commands,
         );
         let span = tracing::info_span!("account", %id);

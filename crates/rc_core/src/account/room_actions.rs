@@ -166,11 +166,37 @@ impl<C: Connector> Actor<C> {
 
     /// Tells the frontend the room list changed, and its unread totals if they did too.
     pub(super) fn emit_rooms(&mut self, changes: Vec<RoomChange>) {
+        // A room that comes back needs its avatar like one that was just listed.
+        let avatars: Vec<_> = changes
+            .iter()
+            .filter_map(|change| match change {
+                RoomChange::Inserted { room, .. } => room.avatar_to_fetch(),
+                _ => None,
+            })
+            .collect();
         (self.on_event)(Event::Rooms(changes));
         let unread = self.rooms.unread();
         if unread != self.unread {
             self.unread = unread;
             (self.on_event)(Event::Unread(unread));
+        }
+        self.want_avatars(avatars);
+    }
+
+    /// Holds back the direct messages that went quiet, and tells the frontend.
+    pub(super) fn hide_quiet_rooms(&mut self) {
+        let changes = self.rooms.refresh(self.clock.now());
+        if !changes.is_empty() {
+            self.emit_rooms(changes);
+        }
+    }
+
+    /// Records the room the user has open, `None` for none, in the room list: the open room is
+    /// always shown, and the one left may go quiet. Tells the frontend.
+    pub(super) fn track_open_room(&mut self, id: Option<RoomId>) {
+        let changes = self.rooms.set_open(id, self.clock.now());
+        if !changes.is_empty() {
+            self.emit_rooms(changes);
         }
     }
 
@@ -181,7 +207,7 @@ impl<C: Connector> Actor<C> {
             return;
         };
         let room = self.seen_if_open(change(held));
-        if let Some(change) = self.rooms.upsert(room) {
+        if let Some(change) = self.rooms.upsert(room, self.clock.now()) {
             self.emit_rooms(vec![change]);
         }
     }
@@ -203,10 +229,10 @@ impl<C: Connector> Actor<C> {
     /// Empties the room list and tells the frontend, unless it was empty already.
     pub(super) fn clear_rooms(&mut self) {
         self.rooms_listed = false;
-        if self.rooms.rooms().is_empty() {
+        if self.rooms.is_empty() {
             return;
         }
-        let change = self.rooms.reset(Vec::new());
+        let change = self.rooms.reset(Vec::new(), self.clock.now());
         self.emit_rooms(vec![change]);
     }
 }
