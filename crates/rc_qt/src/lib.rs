@@ -51,20 +51,6 @@ pub mod thread_message_list_model;
 #[allow(unsafe_code, clippy::unnecessary_box_returns)]
 pub mod thread_vm;
 
-mod accounts;
-mod attachment_view;
-mod avatar_view;
-mod cache;
-mod dev_login;
-mod emoji_picker_view;
 mod hub;
 mod message_mirror;
-mod message_view;
-mod quote_view;
-mod reaction_view;
 mod rich_html;
-mod room_view;
-mod row_ops;
-mod session_view;
-mod thread_view;
-mod viewer;

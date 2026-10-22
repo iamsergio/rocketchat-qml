@@ -80,8 +80,8 @@ use cxx_qt::{CxxQtType, Threading};
 use cxx_qt_lib::{QByteArray, QHash, QHashPair_i32_QByteArray, QModelIndex, QString, QVariant};
 use rc_core::emoji::CustomEmojis;
 
-use crate::emoji_picker_view::Picker;
 use crate::hub;
+use rc_view::emoji_picker_view::Picker;
 
 use qobject::EmojiPickerModel;
 

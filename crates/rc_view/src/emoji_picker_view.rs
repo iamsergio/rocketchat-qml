@@ -60,6 +60,12 @@ impl Picker {
         self.shown.len()
     }
 
+    /// Whether no emoji match.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.shown.is_empty()
+    }
+
     /// The emoji at `row` of the matches.
     #[must_use]
     pub fn get(&self, row: usize) -> Option<&PickerEmoji> {

@@ -1709,6 +1709,7 @@ dependencies = [
  "jiff",
  "rc_api",
  "rc_core",
+ "rc_view",
  "secrecy",
  "tracing",
 ]
@@ -1720,6 +1721,16 @@ dependencies = [
  "serde_json",
  "tungstenite",
  "ureq",
+]
+
+[[package]]
+name = "rc_view"
+version = "0.0.0"
+dependencies = [
+ "jiff",
+ "rc_api",
+ "rc_core",
+ "tracing",
 ]
 
 [[package]]

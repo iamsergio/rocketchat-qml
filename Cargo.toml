@@ -35,6 +35,7 @@ pulldown-cmark = { version = "0.13.4", default-features = false }
 rc_api = { path = "crates/rc_api" }
 rc_core = { path = "crates/rc_core" }
 rc_test_server = { path = "crates/rc_test_server" }
+rc_view = { path = "crates/rc_view" }
 reqwest = { version = "0.13.5", default-features = false, features = ["json", "rustls", "system-proxy"] }
 roxmltree = "0.21.1"
 # The crypto provider reqwest's rustls uses, so there is only one.

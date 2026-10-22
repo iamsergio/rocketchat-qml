@@ -33,7 +33,7 @@ fn stop_core() {
 
 fn enable_dev_login() {
     #[cfg(feature = "developer-mode")]
-    crate::dev_login::enable();
+    rc_view::dev_login::enable();
     #[cfg(not(feature = "developer-mode"))]
     tracing::warn!("--dev needs a developer-mode build: ignored");
 }

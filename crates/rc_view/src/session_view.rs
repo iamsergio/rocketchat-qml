@@ -37,8 +37,8 @@ pub enum LoginMode {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct SessionView {
     pub status: Status,
-    /// Waiting for something: the first event, or a login or a resume in progress. Derived here so that QML
-    /// has no logic.
+    /// Waiting for something: the first event, or a login or a resume in progress. Derived here so
+    /// that the GUI has no logic.
     pub busy: bool,
     /// Why the last login failed, as it is to be shown. Empty if it didn't.
     pub error_text: String,

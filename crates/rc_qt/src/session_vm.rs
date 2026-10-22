@@ -93,9 +93,9 @@ use cxx_qt::{CxxQtType, Threading};
 use cxx_qt_lib::QString;
 use secrecy::SecretString;
 
-use crate::dev_login;
 use crate::hub;
-use crate::session_view::{self, SessionView, Status};
+use rc_view::dev_login;
+use rc_view::session_view::{self, SessionView, Status};
 
 use qobject::{LoginMode, SessionStatus};
 

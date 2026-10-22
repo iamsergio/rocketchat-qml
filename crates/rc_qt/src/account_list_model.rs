@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 //! The `AccountList` model: the core's accounts in the order they were added, one row each,
-//! updated one row at a time. The hub decides what changes (see [`crate::accounts`]); this only
+//! updated one row at a time. The hub decides what changes (see [`rc_view::accounts`]); this only
 //! announces it to the views.
 
 #[cxx_qt::bridge]
@@ -145,8 +145,8 @@ use cxx_qt_lib::{
     QByteArray, QHash, QHashPair_i32_QByteArray, QModelIndex, QString, QVariant, QVector,
 };
 
-use crate::accounts::{AccountChange, AccountView, Status};
 use crate::hub;
+use rc_view::accounts::{AccountChange, AccountView, Status};
 
 use qobject::{AccountListModel, AccountStatus};
 
