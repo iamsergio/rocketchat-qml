@@ -106,6 +106,7 @@ impl<C: Connector> Actor<C> {
     /// held: they load their history when opened, and their unread counts arrive as subscription
     /// changes.
     pub(super) fn add_live_message(&mut self, message: Message) {
+        self.message_ends_typing(&message);
         self.add_live_thread_message(&message);
         if message.shows_in_room() {
             self.add_live_room_message(message);
@@ -182,6 +183,7 @@ impl<C: Connector> Actor<C> {
             changes: None,
             deleted: HashSet::new(),
         });
+        self.end_typing();
         self.track_open_room(Some(id.clone()));
         self.watch_room(Some(id));
         self.mark_open_room_read();
@@ -502,6 +504,7 @@ impl<C: Connector> Actor<C> {
     pub(super) fn close_room(&mut self) {
         self.close_thread();
         self.abort_history_task();
+        self.end_typing();
         if self.open.take().is_some() {
             self.watch_room(None);
             (self.on_event)(Event::Timeline(vec![TimelineChange::Reset {

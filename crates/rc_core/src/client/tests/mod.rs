@@ -57,6 +57,7 @@ mod rooms;
 mod sending;
 mod threads;
 mod timeline;
+mod typing;
 
 use fake::*;
 use harness::*;
