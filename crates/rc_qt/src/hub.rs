@@ -596,6 +596,8 @@ impl Views {
             Event::CustomEmoji(emoji) => {
                 self.show_emoji(&emoji);
                 self.show_session(accounts);
+                // The topic of the open room may have custom emoji.
+                self.show_room(cache);
             }
             Event::Session(_) | Event::Connection(_) => self.show_session(accounts),
             Event::Identity(_) => self.show_session_view(accounts),

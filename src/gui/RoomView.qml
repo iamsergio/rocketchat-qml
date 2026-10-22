@@ -51,26 +51,71 @@ Rectangle {
                         textFormat: Text.PlainText
                     }
 
-                    Label {
-                        id: topic
+                    // One line, clipped with a fade where it goes on: a Text of rich text can't elide.
+                    Item {
+                        id: topicLine
 
-                        objectName: "roomTopic"
+                        // The topic is wider than the room has for it.
+                        readonly property bool overflowing: topic.implicitWidth > width
+
                         Layout.fillWidth: true
-                        color: Theme.textMuted
-                        elide: Text.ElideRight
-                        font.pointSize: Theme.fontSizeSmall
-                        text: Room.topic
-                        textFormat: Text.PlainText
-                        visible: Room.topic !== ""
+                        clip: true
+                        implicitHeight: topic.implicitHeight
+                        visible: Room.topicHtml !== ""
 
-                        // The whole topic, if it doesn't fit.
-                        HoverHandler {
-                            id: topicHover
+                        Label {
+                            id: topic
+
+                            objectName: "roomTopic"
+                            color: Theme.textMuted
+                            font.pointSize: Theme.fontSizeSmall
+                            text: Theme.richTextStyle + Room.topicHtml
+                            textFormat: Text.RichText
+                            wrapMode: Text.NoWrap
+                            onLinkActivated: link => Qt.openUrlExternally(link)
                         }
 
-                        ToolTip.delay: Theme.toolTipDelay
-                        ToolTip.text: Room.topic
-                        ToolTip.visible: topicHover.hovered && topic.truncated
+                        Rectangle {
+                            anchors.bottom: parent.bottom
+                            anchors.right: parent.right
+                            anchors.top: parent.top
+                            visible: topicLine.overflowing
+                            width: Theme.roomTopicFadeWidth
+
+                            gradient: Gradient {
+                                orientation: Gradient.Horizontal
+
+                                GradientStop {
+                                    color: Theme.surfaceClear
+                                    position: Theme.gradientStart
+                                }
+
+                                GradientStop {
+                                    color: Theme.surface
+                                    position: Theme.gradientEnd
+                                }
+                            }
+                        }
+
+                        HoverHandler {
+                            id: topicHover
+
+                            cursorShape: topic.hoveredLink ? Qt.PointingHandCursor : Qt.ArrowCursor
+                        }
+
+                        // The whole topic, if it doesn't fit.
+                        ToolTip {
+                            delay: Theme.toolTipDelay
+                            visible: topicHover.hovered && topicLine.overflowing
+                            width: Math.min(implicitWidth, Theme.roomTopicTipMaxWidth)
+
+                            contentItem: Label {
+                                objectName: "roomTopicTip"
+                                text: Theme.richTextStyle + Room.topicHtml
+                                textFormat: Text.RichText
+                                wrapMode: Text.Wrap
+                            }
+                        }
                     }
                 }
             }

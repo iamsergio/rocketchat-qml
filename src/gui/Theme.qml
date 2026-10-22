@@ -18,6 +18,11 @@ QtObject {
     readonly property color rail: "#111319"
     // The conversation, and the input fields.
     readonly property color surface: "#1b1f26"
+    // The ends of a gradient.
+    readonly property real gradientStart: 0
+    readonly property real gradientEnd: 1
+    // The surface with no opacity: a gradient to it fades into the surface without going dark.
+    readonly property color surfaceClear: Qt.alpha(surface, 0)
     // What sits on the surface: the composer, chips, menus and popups.
     readonly property color raised: "#242933"
     // Hover on raised, and the borders that must show against it. Also the unread badge.
@@ -156,6 +161,10 @@ QtObject {
     // Two lines fit: the name and the topic.
     readonly property int roomHeaderHeight: 56
     readonly property int roomHeaderIconSize: 18
+    // The fade at the end of a topic that goes on past the header.
+    readonly property int roomTopicFadeWidth: 32
+    // The widest the tool tip with the whole topic gets, before it wraps.
+    readonly property int roomTopicTipMaxWidth: 420
     readonly property int roomIconSize: 14
     readonly property int roomRowHeight: 34
     // The space each side of the server's name at the top of the sidebar.
