@@ -544,10 +544,6 @@ Item {
                         wrapMode: Text.Wrap
                         onLinkActivated: link => Qt.openUrlExternally(link)
 
-                        HoverHandler {
-                            cursorShape: bodyText.hoveredLink ? Qt.PointingHandCursor : Qt.ArrowCursor
-                        }
-
                         LinkArea {
                             label: bodyText
                             onMenuRequested: (url, origin, x, y) => root.linkMenuRequested(url, origin, x, y)
@@ -607,17 +603,14 @@ Item {
                                 onTapped: Qt.openUrlExternally(attachment.modelData.link)
                             }
 
-                            // Right-click: the menu of the link.
+                            // Right-click: the menu of the link. A left-click goes to the TapHandler.
                             MouseArea {
                                 id: pictureMenuArea
 
                                 acceptedButtons: Qt.RightButton
                                 anchors.fill: parent
-                                onClicked: mouse => root.linkMenuRequested(attachment.modelData.link, pictureMenuArea, mouse.x, mouse.y)
-                            }
-
-                            HoverHandler {
                                 cursorShape: Qt.PointingHandCursor
+                                onClicked: mouse => root.linkMenuRequested(attachment.modelData.link, pictureMenuArea, mouse.x, mouse.y)
                             }
                         }
 
@@ -678,17 +671,14 @@ Item {
                                 onTapped: Qt.openUrlExternally(attachment.modelData.link)
                             }
 
-                            // Right-click: the menu of the link.
+                            // Right-click: the menu of the link. A left-click goes to the TapHandler.
                             MouseArea {
                                 id: fileMenuArea
 
                                 acceptedButtons: Qt.RightButton
                                 anchors.fill: parent
-                                onClicked: mouse => root.linkMenuRequested(attachment.modelData.link, fileMenuArea, mouse.x, mouse.y)
-                            }
-
-                            HoverHandler {
                                 cursorShape: Qt.PointingHandCursor
+                                onClicked: mouse => root.linkMenuRequested(attachment.modelData.link, fileMenuArea, mouse.x, mouse.y)
                             }
                         }
 

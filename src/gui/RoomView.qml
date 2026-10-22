@@ -104,8 +104,6 @@ Rectangle {
 
                         HoverHandler {
                             id: topicHover
-
-                            cursorShape: topic.hoveredLink ? Qt.PointingHandCursor : Qt.ArrowCursor
                         }
 
                         // The whole topic, if it doesn't fit.
