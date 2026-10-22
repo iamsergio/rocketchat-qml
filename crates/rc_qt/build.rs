@@ -7,6 +7,7 @@ fn main() {
     CxxQtBuilder::new_qml_module(QmlModule::new("RocketChat.Bridge"))
         .qt_module("Qml")
         .files([
+            "src/account_list_model.rs",
             "src/app_info.rs",
             "src/emoji_picker_model.rs",
             "src/lifecycle.rs",

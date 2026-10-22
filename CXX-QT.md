@@ -34,7 +34,7 @@ The Rust staticlib is linked into a C++ executable. Corrosion adds the platform'
 
 Each list model's bridge declares its Qt base class as `extern "C++Qt"` with `#[qobject] type QAbstractListModel;`. cxx-qt then generates `cxx_qt_ffi_QAbstractListModel_upcastPtr` and `downcastPtr` in every bridge that does, with the same symbol names, so a second model fails to link ("duplicate symbol").
 
-- **Workaround:** `MessageListModel` reuses the first declaration with `type QAbstractListModel = crate::room_list_model::qobject::QAbstractListModel;` and no `#[qobject]` (cxx rejects the attribute on an alias). Keep the original in `RoomListModel`'s bridge.
+- **Workaround:** `MessageListModel` and `AccountListModel` reuse the first declaration with `type QAbstractListModel = crate::room_list_model::qobject::QAbstractListModel;` and no `#[qobject]` (cxx rejects the attribute on an alias). Keep the original in `RoomListModel`'s bridge.
 - **Possible patch:** make the generated symbols unique per bridge, or provide `QAbstractListModel` once in cxx-qt-lib (which would also be the place for the safe `begin*`/`end*` helpers mentioned above).
 
 ## An instrumented staticlib has no profiler runtime

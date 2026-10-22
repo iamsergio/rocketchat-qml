@@ -235,6 +235,14 @@ impl cxx_qt::Initialize for RoomListModel {
 }
 
 impl RoomListModel {
+    /// Replaces the rooms and their avatars with another account's, as one model reset. What
+    /// failed for the other account means nothing for this one.
+    pub fn show(mut self: Pin<&mut Self>, snapshot: RoomChange, avatars: AvatarUrls) {
+        self.as_mut().rust_mut().avatars = avatars;
+        self.as_mut().set_action_error_text("");
+        self.apply(&[snapshot]);
+    }
+
     /// Applies the changes in order, announcing each one to the views, then `hasFavorites` if it
     /// changed.
     pub fn apply(mut self: Pin<&mut Self>, changes: &[RoomChange]) {

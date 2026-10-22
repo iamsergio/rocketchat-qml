@@ -117,8 +117,8 @@ One session actor per account under a thin accounts layer: the actor already hol
 - [x] `rc_core`: one shared core (runtime, connector, file cache, store worker) separate from the account actor. Still one account
 - [x] `rc_core`: the `SecretStore` port keeps a list of accounts (`AccountId`, server, user, token or none), with memory, file and keyring adapters (one keyring entry per account plus an index). The session stored by earlier builds is dropped: log in again
 - [x] `rc_core`: accounts layer. Add, log in, remove; events tagged with the account; unread and mention totals per account; all accounts resumed at startup, independently; logging out removes the account; an expired one stays listed without a token, for a prefilled login; the same server and user can't be added twice. Two users on one server are fine
-- [ ] `rc_qt`: refactor the hub first, so that routing to an account is one place, not one per command: a single way to reach the client (today each of the twenty-odd commands repeats "find the client, else warn"), and the cache and the registered view models as separate parts. No behaviour change
-- [ ] `rc_qt`: one cache per account and a current account that the existing view models show; an `Accounts` model; commands go to the current account
+- [x] `rc_qt`: refactor the hub first, so that routing to an account is one place, not one per command: a single way to reach the client (today each of the twenty-odd commands repeats "find the client, else warn"), and the cache and the registered view models as separate parts. No behaviour change
+- [x] `rc_qt`: one cache per account and a current account that the existing view models show; an `Accounts` model; commands go to the current account
 - [ ] QML: mockup first, then a rail of servers with badges and an add button, the login page in add-account mode with Cancel, and a prefilled login for an expired account
 - [ ] Features ACCT-001…ACCT-007 tested. The second server in tests is the test server behind `rc_test_server::Proxy`
 

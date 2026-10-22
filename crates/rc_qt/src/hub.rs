@@ -3,16 +3,20 @@
 
 //! Connects the one `rc_core::Client` to the view models.
 //!
-//! The core can run several accounts, but the view models show one: the current account, the first
-//! one added. The events and the commands of the others are ignored for now, and when the current
-//! account is removed the next one added becomes current. A logout removes the account, and the
-//! core adds a new logged-out one after it, so the app goes on with that one.
+//! The core can run several accounts, and the view models show one at a time: the current account.
+//! The hub keeps a [`Cache`] per account (see [`Accounts`]), so that an account in the background
+//! stays up to date, and lists them all in the `AccountList` model. The first account added is
+//! current. Selecting another one, or removing the current one, switches: every view model gets a
+//! full snapshot of the new current account's cache. Commands go to the current account, and so
+//! do the answers the view models show: those of the others are dropped. A logout removes the
+//! account, and the core adds a new logged-out one if it was the last, so the app goes on with
+//! that one.
 //!
 //! `Session`, `RoomList`, `Room`, `MessageList`, `Thread` and `ThreadMessageList` need the events
 //! of the same client, and QML creates them on its own schedule. The hub owns the client,
-//! remembers what the events said (see [`Cache`]), and queues each event to the view models that
-//! registered. A view model registering later replays the cache, so it doesn't matter whether it
-//! is created before or after the first events.
+//! remembers what the events said, and queues each event of the current account to the view models
+//! that registered. A view model registering later replays the current account's cache, so it
+//! doesn't matter whether it is created before or after the first events.
 //!
 //! The event callback runs on a runtime thread and never waits for the GUI thread; the GUI thread
 //! never waits for the runtime either (commands don't block). So queueing while holding the lock
@@ -34,6 +38,8 @@ use rc_core::timeline::TimelineChange;
 use rc_core::{AccountHandle, Client, Event};
 use secrecy::SecretString;
 
+use crate::account_list_model::qobject::AccountListModel;
+use crate::accounts::{AccountChange, AccountView, Accounts};
 use crate::attachment_view::ImageUrls;
 use crate::avatar_view::AvatarUrls;
 use crate::cache::Cache;
@@ -59,20 +65,57 @@ static HUB: Mutex<Hub> = Mutex::new(Hub::new());
 
 struct Hub {
     client: Option<Client>,
-    /// The account the view models show, and the commands go to. `None` between the removal of
-    /// the current account and the addition of the next.
-    current: Option<AccountId>,
-    cache: Cache,
+    /// The accounts, each with its cache, and the current one: the one the view models show and
+    /// the commands go to.
+    accounts: Accounts,
     views: Views,
+    list: Registered<AccountListModel>,
 }
 
 impl Hub {
     const fn new() -> Self {
         Self {
             client: None,
-            current: None,
-            cache: Cache::new(),
+            accounts: Accounts::new(),
             views: Views::new(),
+            list: Registered::new("AccountList"),
+        }
+    }
+
+    /// Adds the account, unless it is known, and lists it.
+    fn add_row(&mut self, id: &AccountId) {
+        if self.accounts.added(id.clone()).is_some()
+            && let Some((index, view)) = self.accounts.view(id)
+        {
+            self.list
+                .queue(move |model| model.apply(&AccountChange::Inserted { index, view }));
+        }
+    }
+
+    /// Updates the account's row in the account list.
+    fn update_row(&mut self, id: &AccountId) {
+        if let Some((index, view)) = self.accounts.view(id) {
+            self.list
+                .queue(move |model| model.apply(&AccountChange::Updated { index, view }));
+        }
+    }
+
+    /// Brings the view models and the account list up to date if the current account is not
+    /// `before` any more. Call it after every change to the accounts.
+    fn switched_from(&mut self, before: Option<&AccountId>) {
+        let current = self.accounts.current().cloned();
+        if current.as_ref() == before {
+            return;
+        }
+        // The two rows whose `current` changed. The one that was current may be gone.
+        for id in before.into_iter().chain(&current) {
+            self.update_row(id);
+        }
+        // With no account left, the view models keep showing the last one, logged out, until the
+        // next account is added. An account added a moment ago is shown with its first `Session`
+        // event (see `dispatch`): showing it before would flash the startup page.
+        if current.is_some() && self.accounts.current_cache().session_known() {
+            self.views.show_all(self.accounts.current_cache());
         }
     }
 }
@@ -199,7 +242,7 @@ pub fn stop() {
     // Dropped outside the lock: it waits for a pending logout, and the callback locks the hub.
     let client = {
         let mut hub = lock();
-        hub.current = None;
+        hub.accounts = Accounts::new();
         hub.client.take()
     };
     drop(client);
@@ -208,7 +251,7 @@ pub fn stop() {
 /// Runs `command` for the current account, or logs that it was ignored: `what` names it.
 fn current_account(what: &str, command: impl FnOnce(AccountHandle<'_>)) {
     let hub = lock();
-    match (&hub.client, &hub.current) {
+    match (&hub.client, hub.accounts.current()) {
         (Some(client), Some(id)) => command(client.account(id)),
         (Some(_), None) => tracing::warn!("{what} ignored: there is no current account"),
         (None, _) => tracing::warn!("{what} ignored: the core isn't running"),
@@ -219,13 +262,58 @@ pub fn login(server: &str, username: &str, password: SecretString) {
     current_account("login", |account| account.login(server, username, password));
 }
 
-/// Logs out and forgets the current account. A new logged-out one takes its place.
+/// Logs out and forgets the current account. The next account becomes current, or a new
+/// logged-out one takes its place if it was the last.
 pub fn logout() {
     let hub = lock();
-    match (&hub.client, &hub.current) {
+    match (&hub.client, hub.accounts.current()) {
         (Some(client), Some(id)) => client.remove_account(id),
         (Some(_), None) => tracing::warn!("logout ignored: there is no current account"),
         (None, _) => tracing::warn!("logout ignored: the core isn't running"),
+    }
+}
+
+/// Registers the `AccountList` model and returns its rows now. Call on the GUI thread; the changes
+/// that follow are queued to `thread`.
+pub fn register_accounts(thread: CxxQtThread<AccountListModel>) -> Vec<AccountView> {
+    let mut hub = lock();
+    hub.list.register(thread);
+    hub.accounts.views()
+}
+
+/// Makes the account current: the view models show it from now on.
+pub fn select_account(id: &str) {
+    let mut guard = lock();
+    let hub = &mut *guard;
+    let before = hub.accounts.current().cloned();
+    if hub.accounts.select(&AccountId::from(id.to_owned())) {
+        hub.switched_from(before.as_ref());
+    }
+}
+
+/// Adds an account, logged out, and makes it current, so that the login page shows for it. The
+/// account is listed at once, which makes its `Added` a no-op.
+pub fn add_account() {
+    let mut guard = lock();
+    let hub = &mut *guard;
+    let Some(client) = &hub.client else {
+        tracing::warn!("add ignored: the core isn't running");
+        return;
+    };
+    let id = client.add_account();
+    let before = hub.accounts.current().cloned();
+    hub.add_row(&id);
+    hub.accounts.select(&id);
+    hub.switched_from(before.as_ref());
+}
+
+/// Asks the core to forget the account, logging it out first if it is logged in. It leaves the
+/// list, and the current account if it was, when the core says `Removed`.
+pub fn remove_account(id: &str) {
+    if let Some(client) = &lock().client {
+        client.remove_account(&AccountId::from(id.to_owned()));
+    } else {
+        tracing::warn!("remove ignored: the core isn't running");
     }
 }
 
@@ -234,7 +322,7 @@ pub fn logout() {
 pub fn register_session(thread: CxxQtThread<SessionVm>) -> SessionView {
     let mut hub = lock();
     hub.views.session.register(thread);
-    hub.cache.session_view()
+    hub.accounts.current_cache().session_view()
 }
 
 /// Registers the `RoomList` model and returns the change that brings it up to date, and the
@@ -242,7 +330,10 @@ pub fn register_session(thread: CxxQtThread<SessionVm>) -> SessionView {
 pub fn register_rooms(thread: CxxQtThread<RoomListModel>) -> (RoomChange, AvatarUrls) {
     let mut hub = lock();
     hub.views.rooms.register(thread);
-    (hub.cache.rooms_snapshot(), hub.cache.avatars())
+    (
+        hub.accounts.current_cache().rooms_snapshot(),
+        hub.accounts.current_cache().avatars(),
+    )
 }
 
 pub fn open_room(room_id: String) {
@@ -339,7 +430,8 @@ pub fn delete_message(message_id: String) {
 /// The id of the newest message of the open room that the user can edit now, or empty.
 pub fn last_editable() -> String {
     lock()
-        .cache
+        .accounts
+        .current_cache()
         .last_editable(jiff::Timestamp::now())
         .map_or_else(String::new, |message| message.id.to_string())
 }
@@ -347,7 +439,8 @@ pub fn last_editable() -> String {
 /// The id of the newest message of the open thread that the user can edit now, or empty.
 pub fn last_editable_in_thread() -> String {
     lock()
-        .cache
+        .accounts
+        .current_cache()
         .thread_last_editable(jiff::Timestamp::now())
         .map_or_else(String::new, |message| message.id.to_string())
 }
@@ -355,7 +448,8 @@ pub fn last_editable_in_thread() -> String {
 /// The text of a message of the open room or thread as written, or empty if it isn't held.
 pub fn message_text(message_id: &str) -> String {
     lock()
-        .cache
+        .accounts
+        .current_cache()
         .message_text(message_id)
         .map_or_else(String::new, str::to_owned)
 }
@@ -364,7 +458,8 @@ pub fn message_text(message_id: &str) -> String {
 /// isn't held.
 pub fn message_author(message_id: &str) -> String {
     lock()
-        .cache
+        .accounts
+        .current_cache()
         .message_author(message_id)
         .map_or_else(String::new, str::to_owned)
 }
@@ -374,7 +469,7 @@ pub fn message_author(message_id: &str) -> String {
 pub fn register_room(thread: CxxQtThread<RoomVm>) -> RoomState {
     let mut hub = lock();
     hub.views.room.register(thread);
-    hub.cache.room_state()
+    hub.accounts.current_cache().room_state()
 }
 
 /// Registers the `MessageList` model and returns the change that brings it up to date, who it
@@ -386,10 +481,10 @@ pub fn register_messages(
     let mut hub = lock();
     hub.views.messages.register(thread);
     (
-        hub.cache.timeline_snapshot(),
-        hub.cache.viewer(),
-        hub.cache.avatars(),
-        hub.cache.images(),
+        hub.accounts.current_cache().timeline_snapshot(),
+        hub.accounts.current_cache().viewer(),
+        hub.accounts.current_cache().avatars(),
+        hub.accounts.current_cache().images(),
     )
 }
 
@@ -398,7 +493,7 @@ pub fn register_messages(
 pub fn register_thread(thread: CxxQtThread<ThreadVm>) -> ThreadState {
     let mut hub = lock();
     hub.views.thread.register(thread);
-    hub.cache.thread_state()
+    hub.accounts.current_cache().thread_state()
 }
 
 /// Registers the `ThreadMessageList` model and returns the change that brings it up to date, who
@@ -410,16 +505,16 @@ pub fn register_thread_messages(
     let mut hub = lock();
     hub.views.thread_messages.register(thread);
     (
-        hub.cache.thread_snapshot(),
-        hub.cache.viewer(),
-        hub.cache.avatars(),
-        hub.cache.images(),
+        hub.accounts.current_cache().thread_snapshot(),
+        hub.accounts.current_cache().viewer(),
+        hub.accounts.current_cache().avatars(),
+        hub.accounts.current_cache().images(),
     )
 }
 
 /// The thread's state now, for sending a reply.
 pub fn thread_state() -> ThreadState {
-    lock().cache.thread_state()
+    lock().accounts.current_cache().thread_state()
 }
 
 /// Registers the `EmojiCatalog` model and returns the custom emoji it lists now. Call on the GUI
@@ -427,64 +522,124 @@ pub fn thread_state() -> ThreadState {
 pub fn register_emoji_picker(thread: CxxQtThread<EmojiPickerModel>) -> CustomEmojis {
     let mut hub = lock();
     hub.views.picker.register(thread);
-    hub.cache.viewer().emoji
+    hub.accounts.current_cache().viewer().emoji
 }
 
 /// The core's event callback, on a runtime thread.
+#[allow(clippy::needless_pass_by_value)] // The callback's signature.
 fn dispatch(account: AccountId, event: Event) {
     let mut guard = lock();
     let hub = &mut *guard;
-    if hub.current.is_none() && event == Event::Added {
-        hub.current = Some(account);
-        return;
-    }
-    if hub.current.as_ref() != Some(&account) {
-        tracing::debug!(%account, "event of another account ignored");
-        return;
-    }
-    if event == Event::Removed {
-        // The logout's events came before, so the cache shows logged out already; the account
-        // that replaces this one starts it over with its own.
-        hub.current = None;
-        return;
-    }
-    hub.cache.apply(&event);
-    let (cache, views) = (&hub.cache, &mut hub.views);
+    let before = hub.accounts.current().cloned();
     match event {
-        Event::MessagePolicy(_) => views.show_viewer(cache),
-        Event::MessageAction {
-            id,
-            action,
-            outcome,
-        } => views.answer_action(id, action, outcome),
-        Event::RoomAction { outcome, .. } => views.answer_room_action(outcome),
-        Event::CustomEmoji(emoji) => {
-            views.show_emoji(&emoji);
-            views.show_session(cache);
+        Event::Added => hub.add_row(&account),
+        Event::Removed => {
+            // The logout's events came before, so the cache showed logged out already.
+            if let Some(index) = hub.accounts.removed(&account) {
+                hub.list
+                    .queue(move |model| model.apply(&AccountChange::Removed { index }));
+            }
         }
-        Event::Session(_) | Event::Connection(_) => views.show_session(cache),
-        Event::Rooms(changes) => {
-            views.rooms.queue(move |model| model.apply(&changes));
-            // The open room's name may have changed.
-            views.show_room(cache);
-            views.show_thread(cache);
+        _ => {
+            // The first state of an account that became current before it had one: show it whole.
+            let first_state = matches!(event, Event::Session(_))
+                && before.as_ref() == Some(&account)
+                && !hub.accounts.current_cache().session_known();
+            let Some(applied) = hub.accounts.apply(&account, &event) else {
+                tracing::debug!(%account, "event of an unknown account ignored");
+                return;
+            };
+            if matches!(
+                event,
+                Event::Identity(_) | Event::Unread(_) | Event::Session(_) | Event::Connection(_)
+            ) {
+                hub.update_row(&account);
+            }
+            if applied.current && first_state {
+                hub.views.show_all(hub.accounts.current_cache());
+            } else if applied.current {
+                hub.views.show(hub.accounts.current_cache(), event);
+            } else if matches!(
+                event,
+                Event::MessageAction { .. } | Event::RoomAction { .. }
+            ) {
+                tracing::debug!(%account, "answer of another account dropped");
+            }
+            return;
         }
-        Event::Timeline(changes) => views.messages.queue(move |model| model.apply(&changes)),
-        Event::TimelineStatus(_) => {
-            views.show_room(cache);
-            views.show_thread(cache);
-        }
-        Event::ThreadTimeline(changes) => views
-            .thread_messages
-            .queue(move |model| model.apply(&changes)),
-        Event::ThreadStatus(_) => views.show_thread(cache),
-        Event::Avatars(updates) => views.show_avatars(&cache.avatar_changes(&updates)),
-        Event::Images(updates) => views.show_images(&cache.image_changes(&updates)),
-        _ => {}
     }
+    hub.switched_from(before.as_ref());
 }
 
 impl Views {
+    /// Forwards the event of the current account, whose `cache` has taken it in already.
+    fn show(&mut self, cache: &Cache, event: Event) {
+        match event {
+            Event::MessagePolicy(_) => self.show_viewer(cache),
+            Event::MessageAction {
+                id,
+                action,
+                outcome,
+            } => self.answer_action(id, action, outcome),
+            Event::RoomAction { outcome, .. } => self.answer_room_action(outcome),
+            Event::CustomEmoji(emoji) => {
+                self.show_emoji(&emoji);
+                self.show_session(cache);
+            }
+            Event::Session(_) | Event::Connection(_) => self.show_session(cache),
+            Event::Rooms(changes) => {
+                self.rooms.queue(move |model| model.apply(&changes));
+                // The open room's name may have changed.
+                self.show_room(cache);
+                self.show_thread(cache);
+            }
+            Event::Timeline(changes) => self.messages.queue(move |model| model.apply(&changes)),
+            Event::TimelineStatus(_) => {
+                self.show_room(cache);
+                self.show_thread(cache);
+            }
+            Event::ThreadTimeline(changes) => self
+                .thread_messages
+                .queue(move |model| model.apply(&changes)),
+            Event::ThreadStatus(_) => self.show_thread(cache),
+            Event::Avatars(updates) => self.show_avatars(&cache.avatar_changes(&updates)),
+            Event::Images(updates) => self.show_images(&cache.image_changes(&updates)),
+            _ => {}
+        }
+    }
+
+    /// Gives every view model the whole of what `cache` says, replacing what it showed: the
+    /// snapshot a view model gets when it registers.
+    fn show_all(&mut self, cache: &Cache) {
+        let (rooms, avatars) = (cache.rooms_snapshot(), cache.avatars());
+        self.rooms.queue(move |model| model.show(rooms, avatars));
+        let (messages, viewer, avatars, images) = (
+            cache.timeline_snapshot(),
+            cache.viewer(),
+            cache.avatars(),
+            cache.images(),
+        );
+        self.messages
+            .queue(move |model| model.show(&messages, viewer, avatars, images));
+        let (replies, viewer, avatars, images) = (
+            cache.thread_snapshot(),
+            cache.viewer(),
+            cache.avatars(),
+            cache.images(),
+        );
+        self.thread_messages
+            .queue(move |model| model.show(&replies, viewer, avatars, images));
+        self.show_emoji(&cache.viewer().emoji);
+        let state = cache.room_state();
+        self.room.queue(move |mut vm| {
+            vm.as_mut().show(&state);
+            // What failed for the other account means nothing for this one.
+            vm.dismiss_action_error();
+        });
+        self.show_thread(cache);
+        self.show_session_view(cache);
+    }
+
     const fn new() -> Self {
         Self {
             session: Registered::new("Session"),
@@ -500,6 +655,11 @@ impl Views {
     /// Tells the `Session` view model, and the `MessageList` model, what `cache` says now.
     fn show_session(&mut self, cache: &Cache) {
         self.show_viewer(cache);
+        self.show_session_view(cache);
+    }
+
+    /// Tells the `Session` view model what `cache` says now.
+    fn show_session_view(&mut self, cache: &Cache) {
         let view = cache.session_view();
         self.session.queue(move |vm| vm.show(&view));
     }

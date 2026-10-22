@@ -179,6 +179,20 @@ impl MessageMirror {
         apply_newest_first(change, &mut self.messages);
     }
 
+    /// Replaces everything with another account's: the messages (a `Reset` snapshot), who they are
+    /// shown to, and the avatars and images they show. The caller announces a model reset around
+    /// it.
+    pub fn replace(
+        &mut self,
+        snapshot: &TimelineChange,
+        viewer: Viewer,
+        avatars: AvatarUrls,
+        images: ImageUrls,
+    ) {
+        (self.viewer, self.avatars, self.images) = (viewer, avatars, images);
+        self.apply(snapshot);
+    }
+
     /// Shows the messages to someone else, with other custom emoji or under another policy: what
     /// they show, and what the viewer can do with them, changes. Returns the rows to announce as
     /// changed (first and last), if there are any.
@@ -405,6 +419,27 @@ macro_rules! message_model {
                         }
                     }
                 }
+            }
+
+            /// Replaces everything shown with another account's (see
+            /// [`MessageMirror::replace`]), as one model reset.
+            pub fn show(
+                mut self: ::core::pin::Pin<&mut Self>,
+                snapshot: &::rc_core::timeline::TimelineChange,
+                viewer: $crate::rich_html::Viewer,
+                avatars: $crate::avatar_view::AvatarUrls,
+                images: $crate::attachment_view::ImageUrls,
+            ) {
+                use ::cxx_qt::CxxQtType;
+
+                // SAFETY: balanced by `end_reset_model` below.
+                unsafe { self.as_mut().begin_reset_model() };
+                self.as_mut()
+                    .rust_mut()
+                    .mirror
+                    .replace(snapshot, viewer, avatars, images);
+                // SAFETY: after `begin_reset_model`.
+                unsafe { self.as_mut().end_reset_model() };
             }
 
             /// Shows the messages to someone else (see [`MessageMirror::set_viewer`]).

@@ -4,30 +4,35 @@
 //! What the hub remembers of the core's events, so that a view model created late can catch up.
 //! Plain Rust, so it can be unit-tested without Qt or a [`Client`](rc_core::Client).
 
-use rc_core::domain::{AvatarOwner, Message, Room, RoomId, UserId};
+use rc_core::domain::{AccountId, AvatarOwner, Identity, Message, Room, RoomId, UserId};
 use rc_core::emoji::CustomEmojis;
 use rc_core::policy::MessagePolicy;
-use rc_core::rooms::RoomChange;
+use rc_core::rooms::{RoomChange, Unread};
 use rc_core::session::SessionState;
 use rc_core::timeline::{ThreadStatus, TimelineChange, TimelineStatus};
 use rc_core::{AvatarUpdate, ImageUpdate};
 use rc_core::{Connection, Event};
 
+use crate::accounts::{AccountView, account_status};
 use crate::attachment_view::ImageUrls;
 use crate::avatar_view::AvatarUrls;
 use crate::message_view::{author_name, body, can_edit};
 use crate::rich_html::Viewer;
 use crate::room_view::{RoomState, room_state};
-use crate::session_view::{SessionView, session_view};
+use crate::session_view::{SessionView, host, session_view};
 use crate::thread_view::{ThreadState, thread_state};
 
-/// The latest session state, a mirror of the room list and mirrors of the open room's messages and
+/// One account's: its identity and unread totals, the latest session state, a mirror of the room list and mirrors of the open room's messages and
 /// of the open thread's.
 #[derive(Debug)]
 pub struct Cache {
     /// `None` before the first event.
     state: Option<SessionState>,
     connection: Connection,
+    /// Who the account is. Unlike `username` and `server` it holds while logged out, and it is
+    /// never unset.
+    identity: Option<Identity>,
+    unread: Unread,
     rooms: Vec<Room>,
     /// The room `messages` belong to.
     room: Option<RoomId>,
@@ -63,6 +68,11 @@ impl Cache {
         Self {
             state: None,
             connection: Connection::Connected,
+            identity: None,
+            unread: Unread {
+                rooms: 0,
+                mentions: 0,
+            },
             rooms: Vec::new(),
             room: None,
             messages: Vec::new(),
@@ -108,6 +118,8 @@ impl Cache {
                 self.connection = Connection::Connected;
             }
             Event::Connection(connection) => self.connection = *connection,
+            Event::Identity(identity) => self.identity = Some(identity.clone()),
+            Event::Unread(unread) => self.unread = *unread,
             Event::CustomEmoji(emoji) => self.emoji = Some(emoji.clone()),
             Event::MessagePolicy(policy) => self.policy = Some(*policy),
             Event::Avatars(updates) => {
@@ -140,10 +152,39 @@ impl Cache {
         }
     }
 
+    /// Whether the account has said what state it is in: an account added a moment ago hasn't.
+    #[must_use]
+    pub fn session_known(&self) -> bool {
+        self.state.is_some()
+    }
+
     /// What the `Session` view model shows now.
     #[must_use]
     pub fn session_view(&self) -> SessionView {
         session_view(self.state.as_ref(), self.connection)
+    }
+
+    /// What the account list shows of the account `id`, `current` or not.
+    #[must_use]
+    pub fn account_view(&self, id: &AccountId, current: bool) -> AccountView {
+        let (server, username) = self
+            .identity
+            .as_ref()
+            .map_or((String::new(), String::new()), |identity| {
+                (identity.server.clone(), identity.username.clone())
+            });
+        AccountView {
+            id: id.as_str().to_owned(),
+            host: host(&server),
+            server,
+            username,
+            status: account_status(self.state.as_ref()),
+            connected: matches!(self.state, Some(SessionState::LoggedIn(_)))
+                && self.connection == Connection::Connected,
+            unread_rooms: self.unread.rooms,
+            mentions: self.unread.mentions,
+            current,
+        }
     }
 
     /// The change that brings an empty model to the current room list.

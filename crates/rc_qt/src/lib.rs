@@ -8,6 +8,12 @@
 // returning `Box<T>`. cxx-qt rejects attributes on the bridge module itself, so they go here. Keep
 // these modules to bridge code and the Qt calls around it; the logic lives in the modules below,
 // which have no Qt types and therefore unit tests.
+#[allow(
+    unsafe_code,
+    clippy::unnecessary_box_returns,
+    clippy::must_use_candidate // The generated `dataChanged` signal.
+)]
+pub mod account_list_model;
 #[allow(unsafe_code, clippy::unnecessary_box_returns)]
 pub mod app_info;
 #[allow(unsafe_code, clippy::unnecessary_box_returns)]
@@ -45,6 +51,7 @@ pub mod thread_message_list_model;
 #[allow(unsafe_code, clippy::unnecessary_box_returns)]
 pub mod thread_vm;
 
+mod accounts;
 mod attachment_view;
 mod avatar_view;
 mod cache;
