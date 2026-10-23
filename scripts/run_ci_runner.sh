@@ -21,21 +21,31 @@
 # Environment:
 #   RC_ENGINE  docker (default) or podman
 #   RC_REPO    owner/repo to register with (default: taken from the 'origin' git remote)
+#   RC_RUNNER  which runner on this host, from 1 (default). Each one is a container of its own,
+#              registered under a name of its own, with a work directory and toolchains of its own,
+#              so several can run jobs at once. Runner 1 keeps the names of a single runner.
 #
 # The runner joins the test server's network (scripts/run_test_server.sh), so the contract tests in CI
 # reach it as rc-test-rocketchat:3000. The test server has to run on the same host. 'run_test_server.sh
 # reset' can't remove the network while the runner is attached: it keeps the network and carries on.
 #
 # Caches live in named volumes (rc-ci-*) and survive 'start': Cargo registry and git checkouts,
-# rustup toolchains, vcpkg downloads and binary cache, and the runner's work directory.
-# 'docker volume rm' them to start cold.
+# rustup toolchains, vcpkg downloads and binary cache, and the runner's work directory. The runners
+# share the Cargo and vcpkg caches, which lock or write by hash; the work directory and rustup, which
+# doesn't lock, are per runner. 'docker volume rm' them to start cold.
 
 set -euo pipefail
 
 ENGINE=${RC_ENGINE:-docker}
 
+RUNNER=${RC_RUNNER:-1}
+[[ $RUNNER =~ ^[1-9][0-9]*$ ]] || { echo "Error: RC_RUNNER must be a number from 1" >&2; exit 1; }
+# Runner 1 has no suffix, so that it keeps the container, volumes and registration of a single runner.
+SUFFIX=
+[ "$RUNNER" = 1 ] || SUFFIX=-$RUNNER
+
 IMAGE=rc-ci-runner
-CONTAINER=rc-ci-runner
+CONTAINER=rc-ci-runner$SUFFIX
 LABELS=self-hosted,linux,x64,rocketchat-qml
 # Must match NETWORK in run_test_server.sh. The server's port is bound to the host's 127.0.0.1, which
 # a container on the default bridge can't reach. On this network the runner reaches the server by name.
@@ -96,13 +106,13 @@ cmd_start() {
         --network $NETWORK \
         -e RUNNER_REPO_URL="https://github.com/$slug" \
         -e RUNNER_TOKEN="$token" \
-        -e RUNNER_NAME="rocketchat-qml-$(uname -n)" \
+        -e RUNNER_NAME="rocketchat-qml-$(uname -n)$SUFFIX" \
         -e RUNNER_LABELS=$LABELS \
         -v rc-ci-cargo-registry:/home/runner/.cargo/registry \
         -v rc-ci-cargo-git:/home/runner/.cargo/git \
-        -v rc-ci-rustup:/home/runner/.rustup \
+        -v rc-ci-rustup$SUFFIX:/home/runner/.rustup \
         -v rc-ci-vcpkg:/home/runner/.cache/vcpkg \
-        -v rc-ci-work:/opt/actions-runner/_work \
+        -v rc-ci-work$SUFFIX:/opt/actions-runner/_work \
         $IMAGE >/dev/null
     echo "Started. Check 'https://github.com/$slug/settings/actions/runners' or '$0 logs'."
 }
