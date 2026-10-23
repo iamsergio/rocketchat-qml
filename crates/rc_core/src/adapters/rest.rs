@@ -191,6 +191,15 @@ impl ServerApi for RestApi {
         })
     }
 
+    async fn message(
+        &self,
+        credentials: &Credentials,
+        id: &MessageId,
+    ) -> Result<Message, ApiError> {
+        let session = self.client.session(api_credentials(credentials));
+        Ok(message_from(session.message(id.as_str()).await?))
+    }
+
     async fn edit_message(
         &self,
         credentials: &Credentials,

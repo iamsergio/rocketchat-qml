@@ -47,6 +47,13 @@ impl<C: Connector> Actor<C> {
         }
         self.change_timeline(room, |timeline| timeline.remove(id).into_iter().collect());
         if self
+            .pending_thread
+            .as_ref()
+            .is_some_and(|pending| &pending.parent == id)
+        {
+            self.cancel_pending_thread();
+        }
+        if self
             .open_thread
             .as_ref()
             .is_some_and(|thread| &thread.parent.id == id)
@@ -69,12 +76,14 @@ impl<C: Connector> Actor<C> {
     /// Counts one reply less in the held copies of the parent. The time of the last reply stays,
     /// as the server's does.
     fn reply_removed(&mut self, room: &RoomId, parent: &MessageId) {
-        let Some(mut copy) = self.find_message(parent).cloned() else {
+        // The open thread's parent may be one the room doesn't hold.
+        let held = match self.open_thread.as_ref().filter(|t| &t.parent.id == parent) {
+            Some(thread) => Some(&thread.parent),
+            None => self.find_message(parent),
+        };
+        let Some(mut copy) = held.cloned() else {
             return;
         };
-        if let Some(thread) = self.open_thread.as_ref().filter(|t| &t.parent.id == parent) {
-            copy = thread.parent.clone();
-        }
         copy.thread_replies = copy.thread_replies.saturating_sub(1);
         self.replace_everywhere(room, &copy);
     }

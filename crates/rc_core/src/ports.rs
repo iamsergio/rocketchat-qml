@@ -170,6 +170,18 @@ pub trait ServerApi: Clone + Send + Sync + 'static {
         count: usize,
     ) -> impl Future<Output = Result<Page, ApiError>> + Send;
 
+    /// A message by its id, wherever it is, as the server stores it.
+    ///
+    /// # Errors
+    ///
+    /// [`ApiError::Unauthorized`] if the credentials have expired or were revoked,
+    /// [`ApiError::Server`] if there is no such message or the user may not read its room.
+    fn message(
+        &self,
+        credentials: &Credentials,
+        id: &MessageId,
+    ) -> impl Future<Output = Result<Message, ApiError>> + Send;
+
     /// Replaces the text of a message of the user's and returns it as the server stored it.
     ///
     /// # Errors

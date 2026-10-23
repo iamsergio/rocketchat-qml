@@ -13,7 +13,7 @@ use crate::ports::{ApiError, Changes, Connector, RoomHistory, ServerApi};
 use crate::session::SessionState;
 use crate::timeline::{PAGE_SIZE, ThreadStatus, Timeline, TimelineChange, TimelineError};
 
-use super::{Actor, Done, Fetch, ThreadDone};
+use super::{Actor, Done, Fetch, ThreadDone, ThreadParentDone};
 
 /// The thread whose messages the frontend shows beside the open room.
 pub(super) struct OpenThread {
@@ -29,6 +29,22 @@ pub(super) struct OpenThread {
     pub(super) live: Vec<Message>,
     /// The messages deleted while the thread was open.
     pub(super) deleted: HashSet<MessageId>,
+}
+
+/// A thread asked for whose parent the open room doesn't hold, which is on its way.
+pub(super) struct PendingThread {
+    /// Identifies the fetch of the parent.
+    pub(super) attempt: u64,
+    pub(super) parent: MessageId,
+    /// The parent as pushed while it was on its way, which is newer than the answer.
+    pub(super) newer: Option<Message>,
+}
+
+/// Whether a thread can be opened from the message: a sent text message that is not a reply.
+fn can_start_thread(message: &Message) -> bool {
+    !message.is_unsent()
+        && message.thread_id.is_none()
+        && matches!(message.kind, MessageKind::Text(_))
 }
 
 impl OpenThread {
@@ -50,6 +66,9 @@ impl OpenThread {
 impl<C: Connector> Actor<C> {
     /// Adds a pushed message to the open thread: a reply, or a new copy of the parent.
     pub(super) fn add_live_thread_message(&mut self, message: &Message) {
+        if let Some(pending) = (self.pending_thread.as_mut()).filter(|p| p.parent == message.id) {
+            pending.newer = Some(message.clone());
+        }
         let Some(thread) = self
             .open_thread
             .as_mut()
@@ -115,12 +134,16 @@ impl<C: Connector> Actor<C> {
         self.emit_thread_changes(applied);
     }
 
-    /// Shows the replies of a message of the open room in a thread, and fetches the newest.
+    /// Shows the replies of a message of the open room in a thread, and fetches the newest. A
+    /// parent that the room doesn't hold (it has left the window, or the frontend knows it from a
+    /// list) is fetched first, and the thread opens when it arrives.
     pub(super) fn open_thread(&mut self, parent: &MessageId) {
         if !matches!(self.state, SessionState::LoggedIn(_)) {
             tracing::debug!("open_thread ignored: not logged in");
             return;
         }
+        // The last thing asked for wins, also over a parent still on its way.
+        self.cancel_pending_thread();
         if self
             .open_thread
             .as_ref()
@@ -128,28 +151,103 @@ impl<C: Connector> Actor<C> {
         {
             return;
         }
-        let held = self
-            .open
-            .as_ref()
-            .and_then(|open| open.timeline.message(parent))
-            .filter(|message| {
-                !message.is_unsent()
-                    && message.thread_id.is_none()
-                    && matches!(message.kind, MessageKind::Text(_))
-            })
-            .cloned();
-        let Some(message) = held else {
-            tracing::debug!(%parent, "open_thread ignored: not a sent text message of the open room");
+        let Some(open) = &self.open else {
+            tracing::debug!(%parent, "open_thread ignored: no room is open");
             return;
         };
+        match open.timeline.message(parent) {
+            Some(held) if can_start_thread(held) => self.start_thread(held.clone()),
+            Some(_) => {
+                tracing::debug!(%parent, "open_thread ignored: not a sent text message");
+            }
+            None => self.fetch_thread_parent(parent),
+        }
+    }
+
+    /// Fetches a message that the open room doesn't hold, to open its thread.
+    fn fetch_thread_parent(&mut self, parent: &MessageId) {
+        let Some(session) = &self.session else {
+            return;
+        };
+        self.history_attempt += 1;
+        let attempt = self.history_attempt;
+        self.pending_thread = Some(PendingThread {
+            attempt,
+            parent: parent.clone(),
+            newer: None,
+        });
+        let id = parent.clone();
+        let api = session.api.clone();
+        let credentials = session.credentials.clone();
+        let done = self.done_tx.clone();
+        self.parent_task = Some(tokio::spawn(async move {
+            let outcome = api.message(&credentials, &id).await;
+            // Fails only if the actor is gone.
+            let _ = done.send(Done::ThreadParent(ThreadParentDone { attempt, outcome }));
+        }));
+    }
+
+    /// Opens the thread whose parent was fetched, if it still can be: the answer of a thread that
+    /// was asked for since, or of one from a room that is closed, is dropped. The ones that
+    /// can't be opened (a message of another room or a reply, one that isn't there) leave
+    /// whatever is shown as it is.
+    pub(super) fn handle_thread_parent_done(&mut self, done: ThreadParentDone) {
+        let Some(pending) = self
+            .pending_thread
+            .take_if(|pending| pending.attempt == done.attempt)
+        else {
+            tracing::debug!("answer of a stale fetch of a thread's parent dropped");
+            return;
+        };
+        self.parent_task = None;
+        let message = match done.outcome {
+            // A parent pushed meanwhile is newer than the answer, as for a page.
+            Ok(message) => pending.newer.unwrap_or(message),
+            Err(ApiError::Unauthorized) => {
+                self.expire_session();
+                return;
+            }
+            Err(error @ ApiError::Server { .. }) => {
+                tracing::debug!(%error, parent = %pending.parent, "open_thread ignored: no such message");
+                return;
+            }
+            Err(error) => {
+                tracing::warn!(%error, parent = %pending.parent, "can't fetch the thread's parent");
+                return;
+            }
+        };
+        let in_open_room = self
+            .open
+            .as_ref()
+            .is_some_and(|open| open.timeline.room() == &message.room_id);
+        if message.id != pending.parent || !in_open_room || !can_start_thread(&message) {
+            tracing::debug!(
+                parent = %pending.parent,
+                "open_thread ignored: not a sent text message of the open room"
+            );
+            return;
+        }
+        self.start_thread(message);
+    }
+
+    /// Forgets the parent being fetched, if any.
+    pub(super) fn cancel_pending_thread(&mut self) {
+        self.pending_thread = None;
+        if let Some(task) = self.parent_task.take() {
+            task.abort();
+        }
+    }
+
+    /// Opens the thread of `parent`, a message of the open room that `can_start_thread`.
+    fn start_thread(&mut self, parent: Message) {
         // The reset below tells the frontend; the thread that was open has nothing more to say.
         if let Some(task) = self.thread_task.take() {
             task.abort();
         }
-        let timeline = Timeline::new(message.room_id.clone(), RoomHistory::default());
+        let timeline = Timeline::new(parent.room_id.clone(), RoomHistory::default());
         (self.on_event)(Event::ThreadTimeline(vec![timeline.reset()]));
         self.open_thread = Some(OpenThread {
-            parent: message,
+            parent,
             timeline,
             fetch: None,
             error: None,
@@ -292,6 +390,7 @@ impl<C: Connector> Actor<C> {
 
     /// Closes the open thread and tells the frontend, unless no thread was open.
     pub(super) fn close_thread(&mut self) {
+        self.cancel_pending_thread();
         if let Some(task) = self.thread_task.take() {
             task.abort();
         }

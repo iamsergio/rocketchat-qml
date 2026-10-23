@@ -837,6 +837,65 @@ async fn thread_messages_of_a_missing_thread_is_a_server_error_with_the_message(
 
 // ACT-004
 #[tokio::test]
+async fn message_asks_for_the_id_and_reads_the_stored_message() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/chat.getMessage"))
+        .and(query_param("msgId", "m1"))
+        .and(header("X-User-Id", USER_ID))
+        .and(header("X-Auth-Token", TOKEN))
+        .respond_with(json_response(200, SENT))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let message = session(&RestClient::new(&server.uri()).unwrap())
+        .message("m1")
+        .await
+        .unwrap();
+
+    assert_eq!(
+        (message.id.as_str(), message.text.as_str()),
+        ("m1", "hello")
+    );
+}
+
+// ACT-004
+#[tokio::test]
+async fn a_missing_message_is_a_server_error_and_an_expired_token_is_unauthorized() {
+    let server = MockServer::start().await;
+    mount(
+        &server,
+        "GET",
+        "/api/v1/chat.getMessage",
+        json_response(404, r#"{"success":false,"error":"Not Found"}"#),
+    )
+    .await;
+    let client = RestClient::new(&server.uri()).unwrap();
+    let result = session(&client).message("nope").await;
+    assert!(
+        matches!(result, Err(Error::Server { status: 404, .. })),
+        "{result:?}"
+    );
+
+    let server = MockServer::start().await;
+    mount(
+        &server,
+        "GET",
+        "/api/v1/chat.getMessage",
+        json_response(
+            401,
+            r#"{"status":"error","message":"You must be logged in"}"#,
+        ),
+    )
+    .await;
+    let client = RestClient::new(&server.uri()).unwrap();
+    let result = session(&client).message("m1").await;
+    assert!(matches!(result, Err(Error::Unauthorized)), "{result:?}");
+}
+
+// ACT-004
+#[tokio::test]
 async fn thread_messages_with_an_expired_token_is_unauthorized() {
     let server = MockServer::start().await;
     mount(

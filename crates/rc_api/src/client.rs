@@ -576,13 +576,22 @@ impl RestSession {
         Ok(())
     }
 
+    /// The message with this id as the server stores it (`GET /api/v1/chat.getMessage`), whatever
+    /// room it is in, as long as the user may read that room.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Unauthorized`] if the token is expired or revoked, [`Error::Server`] if there is
+    /// no such message or the user may not read it, or any of the other errors.
+    pub async fn message(&self, id: &str) -> Result<Message, Error> {
+        let path = format!("api/v1/chat.getMessage?{}", query("msgId", id)?);
+        let body = self.call(Method::GET, &path).await?;
+        wire::parse_message(&body).map_err(Error::Decode)
+    }
+
     /// The message with this id, or `None` if there is none or it can't be fetched.
     async fn stored_message(&self, id: &str) -> Option<Message> {
-        let mut escaped = Url::parse("http://unused/").ok()?;
-        escaped.query_pairs_mut().append_pair("msgId", id);
-        let path = format!("api/v1/chat.getMessage?{}", escaped.query()?);
-        let body = self.call(Method::GET, &path).await.ok()?;
-        wire::parse_message(&body).ok()
+        self.message(id).await.ok()
     }
 
     /// Marks the room read for the user (`POST /api/v1/subscriptions.read`): the server zeroes the

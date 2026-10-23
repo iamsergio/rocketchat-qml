@@ -889,3 +889,589 @@ fn a_reply_in_the_thread_can_be_quoted() {
     assert!(sent[0].text.ends_with(" agreed"), "{:?}", sent[0].text);
     assert!(sent[0].text.starts_with("[ ]("), "{:?}", sent[0].text);
 }
+
+// A thread whose parent the room doesn't hold: `old`, which predates the room's first page.
+
+/// The parent `old` of room 1 with two replies, as the server stores it.
+fn old_parent() -> Message {
+    Message {
+        thread_replies: 2,
+        thread_last_reply: jiff::Timestamp::from_second(4).ok(),
+        ..message("old", 0)
+    }
+}
+
+/// The events that open the thread of `old` once its parent is here, with replies `r1` and `r2`.
+fn old_thread_events() -> Vec<Event> {
+    vec![
+        thread_reset(Some("1"), Vec::new()),
+        thread_status("old", true, false, false, None),
+        thread_reset(
+            Some("1"),
+            vec![old_parent(), reply("r1", 3, "old"), reply("r2", 4, "old")],
+        ),
+        thread_status("old", false, false, true, None),
+    ]
+}
+
+/// Scripts the parent `old` and its replies, and asks for the thread.
+fn open_old_thread(fake: &Fake, harness: &Harness) {
+    fake.script_message(None, Ok(old_parent()));
+    fake.script_thread(
+        None,
+        page(vec![reply("r2", 4, "old"), reply("r1", 3, "old")], true),
+    );
+    harness.account().open_thread("old".to_owned().into());
+}
+
+/// Room 1 is open and so is the thread of `old`, whose events are taken.
+fn open_thread_of_old(fake: &Fake, harness: &Harness) {
+    open_first_room(fake, harness, false);
+    open_old_thread(fake, harness);
+    harness.expect_thread(old_thread_events());
+}
+
+/// Waits for the answers still on their way to be handled, then opens `a` (which the room holds)
+/// and checks that its events are the first ones about a thread: nothing else happened.
+fn expect_nothing_but_the_thread_of_a(harness: &Harness) {
+    std::thread::sleep(Duration::from_millis(50));
+    harness.account().open_thread("a".to_owned().into());
+    harness.expect_thread(vec![
+        thread_reset(Some("1"), Vec::new()),
+        thread_status("a", true, false, false, None),
+    ]);
+}
+
+// ACT-004
+#[test]
+fn a_parent_the_room_does_not_hold_is_fetched_and_its_thread_opens() {
+    let fake = Fake::new();
+    let harness = logged_in_harness(&fake);
+    open_thread_of_old(&fake, &harness);
+    assert_eq!(fake.state().message_calls, ["old"]);
+    let calls = fake.state().thread_calls.clone();
+    assert_eq!(
+        calls,
+        [ThreadCall {
+            thread: "old".to_owned(),
+            offset: 0,
+            count: crate::timeline::PAGE_SIZE,
+        }]
+    );
+    // Opened again, it is open already: the server is not asked.
+    harness.account().open_thread("old".to_owned().into());
+    expect_nothing_but_the_thread_of_a(&harness);
+    assert_eq!(fake.state().message_calls, ["old"]);
+}
+
+// ACT-004
+#[test]
+fn a_parent_the_room_holds_is_not_fetched() {
+    let fake = Fake::new();
+    let harness = logged_in_harness(&fake);
+    open_thread_of_b(&fake, &harness);
+    assert!(fake.state().message_calls.is_empty());
+}
+
+// ACT-004
+#[test]
+fn the_older_replies_of_a_fetched_parent_load_by_offset_and_the_parent_comes_with_the_start() {
+    let fake = Fake::new();
+    let harness = logged_in_harness(&fake);
+    open_first_room(&fake, &harness, false);
+    fake.script_message(None, Ok(old_parent()));
+    fake.script_thread(None, page(vec![reply("r2", 4, "old")], false));
+    harness.account().open_thread("old".to_owned().into());
+    harness.expect_thread(vec![
+        thread_reset(Some("1"), Vec::new()),
+        thread_status("old", true, false, false, None),
+        thread_reset(Some("1"), vec![reply("r2", 4, "old")]),
+        thread_status("old", false, false, false, None),
+    ]);
+    fake.script_thread(None, page(vec![reply("r1", 3, "old")], true));
+    harness.account().load_older_thread();
+    harness.expect_thread(vec![
+        thread_status("old", false, true, false, None),
+        Event::ThreadTimeline(vec![TimelineChange::Prepended(vec![
+            old_parent(),
+            reply("r1", 3, "old"),
+        ])]),
+        thread_status("old", false, false, true, None),
+    ]);
+    assert_eq!(fake.state().thread_calls[1].offset, 1);
+}
+
+// ACT-004
+#[test]
+fn what_cannot_be_a_parent_is_not_opened() {
+    let removed = Message {
+        kind: MessageKind::System(SystemEvent::Other("rm".into())),
+        ..old_parent()
+    };
+    let another_room = Message {
+        room_id: "2".to_owned().into(),
+        ..old_parent()
+    };
+    let answers = [
+        Ok(another_room),
+        Ok(reply("old", 0, "b")),
+        Ok(removed),
+        // Another message than the one asked for.
+        Ok(message("other", 0)),
+        Err(ApiError::Server {
+            status: 404,
+            message: "Not Found".to_owned(),
+        }),
+        Err(ApiError::Unreachable("down".to_owned())),
+    ];
+    for answer in answers {
+        let fake = Fake::new();
+        let harness = logged_in_harness(&fake);
+        open_first_room(&fake, &harness, false);
+        fake.script_message(None, answer);
+        harness.account().open_thread("old".to_owned().into());
+        fake.wait_for_message_calls(1);
+        expect_nothing_but_the_thread_of_a(&harness);
+        // Only the thread of `a` asked for replies.
+        let calls = fake.wait_for_thread_calls(1);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].thread, "a");
+    }
+}
+
+// ACT-004
+#[test]
+fn a_parent_that_cannot_be_fetched_leaves_the_open_thread_alone() {
+    let fake = Fake::new();
+    let harness = logged_in_harness(&fake);
+    open_thread_of_b(&fake, &harness);
+    harness.account().open_thread("gone".to_owned().into());
+    fake.wait_for_message_calls(1);
+    std::thread::sleep(Duration::from_millis(50));
+    assert!(fake.push(0, Pushed::Message(reply("r3", 5, "b"))));
+    harness.expect_thread(vec![Event::ThreadTimeline(vec![TimelineChange::Appended(
+        vec![reply("r3", 5, "b")],
+    )])]);
+}
+
+// ACT-004
+#[test]
+fn a_parent_is_not_fetched_while_logged_out_or_without_a_room() {
+    let fake = Fake::new();
+    let harness = logged_in_harness(&fake);
+    harness.account().open_thread("old".to_owned().into());
+    open_first_room(&fake, &harness, false);
+    std::thread::sleep(Duration::from_millis(50));
+    assert!(fake.state().message_calls.is_empty());
+}
+
+// ACT-004
+#[test]
+fn a_reply_that_is_held_as_the_parent_is_not_opened_and_not_fetched() {
+    let fake = Fake::new();
+    let harness = logged_in_harness(&fake);
+    fake.script_history(
+        None,
+        page(vec![shown(reply("s", 5, "old")), message("a", 1)], false),
+    );
+    harness.account().open_room("1".to_owned().into());
+    harness.expect_events(vec![
+        reset_event(Some("1"), Vec::new()),
+        status("1", true, false, false, None),
+        reset_event(
+            Some("1"),
+            vec![message("a", 1), shown(reply("s", 5, "old"))],
+        ),
+        status("1", false, false, false, None),
+    ]);
+    harness.account().open_thread("s".to_owned().into());
+    expect_nothing_but_the_thread_of_a(&harness);
+    assert!(fake.state().message_calls.is_empty());
+}
+
+// ACT-004
+#[test]
+fn another_thread_asked_for_meanwhile_drops_the_answer_of_the_parent() {
+    let fake = Fake::new();
+    let harness = logged_in_harness(&fake);
+    open_first_room(&fake, &harness, false);
+    let gate = Arc::new(Notify::new());
+    fake.script_message(Some(Arc::clone(&gate)), Ok(old_parent()));
+    harness.account().open_thread("old".to_owned().into());
+    fake.wait_for_message_calls(1);
+    // `b` is held: it opens at once, and `old` is no longer wanted.
+    fake.script_thread(None, page(vec![reply("r1", 3, "b")], true));
+    harness.account().open_thread("b".to_owned().into());
+    harness.expect_thread(vec![
+        thread_reset(Some("1"), Vec::new()),
+        thread_status("b", true, false, false, None),
+        thread_reset(Some("1"), vec![message("b", 2), reply("r1", 3, "b")]),
+        thread_status("b", false, false, true, None),
+    ]);
+    gate.notify_one();
+    std::thread::sleep(Duration::from_millis(50));
+    harness.account().close_thread();
+    harness.expect_thread(thread_closed_events());
+}
+
+// ACT-004
+#[test]
+fn the_thread_that_is_open_already_wins_over_a_parent_on_its_way() {
+    let fake = Fake::new();
+    let harness = logged_in_harness(&fake);
+    open_thread_of_b(&fake, &harness);
+    let gate = Arc::new(Notify::new());
+    fake.script_message(Some(Arc::clone(&gate)), Ok(old_parent()));
+    harness.account().open_thread("old".to_owned().into());
+    fake.wait_for_message_calls(1);
+    harness.account().open_thread("b".to_owned().into());
+    gate.notify_one();
+    std::thread::sleep(Duration::from_millis(50));
+    harness.account().close_thread();
+    harness.expect_thread(thread_closed_events());
+}
+
+// ACT-004
+#[test]
+fn the_last_of_two_parents_on_its_way_opens_and_the_first_is_dropped() {
+    let fake = Fake::new();
+    let harness = logged_in_harness(&fake);
+    open_first_room(&fake, &harness, false);
+    let first = Arc::new(Notify::new());
+    let second = Arc::new(Notify::new());
+    fake.script_message(Some(Arc::clone(&first)), Ok(old_parent()));
+    fake.script_message(
+        Some(Arc::clone(&second)),
+        Ok(Message {
+            thread_replies: 1,
+            ..message("older", 0)
+        }),
+    );
+    harness.account().open_thread("old".to_owned().into());
+    fake.wait_for_message_calls(1);
+    harness.account().open_thread("older".to_owned().into());
+    fake.wait_for_message_calls(2);
+    fake.script_thread(None, page(vec![reply("x", 3, "older")], true));
+    // The answer of the second arrives first, and the first one's after it.
+    second.notify_one();
+    harness.expect_thread(vec![
+        thread_reset(Some("1"), Vec::new()),
+        thread_status("older", true, false, false, None),
+        thread_reset(
+            Some("1"),
+            vec![
+                Message {
+                    thread_replies: 1,
+                    ..message("older", 0)
+                },
+                reply("x", 3, "older"),
+            ],
+        ),
+        thread_status("older", false, false, true, None),
+    ]);
+    first.notify_one();
+    std::thread::sleep(Duration::from_millis(50));
+    harness.account().close_thread();
+    harness.expect_thread(thread_closed_events());
+}
+
+// ACT-004
+#[test]
+fn closing_the_thread_drops_the_answer_of_a_parent_on_its_way() {
+    let fake = Fake::new();
+    let harness = logged_in_harness(&fake);
+    open_first_room(&fake, &harness, false);
+    let gate = Arc::new(Notify::new());
+    fake.script_message(Some(Arc::clone(&gate)), Ok(old_parent()));
+    harness.account().open_thread("old".to_owned().into());
+    fake.wait_for_message_calls(1);
+    harness.account().close_thread();
+    gate.notify_one();
+    expect_nothing_but_the_thread_of_a(&harness);
+}
+
+// ACT-004
+#[test]
+fn another_room_drops_the_answer_of_a_parent_on_its_way() {
+    let fake = Fake::new();
+    let harness = logged_in_harness(&fake);
+    open_first_room(&fake, &harness, false);
+    let gate = Arc::new(Notify::new());
+    fake.script_message(Some(Arc::clone(&gate)), Ok(old_parent()));
+    harness.account().open_thread("old".to_owned().into());
+    fake.wait_for_message_calls(1);
+    harness.account().open_room("2".to_owned().into());
+    harness.expect_events(vec![
+        reset_event(Some("2"), Vec::new()),
+        status("2", true, false, false, None),
+        status("2", false, false, true, None),
+    ]);
+    gate.notify_one();
+    std::thread::sleep(Duration::from_millis(50));
+    // Nothing opened in room 2, and nothing was asked of the server for it.
+    assert!(fake.state().thread_calls.is_empty());
+    harness.account().close_thread();
+}
+
+// ACT-004
+#[test]
+fn the_room_going_away_drops_the_answer_of_a_parent_on_its_way() {
+    let fake = Fake::new();
+    let harness = logged_in_harness(&fake);
+    open_first_room(&fake, &harness, false);
+    let gate = Arc::new(Notify::new());
+    fake.script_message(Some(Arc::clone(&gate)), Ok(old_parent()));
+    harness.account().open_thread("old".to_owned().into());
+    fake.wait_for_message_calls(1);
+    assert!(fake.push(0, removed("1")));
+    let mut expected = vec![rooms_change(RoomChange::Removed { index: 0 })];
+    expected.extend(closed_events());
+    harness.expect_events(expected);
+    gate.notify_one();
+    std::thread::sleep(Duration::from_millis(50));
+    assert!(fake.state().thread_calls.is_empty());
+    harness.account().close_thread();
+}
+
+// ACT-004
+#[test]
+fn logout_drops_the_answer_of_a_parent_on_its_way() {
+    let fake = Fake::new();
+    let harness = logged_in_harness(&fake);
+    open_first_room(&fake, &harness, false);
+    let gate = Arc::new(Notify::new());
+    fake.script_message(Some(Arc::clone(&gate)), Ok(old_parent()));
+    harness.account().open_thread("old".to_owned().into());
+    fake.wait_for_message_calls(1);
+    harness.logout();
+    gate.notify_one();
+    std::thread::sleep(Duration::from_millis(50));
+    assert!(fake.state().thread_calls.is_empty());
+}
+
+// ACT-004
+#[test]
+fn an_expired_session_on_the_parent_expires_the_session() {
+    let fake = Fake::new();
+    let harness = logged_in_harness(&fake);
+    open_first_room(&fake, &harness, false);
+    fake.script_message(None, Err(ApiError::Unauthorized));
+    harness.account().open_thread("old".to_owned().into());
+    loop {
+        if let Event::Session(state) = harness.next_event() {
+            assert_eq!(
+                state,
+                SessionState::LoggedOut {
+                    failure: Some(LoginFailure::SessionExpired)
+                }
+            );
+            break;
+        }
+    }
+}
+
+// ACT-004
+#[test]
+fn a_reconnect_does_not_drop_a_parent_on_its_way() {
+    let fake = Fake::new();
+    let harness = logged_in_harness_with(&fake, fast());
+    open_first_room(&fake, &harness, false);
+    let gate = Arc::new(Notify::new());
+    fake.script_message(Some(Arc::clone(&gate)), Ok(old_parent()));
+    fake.script_thread(
+        None,
+        page(vec![reply("r2", 4, "old"), reply("r1", 3, "old")], true),
+    );
+    harness.account().open_thread("old".to_owned().into());
+    fake.wait_for_message_calls(1);
+    fake.script_fetch(
+        None,
+        Ok(vec![
+            subscription("1", "general", rc_api::RoomType::Channel),
+            subscription("2", "secret", rc_api::RoomType::Private),
+        ]),
+    );
+    fake.end_connection(0);
+    fake.wait_for_connections(2);
+    gate.notify_one();
+    harness.expect_thread(old_thread_events());
+}
+
+// ACT-004
+#[test]
+fn a_parent_pushed_while_it_is_on_its_way_comes_in_its_new_form() {
+    let fake = Fake::new();
+    let harness = logged_in_harness(&fake);
+    open_first_room(&fake, &harness, false);
+    let gate = Arc::new(Notify::new());
+    fake.script_message(Some(Arc::clone(&gate)), Ok(old_parent()));
+    fake.script_thread(None, page(vec![reply("r1", 3, "old")], true));
+    harness.account().open_thread("old".to_owned().into());
+    fake.wait_for_message_calls(1);
+    let newer = Message {
+        thread_replies: 3,
+        ..old_parent()
+    };
+    assert!(fake.push(0, Pushed::Message(newer.clone())));
+    // Pushed again after the room's own push has gone by, so that the answer finds it.
+    assert!(fake.push(0, pushed_message("1", "c", 7)));
+    harness.expect_events(vec![appended("c", 7)]);
+    gate.notify_one();
+    harness.expect_thread(vec![
+        thread_reset(Some("1"), Vec::new()),
+        thread_status("old", true, false, false, None),
+        thread_reset(Some("1"), vec![newer, reply("r1", 3, "old")]),
+        thread_status("old", false, false, true, None),
+    ]);
+}
+
+// ACT-004
+#[test]
+fn deleting_the_parent_on_its_way_drops_it() {
+    let fake = Fake::new();
+    let harness = logged_in_harness(&fake);
+    open_first_room(&fake, &harness, false);
+    let gate = Arc::new(Notify::new());
+    fake.script_message(Some(Arc::clone(&gate)), Ok(old_parent()));
+    harness.account().open_thread("old".to_owned().into());
+    fake.wait_for_message_calls(1);
+    assert!(fake.push(0, deleted("1", "old")));
+    assert!(fake.push(0, pushed_message("1", "c", 7)));
+    harness.expect_events(vec![appended("c", 7)]);
+    gate.notify_one();
+    expect_nothing_but_the_thread_of_a(&harness);
+}
+
+// ACT-004
+#[test]
+fn a_pushed_reply_goes_to_a_thread_whose_parent_the_room_does_not_hold() {
+    let fake = Fake::new();
+    let harness = logged_in_harness(&fake);
+    open_thread_of_old(&fake, &harness);
+    assert!(fake.push(0, Pushed::Message(reply("r3", 5, "old"))));
+    // Also sent to the channel, it goes to the room too.
+    let both = shown(reply("r4", 6, "old"));
+    assert!(fake.push(0, Pushed::Message(both.clone())));
+    harness.expect_events(vec![
+        Event::ThreadTimeline(vec![TimelineChange::Appended(vec![reply("r3", 5, "old")])]),
+        Event::ThreadTimeline(vec![TimelineChange::Appended(vec![both.clone()])]),
+        Event::Timeline(vec![TimelineChange::Appended(vec![both])]),
+    ]);
+}
+
+// ACT-004
+#[test]
+fn the_pushed_parent_updates_a_thread_whose_parent_the_room_does_not_hold() {
+    let fake = Fake::new();
+    let harness = logged_in_harness(&fake);
+    open_thread_of_old(&fake, &harness);
+    let counted = Message {
+        thread_replies: 3,
+        thread_last_reply: jiff::Timestamp::from_second(5).ok(),
+        ..old_parent()
+    };
+    assert!(fake.push(0, Pushed::Message(counted.clone())));
+    assert!(fake.push(0, pushed_message("1", "c", 7)));
+    // The room doesn't take a message from before its window.
+    harness.expect_events(vec![
+        Event::ThreadTimeline(vec![TimelineChange::Updated {
+            index: 0,
+            message: counted,
+        }]),
+        appended("c", 7),
+    ]);
+}
+
+// ACT-004
+#[test]
+fn deleting_a_reply_counts_one_less_in_a_parent_the_room_does_not_hold() {
+    let fake = Fake::new();
+    let harness = logged_in_harness(&fake);
+    open_thread_of_old(&fake, &harness);
+    assert!(fake.push(0, deleted("1", "r2")));
+    let fewer = Message {
+        thread_replies: 1,
+        ..old_parent()
+    };
+    harness.expect_events(vec![
+        Event::ThreadTimeline(vec![TimelineChange::Removed { index: 2 }]),
+        Event::ThreadTimeline(vec![TimelineChange::Updated {
+            index: 0,
+            message: fewer,
+        }]),
+    ]);
+}
+
+// ACT-004
+#[test]
+fn deleting_a_parent_the_room_does_not_hold_closes_the_thread() {
+    let fake = Fake::new();
+    let harness = logged_in_harness(&fake);
+    open_thread_of_old(&fake, &harness);
+    assert!(fake.push(0, deleted("1", "old")));
+    harness.expect_events(thread_closed_events());
+}
+
+// ACT-004
+#[test]
+fn a_parent_the_room_does_not_hold_left_as_a_removed_message_closes_the_thread() {
+    let fake = Fake::new();
+    let harness = logged_in_harness(&fake);
+    open_thread_of_old(&fake, &harness);
+    let removed = Message {
+        kind: MessageKind::System(SystemEvent::Other("rm".into())),
+        ..old_parent()
+    };
+    assert!(fake.push(0, Pushed::Message(removed)));
+    harness.expect_events(thread_closed_events());
+}
+
+// ACT-004
+#[test]
+fn a_reconnect_catches_up_a_thread_whose_parent_the_room_does_not_hold() {
+    let fake = Fake::new();
+    let harness = logged_in_harness_with(&fake, fast());
+    open_thread_of_old(&fake, &harness);
+    fake.script_fetch(
+        None,
+        Ok(vec![
+            subscription("1", "general", rc_api::RoomType::Channel),
+            subscription("2", "secret", rc_api::RoomType::Private),
+        ]),
+    );
+    // Missed meanwhile: r3, r2 deleted, and the parent's new count.
+    fake.script_thread(
+        None,
+        page(vec![reply("r3", 5, "old"), reply("r1", 3, "old")], true),
+    );
+    let counted = Message {
+        thread_replies: 2,
+        thread_last_reply: jiff::Timestamp::from_second(5).ok(),
+        edited: true,
+        kind: MessageKind::Text("old, edited".into()),
+        ..old_parent()
+    };
+    fake.script_changes(
+        "1",
+        None,
+        Ok(Changes {
+            updated: vec![counted.clone()],
+            deleted: vec!["r2".to_owned().into()],
+        }),
+    );
+    fake.end_connection(0);
+    let found = |seen: &[TimelineChange]| {
+        let parent = TimelineChange::Updated {
+            index: 0,
+            message: counted.clone(),
+        };
+        let appended = TimelineChange::Appended(vec![reply("r3", 5, "old")]);
+        [parent, appended, TimelineChange::Removed { index: 2 }]
+            .iter()
+            .all(|change| seen.contains(change))
+    };
+    let mut seen = Vec::new();
+    while !found(&seen) {
+        seen.extend(harness.thread_changes(1));
+    }
+}
