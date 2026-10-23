@@ -18,7 +18,7 @@ use crate::backoff::Backoff;
 use crate::client::{Command, Connection, Event};
 use crate::core::Shared;
 use crate::domain::{
-    AccountId, AvatarOwner, Credentials, Identity, Message, MessageId, RoomId, RoomKind,
+    AccountId, AvatarOwner, Credentials, Identity, Message, MessageId, Room, RoomId, RoomKind,
     StoredAccount, User,
 };
 use crate::emoji::CustomEmojis;
@@ -263,6 +263,8 @@ struct Actor<C: Connector> {
     users: Arc<Users>,
     /// What the frontend was last told the unread totals are.
     unread: Unread,
+    /// What the frontend was last told the held-back rooms are.
+    quiet: Vec<Room>,
     /// Identifies the current attempt, so that the answer of a cancelled one is dropped.
     attempt: u64,
     login_task: Option<JoinHandle<()>>,
@@ -375,6 +377,7 @@ impl<C: Connector> Actor<C> {
             identity: None,
             users: Arc::clone(&shared.users),
             unread: Unread::default(),
+            quiet: Vec::new(),
             attempt: 0,
             login_task: None,
             rooms_task: None,

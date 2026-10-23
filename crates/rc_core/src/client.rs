@@ -14,7 +14,7 @@ use tokio::sync::mpsc::{self, UnboundedSender};
 use crate::adapters::{RestConnector, SystemClock};
 use crate::avatars::AvatarUpdate;
 use crate::core::{self, ActorSenders, CoreCommand};
-use crate::domain::{AccountId, Identity, MessageId, RoomId};
+use crate::domain::{AccountId, Identity, MessageId, Room, RoomId};
 use crate::emoji::{self, CustomEmojis};
 use crate::error::Error;
 use crate::images::ImageUpdate;
@@ -58,6 +58,12 @@ pub enum Event {
     /// of their mention badges. Comes after the `Rooms` event that changes it, and after a
     /// logout empties the list; not while it stays the same, nor while it is zero from the start.
     Unread(Unread),
+    /// The direct messages the room list holds back because they went quiet (ROOM-008), all of
+    /// them, the most recently active first, then by id: a frontend that searches the rooms looks
+    /// among these too, and never sorts. The `Rooms` changes never mention them. Comes after the
+    /// `Rooms` event that changes the set, or the content of one of its rooms, and after a logout
+    /// empties it; not while it stays the same, nor while it is empty from the start.
+    QuietRooms(Vec<Room>),
     /// Changes to the message list of the open room, to apply in order. Opening a room starts with
     /// a reset, to what is held of it already. Logging out resets to nothing, if a room was open.
     Timeline(Vec<TimelineChange>),

@@ -37,6 +37,8 @@ pub struct Cache {
     expired: bool,
     unread: Unread,
     rooms: Vec<Room>,
+    /// The rooms the room list holds back, in the order the core sent them.
+    quiet_rooms: Vec<Room>,
     /// The room `messages` belong to.
     room: Option<RoomId>,
     messages: Vec<Message>,
@@ -82,6 +84,7 @@ impl Cache {
                 mentions: 0,
             },
             rooms: Vec::new(),
+            quiet_rooms: Vec::new(),
             room: None,
             messages: Vec::new(),
             status: TimelineStatus {
@@ -150,6 +153,7 @@ impl Cache {
                     change.apply(&mut self.rooms);
                 }
             }
+            Event::QuietRooms(rooms) => self.quiet_rooms.clone_from(rooms),
             Event::Timeline(changes) => {
                 for change in changes {
                     change.apply(&mut self.messages);
@@ -281,6 +285,13 @@ impl Cache {
     #[must_use]
     pub fn rooms(&self) -> &[Room] {
         &self.rooms
+    }
+
+    /// The rooms the room list holds back (quiet direct messages), most recently active first. Only
+    /// a search looks at them.
+    #[must_use]
+    pub fn quiet_rooms(&self) -> &[Room] {
+        &self.quiet_rooms
     }
 
     /// The change that brings an empty model to the current room list.
@@ -804,6 +815,26 @@ mod tests {
         assert_eq!(room, Some("a".to_owned().into()));
         let ids: Vec<_> = messages.iter().map(|m| m.id.as_str()).collect();
         assert_eq!(ids, ["a", "b", "c", "d"]);
+    }
+
+    // ROOM-010
+    #[test]
+    fn the_quiet_rooms_are_the_last_set_the_core_sent() {
+        let mut cache = Cache::new();
+        assert!(cache.quiet_rooms().is_empty());
+        cache.apply(&Event::QuietRooms(vec![
+            room("a", "alpha"),
+            room("b", "beta"),
+        ]));
+        assert_eq!(cache.quiet_rooms(), [room("a", "alpha"), room("b", "beta")]);
+        // The room list is another thing: its changes leave the set alone.
+        cache.apply(&Event::Rooms(vec![RoomChange::Reset(vec![room(
+            "c", "gamma",
+        )])]));
+        assert_eq!(cache.quiet_rooms().len(), 2);
+        assert_eq!(cache.rooms(), [room("c", "gamma")]);
+        cache.apply(&Event::QuietRooms(vec![]));
+        assert!(cache.quiet_rooms().is_empty());
     }
 
     // MSG-001

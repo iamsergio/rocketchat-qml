@@ -256,11 +256,15 @@ pub fn register_room_search(thread: CxxQtThread<RoomSearchModel>) {
     lock().views.room_search.register(thread);
 }
 
-/// The rooms of the current account that match `query`, and the avatars to show them with.
+/// The rooms of the current account that match `query`, the held-back ones too, and the avatars to
+/// show them with.
 pub fn search_rooms(query: &str) -> (Vec<Room>, AvatarUrls) {
     let hub = lock();
     let cache = hub.switchboard.accounts().current_cache();
-    (search(cache.rooms(), query), cache.avatars())
+    (
+        search(cache.rooms(), cache.quiet_rooms(), query),
+        cache.avatars(),
+    )
 }
 
 pub fn open_room(room_id: String) {
@@ -496,6 +500,7 @@ impl Views {
             }
             Event::Session(_) | Event::Connection(_) => self.show_session(accounts),
             Event::Identity(_) => self.show_session_view(accounts),
+            Event::QuietRooms(_) => self.room_search.queue(RoomSearchModel::refresh),
             Event::Rooms(changes) => {
                 self.room_search.queue(RoomSearchModel::refresh);
                 self.rooms.queue(move |model| model.apply(&changes));
