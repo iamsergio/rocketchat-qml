@@ -34,6 +34,7 @@ pub mod message_list_model;
     clippy::must_use_candidate // The generated `dataChanged` signal.
 )]
 pub mod room_list_model;
+pub mod room_roles;
 #[allow(
     unsafe_code,
     clippy::unnecessary_box_returns,
