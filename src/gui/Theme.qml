@@ -18,6 +18,9 @@ QtObject {
     readonly property color rail: "#111319"
     // The conversation, and the input fields.
     readonly property color surface: "#1b1f26"
+    // A field set quietly into the sidebar while it isn't focused: darker than the sidebar, like
+    // the rail.
+    readonly property color fieldQuiet: rail
     // The ends of a gradient.
     readonly property real gradientStart: 0
     readonly property real gradientEnd: 1
@@ -167,6 +170,21 @@ QtObject {
     readonly property int roomTopicTipMaxWidth: 420
     readonly property int roomIconSize: 14
     readonly property int roomRowHeight: 34
+    // The space between the avatar and the name in a room row.
+    readonly property int roomRowSpacing: spacingL
+    // Where the avatar and the name start in a room row, from the left edge of its background, and
+    // the middle of the avatar: what the search field above the list lines up with.
+    readonly property int roomAvatarInset: rowPaddingH
+    readonly property int roomNameInset: roomAvatarInset + roomAvatarSize + roomRowSpacing
+    readonly property real roomAvatarCenter: roomAvatarInset + roomAvatarSize / 2
+    // The search field at the top of the room list, and the magnifier in it.
+    readonly property int searchFieldHeight: 32
+    readonly property int searchIconSize: 14
+    // The button that clears it, and the cross in it, and the keycap that hints at Ctrl+K.
+    readonly property int searchClearSize: 22
+    readonly property int searchClearIconSize: 12
+    readonly property int searchHintPaddingH: 6
+    readonly property int searchHintPaddingV: 1
     // The space each side of the server's name at the top of the sidebar.
     readonly property int sidebarHeaderPaddingH: 16
     readonly property int sidebarWidth: 264

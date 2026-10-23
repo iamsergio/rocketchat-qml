@@ -38,6 +38,12 @@ pub mod room_roles;
 #[allow(
     unsafe_code,
     clippy::unnecessary_box_returns,
+    clippy::must_use_candidate // The generated `dataChanged` signal.
+)]
+pub mod room_search_model;
+#[allow(
+    unsafe_code,
+    clippy::unnecessary_box_returns,
     clippy::must_use_candidate // The generated `actionDone` signal.
 )]
 pub mod room_vm;

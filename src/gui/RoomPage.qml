@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Sergio Martins
 // SPDX-License-Identifier: MIT
 
+pragma ComponentBehavior: Bound
+
 import QtQuick
 import QtQuick.Controls.Basic
 import QtQuick.Layouts
@@ -70,6 +72,163 @@ ColumnLayout {
                 }
             }
 
+            // Searches the user's rooms by name. While it holds something, the results replace the
+            // list. The focus stays here: Up and Down move through the results, Enter opens one.
+            InputField {
+                id: searchField
+
+                objectName: "roomSearchField"
+                Layout.bottomMargin: Theme.spacingL
+                Layout.fillWidth: true
+                Layout.leftMargin: Theme.roomRowInset
+                Layout.rightMargin: Theme.roomRowInset
+                implicitHeight: Theme.searchFieldHeight
+                // The text starts where the room names do, and the magnifier is over the avatars.
+                leftPadding: Theme.roomNameInset
+                placeholderText: qsTr("Search rooms")
+                quiet: true
+                // Under neither the cross nor the hint.
+                rightPadding: Theme.fieldPaddingH + Math.max(hint.width, clearButton.width)
+
+                Keys.onDownPressed: searchResults.incrementCurrentIndex()
+                Keys.onEscapePressed: clear()
+                Keys.onUpPressed: searchResults.decrementCurrentIndex()
+                onAccepted: {
+                    if (RoomSearch.open(searchResults.currentIndex))
+                        clear();
+                }
+                onTextChanged: RoomSearch.setQuery(text)
+
+                Icon {
+                    anchors.left: parent.left
+                    anchors.leftMargin: Theme.roomAvatarCenter - Theme.searchIconSize / 2
+                    anchors.verticalCenter: parent.verticalCenter
+                    height: Theme.searchIconSize
+                    source: "icons/search.svg"
+                    tint: Theme.textFaint
+                    width: Theme.searchIconSize
+                }
+
+                // Clears the field and leaves the focus where it is.
+                ToolButton {
+                    id: clearButton
+
+                    objectName: "roomSearchClear"
+                    anchors.right: parent.right
+                    anchors.rightMargin: Theme.spacingM
+                    anchors.verticalCenter: parent.verticalCenter
+                    display: AbstractButton.IconOnly
+                    focusPolicy: Qt.NoFocus
+                    implicitHeight: Theme.searchClearSize
+                    implicitWidth: Theme.searchClearSize
+                    padding: Theme.spacingNone
+                    text: qsTr("Clear the search")
+                    visible: searchField.text !== ""
+                    onClicked: searchField.clear()
+
+                    ToolTip.delay: Theme.toolTipDelay
+                    ToolTip.text: text
+                    ToolTip.visible: hovered
+
+                    background: Rectangle {
+                        color: clearButton.hovered ? Theme.raisedHover : Theme.transparent
+                        radius: Theme.radiusControl
+                    }
+
+                    contentItem: Item {
+                        Icon {
+                            anchors.centerIn: parent
+                            height: Theme.searchClearIconSize
+                            source: "icons/close.svg"
+                            tint: clearButton.hovered ? Theme.text : Theme.textMuted
+                            width: Theme.searchClearIconSize
+                        }
+                    }
+                }
+
+                // The shortcut, in a keycap, while the field is at rest.
+                Rectangle {
+                    id: hint
+
+                    objectName: "roomSearchHint"
+                    anchors.right: parent.right
+                    anchors.rightMargin: Theme.spacingXL
+                    anchors.verticalCenter: parent.verticalCenter
+                    border.color: Theme.raisedHover
+                    border.width: Theme.borderWidth
+                    color: Theme.transparent
+                    height: hintLabel.implicitHeight + 2 * Theme.searchHintPaddingV
+                    radius: Theme.radiusCheckBox
+                    visible: searchField.text === "" && !searchField.activeFocus
+                    width: hintLabel.implicitWidth + 2 * Theme.searchHintPaddingH
+
+                    Label {
+                        id: hintLabel
+
+                        anchors.centerIn: parent
+                        color: Theme.textFaint
+                        font.pointSize: Theme.fontSizeTiny
+                        text: qsTr("Ctrl K")
+                    }
+                }
+
+                Shortcut {
+                    sequence: "Ctrl+K"
+                    onActivated: searchField.forceActiveFocus()
+                }
+            }
+
+            Label {
+                objectName: "roomSearchEmpty"
+                Layout.fillWidth: true
+                // Under the text of the field.
+                Layout.leftMargin: Theme.roomRowInset + Theme.roomNameInset
+                Layout.rightMargin: Theme.roomRowInset + Theme.rowPaddingH
+                color: Theme.textFaint
+                elide: Text.ElideRight
+                font.pointSize: Theme.fontSizeSmall
+                text: qsTr("No rooms match “%1”").arg(RoomSearch.trimmedQuery)
+                textFormat: Text.PlainText
+                visible: RoomSearch.active && searchResults.count === 0
+            }
+
+            // The rooms that match, in place of the list below.
+            ListView {
+                id: searchResults
+
+                objectName: "roomSearchResults"
+                Layout.fillHeight: true
+                Layout.fillWidth: true
+                clip: true
+                model: RoomSearch
+                visible: RoomSearch.active
+
+                delegate: RoomDelegate {
+                    id: result
+
+                    // The one Enter would open.
+                    cursor: result.index === searchResults.currentIndex
+                    menuEnabled: false
+                    namePrefix: "searchResult_"
+
+                    // The normal list is back, with the room open.
+                    onClicked: searchField.clear()
+                }
+
+                ScrollBar.vertical: ScrollBar {}
+
+                onCurrentIndexChanged: positionViewAtIndex(currentIndex, ListView.Contain)
+
+                // A reset leaves nothing current; Enter opens the first result unless Down moved.
+                Connections {
+                    function onModelReset() {
+                        searchResults.currentIndex = 0;
+                    }
+
+                    target: searchResults.model
+                }
+            }
+
             // One list, so that everything scrolls together. The favorites come first, and the
             // sections show only while there are any.
             ListView {
@@ -78,6 +237,7 @@ ColumnLayout {
                 Layout.fillHeight: true
                 clip: true
                 model: RoomList
+                visible: !RoomSearch.active
                 section.criteria: ViewSection.FullString
                 section.property: "favorite"
                 delegate: RoomDelegate {}

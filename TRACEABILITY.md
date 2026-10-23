@@ -50,6 +50,7 @@ The `Slint` column is how much of a feature's GUI tests run against `rocketchat_
 | ROOM-007 | Room menu: favorite/unfavorite, mark read/unread, leave | todo | unit: `crates/rc_core/src/domain.rs`, `crates/rc_core/src/rooms.rs`, `crates/rc_core/src/client/tests/room_actions.rs`; api: `crates/rc_api/tests/rest.rs`; contract: `crates/rc_api/tests/contract.rs`, `crates/rc_core/tests/contract.rs`; GUI: `crates/rc_gui_tests/tests/room_menu.rs` |
 | ROOM-008 | Quiet direct messages (no activity for 10 days, not favorite, unread or open) are left out of the room list, and one comes back with a message | done | unit: `crates/rc_core/src/rooms.rs`, `crates/rc_core/src/client/tests/quiet.rs`; GUI: `crates/rc_gui_tests/tests/rooms.rs` |
 | ROOM-009 | The room header shows the room's topic, rendered as markdown | done | unit: `crates/rc_api/src/wire.rs`, `crates/rc_core/src/domain.rs`, `crates/rc_core/src/rich.rs`, `crates/rc_core/src/rooms.rs`, `crates/rc_core/src/client/tests/activity.rs`, `crates/rc_view/src/rich_html.rs`, `crates/rc_slint/src/rich_markdown.rs`, `crates/rc_view/src/room_view.rs`, `crates/rc_view/src/cache.rs`; api: `crates/rc_api/tests/rest.rs`; contract: `crates/rc_api/tests/contract.rs`, `crates/rc_core/tests/contract.rs`; GUI: `crates/rc_gui_tests/tests/rooms.rs` |
+| ROOM-010 | Search the room list by name: matching rooms replace the list while typing | todo | unit: `crates/rc_view/src/room_search.rs`; GUI: `crates/rc_gui_tests/tests/room_search.rs` |
 
 ## Messages
 
@@ -119,7 +120,7 @@ The `Slint` column is how much of a feature's GUI tests run against `rocketchat_
 | ID | Feature | Slint | Tests |
 |---|---|---|---|
 | INFRA-001 | XML-RPC client encodes Spix calls and decodes its answers and faults | n/a | unit: `crates/rc_gui_tests/src/xmlrpc.rs` |
-| INFRA-002 | GUI test harness gives each app its own Spix port; reports an app that can't start, exits early or won't quit; passes environment overrides; waits for the UI with a timeout; addresses room rows and message rows by id | n/a | unit: `crates/rc_gui_tests/src/app.rs`, `crates/rc_gui_tests/src/gui.rs`, `crates/rc_gui_tests/src/paths.rs` |
+| INFRA-002 | GUI test harness gives each app its own Spix port; reports an app that can't start, exits early or won't quit; passes environment overrides; waits for the UI with a timeout; addresses room rows, search result rows and message rows by id | n/a | unit: `crates/rc_gui_tests/src/app.rs`, `crates/rc_gui_tests/src/gui.rs`, `crates/rc_gui_tests/src/paths.rs` |
 | INFRA-003 | Developer builds' `--dev` fills in the login page for the local test server, with environment overrides; release builds have no such option | n/a | unit: `crates/rc_view/src/dev_login.rs` |
 | INFRA-004 | Spix server for the Slint app: the calls of the GUI test suite over XML-RPC, paths by `accessible-id`, the properties the tests read, input, and `quit` ending the event loop | n/a | unit: `3rdparty/spix/rust/spix_slint/src/`; wire: `3rdparty/spix/rust/spix_slint/tests/server.rs` |
 | INFRA-005 | `slint.txt` and TRACEABILITY's `Slint` column agree: every line names a GUI test that exists, once, and each feature's cell says what the list says | n/a | unit: `crates/rc_gui_tests/src/slint_list.rs` |

@@ -68,6 +68,8 @@ tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", default-features = false, features = ["ansi", "env-filter", "fmt", "std"] }
 # The synchronous side of tokio-tungstenite, for the plain-HTTP connection of the test support.
 tungstenite = { version = "0.30.0", default-features = false, features = ["handshake"] }
+# Takes the accents off a name, for the search of the room list.
+unicode-normalization = { version = "0.1.25", default-features = false, features = ["std"] }
 # Plain HTTP only: no TLS, no compression.
 ureq = { version = "3.4.2", default-features = false }
 windows-native-keyring-store = "1.1.0"

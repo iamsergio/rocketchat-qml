@@ -84,6 +84,7 @@ pub struct Key(i32);
 impl Key {
     pub const ESCAPE: Self = Self(0x0100_0000);
     pub const TAB: Self = Self(0x0100_0001);
+    pub const K: Self = Self(0x4B);
     pub const V: Self = Self(0x56);
     pub const BACKSPACE: Self = Self(0x0100_0003);
     pub const RETURN: Self = Self(0x0100_0004);

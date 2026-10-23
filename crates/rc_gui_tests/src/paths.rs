@@ -48,6 +48,19 @@ pub mod main_window {
     pub const ROOM_SECTION_ROOMS: &str = "mainWindow/roomSection_rooms";
     /// Its heading ("Rooms"), as its `text`. Visible only while the user has favorites.
     pub const ROOM_SECTION_ROOMS_HEADER: &str = "mainWindow/roomSection_rooms/roomSectionHeader";
+    /// The search field above the room list (Ctrl+K focuses it): its `text` is the query. While it
+    /// holds something, `ROOM_SEARCH_RESULTS` is shown in place of the room list.
+    pub const ROOM_SEARCH_FIELD: &str = "mainWindow/roomSearchField";
+    /// The rooms that match the query, in place of the room list. Visible only while searching; its
+    /// `count` is how many match. Its rows are `searchResult_<id>`, see `search_result`.
+    pub const ROOM_SEARCH_RESULTS: &str = "mainWindow/roomSearchResults";
+    /// Clears the search and leaves the focus in the field. Visible only while it holds something.
+    pub const ROOM_SEARCH_CLEAR: &str = "mainWindow/roomSearchClear";
+    /// The shortcut ("Ctrl K"). Visible only while the field is empty and hasn't the focus.
+    pub const ROOM_SEARCH_HINT: &str = "mainWindow/roomSearchHint";
+    /// `No rooms match “<query>”`, as its `text`, with the query trimmed. Visible only while
+    /// searching, when nothing matches.
+    pub const ROOM_SEARCH_EMPTY: &str = "mainWindow/roomSearchEmpty";
     /// Why the last command on a room (a favorite, mark as read or unread, leaving) failed.
     /// Visible only then, under the room list.
     pub const ROOM_LIST_ERROR: &str = "mainWindow/roomListError";
@@ -268,6 +281,13 @@ pub fn room(id: &str, part: &str) -> String {
     format!("{}/room_{id}/{part}", main_window::WINDOW)
 }
 
+/// A part of the row of the room with this id in the search results (see [`room_row`]). Named
+/// apart from the room list's `room_<id>`, which exists at the same time.
+#[must_use]
+pub fn search_result(id: &str, part: &str) -> String {
+    format!("{}/searchResult_{id}/{part}", main_window::WINDOW)
+}
+
 /// The parts of a message row, for [`message`].
 pub mod message_row {
     /// The heading of the day, on the first message of each day.
@@ -428,6 +448,15 @@ mod tests {
         assert_eq!(
             room("abc123", room_row::UNREAD),
             "mainWindow/room_abc123/roomUnread"
+        );
+    }
+
+    // INFRA-002
+    #[test]
+    fn a_search_result_part_is_addressed_by_the_room_id() {
+        assert_eq!(
+            search_result("abc123", room_row::NAME),
+            "mainWindow/searchResult_abc123/roomName"
         );
     }
 
