@@ -115,6 +115,11 @@ fn enter_opens_the_first_result_and_clears_the_search() {
         .unwrap();
     gui.wait_until_hidden(main_window::ROOM_SEARCH_RESULTS, TIMEOUT)
         .unwrap();
+    // The composer of the room just opened has the focus.
+    gui.input_text(main_window::COMPOSER_FIELD, "typed")
+        .unwrap();
+    gui.wait_until_text(main_window::COMPOSER_FIELD, "typed", TIMEOUT)
+        .unwrap();
 }
 
 // ROOM-010
@@ -177,6 +182,10 @@ fn clicking_a_result_opens_the_room_and_clears_the_search() {
         .unwrap();
     gui.wait_until_visible(main_window::ROOM_LIST, TIMEOUT)
         .unwrap();
+    gui.input_text(main_window::COMPOSER_FIELD, "typed")
+        .unwrap();
+    gui.wait_until_text(main_window::COMPOSER_FIELD, "typed", TIMEOUT)
+        .unwrap();
 }
 
 // ROOM-010
@@ -235,6 +244,10 @@ fn escape_clears_the_field() {
     let app = App::launch().unwrap();
     let gui = app.gui();
     log_in_and_wait_for_room(gui, &user, &group_id);
+    // A room is open, so its composer takes the focus.
+    open_room(gui, &group_id);
+    gui.wait_until_visible(main_window::COMPOSER_FIELD, TIMEOUT)
+        .unwrap();
     search_for(gui, &channel_name);
     gui.wait_until_hidden(main_window::ROOM_LIST, TIMEOUT)
         .unwrap();
@@ -245,6 +258,42 @@ fn escape_clears_the_field() {
         .unwrap();
     gui.wait_until_visible(main_window::ROOM_LIST, TIMEOUT)
         .unwrap();
+    // The field is at rest again, and typing goes to the composer of the open room.
+    gui.wait_until_visible(main_window::ROOM_SEARCH_HINT, TIMEOUT)
+        .unwrap();
+    gui.input_text(main_window::COMPOSER_FIELD, "typed")
+        .unwrap();
+    gui.wait_until_text(main_window::COMPOSER_FIELD, "typed", TIMEOUT)
+        .unwrap();
+    assert_eq!(gui.text(main_window::ROOM_SEARCH_FIELD).unwrap(), "");
+}
+
+// ROOM-010
+#[test]
+#[ignore = "needs the app and a Rocket.Chat server: run through ctest"]
+fn escape_without_an_open_room_leaves_the_field_at_rest() {
+    let admin = Admin::login();
+    let user = admin.create_user();
+    let (_, channel_name) = admin.create_channel(&[&user.username]);
+    let (group_id, _) = admin.create_group(&[&user.username]);
+    let app = App::launch().unwrap();
+    let gui = app.gui();
+    log_in_and_wait_for_room(gui, &user, &group_id);
+    search_for(gui, &channel_name);
+    gui.wait_until_hidden(main_window::ROOM_LIST, TIMEOUT)
+        .unwrap();
+
+    press(gui, Key::ESCAPE);
+
+    gui.wait_until_text(main_window::ROOM_SEARCH_FIELD, "", TIMEOUT)
+        .unwrap();
+    gui.wait_until_visible(main_window::ROOM_SEARCH_HINT, TIMEOUT)
+        .unwrap();
+    // Typed text goes nowhere: the field no longer has the focus.
+    gui.input_text(main_window::ROOM_SEARCH_FIELD, "typed")
+        .unwrap();
+    gui.wait(std::time::Duration::from_millis(500)).unwrap();
+    assert_eq!(gui.text(main_window::ROOM_SEARCH_FIELD).unwrap(), "");
 }
 
 // ROOM-010

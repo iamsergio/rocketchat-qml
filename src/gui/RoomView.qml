@@ -10,7 +10,25 @@ import RocketChat.Bridge
 
 // The open room: its name, its messages, oldest at the top, and the box to write in.
 Rectangle {
+    id: root
+
     color: Theme.surface
+
+    // Whether the composer takes the focus as soon as it shows, for a room that is being opened.
+    property bool focusWhenShown: false
+
+    // Gives the focus to the composer. False, with the focus untouched, if no room is open.
+    function focusComposer(): bool {
+        if (!composer.visible)
+            return false;
+        composer.focusField();
+        return true;
+    }
+
+    // As `focusComposer`, and if no room is open yet, once the one being opened shows.
+    function focusComposerOnceOpen() {
+        focusWhenShown = !focusComposer();
+    }
 
     ColumnLayout {
         anchors.fill: parent
@@ -316,6 +334,12 @@ Rectangle {
             Layout.rightMargin: Theme.spacingXXXL
             Layout.topMargin: Theme.spacingM
             visible: Room.roomId !== ""
+
+            onVisibleChanged: {
+                if (visible && root.focusWhenShown)
+                    focusField();
+                root.focusWhenShown = false;
+            }
         }
     }
 }

@@ -73,7 +73,8 @@ ColumnLayout {
             }
 
             // Searches the user's rooms by name. While it holds something, the results replace the
-            // list. The focus stays here: Up and Down move through the results, Enter opens one.
+            // list. The focus stays here while typing: Up and Down move through the results, Enter
+            // opens one. Enter, a click on a result and Escape clear the field and hand the focus on.
             InputField {
                 id: searchField
 
@@ -91,11 +92,21 @@ ColumnLayout {
                 rightPadding: Theme.fieldPaddingH + Math.max(hint.width, clearButton.width)
 
                 Keys.onDownPressed: searchResults.incrementCurrentIndex()
-                Keys.onEscapePressed: clear()
+                // Clears the field and gives up the focus: to the composer of the open room, or of the
+                // one being opened. With no room, nobody has it.
+                function leave(opened) {
+                    clear();
+                    if (opened)
+                        roomView.focusComposerOnceOpen();
+                    else if (!roomView.focusComposer())
+                        focus = false;
+                }
+
+                Keys.onEscapePressed: leave(false)
                 Keys.onUpPressed: searchResults.decrementCurrentIndex()
                 onAccepted: {
                     if (RoomSearch.open(searchResults.currentIndex))
-                        clear();
+                        leave(true);
                 }
                 onTextChanged: RoomSearch.setQuery(text)
 
@@ -212,7 +223,7 @@ ColumnLayout {
                     namePrefix: "searchResult_"
 
                     // The normal list is back, with the room open.
-                    onClicked: searchField.clear()
+                    onClicked: searchField.leave(true)
                 }
 
                 ScrollBar.vertical: ScrollBar {}
@@ -309,6 +320,8 @@ ColumnLayout {
         }
 
         RoomView {
+            id: roomView
+
             Layout.fillWidth: true
             Layout.fillHeight: true
         }
