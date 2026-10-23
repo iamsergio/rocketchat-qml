@@ -30,6 +30,13 @@ The compiler instantiates a `for` lazily only inside a component named `ListView
 - **Workaround:** `crates/rc_slint/ui/list_view.slint` is a style-free component of that name. Check it on each Slint upgrade.
 - **Possible patch:** a documented attribute or property that asks for lazy instantiation.
 
+## The lazy `ListView` can't keep its place on an insert at the top, or bottom-align a few rows
+
+A chat list needs both: older messages are inserted above the rows in view and the view must not move, and a room with few messages sits at the bottom of the list. A spike with the lazy list (`ListView`, above) kept neither: with the top of the view in sight (exactly the state after Home) an insert above shifts what is shown, and the list has no way to align its content to the bottom.
+
+- **Workaround:** the message list (`message_list.slint`) isn't lazy. It is a plain `for` of every loaded message in one `VerticalLayout` (`alignment: end`) in a `Flickable`, and keeps its place itself: Rust counts the insertions at the top, and the handler of the layout's height moves `content-y` by the height that was added. The cost is that every loaded message is instantiated and laid out again in O(n) per change (the spike's numbers: about 5 ms at 500 rows, 22 ms at 2000). Rows are measured when they are made, so each wrapped text is given an explicit width.
+- **Possible patch:** a lazy list that anchors to a row (or to the bottom), keeping it in place when rows are inserted before it, and that can bottom-align content shorter than the list.
+
 ## `accessible-id` needs a constant `accessible-role`
 
 An element is only found by its `accessible-id` if it also has an `accessible-role` that doesn't change. The element search also never visits the window's own element.

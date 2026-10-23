@@ -3,12 +3,13 @@
 
 import { KindIcon } from "icon.slint";
 import { ListView } from "list_view.slint";
+import { MessageList } from "message_list.slint";
 import { RoomDelegate } from "room_delegate.slint";
-import { RoomRow } from "structs.slint";
+import { MessageRow, RoomRow } from "structs.slint";
 import { Theme } from "theme.slint";
 
 // The page of a logged-in account: the sidebar with the server, the user and the room list, and
-// the open room beside it. For now the room shows its header only.
+// the open room beside it: its header, and its messages.
 export component RoomPage inherits Rectangle {
     // Empty while the realtime connection is up.
     in property <string> connection-text;
@@ -24,8 +25,18 @@ export component RoomPage inherits Rectangle {
     in property <string> room-kind;
     in property <styled-text> room-topic;
     in property <string> room-topic-html;
+    // The messages of the open room, oldest first, and what the list shows around them: whether the
+    // conversation starts above them, whether older ones are loading, and the counters that the
+    // list's view keeps its place by (see `message_list.slint`).
+    in property <[MessageRow]> messages;
+    in property <bool> reached-start;
+    in property <bool> loading-older;
+    in property <int> prepends;
+    in property <int> resets;
     callback open-room(string);
-    // A link of the topic was clicked.
+    // The list of messages is at its top: older ones are wanted.
+    callback load-older();
+    // A link of the topic or of a message was clicked.
     callback open-link(string);
 
     VerticalLayout {
@@ -170,6 +181,24 @@ export component RoomPage inherits Rectangle {
                         y: parent.height - self.height;
                         height: Theme.separator-width;
                         background: Theme.line;
+                    }
+                }
+
+                if !root.room-id.is-empty: MessageList {
+                    y: Theme.room-header-height;
+                    width: parent.width;
+                    height: parent.height - Theme.room-header-height;
+                    messages: root.messages;
+                    room-id: root.room-id;
+                    reached-start: root.reached-start;
+                    loading-older: root.loading-older;
+                    prepends: root.prepends;
+                    resets: root.resets;
+                    load-older => {
+                        root.load-older();
+                    }
+                    open-link(url) => {
+                        root.open-link(url);
                     }
                 }
 

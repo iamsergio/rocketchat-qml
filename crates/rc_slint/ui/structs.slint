@@ -67,3 +67,31 @@ export struct RoomRow {
     has-avatar: bool,
     avatar: image,
 }
+
+// One message of the open room: an `rc_view` message list's row, as `rc_qt`'s roles give it.
+export struct MessageRow {
+    id: string,
+    author: string,
+    // The time of day.
+    time: string,
+    // The message as written, and as the HTML that the GUI tests read.
+    body: string,
+    body-html: string,
+    // The body as the styled text that is shown, and whether it is only emoji, which is shown larger.
+    body-styled: styled-text,
+    big-emoji: bool,
+    // A system message shows `system-text` instead of an author and a body.
+    is-system: bool,
+    system-text: string,
+    // The first message of its day shows the heading `day-label` above it.
+    first-of-day: bool,
+    day-label: string,
+    // The message mentions the user.
+    mentions-me: bool,
+    // The author's avatar, as the room list has it.
+    initials: string,
+    initials-color: color,
+    avatar-url: string,
+    has-avatar: bool,
+    avatar: image,
+}
