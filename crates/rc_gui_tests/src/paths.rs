@@ -181,15 +181,43 @@ pub mod main_window {
     /// exist.
     pub const EMOJI_GRID: &str = "mainWindow/emojiGrid";
 
-    // The thread pane, beside the room, visible only while a thread is open. The elements of its
+    // The thread pane, beside the room, visible only while it shows a thread or the room's threads. The elements of its
     // message list are the room's (the parent and the replies also sent to the room are in both),
     // so they are addressed through the pane (see [`thread_message`](super::thread_message)), and
     // the composer through its own name, as in [`THREAD_COMPOSER_FIELD`].
     pub const THREAD_PANE: &str = "mainWindow/threadPane";
-    /// "Thread", in the header of the pane.
+    /// "Thread", in the header of the pane while it shows a thread.
     pub const THREAD_TITLE: &str = "mainWindow/threadTitle";
-    /// Closes the thread.
+    /// Closes the pane: the thread and the list.
     pub const THREAD_CLOSE: &str = "mainWindow/threadClose";
+    /// "Threads", with a chevron, in the header of the pane while it shows a thread: goes back to
+    /// the list of threads, opening it if it was not open.
+    pub const THREAD_BACK_BUTTON: &str = "mainWindow/threadBackButton";
+    /// In the header of the room: shows the pane with the room's threads, or closes the pane if it
+    /// shows anything. Its `checked` is not used; the pane's visibility says what it did.
+    pub const ROOM_THREADS_BUTTON: &str = "mainWindow/roomThreadsButton";
+    /// "Threads", in the header of the pane while it shows the list.
+    pub const THREAD_LIST_TITLE: &str = "mainWindow/threadListTitle";
+    /// The list of the room's threads in the pane: visible while the pane shows it, kept (hidden)
+    /// under a thread. Escape sent to it goes back from the thread, or closes the list.
+    pub const THREAD_LIST: &str = "mainWindow/threadList";
+    /// Its rows, the thread with the most recent reply first: the `count` is how many are loaded.
+    pub const THREAD_LIST_VIEW: &str = "mainWindow/threadListView";
+    /// The segments of the filter: their `checked` says which one is on, and clicking one lists
+    /// that kind of thread from the first page.
+    pub const THREAD_LIST_FILTER_ALL: &str = "mainWindow/threadListFilterAll";
+    pub const THREAD_LIST_FILTER_FOLLOWING: &str = "mainWindow/threadListFilterFollowing";
+    /// Shown while the first page loads, and under the last row while a later one does.
+    pub const THREAD_LIST_LOADING: &str = "mainWindow/threadListLoading";
+    pub const THREAD_LIST_LOADING_MORE: &str = "mainWindow/threadListLoadingMore";
+    /// Why the list couldn't be loaded, as its `text`, with a button to try again.
+    pub const THREAD_LIST_ERROR: &str = "mainWindow/threadListError";
+    pub const THREAD_LIST_RETRY: &str = "mainWindow/threadListRetry";
+    /// What the filter has nothing of: visible once the list has loaded and holds no thread, with
+    /// the words as the `text` of its title and its hint.
+    pub const THREAD_LIST_EMPTY: &str = "mainWindow/threadListEmpty";
+    pub const THREAD_LIST_EMPTY_TITLE: &str = "mainWindow/threadListEmptyTitle";
+    pub const THREAD_LIST_EMPTY_HINT: &str = "mainWindow/threadListEmptyHint";
     /// The messages of the open thread, oldest first: the parent, then the replies. Its `count`
     /// is how many are loaded.
     pub const THREAD_MESSAGE_LIST: &str = "mainWindow/threadMessageList";
@@ -205,8 +233,8 @@ pub mod main_window {
     pub const THREAD_TYPING: &str = "mainWindow/threadTyping";
     /// The box to reply in. Its parts are found through it, as the room's are by name alone.
     pub const THREAD_COMPOSER: &str = "mainWindow/threadComposer";
-    /// Where the reply is typed. Enter sends it, Escape closes the thread when there is nothing to
-    /// cancel.
+    /// Where the reply is typed. Enter sends it, Escape goes back to the list of threads when there
+    /// is nothing to cancel.
     pub const THREAD_COMPOSER_FIELD: &str = "mainWindow/threadComposer/composerField";
     /// Sends the reply, or saves it while a message is edited.
     pub const THREAD_COMPOSER_SEND: &str = "mainWindow/threadComposer/composerSend";
@@ -356,6 +384,36 @@ pub fn thread_message(id: &str, part: &str) -> String {
     format!("{}/threadPane/msg_{id}/{part}", main_window::WINDOW)
 }
 
+/// The parts of a row of the thread list, for [`thread_list_row`].
+pub mod thread_list_row_part {
+    pub const AUTHOR: &str = "threadListAuthor";
+    /// The time of the last reply, or the heading of its day, as its `text`.
+    pub const TIME: &str = "threadListTime";
+    /// The start of the parent's text, on at most two lines: its `text` is all it was given.
+    pub const TEXT: &str = "threadListText";
+    /// "N replies" (or "1 reply"), as its `text`.
+    pub const SUMMARY: &str = "threadListSummary";
+    /// The author's avatar, visible once its file has loaded: its `text` is the file URL.
+    pub const AVATAR: &str = "threadListAvatar";
+    /// The initials on a colour, visible until the avatar has loaded.
+    pub const AVATAR_PLACEHOLDER: &str = "threadListAvatarPlaceholder";
+    /// The letters of the placeholder, as its `text`.
+    pub const AVATAR_INITIALS: &str = "threadListAvatarInitials";
+}
+
+/// The row of the thread whose parent has this id in the thread list, or a part of it (see
+/// [`thread_list_row_part`]); an empty `part` is the row itself, which can be clicked to open the
+/// thread. Rows are addressed by the parent's id, as messages are: their texts repeat.
+#[must_use]
+pub fn thread_list_row(id: &str, part: &str) -> String {
+    let row = format!("{}/threadListRow_{id}", main_window::WINDOW);
+    if part.is_empty() {
+        row
+    } else {
+        format!("{row}/{part}")
+    }
+}
+
 /// The parts of an attachment of a message, for [`attachment`].
 pub mod attachment_row {
     /// The picture of an image, visible once its file has loaded: its `text` is the file URL.
@@ -457,6 +515,16 @@ mod tests {
         assert_eq!(
             search_result("abc123", room_row::NAME),
             "mainWindow/searchResult_abc123/roomName"
+        );
+    }
+
+    // INFRA-002
+    #[test]
+    fn a_thread_list_row_and_its_parts_are_addressed_by_the_parents_id() {
+        assert_eq!(thread_list_row("m7", ""), "mainWindow/threadListRow_m7");
+        assert_eq!(
+            thread_list_row("m7", thread_list_row_part::SUMMARY),
+            "mainWindow/threadListRow_m7/threadListSummary"
         );
     }
 

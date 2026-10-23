@@ -56,6 +56,6 @@ There is no fake Rocket.Chat. Contract and GUI tests use the real local test ser
 - [Attachments](docs/design/attachments.md): authenticated downloads, image cache, Qt side
 - [Editing and deleting your own messages](docs/design/editing-own-messages.md): server policy, rules, answers, composer edit mode
 - [Quoting](docs/design/quoting.md): permalinks, `Site_Url`, hiding quote links, sending
-- [Threads](docs/design/threads.md): what the server does, opening a thread, replying, the thread pane, Qt side
+- [Threads](docs/design/threads.md): what the server does, opening a thread, replying, the thread pane, Qt side, the list of a room's threads
 - [GUI testing contract](docs/design/gui-testing.md): Spix protocol subset, element paths, harness environment
 - [Third-party dependencies](docs/design/dependencies.md): what each dependency is for

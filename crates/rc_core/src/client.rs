@@ -22,6 +22,7 @@ use crate::policy::{ActionError, MessageAction, MessagePolicy};
 use crate::ports::{Clock, Connector, FileCache, SecretStore};
 use crate::rooms::{RoomAction, RoomActionError, RoomChange, Unread};
 use crate::session::SessionState;
+use crate::threads::{ThreadFilter, ThreadListChange, ThreadListStatus};
 use crate::timeline::{ThreadStatus, TimelineChange, TimelineStatus};
 use crate::tuning::Tuning;
 
@@ -69,6 +70,14 @@ pub enum Event {
     Timeline(Vec<TimelineChange>),
     /// What the frontend shows about the message list. Comes after the changes it goes with.
     TimelineStatus(TimelineStatus),
+    /// Changes to the list of the open room's threads, to apply in order: the parent messages, the
+    /// one with the most recent reply last-replied-to first. Opening the list starts with a reset
+    /// to nothing, then a reset to the first page; later pages are inserts at the end, and live
+    /// replies move or insert threads at the front. Closing it, and anything that closes it
+    /// (another room, a logout, the room leaving), resets it to nothing.
+    ThreadList(Vec<ThreadListChange>),
+    /// What the frontend shows about the thread list. Comes after the changes it goes with.
+    ThreadListStatus(ThreadListStatus),
     /// Changes to the message list of the open thread, to apply in order: the parent first, then
     /// its replies, oldest first. Opening a thread starts with a reset to nothing, as does
     /// closing it, and so does anything that closes it: another room, a logout, the room or the
@@ -148,6 +157,9 @@ pub(crate) enum Command {
     OpenThread(MessageId),
     CloseThread,
     LoadOlderThread,
+    OpenThreadList(ThreadFilter),
+    CloseThreadList,
+    LoadMoreThreads,
     SendMessage {
         room: RoomId,
         text: String,
@@ -363,7 +375,8 @@ impl AccountHandle<'_> {
     /// Shows the replies of a message of the open room, in a thread beside the room: a reset to
     /// nothing at once, then the parent and its newest replies as they arrive. Replaces the
     /// thread that was open. The parent must be a sent text message that the open room holds and
-    /// that isn't a reply itself; anything else is logged at debug and ignored. So is a thread
+    /// that isn't a reply itself; the room needn't hold it (it is fetched if neither the room nor the
+    /// thread list does). Anything else is logged at debug and ignored. So is a thread
     /// that is open already, unless its last load failed: then it tries again. Ignored unless
     /// logged in. The thread closes with the room (see [`close_thread`](Self::close_thread)).
     pub fn open_thread(&self, parent: MessageId) {
@@ -381,6 +394,29 @@ impl AccountHandle<'_> {
     /// open, when a fetch is in flight, or when the start of the thread is reached.
     pub fn load_older_thread(&self) {
         self.send(Command::LoadOlderThread);
+    }
+
+    /// Lists the threads of the open room, beside it: a reset to nothing at once, then the first
+    /// page of the threads that `filter` says, the one with the most recent reply first, as it
+    /// arrives, and more when [`load_more_threads`](Self::load_more_threads) asks. Opening it
+    /// with another filter switches to that one and starts again from the first page; with the
+    /// same filter it does nothing, unless the last request failed: then it tries again. Ignored
+    /// unless logged in, and with no room open. The list closes with its room.
+    pub fn open_thread_list(&self, filter: ThreadFilter) {
+        self.send(Command::OpenThreadList(filter));
+    }
+
+    /// Closes the thread list, and tells the frontend with a reset to nothing. It closes by itself
+    /// when another room is opened, the room is closed or leaves the list, and on logout. Ignored
+    /// when it is not open. The open thread is another matter and stays.
+    pub fn close_thread_list(&self) {
+        self.send(Command::CloseThreadList);
+    }
+
+    /// Fetches the next page of the thread list. Ignored when it is not open, while a request is
+    /// in flight, and when its last thread is there; after a failed request it tries again.
+    pub fn load_more_threads(&self) {
+        self.send(Command::LoadMoreThreads);
     }
 
     /// Sends a text message to the room. It shows in the room's messages at once, as pending (see

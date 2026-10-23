@@ -135,6 +135,9 @@ pub struct Message {
     pub thread_replies: u32,
     /// When the last reply of the thread was sent (`tlm`); `None` for a message with no thread.
     pub thread_last_reply: Option<jiff::Timestamp>,
+    /// The ids of the users who follow the thread of this parent (`replies`): its author and
+    /// everyone who replied, until they unfollow. Empty for a message with no thread.
+    pub thread_followers: Vec<String>,
     /// The server's parsed markdown of the text. `None` if it sent none or it isn't a list of
     /// nodes. Some old messages and some system messages have no `md`.
     pub md: Option<Vec<crate::md::Block>>,
@@ -261,6 +264,27 @@ pub struct ThreadPage {
     /// The page ends at the thread's first reply: the replies before the page's offset and the
     /// page itself are all of them.
     pub reached_start: bool,
+}
+
+/// Which threads of a room `chat.getThreadsList` lists.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ThreadsKind {
+    /// Every thread of the room.
+    All,
+    /// The threads the user follows.
+    Following,
+}
+
+/// One page of the threads of a room, as their parent messages.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ThreadsPage {
+    /// The parents, the one with the most recent reply first, as the server sends them.
+    pub threads: Vec<Message>,
+    /// How many threads the room has of that kind, whatever the page holds (`total`).
+    pub total: u32,
+    /// The page ends at the last thread: the threads before the page's offset and the page itself
+    /// are all of them.
+    pub reached_end: bool,
 }
 
 /// What happened to a room's messages since a time (`chat.syncMessages`).

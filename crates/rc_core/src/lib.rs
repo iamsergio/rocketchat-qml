@@ -25,6 +25,7 @@ pub mod rich;
 pub mod rooms;
 pub mod session;
 mod store_worker;
+pub mod threads;
 pub mod timeline;
 mod tuning;
 mod typing;

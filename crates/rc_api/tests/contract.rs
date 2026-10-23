@@ -14,10 +14,10 @@ use std::time::{Duration, Instant};
 
 use rc_api::{
     Credentials, DdpClient, DdpEvent, DdpEvents, Error, Message, RestClient, RoomType,
-    ServerVersion, Subscription, User,
+    ServerVersion, Subscription, ThreadsKind, User,
 };
 use rc_test_server::{
-    Admin, PIXEL_PNG, TestUser, Typist, server_url, status_without_login, unique,
+    Admin, PIXEL_PNG, Posted, TestUser, Typist, server_url, status_without_login, unique,
 };
 use secrecy::{ExposeSecret, SecretString};
 
@@ -2086,6 +2086,166 @@ async fn a_message_that_is_missing_or_in_a_room_the_user_is_not_in_is_a_server_e
             "{id}: {result:?}"
         );
     }
+}
+
+/// A channel with the threads `first`, `second` and `third` (parents posted by admin in that order)
+/// and one reply in each, posted in the order `second`, `third`, `first`, so that the most recent
+/// last reply is `first`'s.
+struct Threads {
+    room_id: String,
+    parents: [Posted; 3],
+}
+
+fn three_threads(fixture: &Fixture) -> Threads {
+    let (room_id, _) = fixture.create_channel();
+    let parents =
+        ["first", "second", "third"].map(|text| fixture.admin.post_message(&room_id, text));
+    for n in [1, 2, 0] {
+        fixture
+            .admin
+            .post_in_thread(&room_id, &parents[n].id, "a reply", false);
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    Threads { room_id, parents }
+}
+
+fn texts_of(threads: &[Message]) -> Vec<&str> {
+    threads.iter().map(|m| m.text.as_str()).collect()
+}
+
+// ACT-010
+#[tokio::test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+async fn the_threads_of_a_room_come_with_the_most_recent_last_reply_first() {
+    let fixture = Fixture::new();
+    let threads = three_threads(&fixture);
+    // A message without replies is not a thread.
+    fixture.admin.post_message(&threads.room_id, "no thread");
+    let session = fixture.client.session(fixture.login().await.credentials);
+
+    let page = session
+        .threads_list(&threads.room_id, ThreadsKind::All, 50, 0)
+        .await
+        .unwrap();
+
+    assert_eq!(texts_of(&page.threads), ["first", "third", "second"]);
+    assert_eq!((page.total, page.reached_end), (3, true));
+    let first = &page.threads[0];
+    assert_eq!(first.id, threads.parents[0].id);
+    assert_eq!(first.room_id, threads.room_id);
+    assert_eq!(first.thread_replies, 1);
+    assert_eq!(first.author.username, "admin");
+    assert!(first.thread_id.is_none());
+    // The time of the last reply is what orders them.
+    let times: Vec<_> = page
+        .threads
+        .iter()
+        .map(|m| m.thread_last_reply.unwrap())
+        .collect();
+    assert!(times.windows(2).all(|pair| pair[0] > pair[1]), "{times:?}");
+}
+
+// ACT-010
+#[tokio::test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+async fn the_threads_of_a_room_page_by_offset_until_the_end() {
+    let fixture = Fixture::new();
+    let threads = three_threads(&fixture);
+    let session = fixture.client.session(fixture.login().await.credentials);
+
+    let first = session
+        .threads_list(&threads.room_id, ThreadsKind::All, 2, 0)
+        .await
+        .unwrap();
+    let second = session
+        .threads_list(&threads.room_id, ThreadsKind::All, 2, 2)
+        .await
+        .unwrap();
+    let beyond = session
+        .threads_list(&threads.room_id, ThreadsKind::All, 2, 6)
+        .await
+        .unwrap();
+
+    assert_eq!(texts_of(&first.threads), ["first", "third"]);
+    assert_eq!((first.total, first.reached_end), (3, false));
+    assert_eq!(texts_of(&second.threads), ["second"]);
+    assert!(second.reached_end);
+    assert!(beyond.threads.is_empty() && beyond.reached_end);
+}
+
+// ACT-010
+#[tokio::test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+async fn a_user_follows_the_threads_they_started_or_replied_to_until_they_unfollow() {
+    let fixture = Fixture::new();
+    let threads = three_threads(&fixture);
+    let me = Admin::login_as(&fixture.user.username, &fixture.user.password);
+    let session = fixture.client.session(fixture.login().await.credentials);
+    let following = || async {
+        let page = session
+            .threads_list(&threads.room_id, ThreadsKind::Following, 50, 0)
+            .await
+            .unwrap();
+        (texts_of(&page.threads).join(","), page)
+    };
+
+    // Nobody told the server about the user: they follow nothing, and `replies` lists the others.
+    let (names, _) = following().await;
+    assert_eq!(names, "");
+
+    // Replying makes the replier a follower, and the thread moves to the front of both lists.
+    me.post_in_thread(&threads.room_id, &threads.parents[1].id, "me too", false);
+    let (names, page) = following().await;
+    assert_eq!(names, "second");
+    assert!(page.threads[0].thread_followers.contains(&fixture.user.id));
+    assert!(
+        page.threads[0]
+            .thread_followers
+            .contains(&fixture.admin.user_id.clone())
+    );
+
+    // Following without replying works too.
+    me.follow_message(&threads.parents[2].id, true);
+    assert_eq!(following().await.0, "second,third");
+
+    // Unfollowing takes the thread out of the followed ones and keeps it among all of them, and a
+    // reply of somebody else doesn't bring the follower back.
+    me.follow_message(&threads.parents[1].id, false);
+    fixture
+        .admin
+        .post_in_thread(&threads.room_id, &threads.parents[1].id, "again", false);
+    assert_eq!(following().await.0, "third");
+    let all = session
+        .threads_list(&threads.room_id, ThreadsKind::All, 50, 0)
+        .await
+        .unwrap();
+    assert_eq!(texts_of(&all.threads), ["second", "first", "third"]);
+}
+
+// ACT-010
+#[tokio::test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+async fn a_pushed_parent_lists_its_followers_as_the_server_has_them() {
+    let fixture = Fixture::new();
+    let threads = three_threads(&fixture);
+    let me = Admin::login_as(&fixture.user.username, &fixture.user.password);
+    let login = fixture.login().await;
+    let (client, mut events) = connect_and_login(&login.credentials).await;
+    client.subscribe_my_messages().await.unwrap();
+    let parent = &threads.parents[1].id;
+
+    me.post_in_thread(&threads.room_id, parent, "me too", false);
+    let counted = message_event_where(&mut events, parent, |m| m.thread_replies == 2).await;
+    assert!(counted.thread_followers.contains(&fixture.user.id));
+
+    // An unfollow is no message: the next push of the parent says it, with no follower of the
+    // user's.
+    me.follow_message(parent, false);
+    fixture
+        .admin
+        .post_in_thread(&threads.room_id, parent, "again", false);
+    let next = message_event_where(&mut events, parent, |m| m.thread_replies == 3).await;
+    assert!(!next.thread_followers.contains(&fixture.user.id));
 }
 
 // ACT-004

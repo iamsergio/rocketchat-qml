@@ -155,7 +155,11 @@ impl<C: Connector> Actor<C> {
             tracing::debug!(%parent, "open_thread ignored: no room is open");
             return;
         };
-        match open.timeline.message(parent) {
+        // The thread list holds parents the room doesn't: opening from it needs no fetch.
+        let listed = (self.thread_list.as_ref())
+            .filter(|listed| listed.list.room() == open.timeline.room())
+            .and_then(|listed| listed.list.message(parent));
+        match open.timeline.message(parent).or(listed) {
             Some(held) if can_start_thread(held) => self.start_thread(held.clone()),
             Some(_) => {
                 tracing::debug!(%parent, "open_thread ignored: not a sent text message");

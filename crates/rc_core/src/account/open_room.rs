@@ -46,6 +46,9 @@ impl<C: Connector> Actor<C> {
             open.deleted.insert(id.clone());
         }
         self.change_timeline(room, |timeline| timeline.remove(id).into_iter().collect());
+        if (self.thread_list.as_ref()).is_some_and(|open| open.list.room() == room) {
+            self.remove_from_thread_list(id);
+        }
         if self
             .pending_thread
             .as_ref()
@@ -79,7 +82,9 @@ impl<C: Connector> Actor<C> {
         // The open thread's parent may be one the room doesn't hold.
         let held = match self.open_thread.as_ref().filter(|t| &t.parent.id == parent) {
             Some(thread) => Some(&thread.parent),
-            None => self.find_message(parent),
+            None => self
+                .find_message(parent)
+                .or_else(|| (self.thread_list.as_ref()).and_then(|open| open.list.message(parent))),
         };
         let Some(mut copy) = held.cloned() else {
             return;
@@ -99,6 +104,9 @@ impl<C: Connector> Actor<C> {
     /// Takes in the server's newer copy of a message that is held as confirmed, wherever it is
     /// held: in the room, in the thread, and as the thread's parent.
     pub(super) fn replace_everywhere(&mut self, room: &RoomId, message: &Message) {
+        if (self.thread_list.as_ref()).is_some_and(|open| open.list.room() == room) {
+            self.replace_in_thread_list(message);
+        }
         if let Some(thread) = self
             .open_thread
             .as_mut()
@@ -116,6 +124,7 @@ impl<C: Connector> Actor<C> {
     /// changes.
     pub(super) fn add_live_message(&mut self, message: Message) {
         self.message_ends_typing(&message);
+        self.push_to_thread_list(&message);
         self.add_live_thread_message(&message);
         if message.shows_in_room() {
             self.add_live_room_message(message);
@@ -174,6 +183,7 @@ impl<C: Connector> Actor<C> {
             return;
         };
         self.close_thread();
+        self.close_thread_list();
         self.abort_history_task();
         let history = self.messages.load(&id);
         let timeline = Timeline::new(id.clone(), history);
@@ -512,6 +522,7 @@ impl<C: Connector> Actor<C> {
     /// open.
     pub(super) fn close_room(&mut self) {
         self.close_thread();
+        self.close_thread_list();
         self.abort_history_task();
         self.end_typing();
         if self.open.take().is_some() {

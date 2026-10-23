@@ -487,7 +487,8 @@ fn the_close_button_escape_and_another_room_close_the_pane() {
     gui.wait_until_hidden(&message(&parent.id, message_row::THREAD_OPEN), TIMEOUT)
         .unwrap();
 
-    // Escape in the composer, with nothing to cancel.
+    // Escape in the composer, with nothing to cancel, goes back to the list of threads, and
+    // Escape in the list closes it (see thread_list.rs).
     choose(gui, &parent.id, main_window::MESSAGE_THREAD_ACTION);
     gui.wait_until_visible(main_window::THREAD_PANE, TIMEOUT)
         .unwrap();
@@ -498,6 +499,10 @@ fn the_close_button_escape_and_another_room_close_the_pane() {
         Modifiers::NONE,
     )
     .unwrap();
+    gui.wait_until_visible(main_window::THREAD_LIST, TIMEOUT)
+        .unwrap();
+    gui.enter_key(main_window::THREAD_LIST, Key::ESCAPE, Modifiers::NONE)
+        .unwrap();
     gui.wait_until_hidden(main_window::THREAD_PANE, TIMEOUT)
         .unwrap();
 

@@ -15,6 +15,7 @@ use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use crate::domain::{
     AccountId, AvatarOwner, Credentials, Message, MessageId, RoomId, RoomKind, StoredAccount, User,
 };
+use crate::threads::ThreadFilter;
 
 /// Why a server call failed. Owned strings only, so that fakes can build and compare them.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
@@ -169,6 +170,24 @@ pub trait ServerApi: Clone + Send + Sync + 'static {
         offset: usize,
         count: usize,
     ) -> impl Future<Output = Result<Page, ApiError>> + Send;
+
+    /// A page of the threads of a room, as their parent messages, the one with the most recent
+    /// reply first: the `count` threads after skipping the first `offset`. The caller
+    /// de-duplicates: a thread that gets a reply meanwhile moves to the front and shifts the
+    /// later pages.
+    ///
+    /// # Errors
+    ///
+    /// [`ApiError::Unauthorized`] if the credentials have expired or were revoked,
+    /// [`ApiError::Server`] if the room doesn't exist or isn't visible to the user.
+    fn threads_list(
+        &self,
+        credentials: &Credentials,
+        room: &RoomId,
+        filter: ThreadFilter,
+        offset: usize,
+        count: usize,
+    ) -> impl Future<Output = Result<ThreadsPage, ApiError>> + Send;
 
     /// A message by its id, wherever it is, as the server stores it.
     ///
@@ -397,6 +416,15 @@ pub struct Page {
     pub messages: Vec<Message>,
     /// There is nothing before them.
     pub reached_start: bool,
+}
+
+/// What [`ServerApi::threads_list`] returns.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ThreadsPage {
+    /// The parents of the threads, the one with the most recent reply first.
+    pub threads: Vec<Message>,
+    /// There is nothing after them.
+    pub reached_end: bool,
 }
 
 /// What is held of one room's messages.

@@ -507,6 +507,7 @@ pub(super) fn message(id: &str, secs: i64) -> Message {
         thread_shown: false,
         thread_replies: 0,
         thread_last_reply: None,
+        thread_followers: Vec::new(),
     }
 }
 

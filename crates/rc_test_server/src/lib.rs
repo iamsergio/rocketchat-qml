@@ -409,6 +409,21 @@ impl Admin {
         );
     }
 
+    /// Makes this user follow the thread of a parent message, or stop following it
+    /// (`chat.followMessage`, `chat.unfollowMessage`).
+    ///
+    /// # Panics
+    ///
+    /// If the server refuses.
+    pub fn follow_message(&self, message_id: &str, follow: bool) {
+        let endpoint = if follow {
+            "chat.followMessage"
+        } else {
+            "chat.unfollowMessage"
+        };
+        self.post(endpoint, &json!({ "mid": message_id }));
+    }
+
     /// Ends every login of this user but this one's (`users.logoutOtherClients`): a client that was
     /// logged in as them finds its token refused, as when a session expires.
     ///

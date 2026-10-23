@@ -71,6 +71,7 @@ impl<C: Connector> Actor<C> {
             thread_shown: target.as_ref().is_some_and(|target| target.also_to_channel),
             thread_replies: 0,
             thread_last_reply: None,
+            thread_followers: Vec::new(),
         };
         let id = message.id.clone();
         let wire = wire_text(&message.quotes, text);

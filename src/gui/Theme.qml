@@ -195,6 +195,12 @@ QtObject {
     readonly property int threadPaneWidth: 360
     readonly property int threadSummaryHeight: 28
     readonly property int threadSummaryIconSize: 14
+    // The list of a room's threads in the pane: the avatar of a row, the lines its text is clamped
+    // to, the height of a segment of the filter, and the chevron of the back button.
+    readonly property int threadRowAvatarSize: 28
+    readonly property int threadRowTextLines: 2
+    readonly property int threadFilterHeight: 28
+    readonly property int threadBackIconSize: 14
     // The line "alice is typing…" over the composer. Its height is always taken, with or without
     // text, so the messages don't move when someone starts or stops typing.
     readonly property int typingLineHeight: 20

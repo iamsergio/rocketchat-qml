@@ -8,16 +8,27 @@ import QtQuick.Controls.Basic
 import QtQuick.Layouts
 import RocketChat.Bridge
 
-// The open thread, beside the room: the message it belongs to, the replies under it, and the box to
-// reply in. RoomPage shows it only while a thread is open.
+// The pane beside the room: the open thread (the message it belongs to, the replies under it, and
+// the box to reply in), or else the room's threads. What it shows is decided in Rust
+// (`ThreadList.pane`); RoomPage shows the pane only while there is something to show. The list stays
+// under a thread, to come back to where it was.
 Rectangle {
     id: root
 
     objectName: "threadPane"
     color: Theme.surface
-    onVisibleChanged: {
-        if (visible)
-            composer.focusField();
+
+    // The pane takes the focus when it shows something else: the box to reply in, or the list, for
+    // Escape.
+    Connections {
+        function onPaneChanged() {
+            if (ThreadList.pane === "thread")
+                composer.focusField();
+            else if (ThreadList.pane === "list")
+                listPage.forceActiveFocus();
+        }
+
+        target: ThreadList
     }
 
     // The hairline between the room and the pane.
@@ -45,6 +56,47 @@ Rectangle {
                 anchors.rightMargin: Theme.spacingXL
                 spacing: Theme.spacingXL
 
+                // Back to the list.
+                AbstractButton {
+                    id: back
+
+                    objectName: "threadBackButton"
+                    focusPolicy: Qt.NoFocus
+                    implicitHeight: Theme.iconButtonSize
+                    implicitWidth: backRow.implicitWidth + 2 * Theme.spacingL
+                    text: qsTr("Threads")
+                    visible: ThreadList.pane === "thread"
+                    onClicked: ThreadList.back()
+
+                    background: Rectangle {
+                        color: back.hovered ? Theme.raised : Theme.transparent
+                        radius: Theme.radiusControl
+                    }
+
+                    contentItem: RowLayout {
+                        id: backRow
+
+                        spacing: Theme.spacingS
+
+                        Icon {
+                            Layout.preferredHeight: Theme.threadBackIconSize
+                            Layout.preferredWidth: Theme.threadBackIconSize
+                            source: "icons/chevron.svg"
+                            tint: back.hovered ? Theme.text : Theme.textMuted
+                        }
+
+                        Label {
+                            color: back.hovered ? Theme.text : Theme.textMuted
+                            font.pointSize: Theme.fontSizeSmall
+                            text: back.text
+                        }
+                    }
+
+                    ToolTip.delay: Theme.toolTipDelay
+                    ToolTip.text: qsTr("Back to the threads")
+                    ToolTip.visible: hovered
+                }
+
                 RowLayout {
                     Layout.fillWidth: true
                     spacing: Theme.spacingL
@@ -54,6 +106,15 @@ Rectangle {
                         font.pointSize: Theme.fontSizeHeading
                         font.weight: Theme.fontWeightBold
                         text: qsTr("Thread")
+                        visible: ThreadList.pane === "thread"
+                    }
+
+                    Label {
+                        objectName: "threadListTitle"
+                        font.pointSize: Theme.fontSizeHeading
+                        font.weight: Theme.fontWeightBold
+                        text: qsTr("Threads")
+                        visible: ThreadList.pane === "list"
                     }
 
                     Label {
@@ -61,7 +122,7 @@ Rectangle {
                         color: Theme.textFaint
                         elide: Text.ElideRight
                         font.pointSize: Theme.fontSizeSmall
-                        text: "# " + Thread.roomName
+                        text: "# " + ThreadList.roomName
                         textFormat: Text.PlainText
                     }
                 }
@@ -75,8 +136,8 @@ Rectangle {
                     implicitHeight: Theme.iconButtonSize
                     implicitWidth: Theme.iconButtonSize
                     padding: Theme.spacingNone
-                    text: qsTr("Close the thread")
-                    onClicked: Thread.close()
+                    text: qsTr("Close the pane")
+                    onClicked: ThreadList.closePane()
 
                     ToolTip.delay: Theme.toolTipDelay
                     ToolTip.text: text
@@ -107,121 +168,137 @@ Rectangle {
             }
         }
 
-        Label {
-            objectName: "threadError"
-            Layout.fillWidth: true
-            Layout.margins: Theme.spacingXXL
-            color: Theme.error
-            font.pointSize: Theme.fontSizeSmall
-            text: Thread.errorText
-            visible: text !== ""
-            wrapMode: Text.Wrap
-        }
-
-        // As the room's list: newest first, bottom to top. The parent is the oldest row, at the
-        // top, and the replies follow it.
-        ListView {
-            id: replies
-
-            objectName: "threadMessageList"
+        // The thread: its error, the replies and the box to reply in. Kept (hidden) under the list.
+        ColumnLayout {
             Layout.fillHeight: true
             Layout.fillWidth: true
-            boundsBehavior: Flickable.StopAtBounds
-            clip: true
-            model: ThreadMessageList
-            verticalLayoutDirection: ListView.BottomToTop
+            spacing: Theme.spacingNone
+            visible: ThreadList.pane === "thread"
 
-            delegate: MessageDelegate {
-                inThreadPane: true
-                onEditRequested: messageId => composer.beginEdit(messageId)
-                onQuoteRequested: messageId => composer.beginQuote(messageId)
-                onReactRequested: messageId => picker.openFor(messageId)
-                onLinkMenuRequested: (url, origin, x, y) => linkMenu.openFor(url, origin, x, y)
+            Label {
+                objectName: "threadError"
+                Layout.fillWidth: true
+                Layout.margins: Theme.spacingXXL
+                color: Theme.error
+                font.pointSize: Theme.fontSizeSmall
+                text: Thread.errorText
+                visible: text !== ""
+                wrapMode: Text.Wrap
             }
 
-            ScrollBar.vertical: ScrollBar {}
+            // As the room's list: newest first, bottom to top. The parent is the oldest row, at the
+            // top, and the replies follow it.
+            ListView {
+                id: replies
 
-            // Above the oldest row, which in this direction is the footer: a spinner while older
-            // replies load.
-            footer: Item {
-                // The list's content item, as wide as the list (see RoomView).
-                width: parent?.width ?? 0
-                height: olderBusy.visible ? Theme.historyFooterHeight : Theme.spacingNone
+                objectName: "threadMessageList"
+                Layout.fillHeight: true
+                Layout.fillWidth: true
+                boundsBehavior: Flickable.StopAtBounds
+                clip: true
+                model: ThreadMessageList
+                verticalLayoutDirection: ListView.BottomToTop
+
+                delegate: MessageDelegate {
+                    inThreadPane: true
+                    onEditRequested: messageId => composer.beginEdit(messageId)
+                    onQuoteRequested: messageId => composer.beginQuote(messageId)
+                    onReactRequested: messageId => picker.openFor(messageId)
+                    onLinkMenuRequested: (url, origin, x, y) => linkMenu.openFor(url, origin, x, y)
+                }
+
+                ScrollBar.vertical: ScrollBar {}
+
+                // Above the oldest row, which in this direction is the footer: a spinner while older
+                // replies load.
+                footer: Item {
+                    // The list's content item, as wide as the list (see RoomView).
+                    width: parent?.width ?? 0
+                    height: olderBusy.visible ? Theme.historyFooterHeight : Theme.spacingNone
+
+                    BusyIndicator {
+                        id: olderBusy
+
+                        objectName: "threadLoadingOlder"
+                        anchors.centerIn: parent
+                        height: Theme.busyIndicatorSize
+                        palette.dark: Theme.textMuted
+                        running: visible
+                        visible: Thread.loadingOlder
+                    }
+                }
+
+                // Reaching the top asks for older replies; the core ignores the request when there is
+                // nothing to load or a load is in progress.
+                onAtYBeginningChanged: {
+                    if (atYBeginning && count > 0)
+                        Thread.loadOlder();
+                }
 
                 BusyIndicator {
-                    id: olderBusy
-
-                    objectName: "threadLoadingOlder"
+                    objectName: "threadLoading"
                     anchors.centerIn: parent
-                    height: Theme.busyIndicatorSize
+                    implicitHeight: Theme.busyIndicatorLargeSize
+                    implicitWidth: Theme.busyIndicatorLargeSize
                     palette.dark: Theme.textMuted
                     running: visible
-                    visible: Thread.loadingOlder
+                    visible: Thread.loading
                 }
             }
 
-            // Reaching the top asks for older replies; the core ignores the request when there is
-            // nothing to load or a load is in progress.
-            onAtYBeginningChanged: {
-                if (atYBeginning && count > 0)
-                    Thread.loadOlder();
+            // What to do with the link that was right-clicked in a reply.
+            LinkMenu {
+                id: linkMenu
             }
 
-            BusyIndicator {
-                objectName: "threadLoading"
-                anchors.centerIn: parent
-                implicitHeight: Theme.busyIndicatorLargeSize
-                implicitWidth: Theme.busyIndicatorLargeSize
-                palette.dark: Theme.textMuted
-                running: visible
-                visible: Thread.loading
+            // The emoji to react with, for the message whose menu or "+" chip asked.
+            EmojiPicker {
+                id: picker
+
+                property string messageId
+
+                function openFor(id) {
+                    messageId = id;
+                    open();
+                }
+
+                onPicked: shortcode => Room.react(messageId, shortcode, true)
+            }
+
+            // Who is typing in the thread. Empty most of the time, but its height is always taken.
+            Label {
+                objectName: "threadTyping"
+                Layout.fillWidth: true
+                Layout.leftMargin: Theme.spacingXXXL
+                Layout.preferredHeight: Theme.typingLineHeight
+                Layout.rightMargin: Theme.spacingXXXL
+                color: Theme.textMuted
+                elide: Text.ElideRight
+                font.pointSize: Theme.fontSizeSmall
+                text: Thread.typing
+                textFormat: Text.PlainText
+                verticalAlignment: Text.AlignVCenter
+            }
+
+            Composer {
+                id: composer
+
+                objectName: "threadComposer"
+                Layout.bottomMargin: Theme.spacingXXXL
+                Layout.fillWidth: true
+                Layout.leftMargin: Theme.spacingXXXL
+                Layout.rightMargin: Theme.spacingXXXL
+                Layout.topMargin: Theme.spacingM
+                forThread: true
             }
         }
 
-        // What to do with the link that was right-clicked in a reply.
-        LinkMenu {
-            id: linkMenu
-        }
+        ThreadListPage {
+            id: listPage
 
-        // The emoji to react with, for the message whose menu or "+" chip asked.
-        EmojiPicker {
-            id: picker
-
-            property string messageId
-
-            function openFor(id) {
-                messageId = id;
-                open();
-            }
-
-            onPicked: shortcode => Room.react(messageId, shortcode, true)
-        }
-
-        // Who is typing in the thread. Empty most of the time, but its height is always taken.
-        Label {
-            objectName: "threadTyping"
+            Layout.fillHeight: true
             Layout.fillWidth: true
-            Layout.leftMargin: Theme.spacingXXXL
-            Layout.preferredHeight: Theme.typingLineHeight
-            Layout.rightMargin: Theme.spacingXXXL
-            color: Theme.textMuted
-            elide: Text.ElideRight
-            font.pointSize: Theme.fontSizeSmall
-            text: Thread.typing
-            textFormat: Text.PlainText
-            verticalAlignment: Text.AlignVCenter
-        }
-
-        Composer {
-            id: composer
-
-            objectName: "threadComposer"
-            Layout.bottomMargin: Theme.spacingXXXL
-            Layout.fillWidth: true
-            Layout.leftMargin: Theme.spacingXXXL
-            Layout.rightMargin: Theme.spacingXXXL
-            Layout.topMargin: Theme.spacingM
-            forThread: true
+            visible: ThreadList.pane === "list"
         }
     }
 }

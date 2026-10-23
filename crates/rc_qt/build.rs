@@ -17,6 +17,8 @@ fn main() {
             "src/room_search_model.rs",
             "src/room_vm.rs",
             "src/session_vm.rs",
+            "src/thread_list_model.rs",
+            "src/thread_list_vm.rs",
             "src/thread_message_list_model.rs",
             "src/thread_vm.rs",
         ])
