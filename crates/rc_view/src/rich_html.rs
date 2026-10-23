@@ -12,12 +12,11 @@
 
 use std::fmt::Write as _;
 
-use jiff::Timestamp;
-use jiff::tz::TimeZone;
 use rc_core::domain::{Message, MessageKind};
 use rc_core::emoji::Shown;
 use rc_core::rich::{Block, Emoji, Inline, Mention, RichText};
 
+use crate::rich_view::{color_hex, is_safe_url, mention_name, task_marker, time_text};
 use crate::viewer::{Clock, Viewer, is_web_url};
 
 /// The edge of a custom emoji image inline, and in a message of nothing but emoji.
@@ -50,11 +49,7 @@ pub fn message_html(message: &Message, viewer: &Viewer, clock: Clock) -> String 
 /// the time.
 #[must_use]
 pub fn topic_html(topic: &str, viewer: &Viewer) -> String {
-    let clock = Clock {
-        zone: &TimeZone::UTC,
-        now: Timestamp::UNIX_EPOCH,
-    };
-    render(&RichText::from_topic(topic), viewer, clock)
+    render(&RichText::from_topic(topic), viewer, Clock::timeless())
 }
 
 /// `text` with the characters that mean something in HTML replaced.
@@ -68,15 +63,6 @@ fn push_escaped(out: &mut String, text: &str) {
             c => out.push(c),
         }
     }
-}
-
-/// Whether a link to `url` is worth making: other schemes (`file:`, `javascript:`, ...) are not
-/// something a message should be able to open.
-fn is_safe_url(url: &str) -> bool {
-    let lower = url.trim_start().to_ascii_lowercase();
-    ["http://", "https://", "mailto:"]
-        .iter()
-        .any(|scheme| lower.starts_with(scheme))
 }
 
 struct Renderer<'a> {
@@ -140,7 +126,7 @@ impl Renderer<'_> {
                     out.push_str(
                         "<p style=\"margin-top:0px; margin-bottom:0px; margin-left:16px\">",
                     );
-                    out.push_str(if item.done { "\u{2611} " } else { "\u{2610} " });
+                    out.push_str(task_marker(item.done));
                     self.inlines(out, &item.content);
                     out.push_str("</p>");
                 }
@@ -216,17 +202,7 @@ impl Renderer<'_> {
     }
 
     fn mention(&self, out: &mut String, mention: &Mention) {
-        let (name, me) = match mention {
-            Mention::All => ("all", true),
-            Mention::Here => ("here", true),
-            Mention::User(name) => (
-                name.as_str(),
-                self.viewer
-                    .username
-                    .as_deref()
-                    .is_some_and(|me| me.eq_ignore_ascii_case(name)),
-            ),
-        };
+        let (name, me) = mention_name(mention, self.viewer);
         if me {
             out.push_str("<span class=\"mention-me\">@");
             push_escaped(out, name);
@@ -271,11 +247,7 @@ fn code_block(out: &mut String, text: &str) {
 }
 
 fn color(out: &mut String, r: u8, g: u8, b: u8, a: u8) {
-    let hex = if a == u8::MAX {
-        format!("#{r:02x}{g:02x}{b:02x}")
-    } else {
-        format!("#{r:02x}{g:02x}{b:02x}{a:02x}")
-    };
+    let hex = color_hex(r, g, b, a);
     let css = if a == u8::MAX {
         hex.clone()
     } else {
@@ -287,46 +259,10 @@ fn color(out: &mut String, r: u8, g: u8, b: u8, a: u8) {
     );
 }
 
-/// A timestamp the way the author's format letter asks (`t` time, `T` with seconds, `d` date, `D`
-/// long date, `f` and `F` date and time, `R` relative), in the user's time zone. The author's own
-/// text if it isn't a time or the format is unknown.
-fn time_text(time: Option<Timestamp>, format: &str, fallback: &str, clock: Clock) -> String {
-    let Some(time) = time else {
-        return fallback.to_owned();
-    };
-    let zoned = time.to_zoned(clock.zone.clone());
-    let pattern = match format {
-        "t" => "%H:%M",
-        "T" => "%H:%M:%S",
-        "d" => "%Y-%m-%d",
-        "D" => "%-d %B %Y",
-        "f" => "%-d %B %Y %H:%M",
-        "F" => "%A, %-d %B %Y %H:%M",
-        "R" => return relative(time, clock.now),
-        _ => return fallback.to_owned(),
-    };
-    zoned.strftime(pattern).to_string()
-}
-
-/// `3 hours ago`, `in 2 days`: the largest unit that fits at least once.
-fn relative(time: Timestamp, now: Timestamp) -> String {
-    let seconds = now.as_second() - time.as_second();
-    let amount = seconds.unsigned_abs();
-    let units = [(86_400, "day"), (3_600, "hour"), (60, "minute")];
-    let (count, unit) = units
-        .iter()
-        .find(|(size, _)| amount >= *size)
-        .map_or((amount, "second"), |(size, name)| (amount / size, *name));
-    let plural = if count == 1 { "" } else { "s" };
-    if seconds >= 0 {
-        format!("{count} {unit}{plural} ago")
-    } else {
-        format!("in {count} {unit}{plural}")
-    }
-}
-
 #[cfg(test)]
 mod tests {
+    use jiff::Timestamp;
+    use jiff::tz::TimeZone;
     use rc_core::domain::{Author, Delivery, SystemEvent};
     use rc_core::emoji::CustomEmojis;
     use rc_core::rich::TaskItem;
@@ -746,19 +682,6 @@ mod tests {
             }]),
             "&lt;t:x:t&gt;"
         );
-    }
-
-    // RICH-001
-    #[test]
-    fn a_relative_time_uses_the_largest_unit_and_looks_both_ways() {
-        let now: Timestamp = "2026-10-20T12:00:00Z".parse().unwrap();
-        let at = |text: &str| relative(text.parse().unwrap(), now);
-        assert_eq!(at("2026-10-20T11:59:30Z"), "30 seconds ago");
-        assert_eq!(at("2026-10-20T11:59:00Z"), "1 minute ago");
-        assert_eq!(at("2026-10-20T09:00:00Z"), "3 hours ago");
-        assert_eq!(at("2026-10-18T12:00:00Z"), "2 days ago");
-        assert_eq!(at("2026-10-20T14:00:00Z"), "in 2 hours");
-        assert_eq!(at("2026-10-20T12:00:00Z"), "0 seconds ago");
     }
 
     // RICH-001

@@ -32,6 +32,20 @@ pub struct Clock<'a> {
     pub now: Timestamp,
 }
 
+/// The zone of [`Clock::timeless`].
+static UTC: TimeZone = TimeZone::UTC;
+
+impl Clock<'static> {
+    /// For text that nothing in depends on the time, a room's topic: UTC, at the epoch.
+    #[must_use]
+    pub fn timeless() -> Self {
+        Self {
+            zone: &UTC,
+            now: Timestamp::UNIX_EPOCH,
+        }
+    }
+}
+
 /// Whether `url` is an `http` or `https` one, which is what an image may load from.
 #[must_use]
 pub fn is_web_url(url: &str) -> bool {
