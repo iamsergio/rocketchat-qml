@@ -15,7 +15,6 @@ use jiff::tz::TimeZone;
 use rc_core::domain::{AvatarOwner, Message, MessageKind};
 use rc_core::timeline::TimelineChange;
 
-use crate::rich_html::{message_html, render};
 use rc_view::attachment_view::{AttachmentView, ImageUrls, attachments, paths, shows_image};
 use rc_view::avatar_view::{AvatarUrls, color, initials, message_owner, owners, rows_using, runs};
 use rc_view::message_view::{
@@ -25,6 +24,7 @@ use rc_view::message_view::{
 };
 use rc_view::quote_view::{QuoteView, quotes};
 use rc_view::reaction_view::{ReactionView, reactions};
+use rc_view::rich_html::{message_html, render};
 use rc_view::row_ops::{MessageOp, apply_newest_first, message_ops};
 use rc_view::viewer::{Clock, Viewer};
 

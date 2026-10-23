@@ -2,8 +2,9 @@
 // SPDX-License-Identifier: MIT
 
 //! Renders a message's `RichText` as the HTML subset that Qt's rich text (`Text.RichText`)
-//! supports. Plain Rust, so it can be unit-tested without Qt. Everything the author typed goes
-//! through [`escape`]; the only markup is what this module writes.
+//! supports. Plain Rust, so it can be unit-tested without Qt, and in `rc_view` so that every
+//! frontend gives the GUI tests the same HTML. Everything the author typed goes through
+//! `push_escaped`; the only markup is what this module writes.
 //!
 //! No colour is set here: the markup carries class names (`mention-me`, `mention`, `channel`,
 //! `code-block`, `quote-bar`, and the tag `code` for inline code) and the GUI's style sheet, in
@@ -17,7 +18,7 @@ use rc_core::domain::{Message, MessageKind};
 use rc_core::emoji::Shown;
 use rc_core::rich::{Block, Emoji, Inline, Mention, RichText};
 
-use rc_view::viewer::{Clock, Viewer, is_web_url};
+use crate::viewer::{Clock, Viewer, is_web_url};
 
 /// The edge of a custom emoji image inline, and in a message of nothing but emoji.
 const EMOJI_SIZE: u32 = 20;
