@@ -53,4 +53,3 @@ pub mod thread_vm;
 
 mod hub;
 mod message_mirror;
-mod rich_html;
