@@ -227,7 +227,7 @@ fn leaving_a_quiet_open_direct_message_by_opening_another_room_hides_it() {
         next_rooms(&harness),
         [RoomChange::Updated {
             index: 0,
-            room: read
+            item: read
         }]
     );
 

@@ -739,7 +739,10 @@ pub(super) fn unread_secret() -> rc_api::Subscription {
 
 /// The next event is the room list changing, once, to this.
 pub(super) fn expect_rooms_updated(harness: &Harness, index: usize, room: Room) {
-    harness.expect_events(vec![rooms_change(RoomChange::Updated { index, room })]);
+    harness.expect_events(vec![rooms_change(RoomChange::Updated {
+        index,
+        item: room,
+    })]);
 }
 
 pub(super) fn at(secs: i64) -> jiff::Timestamp {

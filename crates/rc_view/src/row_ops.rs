@@ -1,11 +1,11 @@
 // SPDX-FileCopyrightText: 2026 Sergio Martins
 // SPDX-License-Identifier: MIT
 
-//! How a [`RoomChange`] maps to the calls a `QAbstractListModel` makes around it. Plain Rust, so it
+//! How a [`ListChange`] (the room list's, for one) maps to the calls a `QAbstractListModel` makes around it. Plain Rust, so it
 //! can be unit-tested without Qt.
 
 use rc_core::domain::Message;
-use rc_core::rooms::RoomChange;
+use rc_core::list_change::ListChange;
 use rc_core::timeline::TimelineChange;
 
 /// The notifications for one change. Rows are indices before the change is applied, except for
@@ -33,12 +33,12 @@ pub enum RowOp {
 
 /// The notifications to make for `change`.
 #[must_use]
-pub fn row_ops(change: &RoomChange) -> RowOp {
+pub fn row_ops<T>(change: &ListChange<T>) -> RowOp {
     match *change {
-        RoomChange::Inserted { index, .. } => RowOp::Insert { row: index },
-        RoomChange::Updated { index, .. } => RowOp::Update { row: index },
-        RoomChange::Removed { index } => RowOp::Remove { row: index },
-        RoomChange::Moved { from, to, .. } => RowOp::Move {
+        ListChange::Inserted { index, .. } => RowOp::Insert { row: index },
+        ListChange::Updated { index, .. } => RowOp::Update { row: index },
+        ListChange::Removed { index } => RowOp::Remove { row: index },
+        ListChange::Moved { from, to, .. } => RowOp::Move {
             from,
             destination: qt_move_destination(from, to),
             to,
@@ -211,6 +211,7 @@ pub fn apply_newest_first(change: &TimelineChange, messages: &mut Vec<Message>) 
 #[cfg(test)]
 mod tests {
     use rc_core::domain::{Author, Delivery, Message, MessageKind, Room, RoomKind};
+    use rc_core::rooms::RoomChange;
 
     use super::*;
 
@@ -238,14 +239,14 @@ mod tests {
         assert_eq!(
             row_ops(&RoomChange::Inserted {
                 index: 4,
-                room: room()
+                item: room()
             }),
             RowOp::Insert { row: 4 }
         );
         assert_eq!(
             row_ops(&RoomChange::Updated {
                 index: 2,
-                room: room()
+                item: room()
             }),
             RowOp::Update { row: 2 }
         );
@@ -257,7 +258,7 @@ mod tests {
             row_ops(&RoomChange::Moved {
                 from: 3,
                 to: 0,
-                room: room()
+                item: room()
             }),
             RowOp::Move {
                 from: 3,

@@ -786,7 +786,7 @@ fn nothing_is_sent_while_the_totals_are_zero() {
     assert!(fake.push(0, Pushed::Subscription(unread_in("b", 0, 0))));
     harness.expect_events(vec![rooms_change(RoomChange::Inserted {
         index: 1,
-        room: room_from(unread_in("b", 0, 0)).unwrap(),
+        item: room_from(unread_in("b", 0, 0)).unwrap(),
     })]);
     harness.logout();
     harness.expect_events(vec![session_event(logged_out(None)), rooms_event(vec![])]);

@@ -173,7 +173,7 @@ impl<C: Connector> Actor<C> {
         let avatars: Vec<_> = changes
             .iter()
             .filter_map(|change| match change {
-                RoomChange::Inserted { room, .. } => room.avatar_to_fetch(),
+                RoomChange::Inserted { item: room, .. } => room.avatar_to_fetch(),
                 _ => None,
             })
             .collect();

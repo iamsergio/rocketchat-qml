@@ -15,6 +15,7 @@ pub mod domain;
 pub mod emoji;
 mod error;
 mod images;
+pub mod list_change;
 pub mod logging;
 pub mod policy;
 pub mod ports;
