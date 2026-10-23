@@ -31,11 +31,13 @@ FocusScope {
         id: segment
 
         required property string filter
+        // How many threads there are, said after the label in faint text, when there are any.
+        property int count: 0
 
         checked: ThreadList.filter === filter
         focusPolicy: Qt.NoFocus
         implicitHeight: Theme.threadFilterHeight
-        implicitWidth: segmentLabel.implicitWidth + 2 * Theme.spacingXXL
+        implicitWidth: segmentRow.implicitWidth + 2 * Theme.spacingXXL
         onClicked: ThreadList.openList(filter)
 
         background: Rectangle {
@@ -43,15 +45,34 @@ FocusScope {
             radius: Theme.radiusControl
         }
 
-        contentItem: Label {
-            id: segmentLabel
+        contentItem: Item {
+            implicitHeight: segmentRow.implicitHeight
+            implicitWidth: segmentRow.implicitWidth
 
-            color: segment.checked ? Theme.text : Theme.textMuted
-            font.pointSize: Theme.fontSizeSmall
-            font.weight: segment.checked ? Theme.fontWeightSemibold : Theme.fontWeightNormal
-            horizontalAlignment: Text.AlignHCenter
-            text: segment.text
-            verticalAlignment: Text.AlignVCenter
+            RowLayout {
+                id: segmentRow
+
+                anchors.centerIn: parent
+                spacing: Theme.spacingS
+
+                Label {
+                    color: segment.checked ? Theme.text : Theme.textMuted
+                    font.pointSize: Theme.fontSizeSmall
+                    font.weight: segment.checked ? Theme.fontWeightSemibold : Theme.fontWeightNormal
+                    text: segment.text
+                }
+
+                Label {
+                    objectName: segment.objectName + "Count"
+                    color: Theme.textFaint
+                    font.features: ({
+                            "tnum": 1
+                        })
+                    font.pointSize: Theme.fontSizeTiny
+                    text: segment.count
+                    visible: segment.count > 0
+                }
+            }
         }
     }
 
@@ -87,6 +108,13 @@ FocusScope {
                     objectName: "threadListFilterFollowing"
                     filter: "following"
                     text: qsTr("Following")
+                }
+
+                Segment {
+                    objectName: "threadListFilterUnread"
+                    count: ThreadList.unreadCount
+                    filter: "unread"
+                    text: qsTr("Unread")
                 }
             }
         }

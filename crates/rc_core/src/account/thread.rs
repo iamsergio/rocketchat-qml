@@ -261,6 +261,7 @@ impl<C: Connector> Actor<C> {
         // Typists in this thread show at once, and the old thread's are told to be gone.
         self.tell_typing();
         self.fetch_thread(false);
+        self.read_open_thread_if_unread();
     }
 
     pub(super) fn load_older_thread(&mut self) {

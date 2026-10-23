@@ -2169,6 +2169,7 @@ struct Mirrors {
     /// The thread list.
     list: Vec<Message>,
     list_status: ThreadListStatus,
+    rooms: Vec<Room>,
 }
 
 /// Follows the events like a frontend until `done` accepts what is shown.
@@ -2190,6 +2191,14 @@ fn follow_both(
                 .iter()
                 .for_each(|change| change.apply(&mut mirrors.list)),
             Event::ThreadListStatus(status) => mirrors.list_status = status.clone(),
+            // The rooms listed at the login came before the mirror: it keeps the latest copy of
+            // each room that changes.
+            Event::Rooms(changes) => {
+                for room in changes.iter().filter_map(changed_room) {
+                    mirrors.rooms.retain(|held| held.id != room.id);
+                    mirrors.rooms.push(room.clone());
+                }
+            }
             _ => {}
         }
         done(mirrors).then_some(())
@@ -2909,4 +2918,96 @@ fn the_thread_list_pages_until_the_last_thread() {
     // The most recent last reply first: the threads were made in order.
     assert_eq!(texts(&mirrors.list)[0], format!("thread {}", total - 1));
     assert_eq!(texts(&mirrors.list)[total - 1], "thread 0");
+}
+
+/// The open room, as the room list holds it.
+fn room_of<'a>(mirrors: &'a Mirrors, open: &OwnMessages) -> Option<&'a Room> {
+    mirrors
+        .rooms
+        .iter()
+        .find(|room| room.id.as_str() == open.room)
+}
+
+/// A room opened by the user where they started the thread "mine" (so they follow it) and admin
+/// the thread "theirs". The room list is mirrored too.
+fn open_channel_for_unread_threads() -> (OwnMessages, Mirrors, String, String, Admin) {
+    let admin = Admin::login();
+    let user = admin.create_user();
+    let (room, room_name) = admin.create_channel(&[&user.username]);
+    let me = Admin::login_as(&user.username, &user.password);
+    let mine = me.post_message(&room, "mine").id;
+    let theirs = admin.post_message(&room, "theirs").id;
+    let (client, events) = logged_in(&user);
+    let mut mirrors = Mirrors::default();
+    // The rooms came with the login: the mirror starts from what the listing says.
+    client.account().open_room(room.clone().into());
+    let open = OwnMessages {
+        admin,
+        username: user.username.clone(),
+        room,
+        room_name,
+        ids: Vec::new(),
+        client,
+        events,
+        mirror: Vec::new(),
+    };
+    follow_both(&open.events, &mut mirrors, |m| !m.room.is_empty());
+    (open, mirrors, mine, theirs, me)
+}
+
+// ACT-011
+#[test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+fn the_rooms_unread_threads_follow_the_replies_and_the_mentions_and_the_unread_list_with_them() {
+    let (open, mut mirrors, mine, theirs, _me) = open_channel_for_unread_threads();
+    open.client.account().open_thread_list(ThreadFilter::Unread);
+    list_loaded(&open, &mut mirrors);
+    assert!(mirrors.list.is_empty());
+
+    // A reply to the user's own thread, then one that mentions them in a thread they don't follow.
+    open.admin.post_in_thread(&open.room, &mine, "plain", false);
+    follow_both(&open.events, &mut mirrors, |m| {
+        listed(m) == ["mine"]
+            && room_of(m, &open).is_some_and(|room| room.unread_threads.len() == 1)
+    });
+    open.admin.post_in_thread(
+        &open.room,
+        &theirs,
+        &format!("hey @{}", open.username),
+        false,
+    );
+    follow_both(&open.events, &mut mirrors, |m| {
+        listed(m) == ["theirs", "mine"]
+            && room_of(m, &open).is_some_and(|room| {
+                room.unread_threads.len() == 2 && room.mentioned_threads == [theirs.clone().into()]
+            })
+    });
+}
+
+// ACT-011
+#[test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+fn opening_an_unread_thread_reads_it_and_it_leaves_the_unread_list() {
+    let (open, mut mirrors, mine, _theirs, _me) = open_channel_for_unread_threads();
+    open.client.account().open_thread_list(ThreadFilter::Unread);
+    list_loaded(&open, &mut mirrors);
+    open.admin.post_in_thread(&open.room, &mine, "plain", false);
+    follow_both(&open.events, &mut mirrors, |m| listed(m) == ["mine"]);
+
+    open.client.account().open_thread(mine.clone().into());
+
+    // The core calls `readThreads` and the server pushes the subscription without the thread.
+    follow_both(&open.events, &mut mirrors, |m| {
+        m.list.is_empty() && room_of(m, &open).is_some_and(|room| room.unread_threads.is_empty())
+    });
+    // A reply that comes while it is open is read as well.
+    open.admin
+        .post_in_thread(&open.room, &mine, "while open", false);
+    follow_both(&open.events, &mut mirrors, |m| {
+        message_saying(&m.thread, "while open").is_some()
+    });
+    std::thread::sleep(Duration::from_millis(500));
+    follow_both(&open.events, &mut mirrors, |m| {
+        room_of(m, &open).is_some_and(|room| room.unread_threads.is_empty())
+    });
 }

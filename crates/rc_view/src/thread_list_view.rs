@@ -5,7 +5,7 @@
 //! list: the texts of a row, the state of the list, and what the pane beside the room shows. Plain
 //! Rust, so it can be unit-tested without Qt and every frontend can use it.
 
-use rc_core::domain::{Message, Room, RoomId};
+use rc_core::domain::{Message, MessageId, Room, RoomId};
 use rc_core::threads::{ThreadFilter, ThreadListStatus};
 
 use crate::message_view::body;
@@ -43,6 +43,7 @@ pub fn filter_name(filter: ThreadFilter) -> &'static str {
     match filter {
         ThreadFilter::All => "all",
         ThreadFilter::Following => "following",
+        ThreadFilter::Unread => "unread",
     }
 }
 
@@ -52,6 +53,7 @@ pub fn parse_filter(name: &str) -> Option<ThreadFilter> {
     match name {
         "all" => Some(ThreadFilter::All),
         "following" => Some(ThreadFilter::Following),
+        "unread" => Some(ThreadFilter::Unread),
         _ => None,
     }
 }
@@ -107,6 +109,11 @@ pub struct ThreadListState {
     /// What an empty list says (see [`empty_texts`]); empty while it isn't empty.
     pub empty_title: String,
     pub empty_hint: String,
+    /// How many threads of the room have replies the user hasn't read: the badge of the room's
+    /// threads button, and the count of the "Unread" filter.
+    pub unread_count: usize,
+    /// One of them mentions the user: the badge is red.
+    pub unread_mention: bool,
 }
 
 /// The title and the hint of an empty list of `filter` in the room called `room_name`.
@@ -121,6 +128,10 @@ pub fn empty_texts(filter: ThreadFilter, room_name: &str) -> (String, String) {
             format!("No threads you follow in #{room_name}"),
             "Reply in a thread to follow it.".to_owned(),
         ),
+        ThreadFilter::Unread => (
+            format!("No unread threads in #{room_name}"),
+            "New replies in a thread you follow show up here.".to_owned(),
+        ),
     }
 }
 
@@ -134,10 +145,12 @@ pub fn thread_list_state(
     rows: usize,
     thread_open: bool,
 ) -> ThreadListState {
-    let name = room
-        .and_then(|id| rooms.iter().find(|candidate| &candidate.id == id))
-        .map(|room| room.name.clone())
-        .unwrap_or_default();
+    let held = room.and_then(|id| rooms.iter().find(|candidate| &candidate.id == id));
+    let name = held.map(|room| room.name.clone()).unwrap_or_default();
+    let unread_count = held.map_or(0, |room| room.unread_threads.len());
+    let unread_mention = held.is_some_and(|room| {
+        (room.mentioned_threads.iter()).any(|id| room.unread_threads.contains(id))
+    });
     let list_open = status.room.is_some();
     let pane = if thread_open {
         Pane::Thread
@@ -171,7 +184,55 @@ pub fn thread_list_state(
         empty,
         empty_title,
         empty_hint,
+        unread_count,
+        unread_mention,
     }
+}
+
+/// The threads of the open room that have replies the user hasn't read, and those among them that
+/// mention them: what decides how the rows of the list look.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ThreadUnread {
+    pub unread: Vec<MessageId>,
+    pub mentioned: Vec<MessageId>,
+}
+
+impl ThreadUnread {
+    /// What the room says.
+    #[must_use]
+    pub fn of(room: &Room) -> Self {
+        Self {
+            unread: room.unread_threads.clone(),
+            mentioned: room.mentioned_threads.clone(),
+        }
+    }
+
+    /// Whether the thread of the parent `id` has replies the user hasn't read.
+    #[must_use]
+    pub fn is_unread(&self, id: &MessageId) -> bool {
+        self.unread.contains(id)
+    }
+
+    /// Whether one of its unread replies mentions the user.
+    #[must_use]
+    pub fn is_mentioned(&self, id: &MessageId) -> bool {
+        self.is_unread(id) && self.mentioned.contains(id)
+    }
+}
+
+/// The rows of `threads`, as runs `(first, last)` of consecutive rows, that look different under
+/// `after` than under `before`: the only ones to announce when the subscription changes.
+#[must_use]
+pub fn rows_changed(
+    threads: &[Message],
+    before: &ThreadUnread,
+    after: &ThreadUnread,
+) -> Vec<(usize, usize)> {
+    crate::avatar_view::runs(threads.len(), |at| {
+        let id = &threads[at].id;
+        before.is_unread(id) != after.is_unread(id)
+            || before.is_mentioned(id) != after.is_mentioned(id)
+    })
 }
 
 /// One thing a command on the pane asks of the core.
@@ -276,6 +337,8 @@ mod tests {
             group_mentions: 0,
             alert: false,
             favorite: false,
+            unread_threads: Vec::new(),
+            mentioned_threads: Vec::new(),
             last_activity: Timestamp::UNIX_EPOCH,
         }
     }
@@ -380,10 +443,14 @@ mod tests {
     // ACT-010
     #[test]
     fn filters_are_known_to_the_gui_by_name() {
-        for filter in [ThreadFilter::All, ThreadFilter::Following] {
+        for filter in [
+            ThreadFilter::All,
+            ThreadFilter::Following,
+            ThreadFilter::Unread,
+        ] {
             assert_eq!(parse_filter(filter_name(filter)), Some(filter));
         }
-        assert_eq!(parse_filter("unread"), None);
+        assert_eq!(parse_filter("everything"), None);
     }
 
     fn state(list_open: bool, thread_open: bool) -> ThreadListState {
@@ -446,5 +513,74 @@ mod tests {
         );
         assert_eq!(escape_steps(&state(true, false), all), [CloseList]);
         assert!(escape_steps(&state(false, false), all).is_empty());
+    }
+
+    // ACT-011
+    #[test]
+    fn the_badge_counts_the_unread_threads_and_is_red_when_one_mentions_the_user() {
+        let mut general = room("1", "general");
+        let id = RoomId::from("1".to_owned());
+        let count = |room: &Room| {
+            let state = thread_list_state(
+                std::slice::from_ref(room),
+                Some(&id),
+                &ThreadListStatus::default(),
+                0,
+                false,
+            );
+            (state.unread_count, state.unread_mention)
+        };
+        assert_eq!(count(&general), (0, false));
+        general.unread_threads = vec!["a".to_owned().into(), "b".to_owned().into()];
+        assert_eq!(count(&general), (2, false));
+        general.mentioned_threads = vec!["b".to_owned().into()];
+        assert_eq!(count(&general), (2, true));
+        // A mention of a thread that was read since doesn't count.
+        general.unread_threads = vec!["a".to_owned().into()];
+        assert_eq!(count(&general), (1, false));
+    }
+
+    // ACT-011
+    #[test]
+    fn an_empty_unread_list_says_so() {
+        let rooms = [room("1", "general")];
+        let id = RoomId::from("1".to_owned());
+        let state = thread_list_state(&rooms, Some(&id), &open(ThreadFilter::Unread), 0, false);
+        assert_eq!(state.filter, "unread");
+        assert_eq!(state.empty_title, "No unread threads in #general");
+        assert_eq!(
+            state.empty_hint,
+            "New replies in a thread you follow show up here."
+        );
+        assert_eq!(parse_filter("unread"), Some(ThreadFilter::Unread));
+    }
+
+    // ACT-011
+    #[test]
+    fn only_the_rows_whose_look_changes_are_announced() {
+        let rows: Vec<Message> = ["a", "b", "c", "d"]
+            .iter()
+            .map(|id| Message {
+                id: (*id).to_owned().into(),
+                ..parent("x", 1, "2026-10-20T11:00:00Z")
+            })
+            .collect();
+        let ids = |ids: &[&str]| -> Vec<MessageId> {
+            ids.iter().map(|id| (*id).to_owned().into()).collect()
+        };
+        let before = ThreadUnread {
+            unread: ids(&["a", "b"]),
+            mentioned: ids(&["b"]),
+        };
+        let after = ThreadUnread {
+            unread: ids(&["b", "c", "d"]),
+            mentioned: ids(&["b", "d"]),
+        };
+        // `a` was read, `b` is the same, `c` and `d` became unread (`d` mentioning).
+        assert_eq!(rows_changed(&rows, &before, &after), [(0, 0), (2, 3)]);
+        assert!(rows_changed(&rows, &before, &before).is_empty());
+        // The mention goes with the unread state.
+        assert!(!after.is_mentioned(&"a".to_owned().into()));
+        assert!(after.is_mentioned(&"d".to_owned().into()));
     }
 }

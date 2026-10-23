@@ -49,6 +49,9 @@ pub(super) fn subscription(
         alert: false,
         open: true,
         favorite: false,
+        thread_unread: Vec::new(),
+        thread_unread_user: Vec::new(),
+        thread_unread_group: Vec::new(),
         created: None,
         last_message: None,
         avatar_etag: None,
@@ -70,6 +73,8 @@ pub(super) fn room(id: &str, name: &str, kind: RoomKind) -> Room {
         group_mentions: 0,
         alert: false,
         favorite: false,
+        unread_threads: Vec::new(),
+        mentioned_threads: Vec::new(),
         last_activity: jiff::Timestamp::UNIX_EPOCH,
     }
 }

@@ -59,7 +59,8 @@ use rc_view::session_view::SessionView;
 use rc_view::startup;
 use rc_view::switchboard::{Shown, Switchboard};
 use rc_view::thread_list_view::{
-    PaneStep, ThreadListState, back_steps, close_pane_steps, escape_steps, toggle_steps,
+    PaneStep, ThreadListState, ThreadUnread, back_steps, close_pane_steps, escape_steps,
+    toggle_steps,
 };
 use rc_view::thread_view::ThreadState;
 use rc_view::viewer::Viewer;
@@ -536,15 +537,19 @@ pub fn register_thread_list(thread: CxxQtThread<ThreadListVm>) -> ThreadListStat
         .thread_list_state()
 }
 
-/// Registers the `ThreadListModel` model and returns the change that brings it up to date and the
-/// avatars it shows. Call on the GUI thread; the events that follow are queued to `thread`.
+/// Registers the `ThreadListModel` model and returns the change that brings it up to date, the
+/// avatars it shows and which threads are unread. Call on the GUI thread; the events that follow are queued to `thread`.
 pub fn register_thread_list_model(
     thread: CxxQtThread<ThreadListModel>,
-) -> (ThreadListChange, AvatarUrls) {
+) -> (ThreadListChange, AvatarUrls, ThreadUnread) {
     let mut hub = lock();
     hub.views.thread_list_rows.register(thread);
     let cache = hub.switchboard.accounts().current_cache();
-    (cache.thread_list_snapshot(), cache.avatars())
+    (
+        cache.thread_list_snapshot(),
+        cache.avatars(),
+        cache.thread_unread(),
+    )
 }
 
 /// The thread's state now, for sending a reply.
@@ -593,6 +598,7 @@ impl Views {
             Event::Rooms(changes) => {
                 self.room_search.queue(RoomSearchModel::refresh);
                 self.rooms.queue(move |model| model.apply(&changes));
+                self.show_thread_unread(cache);
                 // The open room's name may have changed.
                 self.show_room(cache);
                 self.show_thread(cache);
@@ -600,6 +606,8 @@ impl Views {
             }
             Event::Timeline(changes) => self.messages.queue(move |model| model.apply(&changes)),
             Event::TimelineStatus(_) => {
+                // The open room may be another: its threads are unread, or not.
+                self.show_thread_unread(cache);
                 self.show_room(cache);
                 self.show_thread(cache);
                 self.show_thread_list(cache);
@@ -654,9 +662,13 @@ impl Views {
             // What failed for the other account means nothing for this one.
             vm.dismiss_action_error();
         });
-        let (threads, avatars) = (cache.thread_list_snapshot(), cache.avatars());
+        let (threads, avatars, unread) = (
+            cache.thread_list_snapshot(),
+            cache.avatars(),
+            cache.thread_unread(),
+        );
         self.thread_list_rows
-            .queue(move |model| model.show(threads, avatars));
+            .queue(move |model| model.show(threads, avatars, unread));
         self.show_thread(cache);
         self.show_thread_list(cache);
         self.show_session_view(accounts);
@@ -757,6 +769,13 @@ impl Views {
     fn show_room(&mut self, cache: &Cache) {
         let (state, topic_html) = room_shown(cache);
         self.room.queue(move |vm| vm.show(&state, &topic_html));
+    }
+
+    /// Tells the thread list model which threads of the open room have unread replies.
+    fn show_thread_unread(&mut self, cache: &Cache) {
+        let unread = cache.thread_unread();
+        self.thread_list_rows
+            .queue(move |model| model.set_unread(unread));
     }
 
     /// Sends the `ThreadList` view model what `cache` says it shows now.

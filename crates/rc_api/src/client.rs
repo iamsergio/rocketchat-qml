@@ -550,8 +550,14 @@ impl RestSession {
             let mut pairs = escaped.query_pairs_mut();
             pairs.append_pair("rid", room_id);
             // The server refuses `all`: every thread is what it lists without a type.
-            if kind == ThreadsKind::Following {
-                pairs.append_pair("type", "following");
+            match kind {
+                ThreadsKind::All => {}
+                ThreadsKind::Following => {
+                    pairs.append_pair("type", "following");
+                }
+                ThreadsKind::Unread => {
+                    pairs.append_pair("type", "unread");
+                }
             }
             pairs.append_pair("count", &count.to_string());
             pairs.append_pair("offset", &offset.to_string());

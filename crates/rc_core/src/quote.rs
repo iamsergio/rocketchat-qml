@@ -83,6 +83,8 @@ mod tests {
             group_mentions: 0,
             alert: false,
             favorite: false,
+            unread_threads: Vec::new(),
+            mentioned_threads: Vec::new(),
             last_activity: jiff::Timestamp::UNIX_EPOCH,
         }
     }

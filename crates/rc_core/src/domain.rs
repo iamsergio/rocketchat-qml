@@ -215,6 +215,12 @@ pub struct Room {
     /// The user marked the room as a favorite: the room list shows favorites first, in a section
     /// of their own.
     pub favorite: bool,
+    /// The threads of the room with replies the user hasn't read, as the subscription says: the
+    /// replies of a thread they follow, and any reply that mentions them.
+    pub unread_threads: Vec<MessageId>,
+    /// Those among them with a reply that mentions the user (`@name`; `@all` and `@here` don't
+    /// count, as for the room's mention badge).
+    pub mentioned_threads: Vec<MessageId>,
     /// When the room last had a message; when it joined it, for a room without messages. The room
     /// list shows the most recent first.
     pub last_activity: jiff::Timestamp,
@@ -310,6 +316,12 @@ pub(crate) fn room_from(sub: rc_api::Subscription) -> Option<Room> {
         group_mentions: sub.group_mentions,
         alert: sub.alert,
         favorite: sub.favorite,
+        unread_threads: sub.thread_unread.into_iter().map(MessageId::from).collect(),
+        mentioned_threads: sub
+            .thread_unread_user
+            .into_iter()
+            .map(MessageId::from)
+            .collect(),
         last_activity: sub
             .last_message
             .or(sub.created)
@@ -622,6 +634,9 @@ mod tests {
             alert: false,
             open: true,
             favorite: false,
+            thread_unread: Vec::new(),
+            thread_unread_user: Vec::new(),
+            thread_unread_group: Vec::new(),
             created: None,
             last_message: None,
             avatar_etag: None,

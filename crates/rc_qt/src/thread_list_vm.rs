@@ -26,7 +26,7 @@ pub mod qobject {
         #[qproperty(bool, pane_open, cxx_name = "paneOpen", READ, NOTIFY)]
         // Whether the list is open, whether or not a thread hides it.
         #[qproperty(bool, list_open, cxx_name = "listOpen", READ, NOTIFY)]
-        // `all` or `following`.
+        // `all`, `following` or `unread`.
         #[qproperty(QString, filter, READ, NOTIFY)]
         #[qproperty(bool, loading, READ, NOTIFY)]
         #[qproperty(bool, loading_more, cxx_name = "loadingMore", READ, NOTIFY)]
@@ -38,9 +38,14 @@ pub mod qobject {
         #[qproperty(bool, empty, READ, NOTIFY)]
         #[qproperty(QString, empty_title, cxx_name = "emptyTitle", READ, NOTIFY)]
         #[qproperty(QString, empty_hint, cxx_name = "emptyHint", READ, NOTIFY)]
+        // How many threads of the room have replies the user hasn't read: the badge of the
+        // header's button, and the count of the "Unread" filter.
+        #[qproperty(i32, unread_count, cxx_name = "unreadCount", READ, NOTIFY)]
+        // One of them mentions the user.
+        #[qproperty(bool, unread_mention, cxx_name = "unreadMention", READ, NOTIFY)]
         type ThreadListVm = super::ThreadListVmRust;
 
-        /// Lists the open room's threads, `all` or `following`; with another filter than the open
+        /// Lists the open room's threads, `all`, `following` or `unread`; with another filter than the open
         /// list's, it starts again from the first page. Nothing happens for a name that is
         /// neither.
         #[qinvokable]
@@ -104,6 +109,8 @@ pub struct ThreadListVmRust {
     empty: bool,
     empty_title: QString,
     empty_hint: QString,
+    unread_count: i32,
+    unread_mention: bool,
 }
 
 impl Default for ThreadListVmRust {
@@ -127,6 +134,8 @@ impl From<&ThreadListState> for ThreadListVmRust {
             empty: state.empty,
             empty_title: QString::from(&state.empty_title),
             empty_hint: QString::from(&state.empty_hint),
+            unread_count: i32::try_from(state.unread_count).unwrap_or(i32::MAX),
+            unread_mention: state.unread_mention,
         }
     }
 }
@@ -155,6 +164,8 @@ impl qobject::ThreadListVm {
         let empty = self.empty != new.empty;
         let empty_title = self.empty_title != new.empty_title;
         let empty_hint = self.empty_hint != new.empty_hint;
+        let unread_count = self.unread_count != new.unread_count;
+        let unread_mention = self.unread_mention != new.unread_mention;
         *self.as_mut().rust_mut() = new;
         if pane {
             self.as_mut().pane_changed();
@@ -191,6 +202,12 @@ impl qobject::ThreadListVm {
         }
         if empty_hint {
             self.as_mut().empty_hint_changed();
+        }
+        if unread_count {
+            self.as_mut().unread_count_changed();
+        }
+        if unread_mention {
+            self.as_mut().unread_mention_changed();
         }
     }
 

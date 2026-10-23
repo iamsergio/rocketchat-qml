@@ -20,6 +20,9 @@ ItemDelegate {
     required property string avatar
     required property string avatarInitials
     required property string avatarColor
+    // Replies the user hasn't read, and one of them mentions the user.
+    required property bool unread
+    required property bool mentioned
 
     objectName: "threadListRow_" + threadId
     width: ListView.view.width
@@ -80,8 +83,9 @@ ItemDelegate {
             Label {
                 objectName: "threadListText"
                 Layout.fillWidth: true
-                color: Theme.textMuted
+                color: root.unread ? Theme.text : Theme.textMuted
                 elide: Text.ElideRight
+                font.weight: root.unread ? Theme.fontWeightMedium : Theme.fontWeightNormal
                 maximumLineCount: Theme.threadRowTextLines
                 text: root.body
                 textFormat: Text.PlainText
@@ -107,6 +111,44 @@ ItemDelegate {
                     font.pointSize: Theme.fontSizeSmall
                     text: root.summary
                     textFormat: Text.PlainText
+                }
+
+                // The server says which threads are unread, not how many replies are.
+                Rectangle {
+                    objectName: "threadListNew"
+                    color: Theme.raisedHover
+                    implicitHeight: Theme.unreadBadgeHeight
+                    implicitWidth: Math.max(newLabel.implicitWidth + Theme.badgePaddingH, Theme.unreadBadgeMinWidth)
+                    radius: height / 2
+                    visible: root.unread
+
+                    Label {
+                        id: newLabel
+
+                        anchors.centerIn: parent
+                        color: Theme.text
+                        font.pointSize: Theme.fontSizeTiny
+                        font.weight: Theme.fontWeightBold
+                        text: qsTr("New")
+                    }
+                }
+
+                // A reply that mentions the user.
+                Rectangle {
+                    objectName: "threadListMention"
+                    color: Theme.signal
+                    implicitHeight: Theme.unreadBadgeHeight
+                    implicitWidth: Theme.unreadBadgeMinWidth
+                    radius: height / 2
+                    visible: root.mentioned
+
+                    Label {
+                        anchors.centerIn: parent
+                        color: Theme.textOnSignal
+                        font.pointSize: Theme.fontSizeTiny
+                        font.weight: Theme.fontWeightBold
+                        text: "@"
+                    }
                 }
             }
         }

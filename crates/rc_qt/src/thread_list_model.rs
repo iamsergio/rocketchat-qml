@@ -158,7 +158,7 @@ use crate::room_roles::row;
 use rc_view::avatar_view::{AvatarUrls, color, initials, message_owner, owners, rows_using};
 use rc_view::message_view::{author_name, thread_last_reply_text};
 use rc_view::row_ops::{RowOp, row_ops};
-use rc_view::thread_list_view::{row_summary, row_text};
+use rc_view::thread_list_view::{ThreadUnread, row_summary, row_text, rows_changed};
 
 use qobject::ThreadListModel;
 
@@ -176,12 +176,17 @@ const SUMMARY_ROLE: i32 = 261;
 const AVATAR_ROLE: i32 = 262;
 const AVATAR_INITIALS_ROLE: i32 = 263;
 const AVATAR_COLOR_ROLE: i32 = 264;
+/// The two that change when the subscription says other threads are unread.
+const UNREAD_ROLE: i32 = 265;
+const MENTIONED_ROLE: i32 = 266;
 
 /// Backing data of [`qobject::ThreadListModel`]: the parents of the threads, mirrored from the
 /// core's changes.
 pub struct ThreadListModelRust {
     threads: Vec<Message>,
     avatars: AvatarUrls,
+    /// Which threads have replies the user hasn't read.
+    unread: ThreadUnread,
     /// Where times and days are read: the user's.
     zone: TimeZone,
 }
@@ -191,6 +196,7 @@ impl Default for ThreadListModelRust {
         Self {
             threads: Vec::new(),
             avatars: AvatarUrls::default(),
+            unread: ThreadUnread::default(),
             zone: TimeZone::system(),
         }
     }
@@ -198,16 +204,23 @@ impl Default for ThreadListModelRust {
 
 impl cxx_qt::Initialize for ThreadListModel {
     fn initialize(mut self: Pin<&mut Self>) {
-        let (snapshot, avatars) = hub::register_thread_list_model(self.qt_thread());
+        let (snapshot, avatars, unread) = hub::register_thread_list_model(self.qt_thread());
         self.as_mut().rust_mut().avatars = avatars;
+        self.as_mut().rust_mut().unread = unread;
         self.as_mut().apply(&[snapshot]);
     }
 }
 
 impl ThreadListModel {
     /// Replaces the threads and the avatars with another account's, as one model reset.
-    pub fn show(mut self: Pin<&mut Self>, snapshot: ThreadListChange, avatars: AvatarUrls) {
+    pub fn show(
+        mut self: Pin<&mut Self>,
+        snapshot: ThreadListChange,
+        avatars: AvatarUrls,
+        unread: ThreadUnread,
+    ) {
         self.as_mut().rust_mut().avatars = avatars;
+        self.as_mut().rust_mut().unread = unread;
         self.apply(&[snapshot]);
     }
 
@@ -291,6 +304,22 @@ impl ThreadListModel {
         }
     }
 
+    /// Takes in which threads are unread, and announces the two roles that say so, and only
+    /// those, for the rows that look different.
+    pub fn set_unread(mut self: Pin<&mut Self>, unread: ThreadUnread) {
+        let runs = rows_changed(&self.threads, &self.unread, &unread);
+        self.as_mut().rust_mut().unread = unread;
+        let no_parent = QModelIndex::default();
+        for (first, last) in runs {
+            let top_left = self.index(row(first), 0, &no_parent);
+            let bottom_right = self.index(row(last), 0, &no_parent);
+            let mut roles = QVector::<i32>::default();
+            roles.append(UNREAD_ROLE);
+            roles.append(MENTIONED_ROLE);
+            self.as_mut().data_changed(&top_left, &bottom_right, &roles);
+        }
+    }
+
     /// Announces new content in every role of the row.
     fn row_changed(mut self: Pin<&mut Self>, at: usize) {
         let index = self.index(row(at), 0, &QModelIndex::default());
@@ -324,6 +353,8 @@ impl ThreadListModel {
             AVATAR_ROLE => text(message_owner(thread).map_or("", |owner| self.avatars.url(&owner))),
             AVATAR_INITIALS_ROLE => text(&initials(author_name(&thread.author))),
             AVATAR_COLOR_ROLE => text(&color(&thread.author.username)),
+            UNREAD_ROLE => QVariant::from(&self.unread.is_unread(&thread.id)),
+            MENTIONED_ROLE => QVariant::from(&self.unread.is_mentioned(&thread.id)),
             _ => QVariant::default(),
         }
     }
@@ -342,6 +373,8 @@ impl ThreadListModel {
             (AVATAR_ROLE, "avatar"),
             (AVATAR_INITIALS_ROLE, "avatarInitials"),
             (AVATAR_COLOR_ROLE, "avatarColor"),
+            (UNREAD_ROLE, "unread"),
+            (MENTIONED_ROLE, "mentioned"),
         ] {
             names.insert(role, cxx_qt_lib::QByteArray::from(name));
         }

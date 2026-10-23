@@ -84,11 +84,19 @@ struct PolicyDone {
     outcome: Result<rc_api::MessageSettings, ApiError>,
 }
 
+/// What the actor tells an open realtime connection with.
+struct RealtimeLinks {
+    /// Which room is open.
+    watch: UnboundedSender<Option<RoomId>>,
+    /// Which thread the user has read.
+    read_threads: UnboundedSender<MessageId>,
+}
+
 /// What the realtime task tells the actor, in this order: the connection opens or fails, events
 /// follow, the connection ends.
 enum RealtimeDone {
-    /// Opened, with the way to tell the connection which room is open.
-    Opened(Result<UnboundedSender<Option<RoomId>>, ApiError>),
+    /// Opened, with the ways to command the connection.
+    Opened(Result<RealtimeLinks, ApiError>),
     Pushed(Box<Pushed>),
     Ended,
 }
@@ -147,6 +155,12 @@ struct ThreadsListDone {
     /// Identifies the request: the answer is stale if the list was closed or another request began.
     attempt: u64,
     outcome: Result<ThreadsPage, ApiError>,
+}
+
+/// The answer of the fetch of a parent that became one of the unread threads, for the thread list.
+struct ThreadsListParentDone {
+    id: MessageId,
+    outcome: Result<Message, ApiError>,
 }
 
 /// A history fetch's answer.
@@ -221,6 +235,7 @@ enum Done<A> {
     Thread(ThreadDone),
     ThreadParent(ThreadParentDone),
     ThreadsList(ThreadsListDone),
+    ThreadsListParent(ThreadsListParentDone),
     Changes(ChangesDone),
     Send(SendDone),
     MarkRead(MarkReadDone),
@@ -298,6 +313,8 @@ struct Actor<C: Connector> {
     /// Tells the open connection which room is open, so that it follows its deletions and typing.
     /// `None` while there is no connection.
     realtime_watch: Option<UnboundedSender<Option<RoomId>>>,
+    /// The same connection's way to be told that a thread was read.
+    realtime_read: Option<UnboundedSender<MessageId>>,
     /// Counts sync cycles (see [`open_realtime`](Self::open_realtime)), to tell the reports of the
     /// current one from stale ones.
     cycle: u64,
@@ -366,6 +383,10 @@ struct Actor<C: Connector> {
     thread_list_task: Option<JoinHandle<()>>,
     /// How many threads a request of the thread list asks for.
     threads_page_size: usize,
+    /// The fetches of the parents that became unread threads, for the "Unread" list.
+    thread_list_parents: JoinSet<()>,
+    /// The open thread the connection was asked to mark read, until it is no longer unread.
+    read_requested: Option<MessageId>,
     /// The catch-up of the open room (changes since it was last up to date), while it runs.
     changes_task: Option<JoinHandle<()>>,
     /// Token revocations in flight, so that stopping can wait for them.
@@ -415,6 +436,7 @@ impl<C: Connector> Actor<C> {
             realtime_task: None,
             realtime_open: false,
             realtime_watch: None,
+            realtime_read: None,
             cycle: 0,
             reconnect_task: None,
             backoff: tuning.backoff,
@@ -447,6 +469,8 @@ impl<C: Connector> Actor<C> {
             thread_list: None,
             thread_list_task: None,
             threads_page_size: tuning.threads_page_size,
+            thread_list_parents: JoinSet::new(),
+            read_requested: None,
             changes_task: None,
             revokes: JoinSet::new(),
             store: Some(shared.store.clone()),
@@ -485,6 +509,7 @@ impl<C: Connector> Actor<C> {
                     Done::Thread(done) => self.handle_thread_done(done),
                     Done::ThreadParent(done) => self.handle_thread_parent_done(done),
                     Done::ThreadsList(done) => self.handle_threads_list_done(done),
+                    Done::ThreadsListParent(done) => self.handle_threads_list_parent_done(done),
                     Done::Changes(done) => self.handle_changes_done(done),
                     Done::Send(done) => self.handle_send_done(done),
                     Done::MarkRead(done) => self.handle_mark_read_done(done),
@@ -574,6 +599,7 @@ impl<C: Connector> Actor<C> {
         if let Some(task) = self.thread_list_task.take() {
             task.abort();
         }
+        self.thread_list_parents.abort_all();
         drop(self.store.take());
         let deadline = Instant::now() + DRAIN_TIMEOUT;
         let revokes = &mut self.revokes;

@@ -639,3 +639,205 @@ fn a_refresh_that_fails_leaves_the_list_as_it_is() {
     harness.account().close_thread_list();
     harness.expect_list(list_closed_events());
 }
+
+// Unread threads: what the room's subscription says, and what the list and the open thread do
+// about it.
+
+/// The subscription of room 1 as the server pushes it with `unread` threads unread, those of
+/// `mentioned` among them with a mention of the user.
+fn pushed_threads_unread(unread: &[&str], mentioned: &[&str]) -> Pushed {
+    let mut subscription = subscription("1", "general", rc_api::RoomType::Channel);
+    subscription.thread_unread = unread.iter().map(|id| (*id).to_owned()).collect();
+    subscription.thread_unread_user = mentioned.iter().map(|id| (*id).to_owned()).collect();
+    Pushed::Subscription(subscription)
+}
+
+/// Room 1 is open with its "Unread" list loaded with `rows`.
+fn open_unread_list(fake: &Fake, harness: &Harness, rows: Vec<Message>) {
+    open_first_room(fake, harness, false);
+    fake.script_threads_list(None, threads_page(rows.clone(), true));
+    harness.account().open_thread_list(ThreadFilter::Unread);
+    harness.expect_list(vec![
+        list_reset(Vec::new()),
+        list_status(ThreadFilter::Unread, true, false, false, None),
+        list_reset(rows),
+        list_status(ThreadFilter::Unread, false, false, true, None),
+    ]);
+}
+
+// ACT-011
+#[test]
+fn the_unread_list_asks_for_the_unread_threads() {
+    let fake = Fake::new();
+    let harness = logged_in_harness(&fake);
+    open_unread_list(&fake, &harness, vec![tparent("p1", 9, 1)]);
+    assert_eq!(
+        fake.state().thread_list_calls[0].filter,
+        ThreadFilter::Unread
+    );
+}
+
+// ACT-011
+#[test]
+fn the_unread_threads_and_the_mentioned_ones_come_with_the_subscription_and_its_pushes() {
+    let fake = Fake::new();
+    let harness = logged_in_harness(&fake);
+    let room = |harness: &Harness| {
+        loop {
+            if let Event::Rooms(changes) = harness.next_event() {
+                for change in changes {
+                    if let crate::list_change::ListChange::Updated { item, .. } = change {
+                        return item;
+                    }
+                }
+            }
+        }
+    };
+    assert!(fake.push(0, pushed_threads_unread(&["a", "b"], &["b"])));
+    let updated = room(&harness);
+    assert_eq!(
+        updated.unread_threads,
+        ["a".to_owned().into(), "b".to_owned().into()]
+    );
+    assert_eq!(updated.mentioned_threads, ["b".to_owned().into()]);
+    // Read again.
+    assert!(fake.push(0, pushed_threads_unread(&[], &[])));
+    let updated = room(&harness);
+    assert!(updated.unread_threads.is_empty() && updated.mentioned_threads.is_empty());
+}
+
+// ACT-011
+#[test]
+fn a_thread_that_gets_unread_comes_into_the_unread_list_and_one_that_is_read_leaves_it() {
+    let fake = Fake::new();
+    let harness = logged_in_harness(&fake);
+    open_unread_list(&fake, &harness, vec![tparent("p2", 8, 1)]);
+    assert!(fake.push(0, pushed_threads_unread(&["p2"], &[])));
+
+    // The subscription says p3 is unread: the list fetches its parent and puts it where its last
+    // reply says.
+    fake.script_message(None, Ok(tparent("p3", 20, 2)));
+    assert!(fake.push(0, pushed_threads_unread(&["p2", "p3"], &[])));
+    harness.expect_list(vec![Event::ThreadList(vec![ListChange::Inserted {
+        index: 0,
+        item: tparent("p3", 20, 2),
+    }])]);
+    assert_eq!(fake.state().message_calls, ["p3"]);
+
+    // Read: it leaves, with no request.
+    assert!(fake.push(0, pushed_threads_unread(&["p3"], &[])));
+    harness.expect_list(vec![Event::ThreadList(vec![ListChange::Removed {
+        index: 1,
+    }])]);
+    assert_eq!(fake.state().message_calls.len(), 1);
+}
+
+// ACT-011
+#[test]
+fn the_unread_list_takes_the_pushed_parent_of_an_unread_thread_and_drops_a_read_one() {
+    let fake = Fake::new();
+    let harness = logged_in_harness(&fake);
+    open_unread_list(&fake, &harness, vec![tparent("p2", 8, 1)]);
+    assert!(fake.push(0, pushed_threads_unread(&["p2"], &[])));
+    // A new reply to p2: the parent comes, and p2 moves to the front of a list of one.
+    let counted = tparent("p2", 30, 2);
+    assert!(fake.push(0, Pushed::Message(counted.clone())));
+    harness.expect_list(vec![Event::ThreadList(vec![ListChange::Updated {
+        index: 0,
+        item: counted,
+    }])]);
+    // A parent that is not unread (an edit of a read thread) is not listed.
+    let read = Message {
+        edited: true,
+        ..tparent("p9", 40, 1)
+    };
+    assert!(fake.push(0, Pushed::Message(read)));
+    assert!(fake.push(0, deleted("1", "p2")));
+    harness.expect_list(vec![Event::ThreadList(vec![ListChange::Removed {
+        index: 0,
+    }])]);
+}
+
+// ACT-011
+#[test]
+fn another_filter_ignores_what_becomes_unread() {
+    let fake = Fake::new();
+    let harness = logged_in_harness(&fake);
+    let threads = open_list_of_three(&fake, &harness);
+    assert!(fake.push(0, pushed_threads_unread(&["p1"], &[])));
+    assert!(fake.push(0, pushed_threads_unread(&[], &[])));
+    harness.account().close_thread_list();
+    harness.expect_list(list_closed_events());
+    assert!(fake.state().message_calls.is_empty());
+    assert_eq!(threads.len(), 3);
+}
+
+// ACT-011
+#[test]
+fn opening_an_unread_thread_marks_it_read_and_a_thread_that_is_read_is_left_alone() {
+    let fake = Fake::new();
+    let harness = logged_in_harness(&fake);
+    open_first_room(&fake, &harness, false);
+    assert!(fake.push(0, pushed_threads_unread(&["b"], &["b"])));
+    harness.expect_events(vec![]);
+    fake.script_thread(None, page(vec![reply("r1", 3, "b")], true));
+    harness.account().open_thread("b".to_owned().into());
+    assert_eq!(fake.wait_for_read_threads(0, 1), ["b".to_owned().into()]);
+
+    // The server pushes the subscription without it: nothing more is asked, also when another
+    // push comes while the thread is open.
+    assert!(fake.push(0, pushed_threads_unread(&[], &[])));
+    assert!(fake.push(0, pushed_threads_unread(&[], &[])));
+    std::thread::sleep(Duration::from_millis(50));
+    assert_eq!(fake.read_threads(0).len(), 1);
+
+    // A thread that isn't unread is not asked about.
+    harness.account().open_thread("a".to_owned().into());
+    std::thread::sleep(Duration::from_millis(50));
+    assert_eq!(fake.read_threads(0).len(), 1);
+}
+
+// ACT-011
+#[test]
+fn a_reply_that_comes_while_the_thread_is_open_is_read_too_once() {
+    let fake = Fake::new();
+    let harness = logged_in_harness(&fake);
+    open_first_room(&fake, &harness, false);
+    fake.script_thread(None, page(Vec::new(), true));
+    harness.account().open_thread("b".to_owned().into());
+    std::thread::sleep(Duration::from_millis(50));
+    assert!(fake.read_threads(0).is_empty());
+
+    assert!(fake.push(0, pushed_threads_unread(&["b"], &[])));
+    fake.wait_for_read_threads(0, 1);
+    // The same state again before the server's answer: no second request.
+    assert!(fake.push(0, pushed_threads_unread(&["b"], &[])));
+    std::thread::sleep(Duration::from_millis(50));
+    assert_eq!(fake.read_threads(0).len(), 1);
+    // Read, and unread again by the next reply: asked again.
+    assert!(fake.push(0, pushed_threads_unread(&[], &[])));
+    assert!(fake.push(0, pushed_threads_unread(&["b"], &[])));
+    fake.wait_for_read_threads(0, 2);
+}
+
+// ACT-011
+#[test]
+fn an_unread_thread_opened_before_the_connection_is_read_once_it_is_open() {
+    let fake = Fake::new();
+    let harness = logged_in_harness_with(&fake, fast());
+    open_first_room(&fake, &harness, false);
+    assert!(fake.push(0, pushed_threads_unread(&["b"], &[])));
+    // The connection is gone when the thread opens.
+    fake.script_fetch(
+        None,
+        Ok(vec![{
+            let mut general = subscription("1", "general", rc_api::RoomType::Channel);
+            general.thread_unread = vec!["b".to_owned()];
+            general
+        }]),
+    );
+    fake.end_connection(0);
+    harness.account().open_thread("b".to_owned().into());
+    // The second connection is told, when it is up and the rooms are listed again.
+    assert_eq!(fake.wait_for_read_threads(1, 1), ["b".to_owned().into()]);
+}

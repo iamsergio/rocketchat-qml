@@ -54,7 +54,7 @@ A room's threads, in the pane beside it (ACT-010): all of them, or the ones the 
 
 The contract tests record it (`crates/rc_api/tests/contract.rs`, `crates/rc_core/tests/contract.rs`).
 
-- **Reading:** `chat.getThreadsList?rid=<room>&count=&offset=` gives the parent messages, ordered by `tlm` (the time of the last reply) newest first, with `total`. Every thread is what it lists without a `type`: `type=all` is refused (400), `following` is the other one (`unread` is for later). A message with no replies is not a thread.
+- **Reading:** `chat.getThreadsList?rid=<room>&count=&offset=` gives the parent messages, ordered by `tlm` (the time of the last reply) newest first, with `total`. Every thread is what it lists without a `type`: `type=all` is refused (400), `following` and `unread` are the other two (see Unread threads below). A message with no replies is not a thread.
 - **Followers:** the parent carries `replies`, the ids of the users who follow its thread: the author and each user who replied, once the first reply is in; `chat.followMessage` and `chat.unfollowMessage` add and take the user. A reply by somebody else doesn't bring back an unfollower. `type=following` is the threads whose `replies` has the user. `rc_api` reads it into `Message::thread_followers`, the core into `thread_followers: Vec<UserId>` (empty on a copy that has none to say).
 - **Pushes:** the parent is pushed again before each reply, with its new `tcount`, `tlm` and `replies`: that is how a thread moves, appears (the first reply) and, for the followed ones, appears when the user replies. Unfollowing is not announced: the next push of the parent says so, and a list of the followed threads drops it then.
 
@@ -76,4 +76,32 @@ The contract tests record it (`crates/rc_api/tests/contract.rs`, `crates/rc_core
 
 ### QML
 
-`roomThreadsButton` in the room's header is lit while the pane shows the list or a thread. `ThreadPane` holds the thread (kept hidden while the list shows) and `ThreadListPage`, which stays alive under a thread so its scroll position stays: the header ("Threads", `# room`, close), the compact segmented filter ("All", "Following"), the rows (`ThreadListRow`: 28 px avatar, author, time of the last reply, the text clamped to two lines, the thread icon and "N replies"), a busy indicator at the end while the next page loads, the error with a retry button and the empty words. The next page is asked when the end of the list is in view, also when a page leaves the list short. The thread's header has `threadBackButton`. The names are in [GUI testing](gui-testing.md).
+`roomThreadsButton` in the room's header is lit while the pane shows the list or a thread. `ThreadPane` holds the thread (kept hidden while the list shows) and `ThreadListPage`, which stays alive under a thread so its scroll position stays: the header ("Threads", `# room`, close), the compact segmented filter ("All", "Following", "Unread" and its count), the rows (`ThreadListRow`: 28 px avatar, author, time of the last reply, the text clamped to two lines, the thread icon and "N replies", and the marks of an unread thread), a busy indicator at the end while the next page loads, the error with a retry button and the empty words. The next page is asked when the end of the list is in view, also when a page leaves the list short. The thread's header has `threadBackButton`. The names are in [GUI testing](gui-testing.md).
+
+## Unread threads
+
+The header button's badge, the emphasis of a row and the "Unread" filter (ACT-011). All of it comes from the room's subscription.
+
+### What the server does
+
+The contract tests record it (`crates/rc_api/tests/contract.rs`, `crates/rc_core/tests/contract.rs`), on RC 8.0.
+
+- **Fields:** the subscription (`subscriptions.get` and the `subscriptions-changed` pushes) has `tunread`, the ids of the threads with replies the user hasn't read, `tunreadUser`, those among them with a reply that mentions the user, and `tunreadGroup`, those with `@all` or `@here`. A field is left out while it is empty, which reads as empty. `rc_api` reads them into `Subscription::thread_unread`, `thread_unread_user` and `thread_unread_group`; the core's `Room` keeps `unread_threads` and `mentioned_threads` (the user's mentions only, as the room's mention badge counts only those). The room's `alert` flag is set too, which the room list already shows.
+- **When they change:** a reply by somebody else in a thread the user follows (they started it or replied to it) adds the thread to `tunread`. A plain reply in a thread they don't follow does nothing. A reply that mentions them adds the thread to `tunread` and `tunreadUser`, followed or not. `@all` in a followed thread goes to `tunreadGroup`. The changed subscription is pushed each time.
+- **No count:** nothing says how many replies of a thread are unread. A row says that it is unread ("New"), not how many are.
+- **`type=unread`:** `chat.getThreadsList?type=unread` lists exactly the threads of `tunread`.
+- **Reading:** fetching the replies (`chat.getThreadMessages`, `chat.syncThreadMessages`) doesn't read a thread, and there is no REST call that does. The web client calls the DDP method `readThreads` with the parent's id: the server takes the thread out of `tunread` (and `tunreadUser`) and pushes the subscription. Reading a thread that isn't unread is no error. `rc_api` has `DdpClient::read_thread`.
+
+### The core
+
+- **The sets** come with the room (`Room::unread_threads`, `mentioned_threads`) like the unread counts, and change with its subscription pushes (`Event::Rooms`, an `Updated` of the room). No new event.
+- **Marking read:** `Realtime::read_threads` is a channel to the connection, next to `watch`. The actor sends the id of the open thread when the room's subscription lists it as unread: when the thread opens, when a push brings it (a reply that came while the thread is open), and when a connection opens (a new connection hasn't been asked). Once for each time it is unread (`read_requested`, cleared when the set no longer holds it). Without a connection it is not sent, and the next push or the next connection does.
+- **The "Unread" filter** is `type=unread`, which agrees with `tunread`. The list's `pushed` takes the room's set as a rule for it: a parent that is unread is listed, any other leaves. When a push changes the set, the actor removes the rows that were read (`Removed`) and fetches the parent of each thread that became unread and isn't held (`chat.getMessage`, since the push carries ids only) and puts it where its last reply says (`Inserted`). A parent pushed with a new reply either way updates or moves its row.
+- **The rows' marks** are not a change of the list: the frontend takes them from the room's sets.
+
+### rc_view, Qt and QML
+
+- `ThreadListState` has `unread_count` and `unread_mention` (a mentioned thread that is still unread), and the empty words of the filter ("No unread threads in #room", "New replies in a thread you follow show up here."). `ThreadUnread` (the sets of the open room, from the cache) says which rows look unread and mentioned, and `rows_changed` which rows to announce.
+- `ThreadListModel` has the roles `unread` and `mentioned`, and `set_unread`, which the hub calls on each `Rooms` event: `dataChanged` for those two roles, and only for the rows that look different. `ThreadList` has `unreadCount` and `unreadMention`.
+- **QML:** `roomThreadsBadge` is a pill at the top right of the header button, with a ring in the header's colour around it (`roomThreadsBadgeRing`), grey or red when a thread mentions the user, and not shown at 0. A row with unread replies has its text in the text colour at medium weight, a grey "New" pill (`threadListNew`) and, if it mentions the user, a red "@" (`threadListMention`) at the end of its last line. The third segment, `threadListFilterUnread`, has its count in faint text after the label while there are unread threads.
+

@@ -22,7 +22,7 @@ use crate::avatar_view::AvatarUrls;
 use crate::message_view::{author_name, body, can_edit};
 use crate::room_view::{RoomState, room_state, typing_line};
 use crate::session_view::{LoginMode, SessionView, host, session_view};
-use crate::thread_list_view::{ThreadListState, thread_list_state};
+use crate::thread_list_view::{ThreadListState, ThreadUnread, thread_list_state};
 use crate::thread_view::{ThreadState, thread_state};
 use crate::viewer::Viewer;
 
@@ -449,6 +449,15 @@ impl Cache {
         state
     }
 
+    /// Which threads of the open room have replies the user hasn't read, as its subscription says.
+    #[must_use]
+    pub fn thread_unread(&self) -> ThreadUnread {
+        (self.status.room.as_ref())
+            .and_then(|id| self.rooms.iter().find(|room| &room.id == id))
+            .map(ThreadUnread::of)
+            .unwrap_or_default()
+    }
+
     /// What the `ThreadList` view model shows now.
     #[must_use]
     pub fn thread_list_state(&self) -> ThreadListState {
@@ -522,6 +531,8 @@ mod tests {
             group_mentions: 0,
             alert: false,
             favorite: false,
+            unread_threads: Vec::new(),
+            mentioned_threads: Vec::new(),
             last_activity: jiff::Timestamp::UNIX_EPOCH,
         }
     }

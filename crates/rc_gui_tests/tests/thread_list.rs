@@ -543,3 +543,253 @@ fn the_list_loads_more_threads_when_a_page_does_not_fill_it() {
     gui.wait_until_hidden(main_window::THREAD_LIST_LOADING_MORE, TIMEOUT)
         .unwrap();
 }
+
+/// A channel with two threads: "mine", which the user started (so they follow it), and "theirs",
+/// started by admin, each with a reply of the starter's own, so that nothing is unread yet.
+struct UnreadFixture {
+    admin: Admin,
+    user: TestUser,
+    channel_id: String,
+    channel_name: String,
+    mine: Posted,
+    theirs: Posted,
+}
+
+impl UnreadFixture {
+    fn new() -> Self {
+        let admin = Admin::login();
+        let user = admin.create_user();
+        let (channel_id, channel_name) = admin.create_channel(&[&user.username]);
+        let me = Admin::login_as(&user.username, &user.password);
+        let mine = me.post_message(&channel_id, &format!("mine {}", unique()));
+        me.post_in_thread(&channel_id, &mine.id, "my own reply", false);
+        let theirs = admin.post_message(&channel_id, &format!("theirs {}", unique()));
+        admin.post_in_thread(&channel_id, &theirs.id, "their own reply", false);
+        Self {
+            admin,
+            user,
+            channel_id,
+            channel_name,
+            mine,
+            theirs,
+        }
+    }
+
+    fn open(&self, app: &App) {
+        let gui = app.gui();
+        log_in_and_wait_for_room(gui, &self.user, &self.channel_id);
+        open_room(gui, &self.channel_id);
+        gui.wait_until_visible(&message(&self.theirs.id, message_row::BODY), TIMEOUT)
+            .unwrap();
+        assert!(
+            !gui.exists_and_visible(main_window::ROOM_THREADS_BADGE)
+                .unwrap()
+        );
+    }
+}
+
+/// A part of the row of the thread started by `parent`.
+fn row_of(parent: &Posted, part: &str) -> String {
+    thread_list_row(&parent.id, part)
+}
+
+// ACT-011
+#[test]
+#[ignore = "needs the app and a Rocket.Chat server: run through ctest"]
+fn a_reply_in_a_followed_thread_shows_a_badge_on_the_button_and_marks_the_row_unread() {
+    let fixture = UnreadFixture::new();
+    let app = launch();
+    let gui = app.gui();
+    fixture.open(&app);
+    open_list(gui);
+    gui.wait_until_visible(&row_of(&fixture.mine, ""), TIMEOUT)
+        .unwrap();
+    assert!(
+        !gui.exists_and_visible(&row_of(&fixture.mine, thread_list_row_part::NEW))
+            .unwrap()
+    );
+
+    fixture
+        .admin
+        .post_in_thread(&fixture.channel_id, &fixture.mine.id, "news", false);
+
+    // The badge says one, in grey, and the row says it is new, without a mention.
+    gui.wait_until_visible(main_window::ROOM_THREADS_BADGE, TIMEOUT)
+        .unwrap();
+    gui.wait_until_text(main_window::ROOM_THREADS_BADGE_COUNT, "1", TIMEOUT)
+        .unwrap();
+    assert_eq!(gui.text(main_window::ROOM_THREADS_BADGE).unwrap(), "unread");
+    gui.wait_until_visible(&row_of(&fixture.mine, thread_list_row_part::NEW), TIMEOUT)
+        .unwrap();
+    assert!(
+        !gui.exists_and_visible(&row_of(&fixture.mine, thread_list_row_part::MENTION))
+            .unwrap()
+    );
+    // The other thread is not.
+    assert!(
+        !gui.exists_and_visible(&row_of(&fixture.theirs, thread_list_row_part::NEW))
+            .unwrap()
+    );
+    gui.wait_until_text(main_window::THREAD_LIST_FILTER_UNREAD_COUNT, "1", TIMEOUT)
+        .unwrap();
+}
+
+// ACT-011
+#[test]
+#[ignore = "needs the app and a Rocket.Chat server: run through ctest"]
+fn a_reply_that_mentions_the_user_turns_the_badge_red_and_shows_the_at() {
+    let fixture = UnreadFixture::new();
+    let app = launch();
+    let gui = app.gui();
+    fixture.open(&app);
+    open_list(gui);
+    gui.wait_until_visible(&row_of(&fixture.theirs, ""), TIMEOUT)
+        .unwrap();
+    fixture
+        .admin
+        .post_in_thread(&fixture.channel_id, &fixture.mine.id, "news", false);
+    gui.wait_until_text(main_window::ROOM_THREADS_BADGE_COUNT, "1", TIMEOUT)
+        .unwrap();
+
+    // A mention counts in a thread the user doesn't follow, too.
+    fixture.admin.post_in_thread(
+        &fixture.channel_id,
+        &fixture.theirs.id,
+        &format!("hey @{}", fixture.user.username),
+        false,
+    );
+
+    gui.wait_until_text(main_window::ROOM_THREADS_BADGE_COUNT, "2", TIMEOUT)
+        .unwrap();
+    gui.wait_until_text(main_window::ROOM_THREADS_BADGE, "mention", TIMEOUT)
+        .unwrap();
+    gui.wait_until_visible(
+        &row_of(&fixture.theirs, thread_list_row_part::MENTION),
+        TIMEOUT,
+    )
+    .unwrap();
+    assert!(
+        gui.exists_and_visible(&row_of(&fixture.theirs, thread_list_row_part::NEW))
+            .unwrap()
+    );
+    // Only that thread mentions.
+    assert!(
+        !gui.exists_and_visible(&row_of(&fixture.mine, thread_list_row_part::MENTION))
+            .unwrap()
+    );
+}
+
+// ACT-011
+#[test]
+#[ignore = "needs the app and a Rocket.Chat server: run through ctest"]
+fn the_unread_filter_lists_only_the_unread_threads_and_opening_one_reads_it() {
+    let fixture = UnreadFixture::new();
+    let app = launch();
+    let gui = app.gui();
+    fixture.open(&app);
+    fixture
+        .admin
+        .post_in_thread(&fixture.channel_id, &fixture.mine.id, "news", false);
+    gui.wait_until_text(main_window::ROOM_THREADS_BADGE_COUNT, "1", TIMEOUT)
+        .unwrap();
+    open_list(gui);
+    gui.wait_until_visible(&row_of(&fixture.theirs, ""), TIMEOUT)
+        .unwrap();
+
+    gui.mouse_click(main_window::THREAD_LIST_FILTER_UNREAD)
+        .unwrap();
+
+    // Only the unread thread, in the filter that says so.
+    gui.wait_until("only the unread thread", TIMEOUT, || {
+        Ok(gui.count(main_window::THREAD_LIST_VIEW)? == 1
+            && gui.exists_and_visible(&row_of(&fixture.mine, ""))?)
+    })
+    .unwrap();
+    assert!(gui.checked(main_window::THREAD_LIST_FILTER_UNREAD).unwrap());
+
+    // Opening it reads it: the badge and the count go, and so does the row's mark.
+    gui.mouse_click(&row_of(&fixture.mine, "")).unwrap();
+    gui.wait_until_visible(main_window::THREAD_BACK_BUTTON, TIMEOUT)
+        .unwrap();
+    gui.wait_until_hidden(main_window::ROOM_THREADS_BADGE, TIMEOUT)
+        .unwrap();
+    gui.wait_until_hidden(main_window::THREAD_LIST_FILTER_UNREAD_COUNT, TIMEOUT)
+        .unwrap();
+
+    // Back to the list: the thread has left the unread ones, and the filter says so.
+    gui.mouse_click(main_window::THREAD_BACK_BUTTON).unwrap();
+    gui.wait_until_visible(main_window::THREAD_LIST_EMPTY, TIMEOUT)
+        .unwrap();
+    assert_eq!(
+        gui.text(main_window::THREAD_LIST_EMPTY_TITLE).unwrap(),
+        format!("No unread threads in #{}", fixture.channel_name)
+    );
+    assert_eq!(
+        gui.text(main_window::THREAD_LIST_EMPTY_HINT).unwrap(),
+        "New replies in a thread you follow show up here."
+    );
+    gui.mouse_click(main_window::THREAD_LIST_FILTER_ALL)
+        .unwrap();
+    gui.wait_until_visible(&row_of(&fixture.mine, ""), TIMEOUT)
+        .unwrap();
+    assert!(
+        !gui.exists_and_visible(&row_of(&fixture.mine, thread_list_row_part::NEW))
+            .unwrap()
+    );
+}
+
+// ACT-011
+#[test]
+#[ignore = "needs the app and a Rocket.Chat server: run through ctest"]
+fn a_reply_that_comes_while_the_thread_is_open_does_not_leave_it_unread() {
+    let fixture = UnreadFixture::new();
+    let app = launch();
+    let gui = app.gui();
+    fixture.open(&app);
+    gui.mouse_click(&message(&fixture.mine.id, message_row::THREAD_SUMMARY))
+        .unwrap();
+    gui.wait_until_visible(main_window::THREAD_BACK_BUTTON, TIMEOUT)
+        .unwrap();
+
+    let reply = fixture.admin.post_in_thread(
+        &fixture.channel_id,
+        &fixture.mine.id,
+        "while you look",
+        false,
+    );
+
+    gui.wait_until_text(
+        &thread_message(&reply.id, message_row::BODY),
+        "while you look",
+        TIMEOUT,
+    )
+    .unwrap();
+    // The badge may show for a moment: it is gone once the server has read it.
+    std::thread::sleep(std::time::Duration::from_millis(500));
+    gui.wait_until_hidden(main_window::ROOM_THREADS_BADGE, TIMEOUT)
+        .unwrap();
+}
+
+// ACT-011
+#[test]
+#[ignore = "needs the app and a Rocket.Chat server: run through ctest"]
+fn threads_that_were_unread_before_the_room_opened_show_as_such() {
+    let fixture = UnreadFixture::new();
+    fixture
+        .admin
+        .post_in_thread(&fixture.channel_id, &fixture.mine.id, "news", false);
+    let app = launch();
+    let gui = app.gui();
+    log_in_and_wait_for_room(gui, &fixture.user, &fixture.channel_id);
+    open_room(gui, &fixture.channel_id);
+
+    gui.wait_until_text(main_window::ROOM_THREADS_BADGE_COUNT, "1", TIMEOUT)
+        .unwrap();
+    open_list(gui);
+    gui.wait_until_visible(&row_of(&fixture.mine, thread_list_row_part::NEW), TIMEOUT)
+        .unwrap();
+    assert!(
+        !gui.exists_and_visible(&row_of(&fixture.theirs, thread_list_row_part::NEW))
+            .unwrap()
+    );
+}
