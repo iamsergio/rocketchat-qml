@@ -164,7 +164,10 @@ impl<C: Connector> Actor<C> {
         }
     }
 
-    /// Tells the frontend the room list changed, and its unread totals if they did too.
+    /// Tells the frontend the room list changed, and its unread totals and held-back rooms if they
+    /// did too. Every path that changes the room list ends here, with no changes if only a
+    /// held-back room did: nothing is sent for the changes then, but the held-back rooms are
+    /// checked.
     pub(super) fn emit_rooms(&mut self, changes: Vec<RoomChange>) {
         // A room that comes back needs its avatar like one that was just listed.
         let avatars: Vec<_> = changes
@@ -174,13 +177,37 @@ impl<C: Connector> Actor<C> {
                 _ => None,
             })
             .collect();
-        (self.on_event)(Event::Rooms(changes));
+        if !changes.is_empty() {
+            (self.on_event)(Event::Rooms(changes));
+        }
         let unread = self.rooms.unread();
         if unread != self.unread {
             self.unread = unread;
             (self.on_event)(Event::Unread(unread));
         }
+        self.emit_quiet_rooms();
         self.want_avatars(avatars);
+    }
+
+    /// Tells the frontend the held-back rooms if they are not what it was told last. The list says
+    /// when they may have changed, so this costs nothing while they didn't. The rooms that joined
+    /// the set get the avatar file the cache holds, and no download: nobody looks at them until
+    /// the search shows one, and an account may hold hundreds.
+    fn emit_quiet_rooms(&mut self) {
+        let Some(quiet) = self.rooms.take_quiet_change() else {
+            return;
+        };
+        if quiet == self.quiet {
+            return;
+        }
+        let joined: Vec<_> = quiet
+            .iter()
+            .filter(|room| !self.quiet.iter().any(|known| known.id == room.id))
+            .filter_map(Room::avatar_to_fetch)
+            .collect();
+        self.quiet.clone_from(&quiet);
+        (self.on_event)(Event::QuietRooms(quiet));
+        self.show_cached_avatars(joined);
     }
 
     /// Holds back the direct messages that went quiet, and tells the frontend.
@@ -207,16 +234,14 @@ impl<C: Connector> Actor<C> {
             return;
         };
         let room = self.seen_if_open(change(held));
-        if let Some(change) = self.rooms.upsert(room, self.clock.now()) {
-            self.emit_rooms(vec![change]);
-        }
+        let change = self.rooms.upsert(room, self.clock.now());
+        self.emit_rooms(change.into_iter().collect());
     }
 
     /// Drops the room from the list, and closes it if it was open.
     pub(super) fn remove_room(&mut self, id: &RoomId) {
-        if let Some(change) = self.rooms.remove(id) {
-            self.emit_rooms(vec![change]);
-        }
+        let change = self.rooms.remove(id);
+        self.emit_rooms(change.into_iter().collect());
         if self
             .open
             .as_ref()

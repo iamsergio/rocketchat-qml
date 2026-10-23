@@ -64,6 +64,21 @@ impl Avatars {
         Some(self.show(owner, path))
     }
 
+    /// Shows the owner's cached file (`cached`) if there is one and it isn't what the frontend
+    /// has. For avatars that nobody looks at yet: the owner isn't marked as looked at and no
+    /// download is queued, so a later [`want`](Self::want) does both.
+    pub(crate) fn show_cached(
+        &mut self,
+        owner: AvatarOwner,
+        cached: impl FnOnce(&AvatarOwner) -> Option<PathBuf>,
+    ) -> Option<AvatarUpdate> {
+        let path = cached(&owner)?;
+        if self.shown.get(&owner) == Some(&path) {
+            return None;
+        }
+        Some(self.show(owner, path))
+    }
+
     /// The next download to start, if fewer than [`MAX_DOWNLOADS`] are running.
     pub(crate) fn next_download(&mut self) -> Option<AvatarOwner> {
         if self.running >= MAX_DOWNLOADS {
@@ -169,6 +184,31 @@ mod tests {
     fn without_a_cached_file_there_is_nothing_to_show_yet() {
         let mut avatars = Avatars::default();
         assert_eq!(avatars.want(user("alice"), |_| None), None);
+        assert_eq!(avatars.next_download(), Some(user("alice")));
+    }
+
+    // ROOM-010
+    #[test]
+    fn a_cached_file_can_be_shown_without_looking_at_the_avatar() {
+        let mut avatars = Avatars::default();
+        // Nothing cached, nothing to show.
+        assert_eq!(avatars.show_cached(user("alice"), |_| None), None);
+        let update = avatars.show_cached(user("alice"), |_| Some(path("alice")));
+        assert_eq!(
+            update,
+            Some(AvatarUpdate {
+                owner: user("alice"),
+                path: Some(path("alice"))
+            })
+        );
+        // The same file again says nothing, and no download was queued.
+        assert_eq!(
+            avatars.show_cached(user("alice"), |_| Some(path("alice"))),
+            None
+        );
+        assert_eq!(avatars.next_download(), None);
+        // Wanted later, it is downloaded, and the cached file it already showed isn't repeated.
+        assert_eq!(avatars.want(user("alice"), |_| Some(path("alice"))), None);
         assert_eq!(avatars.next_download(), Some(user("alice")));
     }
 

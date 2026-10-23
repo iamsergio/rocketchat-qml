@@ -134,6 +134,26 @@ impl<C: Connector> Actor<C> {
         self.start_avatar_downloads(&server);
     }
 
+    /// Shows the avatars the file cache holds for `owners`, and fetches none: for avatars that
+    /// nobody looks at yet. [`want_avatars`](Self::want_avatars) does the rest when they are.
+    pub(super) fn show_cached_avatars(&mut self, owners: impl IntoIterator<Item = AvatarOwner>) {
+        let SessionState::LoggedIn(account) = &self.state else {
+            return;
+        };
+        let server = account.server.clone();
+        let cache = &self.cache;
+        let updates: Vec<_> = owners
+            .into_iter()
+            .filter_map(|owner| {
+                self.avatars
+                    .show_cached(owner, |owner| cache.get(&CacheKey::avatar(&server, owner)))
+            })
+            .collect();
+        if !updates.is_empty() {
+            (self.on_event)(Event::Avatars(updates));
+        }
+    }
+
     fn start_avatar_downloads(&mut self, server: &str) {
         let Some(session) = &self.session else {
             return;

@@ -66,14 +66,19 @@ pub const QUIET_AFTER: jiff::SignedDuration = jiff::SignedDuration::from_hours(1
 /// back. Positions exist only among the shown rooms: a held-back room is found by its id.
 ///
 /// A direct message is held back once it has been quiet for longer than `quiet_after`, unless it is
-/// a favorite, shows as unread or is the open room. The frontend never hears of a held-back room.
-/// It comes back, with an `Inserted`, as soon as the rule lets it, e.g. with a new message.
+/// a favorite, shows as unread or is the open room. The room changes never mention a held-back
+/// room; the frontend hears of them only as a set, [`quiet`](RoomList::quiet). It comes back, with
+/// an `Inserted`, as soon as the rule lets it, e.g. with a new message.
 #[derive(Debug)]
 pub struct RoomList {
     /// The rooms the frontend shows, in display order. `RoomChange` indices point here.
     shown: Vec<Room>,
     /// The rooms the list doesn't show. They have no position, only an id.
     hidden: HashMap<RoomId, Room>,
+    /// Whether `hidden` may have changed since [`take_quiet_change`](Self::take_quiet_change). It
+    /// is set whenever a room goes in or out of `hidden`, or is replaced in it, without checking
+    /// whether the content is different.
+    hidden_touched: bool,
     /// How long a direct message may be quiet and still be shown.
     quiet_after: jiff::SignedDuration,
     /// The room the user has open, which is always shown.
@@ -152,6 +157,7 @@ impl RoomList {
         Self {
             shown: Vec::new(),
             hidden: HashMap::new(),
+            hidden_touched: false,
             quiet_after,
             open: None,
         }
@@ -175,6 +181,26 @@ impl RoomList {
         &self.shown
     }
 
+    /// The rooms the list holds back, the most recently active first, then by id: a frontend that
+    /// wants them, to search among them, takes them in this order and never sorts.
+    #[must_use]
+    pub fn quiet(&self) -> Vec<Room> {
+        let mut quiet: Vec<Room> = self.hidden.values().cloned().collect();
+        quiet.sort_by(|a, b| {
+            b.last_activity
+                .cmp(&a.last_activity)
+                .then_with(|| a.id.cmp(&b.id))
+        });
+        quiet
+    }
+
+    /// The held-back rooms as [`quiet`](Self::quiet) has them, if one may have gone in, out or
+    /// changed since the last call; `None` if none did, which is the usual case and costs nothing.
+    /// "May have": a room replaced by an identical one counts, so the caller compares.
+    pub fn take_quiet_change(&mut self) -> Option<Vec<Room>> {
+        std::mem::take(&mut self.hidden_touched).then(|| self.quiet())
+    }
+
     /// Whether the list holds no room at all, shown or hidden.
     #[must_use]
     pub fn is_empty(&self) -> bool {
@@ -188,6 +214,7 @@ impl RoomList {
             .partition(|room| self.is_shown_at(room, now));
         shown.sort_by(display_order);
         self.shown.clone_from(&shown);
+        self.hidden_touched |= !self.hidden.is_empty() || !hidden.is_empty();
         self.hidden = hidden
             .into_iter()
             .map(|room| (room.id.clone(), room))
@@ -203,13 +230,14 @@ impl RoomList {
         if !self.is_shown_at(&room, now) {
             let id = room.id.clone();
             self.hidden.insert(id, room);
+            self.hidden_touched = true;
             let index = from?;
             self.shown.remove(index);
             return Some(RoomChange::Removed { index });
         }
         let Some(from) = from else {
             // A room is in one place only: a hidden one is shown from now on.
-            self.hidden.remove(&room.id);
+            self.hidden_touched |= self.hidden.remove(&room.id).is_some();
             let index = self.insertion_index(&room);
             self.shown.insert(index, room.clone());
             return Some(RoomChange::Inserted { index, room });
@@ -248,7 +276,7 @@ impl RoomList {
     /// `None` if there's no such room, or it was hidden: the frontend has no row to remove.
     pub fn remove(&mut self, id: &RoomId) -> Option<RoomChange> {
         let Some(index) = self.position(id) else {
-            self.hidden.remove(id);
+            self.hidden_touched |= self.hidden.remove(id).is_some();
             return None;
         };
         self.shown.remove(index);
@@ -1236,6 +1264,65 @@ mod tests {
         assert_eq!(list.remove(&id("h")), None);
         assert!(list.get(&id("h")).is_none());
         assert!(list.is_empty());
+    }
+
+    // ROOM-010
+    #[test]
+    fn the_quiet_change_flag_is_set_by_what_touches_the_hidden_rooms_only() {
+        let mut list = quiet_list(vec![dm("h", "h", QUIET + 1), dm("n", "n", 5)]);
+        // A reset that held rooms back.
+        assert_eq!(list.take_quiet_change().map(|rooms| rooms.len()), Some(1));
+        // Taken, it is clear.
+        assert_eq!(list.take_quiet_change(), None);
+        // A bump of a shown room, a topic, a mark as unread: the hidden rooms are not touched.
+        list.bump(&id("n"), now(), now());
+        list.set_topic(&id("n"), "t".to_owned(), now());
+        list.upsert(dm("n", "renamed", 4), now());
+        list.set_open(Some(id("n")), now());
+        list.set_open(None, now());
+        assert_eq!(list.take_quiet_change(), None);
+        // A hidden room replaced, staying hidden.
+        list.set_topic(&id("h"), "t".to_owned(), now());
+        assert_eq!(
+            list.take_quiet_change().map(|rooms| rooms[0].topic.clone()),
+            Some("t".to_owned())
+        );
+        // One that comes back, one that goes, one removed from the list, a snapshot.
+        list.upsert(dm("h", "h", 1), now());
+        assert_eq!(list.take_quiet_change(), Some(vec![]));
+        list.upsert(dm("n", "n", QUIET + 1), now());
+        assert_eq!(list.take_quiet_change().map(|rooms| rooms.len()), Some(1));
+        list.remove(&id("n"));
+        assert_eq!(list.take_quiet_change(), Some(vec![]));
+        list.upsert(dm("x", "x", QUIET + 1), now());
+        list.sync(vec![dm("h", "h", 1)], now());
+        assert_eq!(list.take_quiet_change(), Some(vec![]));
+        list.reset(vec![], now());
+        assert_eq!(list.take_quiet_change(), None);
+    }
+
+    // ROOM-010
+    #[test]
+    fn the_quiet_rooms_come_most_recent_first_then_by_id() {
+        let mut list = quiet_list(vec![
+            dm("c", "c", QUIET + 30),
+            dm("b", "b", QUIET + 10),
+            dm("a", "a", QUIET + 10),
+            dm("d", "d", QUIET + 20),
+            dm("n", "new", 5),
+        ]);
+        let ids = |list: &RoomList| -> Vec<String> {
+            list.quiet()
+                .iter()
+                .map(|room| room.id.to_string())
+                .collect()
+        };
+        // The shown room is not among them.
+        assert_eq!(ids(&list), ["a", "b", "d", "c"]);
+        // A room that comes back leaves the set.
+        list.upsert(dm("d", "d", 1), now());
+        assert_eq!(ids(&list), ["a", "b", "c"]);
+        assert_eq!(quiet_list(vec![dm("n", "new", 5)]).quiet(), []);
     }
 
     // ROOM-008

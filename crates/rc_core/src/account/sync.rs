@@ -10,7 +10,6 @@ use crate::domain::{AvatarOwner, Room, RoomId, room_from};
 use crate::emoji::CustomEmojis;
 use crate::policy::MessagePolicy;
 use crate::ports::{ApiError, Connector, Pushed, Realtime, ServerApi};
-use crate::rooms::RoomChange;
 use crate::session::SessionState;
 
 use super::{Actor, Done, EmojiDone, PolicyDone, RealtimeDone, RealtimeReport, RoomsDone};
@@ -161,9 +160,8 @@ impl<C: Connector> Actor<C> {
                         }
                         let room = self.seen_if_open(room);
                         let owner = room.avatar_to_fetch();
-                        if let Some(change) = self.rooms.upsert(room, self.clock.now()) {
-                            self.emit_rooms(vec![change]);
-                        }
+                        let change = self.rooms.upsert(room, self.clock.now());
+                        self.emit_rooms(change.into_iter().collect());
                         // A hidden room gets its avatar when it comes back.
                         if self.rooms.is_shown(&id) {
                             self.want_avatars(owner);
@@ -183,10 +181,7 @@ impl<C: Connector> Actor<C> {
                 // A room without a last message (just created) has no activity.
                 let moved = last_message.and_then(|at| self.rooms.bump(&room, at, now));
                 let retitled = topic.and_then(|topic| self.rooms.set_topic(&room, topic, now));
-                let changes: Vec<RoomChange> = moved.into_iter().chain(retitled).collect();
-                if !changes.is_empty() {
-                    self.emit_rooms(changes);
-                }
+                self.emit_rooms(moved.into_iter().chain(retitled).collect());
             }
             Pushed::Message(message) => self.add_live_message(message),
             Pushed::MessageDeleted { room, id } => self.delete_message(&room, &id),
@@ -261,9 +256,7 @@ impl<C: Connector> Actor<C> {
             vec![self.rooms.reset(rooms, self.clock.now())]
         };
         self.rooms_listed = true;
-        if !changes.is_empty() {
-            self.emit_rooms(changes);
-        }
+        self.emit_rooms(changes);
         self.want_avatars(
             self.rooms
                 .rooms()
