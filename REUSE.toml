@@ -22,6 +22,8 @@ path = [
     "CXX-QT.md",
     "SLINT.md",
     "CLAUDE.md",
+    ".claude/agents/*.md",
+    ".claude/skills/**/SKILL.md",
     "docs/design/*.md",
     "Cargo.lock",
     "vcpkg.json",
