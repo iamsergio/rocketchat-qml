@@ -2050,6 +2050,47 @@ async fn thread_messages_of_something_that_is_not_a_message_is_a_server_error() 
 // ACT-004
 #[tokio::test]
 #[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+async fn a_message_is_fetched_by_its_id_with_the_summary_of_its_thread() {
+    let fixture = Fixture::new();
+    let thread = thread_of(&fixture, 2);
+    let session = fixture.client.session(fixture.login().await.credentials);
+
+    let parent = session.message(&thread.parent.id).await.unwrap();
+    let reply = session.message(&thread.replies[0].id).await.unwrap();
+
+    assert_eq!(
+        (parent.id.as_str(), parent.text.as_str()),
+        (thread.parent.id.as_str(), "parent")
+    );
+    assert_eq!(parent.room_id, thread.room_id);
+    assert_eq!(parent.thread_replies, 2);
+    assert!(parent.thread_last_reply.is_some());
+    assert!(parent.thread_id.is_none());
+    assert_eq!(reply.thread_id.as_deref(), Some(thread.parent.id.as_str()));
+}
+
+// ACT-004
+#[tokio::test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+async fn a_message_that_is_missing_or_in_a_room_the_user_is_not_in_is_a_server_error() {
+    let fixture = Fixture::new();
+    // A private group the user was not invited to.
+    let (secret, _) = fixture.admin.create_group(&[]);
+    let hidden = fixture.admin.post_message(&secret, "hidden");
+    let session = fixture.client.session(fixture.login().await.credentials);
+
+    for id in ["noSuchMessage", hidden.id.as_str()] {
+        let result = session.message(id).await;
+        assert!(
+            matches!(result, Err(Error::Server { .. })),
+            "{id}: {result:?}"
+        );
+    }
+}
+
+// ACT-004
+#[tokio::test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
 async fn a_thread_without_replies_is_empty() {
     let fixture = Fixture::new();
     let thread = thread_of(&fixture, 0);

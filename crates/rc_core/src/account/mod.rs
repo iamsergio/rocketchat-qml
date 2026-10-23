@@ -44,7 +44,7 @@ mod sync;
 mod thread;
 mod typing;
 
-use thread::OpenThread;
+use thread::{OpenThread, PendingThread};
 
 /// How long, once the actor is told to end, it and the store worker may take to finish what the
 /// user asked already: the token revocations and the queued store writes. One bound for both: the
@@ -131,6 +131,14 @@ struct ThreadDone {
     outcome: Result<Page, ApiError>,
 }
 
+/// The answer of the fetch of a thread's parent, which the open room doesn't hold.
+struct ThreadParentDone {
+    /// Identifies the fetch: the answer is stale if another thread was asked for or the room
+    /// changed since.
+    attempt: u64,
+    outcome: Result<Message, ApiError>,
+}
+
 /// A history fetch's answer.
 struct HistoryDone {
     /// Identifies the fetch: the answer is stale if the room was closed or another fetch began.
@@ -201,6 +209,7 @@ enum Done<A> {
     },
     History(HistoryDone),
     Thread(ThreadDone),
+    ThreadParent(ThreadParentDone),
     Changes(ChangesDone),
     Send(SendDone),
     MarkRead(MarkReadDone),
@@ -335,6 +344,11 @@ struct Actor<C: Connector> {
     history_task: Option<JoinHandle<()>>,
     /// The thread fetch of the open thread, while it runs.
     thread_task: Option<JoinHandle<()>>,
+    /// The thread asked for whose parent the open room doesn't hold, while the parent is fetched.
+    /// The thread that is open stays until the parent arrives.
+    pending_thread: Option<PendingThread>,
+    /// The fetch of that parent, while it runs.
+    parent_task: Option<JoinHandle<()>>,
     /// The catch-up of the open room (changes since it was last up to date), while it runs.
     changes_task: Option<JoinHandle<()>>,
     /// Token revocations in flight, so that stopping can wait for them.
@@ -411,6 +425,8 @@ impl<C: Connector> Actor<C> {
             history_attempt: 0,
             history_task: None,
             thread_task: None,
+            pending_thread: None,
+            parent_task: None,
             changes_task: None,
             revokes: JoinSet::new(),
             store: Some(shared.store.clone()),
@@ -447,6 +463,7 @@ impl<C: Connector> Actor<C> {
                     Done::Reconnect { cycle } => self.handle_reconnect(cycle),
                     Done::History(done) => self.handle_history_done(done),
                     Done::Thread(done) => self.handle_thread_done(done),
+                    Done::ThreadParent(done) => self.handle_thread_parent_done(done),
                     Done::Changes(done) => self.handle_changes_done(done),
                     Done::Send(done) => self.handle_send_done(done),
                     Done::MarkRead(done) => self.handle_mark_read_done(done),
@@ -532,6 +549,7 @@ impl<C: Connector> Actor<C> {
         if let Some(task) = self.thread_task.take() {
             task.abort();
         }
+        self.cancel_pending_thread();
         drop(self.store.take());
         let deadline = Instant::now() + DRAIN_TIMEOUT;
         let revokes = &mut self.revokes;

@@ -2233,6 +2233,92 @@ fn a_thread_loads_page_by_page_with_the_parent_first() {
     assert!(mirrors.thread[1..].iter().all(|m| m.thread_id.is_some()));
 }
 
+/// The mirrors of a channel whose first page starts after its message "old parent", which has a
+/// reply, "r1". The user (not admin) has the channel open.
+fn open_channel_past_its_thread() -> (OwnMessages, Mirrors, String) {
+    let admin = Admin::login();
+    let user = admin.create_user();
+    let (room, room_name) = admin.create_channel(&[&user.username]);
+    let parent = admin.post_message(&room, "old parent").id;
+    admin.post_in_thread(&room, &parent, "r1", false);
+    for n in 0..PAGE_SIZE + 5 {
+        admin.post_message(&room, &format!("filler {n}"));
+    }
+    let (client, events) = logged_in(&user);
+    client.account().open_room(room.clone().into());
+    let mut mirrors = Mirrors::default();
+    follow_both(&events, &mut mirrors, |m| m.room.len() == PAGE_SIZE);
+    let open = OwnMessages {
+        admin,
+        username: user.username,
+        room,
+        room_name,
+        ids: Vec::new(),
+        client,
+        events,
+        mirror: Vec::new(),
+    };
+    (open, mirrors, parent)
+}
+
+// ACT-004
+#[test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+fn a_thread_whose_parent_is_older_than_the_first_page_opens_and_follows_its_replies() {
+    let (open, mut mirrors, parent) = open_channel_past_its_thread();
+    assert!(message_saying(&mirrors.room, "old parent").is_none());
+
+    open.client.account().open_thread(parent.clone().into());
+    follow_both(&open.events, &mut mirrors, |m| {
+        !m.status.loading && m.status.parent.is_some() && m.status.reached_start
+    });
+    assert_eq!(texts(&mirrors.thread), ["old parent", "r1"]);
+    assert_eq!(mirrors.thread[0].thread_replies, 1);
+
+    // A reply pushed now reaches the thread and counts in its parent, which the room doesn't hold.
+    let r2 = open.admin.post_in_thread(&open.room, &parent, "r2", false);
+    follow_both(&open.events, &mut mirrors, |m| {
+        message_saying(&m.thread, "r2").is_some() && m.thread[0].thread_replies == 2
+    });
+    assert!(message_saying(&mirrors.room, "old parent").is_none());
+    assert!(message_saying(&mirrors.room, "r2").is_none());
+
+    // The server doesn't push the parent for a deletion: the core counts it down.
+    open.admin.delete_message(&open.room, &r2.id);
+    follow_both(&open.events, &mut mirrors, |m| {
+        message_saying(&m.thread, "r2").is_none() && m.thread[0].thread_replies == 1
+    });
+
+    // Deleting the parent, which has a reply, closes the thread.
+    open.admin.delete_message(&open.room, &parent);
+    follow_both(&open.events, &mut mirrors, |m| m.status.parent.is_none());
+    assert!(mirrors.thread.is_empty());
+}
+
+// ACT-004
+#[test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+fn a_message_of_another_room_or_one_that_is_missing_does_not_open_a_thread() {
+    let (open, mut mirrors, _) = open_channel_past_its_thread();
+    let (other, _) = open.admin.create_channel(&[&open.username]);
+    let elsewhere = open.admin.post_message(&other, "elsewhere").id;
+    open.admin
+        .post_in_thread(&other, &elsewhere, "reply elsewhere", false);
+
+    for id in [elsewhere.as_str(), "noSuchMessage"] {
+        open.client.account().open_thread(id.to_owned().into());
+    }
+
+    // The room goes on: a message sent after the asks is the last thing heard, and no thread
+    // was opened before it.
+    open.admin.post_message(&open.room, "after");
+    follow_both(&open.events, &mut mirrors, |m| {
+        message_saying(&m.room, "after").is_some()
+    });
+    assert!(mirrors.status.parent.is_none());
+    assert!(mirrors.thread.is_empty());
+}
+
 // ACT-004
 #[test]
 #[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]

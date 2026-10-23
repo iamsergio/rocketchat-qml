@@ -20,6 +20,10 @@ use common::{
     wait_for_reply_after,
 };
 
+/// How many messages the first page holds: `rc_core`'s `NEWEST_PAGE`. The tests don't link to the
+/// core.
+const NEWEST_PAGE: usize = 50;
+
 // ACT-004
 #[test]
 #[ignore = "needs the app and a Rocket.Chat server: run through ctest"]
@@ -343,6 +347,52 @@ fn a_reply_sent_to_the_room_by_somebody_else_leads_to_its_thread() {
     .unwrap();
     gui.wait_until_text(main_window::THREAD_REPLIES, "1 reply", TIMEOUT)
         .unwrap();
+}
+
+// ACT-004
+#[test]
+#[ignore = "needs the app and a Rocket.Chat server: run through ctest"]
+fn a_reply_sent_to_the_room_whose_parent_left_the_window_leads_to_its_thread() {
+    let admin = Admin::login();
+    let user = admin.create_user();
+    let (channel_id, _) = admin.create_channel(&[&user.username]);
+    let parent_text = format!("parent {}", unique());
+    let parent = admin.post_message(&channel_id, &parent_text);
+    // Enough messages after the parent for the room's first page to start after it.
+    for n in 0..NEWEST_PAGE + 5 {
+        admin.post_message(&channel_id, &format!("filler {n}"));
+    }
+    let text = format!("shown in the room {}", unique());
+    let posted = admin.post_in_thread(&channel_id, &parent.id, &text, true);
+    let app = launch();
+    let gui = app.gui();
+    log_in_and_wait_for_room(gui, &user, &channel_id);
+    open_room(gui, &channel_id);
+
+    // The room doesn't hold the parent, so the line has no start of it to show.
+    let line = message(&posted.id, message_row::IN_THREAD);
+    gui.wait_until_visible(&line, TIMEOUT).unwrap();
+    assert_eq!(gui.text(&line).unwrap(), "Replied in a thread");
+    assert!(
+        !gui.exists_and_visible(&message(&parent.id, message_row::BODY))
+            .unwrap()
+    );
+
+    gui.mouse_click(&line).unwrap();
+    gui.wait_until_visible(main_window::THREAD_PANE, TIMEOUT)
+        .unwrap();
+    gui.wait_until_text(
+        &thread_message(&parent.id, message_row::BODY),
+        &parent_text,
+        TIMEOUT,
+    )
+    .unwrap();
+    gui.wait_until_text(
+        &thread_message(&posted.id, message_row::BODY),
+        &text,
+        TIMEOUT,
+    )
+    .unwrap();
 }
 
 // ACT-004

@@ -37,6 +37,12 @@ pub(super) struct ThreadScript {
     pub(super) result: Result<Page, ApiError>,
 }
 
+pub(super) struct MessageScript {
+    /// Holds the fetch until the test notifies it.
+    pub(super) gate: Option<Arc<Notify>>,
+    pub(super) result: Result<Message, ApiError>,
+}
+
 pub(super) struct ChangesScript {
     /// Holds the request until the test notifies it.
     pub(super) gate: Option<Arc<Notify>>,
@@ -168,6 +174,10 @@ pub(super) struct FakeState {
     /// One per thread fetch; an empty page at the start once they run out.
     pub(super) threads: VecDeque<ThreadScript>,
     pub(super) thread_calls: Vec<ThreadCall>,
+    /// One per fetch of a message by its id; not found once they run out.
+    pub(super) messages: VecDeque<MessageScript>,
+    /// The ids of the messages fetched.
+    pub(super) message_calls: Vec<String>,
     /// One per catch-up of a room; no changes once they run out.
     pub(super) changes: HashMap<String, VecDeque<ChangesScript>>,
     pub(super) changes_calls: Vec<ChangesCall>,
@@ -307,6 +317,24 @@ impl Fake {
         self.state()
             .threads
             .push_back(ThreadScript { gate, result });
+    }
+
+    pub(super) fn script_message(
+        &self,
+        gate: Option<Arc<Notify>>,
+        result: Result<Message, ApiError>,
+    ) {
+        self.state()
+            .messages
+            .push_back(MessageScript { gate, result });
+    }
+
+    /// The fetch tasks of messages have started and are inside `message`.
+    pub(super) fn wait_for_message_calls(&self, count: usize) -> Vec<String> {
+        wait_until(|| {
+            let calls = self.state().message_calls.clone();
+            (calls.len() >= count).then_some(calls)
+        })
     }
 
     /// The thread fetch task has started and is inside `thread_messages`.
@@ -737,6 +765,28 @@ impl ServerApi for Fake {
             return Ok(Page {
                 messages: Vec::new(),
                 reached_start: true,
+            });
+        };
+        if let Some(gate) = script.gate {
+            gate.notified().await;
+        }
+        script.result
+    }
+
+    async fn message(
+        &self,
+        _credentials: &Credentials,
+        id: &MessageId,
+    ) -> Result<Message, ApiError> {
+        let script = {
+            let mut state = self.state();
+            state.message_calls.push(id.to_string());
+            state.messages.pop_front()
+        };
+        let Some(script) = script else {
+            return Err(ApiError::Server {
+                status: 404,
+                message: "Not Found".to_owned(),
             });
         };
         if let Some(gate) = script.gate {
