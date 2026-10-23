@@ -41,6 +41,11 @@ export component Avatar inherits Rectangle {
     Image {
         accessible-id: root.image-name;
         accessible-label: root.url;
+        // Without a size the image has its file's, far larger than the box, which clips it to one
+        // corner. At the box's size `cover` scales the whole image into it, as Qt's
+        // `PreserveAspectCrop` does.
+        width: root.width;
+        height: root.height;
         source: root.source;
         image-fit: cover;
         visible: root.has-image;
