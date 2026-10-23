@@ -51,6 +51,7 @@ mod tests {
                 thread_shown: false,
                 thread_replies: 0,
                 thread_last_reply: None,
+                thread_followers: Vec::new(),
             }],
             reached_start: true,
             synced_at: Some(jiff::Timestamp::UNIX_EPOCH),

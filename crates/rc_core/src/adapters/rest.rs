@@ -12,7 +12,9 @@ use crate::domain::{
 };
 use crate::ports::{
     ApiError, Changes, Connector, Image, Page, Pushed, Realtime, ServerApi, ThreadTarget,
+    ThreadsPage,
 };
+use crate::threads::ThreadFilter;
 
 pub struct RestConnector;
 
@@ -188,6 +190,28 @@ impl ServerApi for RestApi {
         Ok(Page {
             messages: page.messages.into_iter().map(message_from).collect(),
             reached_start: page.reached_start,
+        })
+    }
+
+    async fn threads_list(
+        &self,
+        credentials: &Credentials,
+        room: &RoomId,
+        filter: ThreadFilter,
+        offset: usize,
+        count: usize,
+    ) -> Result<ThreadsPage, ApiError> {
+        let session = self.client.session(api_credentials(credentials));
+        let kind = match filter {
+            ThreadFilter::All => rc_api::ThreadsKind::All,
+            ThreadFilter::Following => rc_api::ThreadsKind::Following,
+        };
+        let page = session
+            .threads_list(room.as_str(), kind, count, offset)
+            .await?;
+        Ok(ThreadsPage {
+            threads: page.threads.into_iter().map(message_from).collect(),
+            reached_end: page.reached_end,
         })
     }
 
@@ -481,6 +505,7 @@ mod tests {
             thread_shown: false,
             thread_replies: 0,
             thread_last_reply: None,
+            thread_followers: Vec::new(),
             md: None,
             attachments: Vec::new(),
             quotes: Vec::new(),

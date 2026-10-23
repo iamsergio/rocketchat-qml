@@ -45,6 +45,8 @@ qt_add_qml_module(
   ServerRail.qml
   ServerTile.qml
   StartupPage.qml
+  ThreadListPage.qml
+  ThreadListRow.qml
   ThreadPane.qml
   Theme.qml
   VersionLabel.qml
@@ -52,6 +54,7 @@ qt_add_qml_module(
   fonts/InstrumentSans.ttf
   fonts/InstrumentSans-Italic.ttf
   icons/channel.svg
+  icons/chevron.svg
   icons/check.svg
   icons/clock.svg
   icons/close.svg

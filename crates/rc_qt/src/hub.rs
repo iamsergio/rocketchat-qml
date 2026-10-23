@@ -32,6 +32,7 @@ use rc_core::domain::{AccountId, AvatarOwner, MessageId, Room, RoomId};
 use rc_core::emoji::CustomEmojis;
 use rc_core::policy::{ActionError, MessageAction};
 use rc_core::rooms::{RoomActionError, RoomChange};
+use rc_core::threads::{ThreadFilter, ThreadListChange};
 use rc_core::timeline::TimelineChange;
 use rc_core::{AccountHandle, Client, Event};
 use secrecy::SecretString;
@@ -43,6 +44,8 @@ use crate::room_list_model::qobject::RoomListModel;
 use crate::room_search_model::qobject::RoomSearchModel;
 use crate::room_vm::qobject::RoomVm;
 use crate::session_vm::qobject::SessionVm;
+use crate::thread_list_model::qobject::ThreadListModel;
+use crate::thread_list_vm::qobject::ThreadListVm;
 use crate::thread_message_list_model::qobject::ThreadMessageListModel;
 use crate::thread_vm::qobject::ThreadVm;
 use rc_view::accounts::{AccountView, Accounts};
@@ -55,6 +58,9 @@ use rc_view::room_view::RoomState;
 use rc_view::session_view::SessionView;
 use rc_view::startup;
 use rc_view::switchboard::{Shown, Switchboard};
+use rc_view::thread_list_view::{
+    PaneStep, ThreadListState, back_steps, close_pane_steps, escape_steps, toggle_steps,
+};
 use rc_view::thread_view::ThreadState;
 use rc_view::viewer::Viewer;
 
@@ -131,6 +137,8 @@ struct Views {
     messages: Registered<MessageListModel>,
     thread: Registered<ThreadVm>,
     thread_messages: Registered<ThreadMessageListModel>,
+    thread_list: Registered<ThreadListVm>,
+    thread_list_rows: Registered<ThreadListModel>,
     picker: Registered<EmojiPickerModel>,
 }
 
@@ -306,6 +314,65 @@ pub fn close_thread() {
     current_account("close_thread", |account| account.close_thread());
 }
 
+/// Lists the open room's threads, from the first page.
+pub fn open_thread_list(filter: ThreadFilter) {
+    current_account("open_thread_list", |account| {
+        account.open_thread_list(filter);
+    });
+}
+
+pub fn close_thread_list() {
+    current_account("close_thread_list", |account| account.close_thread_list());
+}
+
+pub fn load_more_threads() {
+    current_account("load_more_threads", |account| account.load_more_threads());
+}
+
+/// Does what a command on the pane decided, in order.
+fn run_steps(account: &AccountHandle<'_>, steps: &[PaneStep]) {
+    for step in steps {
+        match *step {
+            PaneStep::CloseThread => account.close_thread(),
+            PaneStep::CloseList => account.close_thread_list(),
+            PaneStep::OpenList(filter) => account.open_thread_list(filter),
+        }
+    }
+}
+
+/// Carries out the steps `decide` takes from the pane's state and the filter last used in the
+/// open room.
+fn pane_command(what: &str, decide: impl FnOnce(&ThreadListState, ThreadFilter) -> Vec<PaneStep>) {
+    let hub = lock();
+    let cache = hub.switchboard.accounts().current_cache();
+    let steps = decide(&cache.thread_list_state(), cache.thread_list_filter());
+    match (&hub.client, hub.switchboard.accounts().current()) {
+        (Some(client), Some(id)) => run_steps(&client.account(id), &steps),
+        (Some(_), None) => tracing::warn!("{what} ignored: there is no current account"),
+        (None, _) => tracing::warn!("{what} ignored: the core isn't running"),
+    }
+}
+
+/// The back button of a thread.
+pub fn thread_back() {
+    pane_command("thread_back", back_steps);
+}
+
+/// The pane's close button.
+pub fn close_pane() {
+    pane_command("close_pane", |state, _| close_pane_steps(state));
+}
+
+/// The header button.
+pub fn toggle_pane() {
+    pane_command("toggle_pane", toggle_steps);
+}
+
+/// Escape in the pane.
+pub fn escape_pane() {
+    pane_command("escape_pane", escape_steps);
+}
+
 pub fn load_older_thread() {
     current_account("load_older_thread", |account| account.load_older_thread());
 }
@@ -458,6 +525,28 @@ pub fn register_thread_messages(
     )
 }
 
+/// Registers the `ThreadList` view model and returns what it shows now. Call on the GUI thread;
+/// the events that follow the returned state are queued to `thread`.
+pub fn register_thread_list(thread: CxxQtThread<ThreadListVm>) -> ThreadListState {
+    let mut hub = lock();
+    hub.views.thread_list.register(thread);
+    hub.switchboard
+        .accounts()
+        .current_cache()
+        .thread_list_state()
+}
+
+/// Registers the `ThreadListModel` model and returns the change that brings it up to date and the
+/// avatars it shows. Call on the GUI thread; the events that follow are queued to `thread`.
+pub fn register_thread_list_model(
+    thread: CxxQtThread<ThreadListModel>,
+) -> (ThreadListChange, AvatarUrls) {
+    let mut hub = lock();
+    hub.views.thread_list_rows.register(thread);
+    let cache = hub.switchboard.accounts().current_cache();
+    (cache.thread_list_snapshot(), cache.avatars())
+}
+
 /// The thread's state now, for sending a reply.
 pub fn thread_state() -> ThreadState {
     lock().switchboard.accounts().current_cache().thread_state()
@@ -507,16 +596,27 @@ impl Views {
                 // The open room's name may have changed.
                 self.show_room(cache);
                 self.show_thread(cache);
+                self.show_thread_list(cache);
             }
             Event::Timeline(changes) => self.messages.queue(move |model| model.apply(&changes)),
             Event::TimelineStatus(_) => {
                 self.show_room(cache);
                 self.show_thread(cache);
+                self.show_thread_list(cache);
             }
             Event::ThreadTimeline(changes) => self
                 .thread_messages
                 .queue(move |model| model.apply(&changes)),
-            Event::ThreadStatus(_) | Event::ThreadTyping { .. } => self.show_thread(cache),
+            Event::ThreadStatus(_) => {
+                self.show_thread(cache);
+                // A thread hides the list, and the pane follows.
+                self.show_thread_list(cache);
+            }
+            Event::ThreadTyping { .. } => self.show_thread(cache),
+            Event::ThreadList(changes) => self
+                .thread_list_rows
+                .queue(move |model| model.apply(&changes)),
+            Event::ThreadListStatus(_) => self.show_thread_list(cache),
             Event::Typing { .. } => self.show_room(cache),
             Event::Avatars(updates) => self.show_avatars(&cache.avatar_changes(&updates)),
             Event::Images(updates) => self.show_images(&cache.image_changes(&updates)),
@@ -554,7 +654,11 @@ impl Views {
             // What failed for the other account means nothing for this one.
             vm.dismiss_action_error();
         });
+        let (threads, avatars) = (cache.thread_list_snapshot(), cache.avatars());
+        self.thread_list_rows
+            .queue(move |model| model.show(threads, avatars));
         self.show_thread(cache);
+        self.show_thread_list(cache);
         self.show_session_view(accounts);
     }
 
@@ -567,6 +671,8 @@ impl Views {
             messages: Registered::new("MessageList"),
             thread: Registered::new("Thread"),
             thread_messages: Registered::new("ThreadMessageList"),
+            thread_list: Registered::new("ThreadList"),
+            thread_list_rows: Registered::new("ThreadListModel"),
             picker: Registered::new("EmojiCatalog"),
         }
     }
@@ -633,6 +739,9 @@ impl Views {
         let for_thread = changes.to_vec();
         self.thread_messages
             .queue(move |model| model.set_avatars(&for_thread));
+        let for_threads = changes.to_vec();
+        self.thread_list_rows
+            .queue(move |model| model.set_avatars(&for_threads));
     }
 
     /// Tells the message models who they show the messages to now, as `cache` says.
@@ -648,6 +757,12 @@ impl Views {
     fn show_room(&mut self, cache: &Cache) {
         let (state, topic_html) = room_shown(cache);
         self.room.queue(move |vm| vm.show(&state, &topic_html));
+    }
+
+    /// Sends the `ThreadList` view model what `cache` says it shows now.
+    fn show_thread_list(&mut self, cache: &Cache) {
+        let state = cache.thread_list_state();
+        self.thread_list.queue(move |vm| vm.show(&state));
     }
 
     /// Sends the `Thread` view model what `cache` says it shows now.

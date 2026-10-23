@@ -19,7 +19,7 @@ import RocketChat.Bridge
 // quote, and so does opening another room. Quoting and editing exclude each other.
 //
 // For a thread it replies in the open thread, with a check box to send the reply to the room too,
-// and Escape with nothing to cancel closes the thread. The edits, deletions and reactions go
+// and Escape with nothing to cancel goes back to the list of threads. The edits, deletions and reactions go
 // through Room in both cases.
 Rectangle {
     id: root
@@ -313,7 +313,7 @@ Rectangle {
                             root.endQuote();
                             event.accepted = true;
                         } else if (event.key === Qt.Key_Escape && root.forThread) {
-                            Thread.close();
+                            ThreadList.escape();
                             event.accepted = true;
                         } else if (event.key === Qt.Key_Up && !root.editing && field.length === 0) {
                             root.editLast();

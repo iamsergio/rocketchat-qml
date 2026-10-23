@@ -6,7 +6,7 @@
 use super::*;
 
 /// A reply in the thread of `parent`, not shown in the room, in room 1.
-fn reply(id: &str, secs: i64, parent: &str) -> Message {
+pub(super) fn reply(id: &str, secs: i64, parent: &str) -> Message {
     Message {
         thread_id: Some(parent.to_owned().into()),
         ..message(id, secs)
@@ -21,14 +21,14 @@ fn shown(message: Message) -> Message {
     }
 }
 
-fn thread_reset(room: Option<&str>, messages: Vec<Message>) -> Event {
+pub(super) fn thread_reset(room: Option<&str>, messages: Vec<Message>) -> Event {
     Event::ThreadTimeline(vec![TimelineChange::Reset {
         room: room.map(|id| id.to_owned().into()),
         messages,
     }])
 }
 
-fn thread_status(
+pub(super) fn thread_status(
     parent: &str,
     loading: bool,
     loading_older: bool,
@@ -45,7 +45,7 @@ fn thread_status(
 }
 
 /// The events that close the open thread: no messages, no parent.
-fn thread_closed_events() -> Vec<Event> {
+pub(super) fn thread_closed_events() -> Vec<Event> {
     vec![
         thread_reset(None, Vec::new()),
         Event::ThreadStatus(ThreadStatus::default()),
@@ -54,7 +54,7 @@ fn thread_closed_events() -> Vec<Event> {
 
 impl Harness {
     /// The next event about the thread, skipping the others.
-    fn next_thread(&self) -> Event {
+    pub(super) fn next_thread(&self) -> Event {
         loop {
             let event = self.next_event();
             if matches!(event, Event::ThreadTimeline(_) | Event::ThreadStatus(_)) {
@@ -64,7 +64,7 @@ impl Harness {
     }
 
     /// Checks the next events about the thread, in order, skipping the others.
-    fn expect_thread(&self, events: Vec<Event>) {
+    pub(super) fn expect_thread(&self, events: Vec<Event>) {
         for expected in events {
             assert_eq!(self.next_thread(), expected);
         }

@@ -37,6 +37,12 @@ pub(super) struct ThreadScript {
     pub(super) result: Result<Page, ApiError>,
 }
 
+pub(super) struct ThreadsListScript {
+    /// Holds the fetch until the test notifies it.
+    pub(super) gate: Option<Arc<Notify>>,
+    pub(super) result: Result<ThreadsPage, ApiError>,
+}
+
 pub(super) struct MessageScript {
     /// Holds the fetch until the test notifies it.
     pub(super) gate: Option<Arc<Notify>>,
@@ -116,6 +122,15 @@ pub(super) struct ThreadCall {
     pub(super) count: usize,
 }
 
+/// What `threads_list` was asked.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct ThreadsListCall {
+    pub(super) room: String,
+    pub(super) filter: ThreadFilter,
+    pub(super) offset: usize,
+    pub(super) count: usize,
+}
+
 /// What `changes_since` was asked.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct ChangesCall {
@@ -174,6 +189,9 @@ pub(super) struct FakeState {
     /// One per thread fetch; an empty page at the start once they run out.
     pub(super) threads: VecDeque<ThreadScript>,
     pub(super) thread_calls: Vec<ThreadCall>,
+    /// One per fetch of a page of a room's threads; an empty last page once they run out.
+    pub(super) thread_lists: VecDeque<ThreadsListScript>,
+    pub(super) thread_list_calls: Vec<ThreadsListCall>,
     /// One per fetch of a message by its id; not found once they run out.
     pub(super) messages: VecDeque<MessageScript>,
     /// The ids of the messages fetched.
@@ -317,6 +335,24 @@ impl Fake {
         self.state()
             .threads
             .push_back(ThreadScript { gate, result });
+    }
+
+    pub(super) fn script_threads_list(
+        &self,
+        gate: Option<Arc<Notify>>,
+        result: Result<ThreadsPage, ApiError>,
+    ) {
+        self.state()
+            .thread_lists
+            .push_back(ThreadsListScript { gate, result });
+    }
+
+    /// The fetch tasks of thread lists have started and are inside `threads_list`.
+    pub(super) fn wait_for_threads_list_calls(&self, count: usize) -> Vec<ThreadsListCall> {
+        wait_until(|| {
+            let calls = self.state().thread_list_calls.clone();
+            (calls.len() >= count).then_some(calls)
+        })
     }
 
     pub(super) fn script_message(
@@ -765,6 +801,36 @@ impl ServerApi for Fake {
             return Ok(Page {
                 messages: Vec::new(),
                 reached_start: true,
+            });
+        };
+        if let Some(gate) = script.gate {
+            gate.notified().await;
+        }
+        script.result
+    }
+
+    async fn threads_list(
+        &self,
+        _credentials: &Credentials,
+        room: &RoomId,
+        filter: ThreadFilter,
+        offset: usize,
+        count: usize,
+    ) -> Result<ThreadsPage, ApiError> {
+        let script = {
+            let mut state = self.state();
+            state.thread_list_calls.push(ThreadsListCall {
+                room: room.to_string(),
+                filter,
+                offset,
+                count,
+            });
+            state.thread_lists.pop_front()
+        };
+        let Some(script) = script else {
+            return Ok(ThreadsPage {
+                threads: Vec::new(),
+                reached_end: true,
             });
         };
         if let Some(gate) = script.gate {

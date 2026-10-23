@@ -11,7 +11,8 @@ use serde_json::json;
 use crate::error::Error;
 use crate::types::{
     Credentials, CustomEmoji, Download, HistoryPage, LoginResult, Message, MessageChanges,
-    MessageSettings, RoomType, ServerInfo, Subscription, ThreadPage, User,
+    MessageSettings, RoomType, ServerInfo, Subscription, ThreadPage, ThreadsKind, ThreadsPage,
+    User,
 };
 use crate::wire;
 
@@ -523,6 +524,44 @@ impl RestSession {
         );
         let body = self.call(Method::GET, &path).await?;
         wire::parse_thread_messages(&body, offset).map_err(Error::Decode)
+    }
+
+    /// A page of the threads of a room (`GET /api/v1/chat.getThreadsList`), as their parent
+    /// messages, the one with the most recent reply first, starting `offset` threads from the
+    /// first. The page has at most `count` threads; [`ThreadsPage::reached_end`] says when there
+    /// are no more. A thread that gets a reply meanwhile moves to the front and shifts the later
+    /// pages, which is for the caller to de-duplicate.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Unauthorized`] if the token is expired or revoked, [`Error::Server`] if the room
+    /// doesn't exist or isn't visible to the user, or any of the other errors.
+    pub async fn threads_list(
+        &self,
+        room_id: &str,
+        kind: ThreadsKind,
+        count: usize,
+        offset: usize,
+    ) -> Result<ThreadsPage, Error> {
+        // Only a URL to escape the query with; the host is never used.
+        let mut escaped =
+            Url::parse("http://unused/").map_err(|e| Error::InvalidUrl(e.to_string()))?;
+        {
+            let mut pairs = escaped.query_pairs_mut();
+            pairs.append_pair("rid", room_id);
+            // The server refuses `all`: every thread is what it lists without a type.
+            if kind == ThreadsKind::Following {
+                pairs.append_pair("type", "following");
+            }
+            pairs.append_pair("count", &count.to_string());
+            pairs.append_pair("offset", &offset.to_string());
+        }
+        let path = format!(
+            "api/v1/chat.getThreadsList?{}",
+            escaped.query().unwrap_or_default()
+        );
+        let body = self.call(Method::GET, &path).await?;
+        wire::parse_threads_list(&body, offset).map_err(Error::Decode)
     }
 
     /// Replaces the text of a message (`POST /api/v1/chat.update`) and returns the message as the

@@ -4,11 +4,14 @@
 //! What the hub remembers of the core's events, so that a view model created late can catch up.
 //! Plain Rust, so it can be unit-tested without Qt or a [`Client`](rc_core::Client).
 
+use std::collections::HashMap;
+
 use rc_core::domain::{AccountId, AvatarOwner, Identity, Message, MessageId, Room, RoomId, UserId};
 use rc_core::emoji::CustomEmojis;
 use rc_core::policy::MessagePolicy;
 use rc_core::rooms::{RoomChange, Unread};
 use rc_core::session::{LoginFailure, SessionState};
+use rc_core::threads::{ThreadFilter, ThreadListChange, ThreadListStatus};
 use rc_core::timeline::{ThreadStatus, TimelineChange, TimelineStatus};
 use rc_core::{AvatarUpdate, ImageUpdate};
 use rc_core::{Connection, Event};
@@ -19,6 +22,7 @@ use crate::avatar_view::AvatarUrls;
 use crate::message_view::{author_name, body, can_edit};
 use crate::room_view::{RoomState, room_state, typing_line};
 use crate::session_view::{LoginMode, SessionView, host, session_view};
+use crate::thread_list_view::{ThreadListState, thread_list_state};
 use crate::thread_view::{ThreadState, thread_state};
 use crate::viewer::Viewer;
 
@@ -46,6 +50,14 @@ pub struct Cache {
     /// The open thread's messages: the parent, then the replies. Empty when none is open.
     thread_messages: Vec<Message>,
     thread_status: ThreadStatus,
+    /// The parents the open room's thread list holds, the one with the most recent reply first.
+    /// Empty when it is closed.
+    thread_list: Vec<Message>,
+    thread_list_status: ThreadListStatus,
+    /// The filter the thread list was last opened with in each room, which opening it again
+    /// without a choice (the back button of a thread) starts with.
+    /// `None` until there is one: a `HashMap` can't be built in `new`.
+    thread_list_filters: Option<HashMap<RoomId, ThreadFilter>>,
     /// Who the core says is typing, and where: in a room, in a thread (by its parent). Empty
     /// names once nobody does.
     typing: Option<(RoomId, Vec<String>)>,
@@ -102,6 +114,16 @@ impl Cache {
                 reached_start: false,
                 error: None,
             },
+            thread_list: Vec::new(),
+            thread_list_status: ThreadListStatus {
+                room: None,
+                filter: ThreadFilter::All,
+                loading: false,
+                loading_more: false,
+                reached_end: false,
+                error: None,
+            },
+            thread_list_filters: None,
             typing: None,
             thread_typing: None,
             username: None,
@@ -169,6 +191,18 @@ impl Cache {
                 }
             }
             Event::ThreadStatus(status) => self.thread_status = status.clone(),
+            Event::ThreadList(changes) => {
+                for change in changes {
+                    change.apply(&mut self.thread_list);
+                }
+            }
+            Event::ThreadListStatus(status) => {
+                if let Some(room) = &status.room {
+                    (self.thread_list_filters.get_or_insert_default())
+                        .insert(room.clone(), status.filter);
+                }
+                self.thread_list_status = status.clone();
+            }
             Event::Typing { room, names } => self.typing = Some((room.clone(), names.clone())),
             Event::ThreadTyping { thread, names } => {
                 self.thread_typing = Some((thread.clone(), names.clone()));
@@ -309,6 +343,12 @@ impl Cache {
         }
     }
 
+    /// The change that brings an empty thread list model to the current threads.
+    #[must_use]
+    pub fn thread_list_snapshot(&self) -> ThreadListChange {
+        ThreadListChange::Reset(self.thread_list.clone())
+    }
+
     /// The change that brings an empty thread model to the current thread messages.
     #[must_use]
     pub fn thread_snapshot(&self) -> TimelineChange {
@@ -407,6 +447,31 @@ impl Cache {
             state.typing = typing_line(names);
         }
         state
+    }
+
+    /// What the `ThreadList` view model shows now.
+    #[must_use]
+    pub fn thread_list_state(&self) -> ThreadListState {
+        thread_list_state(
+            &self.rooms,
+            self.status.room.as_ref(),
+            &self.thread_list_status,
+            self.thread_list.len(),
+            self.thread_status.parent.is_some(),
+        )
+    }
+
+    /// The filter to open the open room's thread list with when the user didn't choose one: the
+    /// last one used in the room, else all of them.
+    #[must_use]
+    pub fn thread_list_filter(&self) -> ThreadFilter {
+        self.status
+            .room
+            .as_ref()
+            .zip(self.thread_list_filters.as_ref())
+            .and_then(|(room, filters)| filters.get(room))
+            .copied()
+            .unwrap_or_default()
     }
 
     /// What the `Thread` view model shows now.
@@ -622,6 +687,7 @@ mod tests {
             thread_shown: false,
             thread_replies: 0,
             thread_last_reply: None,
+            thread_followers: Vec::new(),
         }
     }
 
@@ -1323,5 +1389,131 @@ mod tests {
         cache.apply(&logged_in("alice"));
         assert_eq!(view(&cache).login_mode, LoginMode::Login);
         assert!(!cache.is_blank());
+    }
+
+    /// A parent of a thread with `replies` replies.
+    fn listed(id: &str, replies: u32) -> Message {
+        let mut parent = from_other(id, 1);
+        parent.thread_replies = replies;
+        parent
+    }
+
+    fn list_status(filter: ThreadFilter) -> Event {
+        Event::ThreadListStatus(ThreadListStatus {
+            room: Some("a".to_owned().into()),
+            filter,
+            ..ThreadListStatus::default()
+        })
+    }
+
+    // ACT-010
+    #[test]
+    fn a_thread_list_snapshot_taken_at_any_point_followed_by_the_rest_equals_the_replay() {
+        let events = vec![
+            Event::ThreadList(vec![ThreadListChange::Reset(Vec::new())]),
+            Event::ThreadList(vec![ThreadListChange::Reset(vec![
+                listed("p1", 1),
+                listed("p2", 2),
+            ])]),
+            Event::ThreadList(vec![ThreadListChange::Inserted {
+                index: 2,
+                item: listed("p3", 1),
+            }]),
+            Event::ThreadList(vec![ThreadListChange::Moved {
+                from: 2,
+                to: 0,
+                item: listed("p3", 2),
+            }]),
+            Event::ThreadList(vec![ThreadListChange::Updated {
+                index: 1,
+                item: listed("p1", 5),
+            }]),
+            Event::ThreadList(vec![ThreadListChange::Removed { index: 0 }]),
+            Event::ThreadList(vec![ThreadListChange::Reset(Vec::new())]),
+        ];
+        let mut replay = Vec::new();
+        for event in &events {
+            if let Event::ThreadList(changes) = event {
+                for change in changes {
+                    change.apply(&mut replay);
+                }
+            }
+        }
+        for split in 0..=events.len() {
+            let mut cache = Cache::default();
+            events[..split].iter().for_each(|event| cache.apply(event));
+            let mut mirror = Vec::new();
+            cache.thread_list_snapshot().apply(&mut mirror);
+            for event in &events[split..] {
+                if let Event::ThreadList(changes) = event {
+                    for change in changes {
+                        change.apply(&mut mirror);
+                    }
+                }
+            }
+            assert_eq!(mirror, replay, "split at {split}");
+        }
+    }
+
+    // ACT-010
+    #[test]
+    fn the_thread_list_state_follows_the_status_the_rows_and_the_open_thread() {
+        let mut cache = Cache::default();
+        assert_eq!(cache.thread_list_state().pane, "none");
+        cache.apply(&Event::Rooms(vec![RoomChange::Reset(vec![room(
+            "a", "alpha",
+        )])]));
+        cache.apply(&Event::TimelineStatus(TimelineStatus {
+            room: Some("a".to_owned().into()),
+            ..TimelineStatus::default()
+        }));
+        cache.apply(&list_status(ThreadFilter::Following));
+        let state = cache.thread_list_state();
+        assert_eq!(
+            (state.pane.as_str(), state.filter.as_str()),
+            ("list", "following")
+        );
+        assert_eq!(state.room_name, "alpha");
+        assert!(state.empty);
+        cache.apply(&Event::ThreadList(vec![ThreadListChange::Reset(vec![
+            listed("p1", 1),
+        ])]));
+        assert!(!cache.thread_list_state().empty);
+
+        // A thread hides the list, which stays.
+        cache.apply(&Event::ThreadStatus(ThreadStatus {
+            parent: Some("p1".to_owned().into()),
+            ..ThreadStatus::default()
+        }));
+        let state = cache.thread_list_state();
+        assert_eq!((state.pane.as_str(), state.list_open), ("thread", true));
+        cache.apply(&Event::ThreadStatus(ThreadStatus::default()));
+        assert_eq!(cache.thread_list_state().pane, "list");
+
+        cache.apply(&Event::ThreadListStatus(ThreadListStatus::default()));
+        assert_eq!(cache.thread_list_state().pane, "none");
+    }
+
+    // ACT-010
+    #[test]
+    fn the_filter_last_used_in_a_room_is_the_one_to_open_its_list_with() {
+        let mut cache = Cache::default();
+        let open_room = |cache: &mut Cache, id: &str| {
+            cache.apply(&Event::TimelineStatus(TimelineStatus {
+                room: Some(id.to_owned().into()),
+                ..TimelineStatus::default()
+            }));
+        };
+        open_room(&mut cache, "a");
+        assert_eq!(cache.thread_list_filter(), ThreadFilter::All);
+        cache.apply(&list_status(ThreadFilter::Following));
+        // Closing the list keeps the choice, and so does a thread alone.
+        cache.apply(&Event::ThreadListStatus(ThreadListStatus::default()));
+        assert_eq!(cache.thread_list_filter(), ThreadFilter::Following);
+        // Another room has its own.
+        open_room(&mut cache, "b");
+        assert_eq!(cache.thread_list_filter(), ThreadFilter::All);
+        open_room(&mut cache, "a");
+        assert_eq!(cache.thread_list_filter(), ThreadFilter::Following);
     }
 }

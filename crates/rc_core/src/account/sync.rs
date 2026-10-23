@@ -396,6 +396,7 @@ impl<C: Connector> Actor<C> {
             if self.open_thread.is_some() {
                 self.fetch_thread(false);
             }
+            self.refresh_thread_list();
         } else {
             self.close_room();
         }

@@ -14,7 +14,7 @@ use crate::md;
 use crate::types::{
     Attachment, AttachmentImage, Author, AvatarOwner, Credentials, CustomEmoji, DdpEvent,
     HistoryPage, LoginResult, Message, MessageChanges, MessageSettings, Quote, Reaction, RoomType,
-    ServerInfo, ServerVersion, Subscription, ThreadPage, User,
+    ServerInfo, ServerVersion, Subscription, ThreadPage, ThreadsPage, User,
 };
 
 #[derive(Deserialize)]
@@ -165,6 +165,14 @@ struct ThreadBody {
 }
 
 #[derive(Deserialize)]
+struct ThreadsBody {
+    #[serde(default)]
+    threads: Vec<MessageBody>,
+    #[serde(default)]
+    total: u32,
+}
+
+#[derive(Deserialize)]
 struct SyncBody {
     result: SyncResult,
 }
@@ -214,6 +222,9 @@ struct MessageBody {
     tcount: u32,
     #[serde(default, deserialize_with = "optional_timestamp")]
     tlm: Option<jiff::Timestamp>,
+    /// The followers of the thread, on its parent.
+    #[serde(default)]
+    replies: Vec<String>,
     #[serde(default)]
     md: Option<serde_json::Value>,
     /// Read entry by entry (see [`parse_attachments`] and [`parse_quotes`]), so one odd entry
@@ -452,6 +463,7 @@ impl From<MessageBody> for Message {
             thread_shown: body.tshow,
             thread_replies: body.tcount,
             thread_last_reply: body.tlm,
+            thread_followers: body.replies,
             md: body.md.as_ref().and_then(md::parse),
             attachments: parse_attachments(body.attachments.as_ref()),
             quotes: parse_quotes(body.attachments.as_ref()),
@@ -643,6 +655,21 @@ pub(crate) fn parse_thread_messages(
         reached_start: offset.saturating_add(body.messages.len()) >= total,
         total: body.total,
         messages: body.messages.into_iter().map(Message::from).collect(),
+    })
+}
+
+/// The answer of `chat.getThreadsList`. `offset` is what was asked for: the page ends the list if
+/// it reaches `total`.
+pub(crate) fn parse_threads_list(
+    bytes: &[u8],
+    offset: usize,
+) -> Result<ThreadsPage, serde_json::Error> {
+    let body: ThreadsBody = serde_json::from_slice(bytes)?;
+    let total = usize::try_from(body.total).unwrap_or(usize::MAX);
+    Ok(ThreadsPage {
+        reached_end: offset.saturating_add(body.threads.len()) >= total,
+        total: body.total,
+        threads: body.threads.into_iter().map(Message::from).collect(),
     })
 }
 
@@ -1676,6 +1703,45 @@ mod tests {
         assert!(!reached(0));
         assert!(reached(1));
         assert!(reached(5));
+    }
+
+    const THREADS_LIST: &str = include_str!("../tests/fixtures/threads_list.json");
+
+    // ACT-010
+    #[test]
+    fn a_threads_list_is_the_parents_with_their_summaries_and_followers() {
+        let page = parse_threads_list(THREADS_LIST.as_bytes(), 0).unwrap();
+        let texts: Vec<_> = page.threads.iter().map(|m| m.text.as_str()).collect();
+        assert_eq!(texts, ["first thread", "second thread"]);
+        assert_eq!(page.total, 2);
+        let first = &page.threads[0];
+        assert_eq!(first.thread_replies, 2);
+        assert_eq!(
+            first.thread_last_reply.map(|t| t.to_string()).as_deref(),
+            Some("2026-10-23T21:27:28.328Z")
+        );
+        assert_eq!(first.thread_followers, ["6ad7ec7031e8972175108184"]);
+        assert!(first.thread_id.is_none());
+    }
+
+    // ACT-010
+    #[test]
+    fn a_threads_page_reaches_the_end_when_the_offset_and_the_page_cover_the_total() {
+        // The fixture holds 2 threads.
+        let reached = |body: &str, offset| {
+            parse_threads_list(body.as_bytes(), offset)
+                .unwrap()
+                .reached_end
+        };
+        assert!(reached(THREADS_LIST, 0));
+        let partial = THREADS_LIST.replace(r#""total":2"#, r#""total":5"#);
+        assert!(!reached(&partial, 0));
+        assert!(!reached(&partial, 2));
+        assert!(reached(&partial, 3));
+        assert!(reached(
+            r#"{"threads":[],"count":0,"offset":0,"total":0}"#,
+            0
+        ));
     }
 
     // ACT-004

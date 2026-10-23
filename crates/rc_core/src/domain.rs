@@ -392,6 +392,10 @@ pub struct Message {
     /// When the last reply of the thread was sent, as the server last said. A deleted reply
     /// doesn't change it.
     pub thread_last_reply: Option<jiff::Timestamp>,
+    /// The users who follow the thread, as the parent of one: its author and the users who replied,
+    /// until they unfollow. Empty for a message with no thread, and for a copy that doesn't say
+    /// (the server sends them only with the parent).
+    pub thread_followers: Vec<UserId>,
 }
 
 /// A message that another one quotes, as a copy taken when the quote was made: it doesn't follow
@@ -592,6 +596,11 @@ pub(crate) fn message_from(message: rc_api::Message) -> Message {
         thread_shown: message.thread_shown,
         thread_replies: message.thread_replies,
         thread_last_reply: message.thread_last_reply,
+        thread_followers: message
+            .thread_followers
+            .into_iter()
+            .map(UserId::from)
+            .collect(),
     }
 }
 
@@ -788,6 +797,7 @@ mod tests {
             thread_shown: false,
             thread_replies: 0,
             thread_last_reply: None,
+            thread_followers: Vec::new(),
             md: None,
             attachments: Vec::new(),
             quotes: Vec::new(),

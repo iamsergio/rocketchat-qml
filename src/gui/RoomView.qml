@@ -139,6 +139,39 @@ Rectangle {
                         }
                     }
                 }
+
+                // The room's threads: lit while the pane beside the room shows them or a thread.
+                ToolButton {
+                    id: threadsButton
+
+                    objectName: "roomThreadsButton"
+                    // Only the tool tip and the accessibility name show it.
+                    display: AbstractButton.IconOnly
+                    implicitHeight: Theme.iconButtonSize
+                    implicitWidth: Theme.iconButtonSize
+                    padding: Theme.spacingNone
+                    text: qsTr("Threads")
+                    onClicked: ThreadList.toggle()
+
+                    ToolTip.delay: Theme.toolTipDelay
+                    ToolTip.text: text
+                    ToolTip.visible: hovered
+
+                    background: Rectangle {
+                        color: ThreadList.paneOpen ? Theme.ownWash : threadsButton.hovered ? Theme.raised : Theme.transparent
+                        radius: Theme.radiusControl
+                    }
+
+                    contentItem: Item {
+                        Icon {
+                            anchors.centerIn: parent
+                            height: Theme.iconButtonIconSize
+                            source: "icons/thread.svg"
+                            tint: ThreadList.paneOpen ? Theme.own : threadsButton.hovered ? Theme.text : Theme.textMuted
+                            width: Theme.iconButtonIconSize
+                        }
+                    }
+                }
             }
 
             Rectangle {

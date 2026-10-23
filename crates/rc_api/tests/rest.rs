@@ -5,7 +5,7 @@
 
 use std::net::TcpListener;
 
-use rc_api::{Credentials, Error, RestClient, RestSession, RoomType, ServerVersion};
+use rc_api::{Credentials, Error, RestClient, RestSession, RoomType, ServerVersion, ThreadsKind};
 use secrecy::{ExposeSecret, SecretString};
 use serde_json::json;
 use wiremock::matchers::{body_json, header, method, path, query_param};
@@ -891,6 +891,86 @@ async fn a_missing_message_is_a_server_error_and_an_expired_token_is_unauthorize
     .await;
     let client = RestClient::new(&server.uri()).unwrap();
     let result = session(&client).message("m1").await;
+    assert!(matches!(result, Err(Error::Unauthorized)), "{result:?}");
+}
+
+const THREADS_LIST: &str = include_str!("fixtures/threads_list.json");
+
+// ACT-010
+#[tokio::test]
+async fn threads_list_asks_for_the_room_the_kind_and_the_page() {
+    let server = MockServer::start().await;
+    // Every thread is what the server lists without a type: it refuses `all`.
+    Mock::given(method("GET"))
+        .and(path("/api/v1/chat.getThreadsList"))
+        .and(query_param("rid", "room"))
+        .and(query_param("count", "2"))
+        .and(query_param("offset", "0"))
+        .and(header("X-User-Id", USER_ID))
+        .and(header("X-Auth-Token", TOKEN))
+        .respond_with(json_response(200, THREADS_LIST))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/chat.getThreadsList"))
+        .and(query_param("type", "following"))
+        .and(query_param("offset", "4"))
+        .respond_with(json_response(200, THREADS_LIST))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let client = RestClient::new(&server.uri()).unwrap();
+
+    let all = session(&client)
+        .threads_list("room", ThreadsKind::All, 2, 0)
+        .await
+        .unwrap();
+    let following = session(&client)
+        .threads_list("room", ThreadsKind::Following, 2, 4)
+        .await
+        .unwrap();
+
+    assert_eq!(all.threads.len(), 2);
+    assert!(all.reached_end);
+    assert_eq!(following.threads.len(), 2);
+}
+
+// ACT-010
+#[tokio::test]
+async fn threads_list_of_a_missing_room_is_a_server_error_and_an_expired_token_unauthorized() {
+    let server = MockServer::start().await;
+    mount(
+        &server,
+        "GET",
+        "/api/v1/chat.getThreadsList",
+        json_response(400, r#"{"success":false,"error":"error-invalid-room"}"#),
+    )
+    .await;
+    let client = RestClient::new(&server.uri()).unwrap();
+    let result = session(&client)
+        .threads_list("nope", ThreadsKind::All, 50, 0)
+        .await;
+    assert!(
+        matches!(result, Err(Error::Server { status: 400, .. })),
+        "{result:?}"
+    );
+
+    let server = MockServer::start().await;
+    mount(
+        &server,
+        "GET",
+        "/api/v1/chat.getThreadsList",
+        json_response(
+            401,
+            r#"{"status":"error","message":"You must be logged in"}"#,
+        ),
+    )
+    .await;
+    let client = RestClient::new(&server.uri()).unwrap();
+    let result = session(&client)
+        .threads_list("room", ThreadsKind::All, 50, 0)
+        .await;
     assert!(matches!(result, Err(Error::Unauthorized)), "{result:?}");
 }
 

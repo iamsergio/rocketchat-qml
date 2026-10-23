@@ -26,6 +26,7 @@ use crate::images::{self, Images};
 use crate::policy::{MessageAction, MessagePolicy};
 use crate::ports::{
     ApiError, Changes, Clock, Connector, FileCache, MessageStore, Page, Pushed, ServerApi,
+    ThreadsPage,
 };
 use crate::rooms::{RoomAction, RoomList, Unread};
 use crate::session::{Established, LoginFailure, SessionState, log_in, resume};
@@ -42,9 +43,11 @@ mod room_actions;
 mod sending;
 mod sync;
 mod thread;
+mod thread_list;
 mod typing;
 
 use thread::{OpenThread, PendingThread};
+use thread_list::OpenThreadList;
 
 /// How long, once the actor is told to end, it and the store worker may take to finish what the
 /// user asked already: the token revocations and the queued store writes. One bound for both: the
@@ -139,6 +142,13 @@ struct ThreadParentDone {
     outcome: Result<Message, ApiError>,
 }
 
+/// The answer of a request for a page of the thread list.
+struct ThreadsListDone {
+    /// Identifies the request: the answer is stale if the list was closed or another request began.
+    attempt: u64,
+    outcome: Result<ThreadsPage, ApiError>,
+}
+
 /// A history fetch's answer.
 struct HistoryDone {
     /// Identifies the fetch: the answer is stale if the room was closed or another fetch began.
@@ -210,6 +220,7 @@ enum Done<A> {
     History(HistoryDone),
     Thread(ThreadDone),
     ThreadParent(ThreadParentDone),
+    ThreadsList(ThreadsListDone),
     Changes(ChangesDone),
     Send(SendDone),
     MarkRead(MarkReadDone),
@@ -349,6 +360,12 @@ struct Actor<C: Connector> {
     pending_thread: Option<PendingThread>,
     /// The fetch of that parent, while it runs.
     parent_task: Option<JoinHandle<()>>,
+    /// The list of the open room's threads, if the frontend asked for it.
+    thread_list: Option<OpenThreadList>,
+    /// The request for a page of that list, while it runs.
+    thread_list_task: Option<JoinHandle<()>>,
+    /// How many threads a request of the thread list asks for.
+    threads_page_size: usize,
     /// The catch-up of the open room (changes since it was last up to date), while it runs.
     changes_task: Option<JoinHandle<()>>,
     /// Token revocations in flight, so that stopping can wait for them.
@@ -427,6 +444,9 @@ impl<C: Connector> Actor<C> {
             thread_task: None,
             pending_thread: None,
             parent_task: None,
+            thread_list: None,
+            thread_list_task: None,
+            threads_page_size: tuning.threads_page_size,
             changes_task: None,
             revokes: JoinSet::new(),
             store: Some(shared.store.clone()),
@@ -464,6 +484,7 @@ impl<C: Connector> Actor<C> {
                     Done::History(done) => self.handle_history_done(done),
                     Done::Thread(done) => self.handle_thread_done(done),
                     Done::ThreadParent(done) => self.handle_thread_parent_done(done),
+                    Done::ThreadsList(done) => self.handle_threads_list_done(done),
                     Done::Changes(done) => self.handle_changes_done(done),
                     Done::Send(done) => self.handle_send_done(done),
                     Done::MarkRead(done) => self.handle_mark_read_done(done),
@@ -550,6 +571,9 @@ impl<C: Connector> Actor<C> {
             task.abort();
         }
         self.cancel_pending_thread();
+        if let Some(task) = self.thread_list_task.take() {
+            task.abort();
+        }
         drop(self.store.take());
         let deadline = Instant::now() + DRAIN_TIMEOUT;
         let revokes = &mut self.revokes;
@@ -573,6 +597,9 @@ impl<C: Connector> Actor<C> {
             Command::OpenThread(parent) => self.open_thread(&parent),
             Command::CloseThread => self.close_thread(),
             Command::LoadOlderThread => self.load_older_thread(),
+            Command::OpenThreadList(filter) => self.open_thread_list(filter),
+            Command::CloseThreadList => self.close_thread_list(),
+            Command::LoadMoreThreads => self.load_more_threads(),
             Command::SendMessage {
                 room,
                 text,

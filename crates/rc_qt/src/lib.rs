@@ -54,6 +54,14 @@ pub mod session_vm;
     clippy::unnecessary_box_returns,
     clippy::must_use_candidate // The generated `dataChanged` signal.
 )]
+pub mod thread_list_model;
+#[allow(unsafe_code, clippy::unnecessary_box_returns)]
+pub mod thread_list_vm;
+#[allow(
+    unsafe_code,
+    clippy::unnecessary_box_returns,
+    clippy::must_use_candidate // The generated `dataChanged` signal.
+)]
 pub mod thread_message_list_model;
 #[allow(unsafe_code, clippy::unnecessary_box_returns)]
 pub mod thread_vm;

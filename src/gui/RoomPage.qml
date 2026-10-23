@@ -333,7 +333,7 @@ ColumnLayout {
         ThreadPane {
             Layout.fillHeight: true
             Layout.preferredWidth: Theme.threadPaneWidth
-            visible: Thread.isOpen
+            visible: ThreadList.paneOpen
         }
     }
 }

@@ -30,6 +30,7 @@ use rc_core::ports::{
 use rc_core::rich::{Block, Emoji, Inline, Mention, TaskItem};
 use rc_core::rooms::{RoomAction, RoomActionError, RoomChange};
 use rc_core::session::{LoginFailure, SessionState};
+use rc_core::threads::{ThreadFilter, ThreadListStatus};
 use rc_core::timeline::{PAGE_SIZE, ThreadStatus, TimelineChange, TimelineStatus};
 use rc_core::{AccountHandle, Client, Event};
 use rc_test_server::{Admin, PIXEL_PNG, Proxy, TestUser, Typist, server_url, unique};
@@ -2165,6 +2166,9 @@ struct Mirrors {
     room: Vec<Message>,
     thread: Vec<Message>,
     status: ThreadStatus,
+    /// The thread list.
+    list: Vec<Message>,
+    list_status: ThreadListStatus,
 }
 
 /// Follows the events like a frontend until `done` accepts what is shown.
@@ -2182,6 +2186,10 @@ fn follow_both(
                 .iter()
                 .for_each(|change| change.apply(&mut mirrors.thread)),
             Event::ThreadStatus(status) => mirrors.status = status.clone(),
+            Event::ThreadList(changes) => changes
+                .iter()
+                .for_each(|change| change.apply(&mut mirrors.list)),
+            Event::ThreadListStatus(status) => mirrors.list_status = status.clone(),
             _ => {}
         }
         done(mirrors).then_some(())
@@ -2717,4 +2725,188 @@ fn the_unread_totals_follow_what_other_users_post() {
         "{:?}",
         badge.unread
     );
+}
+
+/// A channel with the threads "t0", "t1" and "t2" (the parents posted by admin in that order, one
+/// reply each, in the order t1, t2, t0, so that "t0" has the most recent reply), opened by the
+/// user. The user's thread list is not open.
+fn open_channel_with_threads() -> (OwnMessages, Mirrors, Vec<String>, Admin) {
+    let admin = Admin::login();
+    let user = admin.create_user();
+    let (room, room_name) = admin.create_channel(&[&user.username]);
+    let parents: Vec<String> = (0..3)
+        .map(|n| admin.post_message(&room, &format!("t{n}")).id)
+        .collect();
+    for n in [1, 2, 0] {
+        admin.post_in_thread(&room, &parents[n], &format!("reply to t{n}"), false);
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let (client, events) = logged_in(&user);
+    client.account().open_room(room.clone().into());
+    let mut mirrors = Mirrors::default();
+    follow_both(&events, &mut mirrors, |m| !m.room.is_empty());
+    let open = OwnMessages {
+        admin,
+        username: user.username.clone(),
+        room,
+        room_name,
+        ids: parents.clone(),
+        client,
+        events,
+        mirror: Vec::new(),
+    };
+    let me = Admin::login_as(&user.username, &user.password);
+    (open, mirrors, parents, me)
+}
+
+fn listed(mirrors: &Mirrors) -> Vec<&str> {
+    texts(&mirrors.list)
+}
+
+/// Follows the events until the list has loaded its first page.
+fn list_loaded(open: &OwnMessages, mirrors: &mut Mirrors) {
+    follow_both(&open.events, mirrors, |m| {
+        m.list_status.room.is_some() && !m.list_status.loading
+    });
+}
+
+// ACT-010
+#[test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+fn the_thread_list_loads_the_rooms_threads_and_a_thread_opens_from_it() {
+    let (open, mut mirrors, parents, _me) = open_channel_with_threads();
+
+    open.client.account().open_thread_list(ThreadFilter::All);
+    list_loaded(&open, &mut mirrors);
+
+    assert_eq!(listed(&mirrors), ["t0", "t2", "t1"]);
+    assert!(mirrors.list_status.reached_end);
+    assert_eq!(mirrors.list[0].id.as_str(), parents[0]);
+    assert_eq!(mirrors.list[0].thread_replies, 1);
+    assert_eq!(mirrors.list_status.filter, ThreadFilter::All);
+
+    // The parent comes from the list when the room doesn't hold it: here it does, and the thread
+    // opens either way.
+    open.client.account().open_thread(parents[2].clone().into());
+    follow_both(&open.events, &mut mirrors, |m| {
+        m.status.parent.is_some() && !m.status.loading && m.status.reached_start
+    });
+    assert_eq!(texts(&mirrors.thread), ["t2", "reply to t2"]);
+
+    // The thread closes without the list.
+    open.client.account().close_thread();
+    follow_both(&open.events, &mut mirrors, |m| m.status.parent.is_none());
+    assert_eq!(listed(&mirrors), ["t0", "t2", "t1"]);
+    open.client.account().close_thread_list();
+    follow_both(&open.events, &mut mirrors, |m| m.list_status.room.is_none());
+    assert!(mirrors.list.is_empty());
+}
+
+// ACT-010
+#[test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+fn the_followed_threads_are_the_ones_the_user_started_or_replied_to() {
+    let (open, mut mirrors, parents, me) = open_channel_with_threads();
+    open.client
+        .account()
+        .open_thread_list(ThreadFilter::Following);
+    list_loaded(&open, &mut mirrors);
+    assert!(mirrors.list.is_empty());
+    assert_eq!(mirrors.list_status.filter, ThreadFilter::Following);
+
+    // Admin replied to every thread, and the user replies to t2: only t2 has them as a follower.
+    me.post_in_thread(&open.room, &parents[2], "mine", false);
+    follow_both(&open.events, &mut mirrors, |m| {
+        listed(m) == ["t2"] && m.list[0].thread_replies == 2
+    });
+
+    // Another filter starts again.
+    open.client.account().open_thread_list(ThreadFilter::All);
+    follow_both(&open.events, &mut mirrors, |m| {
+        m.list_status.filter == ThreadFilter::All && !m.list_status.loading && m.list.len() == 3
+    });
+    assert_eq!(listed(&mirrors), ["t2", "t0", "t1"]);
+}
+
+// ACT-010
+#[test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+fn a_live_reply_moves_its_thread_to_the_front_and_a_first_reply_adds_one() {
+    let (open, mut mirrors, parents, _me) = open_channel_with_threads();
+    open.client.account().open_thread_list(ThreadFilter::All);
+    list_loaded(&open, &mut mirrors);
+
+    open.admin
+        .post_in_thread(&open.room, &parents[1], "a late reply", false);
+    follow_both(&open.events, &mut mirrors, |m| {
+        listed(m) == ["t1", "t0", "t2"] && m.list[0].thread_replies == 2
+    });
+
+    // A message that gets its first reply is a thread from then on.
+    let fresh = open.admin.post_message(&open.room, "fresh").id;
+    open.admin
+        .post_in_thread(&open.room, &fresh, "the first reply", false);
+    follow_both(&open.events, &mut mirrors, |m| {
+        listed(m) == ["fresh", "t1", "t0", "t2"]
+    });
+
+    // A parent deleted while it has replies leaves the list.
+    open.admin.delete_message(&open.room, &parents[0]);
+    follow_both(&open.events, &mut mirrors, |m| {
+        listed(m) == ["fresh", "t1", "t2"]
+    });
+}
+
+// ACT-010
+#[test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+fn a_thread_the_user_unfollowed_leaves_the_followed_list_with_its_next_push() {
+    let (open, mut mirrors, parents, me) = open_channel_with_threads();
+    open.client
+        .account()
+        .open_thread_list(ThreadFilter::Following);
+    list_loaded(&open, &mut mirrors);
+    me.post_in_thread(&open.room, &parents[1], "I follow this", false);
+    follow_both(&open.events, &mut mirrors, |m| listed(m) == ["t1"]);
+
+    // Nothing announces the unfollow: the row stays...
+    me.follow_message(&parents[1], false);
+    std::thread::sleep(Duration::from_millis(500));
+    follow_both(&open.events, &mut mirrors, |m| listed(m) == ["t1"]);
+    // ...until the thread is pushed again, without the user among its followers.
+    open.admin
+        .post_in_thread(&open.room, &parents[1], "somebody else", false);
+    follow_both(&open.events, &mut mirrors, |m| m.list.is_empty());
+}
+
+// ACT-010
+#[test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+fn the_thread_list_pages_until_the_last_thread() {
+    let admin = Admin::login();
+    let user = admin.create_user();
+    let (room, _) = admin.create_channel(&[&user.username]);
+    let total = PAGE_SIZE + 3;
+    for n in 0..total {
+        let parent = admin.post_message(&room, &format!("thread {n}")).id;
+        admin.post_in_thread(&room, &parent, "reply", false);
+    }
+    let (client, events) = logged_in(&user);
+    client.account().open_room(room.clone().into());
+    let mut mirrors = Mirrors::default();
+    follow_both(&events, &mut mirrors, |m| !m.room.is_empty());
+
+    client.account().open_thread_list(ThreadFilter::All);
+    follow_both(&events, &mut mirrors, |m| {
+        m.list_status.room.is_some() && !m.list_status.loading
+    });
+    assert_eq!(mirrors.list.len(), PAGE_SIZE);
+    assert!(!mirrors.list_status.reached_end);
+
+    client.account().load_more_threads();
+    follow_both(&events, &mut mirrors, |m| m.list_status.reached_end);
+    assert_eq!(mirrors.list.len(), total);
+    // The most recent last reply first: the threads were made in order.
+    assert_eq!(texts(&mirrors.list)[0], format!("thread {}", total - 1));
+    assert_eq!(texts(&mirrors.list)[total - 1], "thread 0");
 }
