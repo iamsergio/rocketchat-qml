@@ -277,6 +277,12 @@ impl Cache {
         }
     }
 
+    /// The rooms as the room list shows them, in its order.
+    #[must_use]
+    pub fn rooms(&self) -> &[Room] {
+        &self.rooms
+    }
+
     /// The change that brings an empty model to the current room list.
     #[must_use]
     pub fn rooms_snapshot(&self) -> RoomChange {

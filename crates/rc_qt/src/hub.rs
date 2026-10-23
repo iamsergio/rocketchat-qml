@@ -12,11 +12,11 @@
 //! account, and the core adds a new logged-out one if it was the last, so the app goes on with
 //! that one.
 //!
-//! `Session`, `RoomList`, `Room`, `MessageList`, `Thread` and `ThreadMessageList` need the events
-//! of the same client, and QML creates them on its own schedule. The hub owns the client,
-//! remembers what the events said, and queues each event of the current account to the view models
-//! that registered. A view model registering later replays the current account's cache, so it
-//! doesn't matter whether it is created before or after the first events.
+//! `Session`, `RoomList`, `RoomSearch`, `Room`, `MessageList`, `Thread` and `ThreadMessageList`
+//! need the events of the same client, and QML creates them on its own schedule. The hub owns the
+//! client, remembers what the events said, and queues each event of the current account to the
+//! view models that registered. A view model registering later replays the current account's
+//! cache, so it doesn't matter whether it is created before or after the first events.
 //!
 //! The event callback runs on a runtime thread and never waits for the GUI thread; the GUI thread
 //! never waits for the runtime either (commands don't block). So queueing while holding the lock
@@ -28,7 +28,7 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 use cxx_qt::CxxQtThread;
 use cxx_qt::Threading;
 use rc_core::adapters::DiskFileCache;
-use rc_core::domain::{AccountId, AvatarOwner, MessageId, RoomId};
+use rc_core::domain::{AccountId, AvatarOwner, MessageId, Room, RoomId};
 use rc_core::emoji::CustomEmojis;
 use rc_core::policy::{ActionError, MessageAction};
 use rc_core::rooms::{RoomActionError, RoomChange};
@@ -40,6 +40,7 @@ use crate::account_list_model::qobject::AccountListModel;
 use crate::emoji_picker_model::qobject::EmojiPickerModel;
 use crate::message_list_model::qobject::MessageListModel;
 use crate::room_list_model::qobject::RoomListModel;
+use crate::room_search_model::qobject::RoomSearchModel;
 use crate::room_vm::qobject::RoomVm;
 use crate::session_vm::qobject::SessionVm;
 use crate::thread_message_list_model::qobject::ThreadMessageListModel;
@@ -49,6 +50,7 @@ use rc_view::attachment_view::ImageUrls;
 use rc_view::avatar_view::AvatarUrls;
 use rc_view::cache::Cache;
 use rc_view::rich_html::topic_html;
+use rc_view::room_search::search_rooms as search;
 use rc_view::room_view::RoomState;
 use rc_view::session_view::SessionView;
 use rc_view::startup;
@@ -124,6 +126,7 @@ impl<T: Threading> Registered<T> {
 struct Views {
     session: Registered<SessionVm>,
     rooms: Registered<RoomListModel>,
+    room_search: Registered<RoomSearchModel>,
     room: Registered<RoomVm>,
     messages: Registered<MessageListModel>,
     thread: Registered<ThreadVm>,
@@ -245,6 +248,19 @@ pub fn register_rooms(thread: CxxQtThread<RoomListModel>) -> (RoomChange, Avatar
         hub.switchboard.accounts().current_cache().rooms_snapshot(),
         hub.switchboard.accounts().current_cache().avatars(),
     )
+}
+
+/// Registers the `RoomSearch` model. Call on the GUI thread; it is told to search again when the
+/// room list changes. It has nothing to replay: it asks for results with [`search_rooms`].
+pub fn register_room_search(thread: CxxQtThread<RoomSearchModel>) {
+    lock().views.room_search.register(thread);
+}
+
+/// The rooms of the current account that match `query`, and the avatars to show them with.
+pub fn search_rooms(query: &str) -> (Vec<Room>, AvatarUrls) {
+    let hub = lock();
+    let cache = hub.switchboard.accounts().current_cache();
+    (search(cache.rooms(), query), cache.avatars())
 }
 
 pub fn open_room(room_id: String) {
@@ -481,6 +497,7 @@ impl Views {
             Event::Session(_) | Event::Connection(_) => self.show_session(accounts),
             Event::Identity(_) => self.show_session_view(accounts),
             Event::Rooms(changes) => {
+                self.room_search.queue(RoomSearchModel::refresh);
                 self.rooms.queue(move |model| model.apply(&changes));
                 // The open room's name may have changed.
                 self.show_room(cache);
@@ -507,6 +524,7 @@ impl Views {
     fn show_all(&mut self, accounts: &Accounts) {
         let cache = accounts.current_cache();
         let (rooms, avatars) = (cache.rooms_snapshot(), cache.avatars());
+        self.room_search.queue(RoomSearchModel::refresh);
         self.rooms.queue(move |model| model.show(rooms, avatars));
         let (messages, viewer, avatars, images) = (
             cache.timeline_snapshot(),
@@ -539,6 +557,7 @@ impl Views {
         Self {
             session: Registered::new("Session"),
             rooms: Registered::new("RoomList"),
+            room_search: Registered::new("RoomSearch"),
             room: Registered::new("Room"),
             messages: Registered::new("MessageList"),
             thread: Registered::new("Thread"),
@@ -600,6 +619,9 @@ impl Views {
     fn show_avatars(&mut self, changes: &[(AvatarOwner, String)]) {
         let for_rooms = changes.to_vec();
         self.rooms.queue(move |model| model.set_avatars(&for_rooms));
+        let for_search = changes.to_vec();
+        self.room_search
+            .queue(move |model| model.set_avatars(&for_search));
         let for_messages = changes.to_vec();
         self.messages
             .queue(move |model| model.set_avatars(&for_messages));

@@ -13,6 +13,7 @@ publish.workspace = true
 jiff.workspace = true
 rc_core.workspace = true
 tracing.workspace = true
+unicode-normalization.workspace = true
 
 [features]
 # Set through the feature of the same name of rc_qt or rc_slint: `--dev` fills the login page in (dev_login).

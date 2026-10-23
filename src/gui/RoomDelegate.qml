@@ -10,6 +10,7 @@ import RocketChat.Bridge
 ItemDelegate {
     id: root
 
+    required property int index
     required property string roomId
     required property string name
     required property string kind
@@ -23,10 +24,18 @@ ItemDelegate {
     required property bool hasUnread
     required property bool canLeave
 
+    // The room list's rows are `room_<id>`; another list of the same rows names them differently.
+    property string namePrefix: "room_"
+    // Whether the keyboard cursor is on the row, as in a list of search results: it looks like the
+    // pointer over it, and the open room's look wins over it.
+    property bool cursor: false
+    // Whether a right-click opens the menu of the room.
+    property bool menuEnabled: true
+
     // Whether the room has something new for the user, which its name shows.
     readonly property bool emphasised: alert || hasUnread || unread > 0
 
-    objectName: "room_" + roomId
+    objectName: namePrefix + roomId
     width: ListView.view.width
     implicitHeight: Theme.roomRowHeight
     highlighted: Room.roomId === roomId
@@ -41,7 +50,7 @@ ItemDelegate {
             anchors.fill: parent
             anchors.leftMargin: Theme.roomRowInset
             anchors.rightMargin: Theme.roomRowInset
-            color: root.highlighted ? Theme.ownWash : root.hovered ? Theme.surface : Theme.transparent
+            color: root.highlighted ? Theme.ownWash : (root.hovered || root.cursor) ? Theme.surface : Theme.transparent
             radius: Theme.radiusControl
         }
     }
@@ -50,6 +59,7 @@ ItemDelegate {
     MouseArea {
         acceptedButtons: Qt.RightButton
         anchors.fill: parent
+        enabled: root.menuEnabled
         onClicked: mouse => menu.popup(root, mouse.x, mouse.y)
     }
 
@@ -132,7 +142,7 @@ ItemDelegate {
     }
 
     contentItem: RowLayout {
-        spacing: Theme.spacingL
+        spacing: Theme.roomRowSpacing
 
         Avatar {
             Layout.preferredWidth: Theme.roomAvatarSize

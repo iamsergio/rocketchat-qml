@@ -12,7 +12,7 @@ At the end of every phase the app builds, runs against the local test server (`s
 - Domain IDs are newtypes (`RoomId`, `MessageId`, `UserId`). Secrets are wrapped in `secrecy` types. Wire types never leave `rc_api`.
 - Use cases depend on traits (ports), never on concrete I/O, so every use case can be unit-tested with fakes.
 - No logic in QML. Every interactive QML element gets an `objectName` from the GUI test contract.
-- Models emit fine-grained row inserts, updates and removals. No `beginResetModel` for incremental changes.
+- Models emit fine-grained row inserts, updates and removals. No `beginResetModel` for incremental changes. A model whose rows are a fresh result set, such as a search, resets: a new query is not a change of the old rows.
 - Every feature has an ID in TRACEABILITY.md, and its tests carry a `// <ID>` comment.
 - Every feature gets a unit test, a contract test against the local test server, or both. Every user-visible flow also gets a GUI test.
 - Commit hygiene: `cargo fmt`, clippy, `cargo test` and the GUI tests all pass before each commit.
@@ -29,7 +29,8 @@ Done when: day-to-day use works. Edit, delete, react, threads, DMs, search and u
 - [x] Threads: open a thread panel, reply, see thread counts in the main timeline
 - [x] Reply/quote a message
 - [x] Typing indicators, received only: see [Typing indicators](#typing-indicators)
-- [ ] Start a DM, search the directory, join a channel
+- [x] Search the room list by name (ROOM-010): a field above the room list, Ctrl+K focuses it, the matching rooms replace the list while it holds something. Only the user's own rooms, filtered locally: see [Search](docs/design/room-list.md#search)
+- [ ] Start a DM, search the directory, join a channel. The directory search extends the field above the room list with the server's results
 - [ ] File upload with progress
 - [ ] Features ACT-001…ACT-009 tested
 

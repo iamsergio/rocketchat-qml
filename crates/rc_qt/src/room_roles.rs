@@ -1,7 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Sergio Martins
 // SPDX-License-Identifier: MIT
 
-//! The roles of a room row, which `RoomDelegate` reads, for the models that list rooms.
+//! The roles of a room row, which `RoomDelegate` reads, for the models that list rooms: `RoomList`
+//! and `RoomSearch`.
 
 use cxx_qt_lib::{QByteArray, QHash, QHashPair_i32_QByteArray, QString, QVariant};
 use rc_core::domain::Room;

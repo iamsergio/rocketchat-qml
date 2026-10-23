@@ -60,6 +60,7 @@ qt_add_qml_module(
   icons/file.svg
   icons/plus.svg
   icons/private.svg
+  icons/search.svg
   icons/settings.svg
   icons/thread.svg
   IMPORT_PATH
