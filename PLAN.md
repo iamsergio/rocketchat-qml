@@ -29,8 +29,8 @@ Done when: day-to-day use works. Edit, delete, react, threads, DMs, search and u
 - [x] Threads: open a thread panel, reply, see thread counts in the main timeline
 - [x] Reply/quote a message
 - [x] Typing indicators, received only: see [Typing indicators](#typing-indicators)
-- [x] Search the room list by name (ROOM-010): a field above the room list, Ctrl+K focuses it, the matching rooms replace the list while it holds something. Only the user's own rooms, filtered locally: see [Search](docs/design/room-list.md#search)
-- [ ] Start a DM, search the directory, join a channel. The directory search extends the field above the room list with the server's results
+- [x] Search the room list by name (ROOM-010): a field below the room list, Ctrl+K focuses it, the matching rooms replace the list while it holds something. Only the user's own rooms, filtered locally: see [Search](docs/design/room-list.md#search)
+- [ ] Start a DM, search the directory, join a channel. The directory search extends the field below the room list with the server's results
 - [ ] File upload with progress
 - [ ] Features ACT-001…ACT-009 tested
 
