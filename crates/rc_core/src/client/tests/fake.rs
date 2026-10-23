@@ -246,6 +246,10 @@ pub(super) struct FakeState {
     pub(super) watches: Vec<UnboundedReceiver<Option<RoomId>>>,
     /// What each connection was told about the open room, in order.
     pub(super) watch_log: Vec<Vec<Option<RoomId>>>,
+    /// What each connection was told about threads read, not yet moved to `read_log`.
+    pub(super) reads: Vec<UnboundedReceiver<MessageId>>,
+    /// The ids of the threads each connection was told were read.
+    pub(super) read_log: Vec<Vec<MessageId>>,
 }
 
 /// Scripted results, plus a record of what it was asked.
@@ -415,6 +419,26 @@ impl Fake {
             state.watch_log[index].push(room);
         }
         state.watch_log[index].clone()
+    }
+
+    /// The threads connection `index` was told the user read, so far.
+    pub(super) fn read_threads(&self, index: usize) -> Vec<MessageId> {
+        self.wait_for_connections(index + 1);
+        let mut state = self.state();
+        let state = &mut *state;
+        state.read_log.resize(state.reads.len(), Vec::new());
+        while let Ok(thread) = state.reads[index].try_recv() {
+            state.read_log[index].push(thread);
+        }
+        state.read_log[index].clone()
+    }
+
+    /// Waits until connection `index` has been told `count` times that a thread was read.
+    pub(super) fn wait_for_read_threads(&self, index: usize, count: usize) -> Vec<MessageId> {
+        wait_until(|| {
+            let log = self.read_threads(index);
+            (log.len() >= count).then_some(log)
+        })
     }
 
     /// Waits until connection `index` has been told `count` times about the open room.
@@ -1037,9 +1061,11 @@ impl ServerApi for Fake {
     async fn realtime(&self, credentials: &Credentials) -> Result<Realtime, ApiError> {
         let (server, client) = unbounded_channel();
         let (watch, watched) = unbounded_channel();
+        let (read_threads, reads) = unbounded_channel();
         let realtime = Realtime {
             events: client,
             watch,
+            read_threads,
         };
         let script = {
             let mut state = self.state();
@@ -1050,6 +1076,7 @@ impl ServerApi for Fake {
             state.realtime_times.push(Instant::now());
             state.connections.push(Some(server.clone()));
             state.watches.push(watched);
+            state.reads.push(reads);
             state.realtimes.pop_front()
         };
         let Some(script) = script else {

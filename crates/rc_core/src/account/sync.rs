@@ -12,7 +12,9 @@ use crate::policy::MessagePolicy;
 use crate::ports::{ApiError, Connector, Pushed, Realtime, ServerApi};
 use crate::session::SessionState;
 
-use super::{Actor, Done, EmojiDone, PolicyDone, RealtimeDone, RealtimeReport, RoomsDone};
+use super::{
+    Actor, Done, EmojiDone, PolicyDone, RealtimeDone, RealtimeLinks, RealtimeReport, RoomsDone,
+};
 
 impl<C: Connector> Actor<C> {
     /// Starts a sync cycle: opens the realtime connection of the session, then (when it is open)
@@ -31,6 +33,7 @@ impl<C: Connector> Actor<C> {
         let cycle = self.cycle;
         self.realtime_open = false;
         self.realtime_watch = None;
+        self.realtime_read = None;
         self.succeeded_at = None;
         self.backlog = Some(Vec::new());
         let api = session.api.clone();
@@ -38,7 +41,11 @@ impl<C: Connector> Actor<C> {
         let done = self.done_tx.clone();
         self.realtime_task = Some(tokio::spawn(async move {
             let report = |done| Done::Realtime(RealtimeReport { cycle, done });
-            let Realtime { mut events, watch } = match api.realtime(&credentials).await {
+            let Realtime {
+                mut events,
+                watch,
+                read_threads,
+            } = match api.realtime(&credentials).await {
                 Ok(realtime) => realtime,
                 Err(error) => {
                     // Fails only if the actor is gone.
@@ -46,7 +53,13 @@ impl<C: Connector> Actor<C> {
                     return;
                 }
             };
-            if done.send(report(RealtimeDone::Opened(Ok(watch)))).is_err() {
+            if done
+                .send(report(RealtimeDone::Opened(Ok(RealtimeLinks {
+                    watch,
+                    read_threads,
+                }))))
+                .is_err()
+            {
                 return;
             }
             while let Some(event) = events.recv().await {
@@ -71,9 +84,12 @@ impl<C: Connector> Actor<C> {
             return;
         }
         match report.done {
-            RealtimeDone::Opened(Ok(watch)) => {
+            RealtimeDone::Opened(Ok(links)) => {
                 self.realtime_open = true;
-                self.realtime_watch = Some(watch);
+                self.realtime_watch = Some(links.watch);
+                self.realtime_read = Some(links.read_threads);
+                // A connection that is new hasn't been asked to read anything.
+                self.read_requested = None;
                 if let Some(open) = &self.open {
                     self.watch_room(Some(open.timeline.room().clone()));
                 }
@@ -150,6 +166,7 @@ impl<C: Connector> Actor<C> {
                 let id = RoomId::from(subscription.room_id.clone());
                 // The server doesn't push the time of the last message with the subscription.
                 let known = self.rooms.get(&id).cloned();
+                let known_unread_threads = known.as_ref().map(|room| room.unread_threads.clone());
                 match room_from(subscription) {
                     Some(mut room) => {
                         // Nor does it push the avatar or the topic of the room.
@@ -160,8 +177,11 @@ impl<C: Connector> Actor<C> {
                         }
                         let room = self.seen_if_open(room);
                         let owner = room.avatar_to_fetch();
+                        let unread_threads = room.unread_threads.clone();
                         let change = self.rooms.upsert(room, self.clock.now());
                         self.emit_rooms(change.into_iter().collect());
+                        let before = known_unread_threads.unwrap_or_default();
+                        self.threads_unread_changed(&id, &before, &unread_threads);
                         // A hidden room gets its avatar when it comes back.
                         if self.rooms.is_shown(&id) {
                             self.want_avatars(owner);
@@ -270,6 +290,7 @@ impl<C: Connector> Actor<C> {
             self.succeeded_at = Some(Instant::now());
             self.set_connection(Connection::Connected);
             self.catch_up_open_room();
+            self.read_open_thread_if_unread();
         }
         for event in self.backlog.take().unwrap_or_default() {
             self.handle_pushed(event);
@@ -414,6 +435,7 @@ impl<C: Connector> Actor<C> {
         self.backlog = None;
         self.realtime_open = false;
         self.realtime_watch = None;
+        self.realtime_read = None;
         if let Some(task) = self.realtime_task.take() {
             task.abort();
         }

@@ -105,6 +105,14 @@ struct SubscriptionBody {
     open: bool,
     #[serde(default)]
     f: bool,
+    /// The threads with replies the user hasn't read, those among them that mention the user and
+    /// those that mention the room (`@all`, `@here`). The server leaves each out when it is empty.
+    #[serde(default)]
+    tunread: Vec<String>,
+    #[serde(default)]
+    tunread_user: Vec<String>,
+    #[serde(default)]
+    tunread_group: Vec<String>,
     /// When the user joined.
     #[serde(default, deserialize_with = "optional_timestamp")]
     ts: Option<jiff::Timestamp>,
@@ -438,6 +446,9 @@ impl From<SubscriptionBody> for Subscription {
             alert: body.alert,
             open: body.open,
             favorite: body.f,
+            thread_unread: body.tunread,
+            thread_unread_user: body.tunread_user,
+            thread_unread_group: body.tunread_group,
             created: body.ts,
             last_message: None,
             avatar_etag: None,
@@ -1468,6 +1479,9 @@ mod tests {
                 alert: false,
                 open: false,
                 favorite: false,
+                thread_unread: Vec::new(),
+                thread_unread_user: Vec::new(),
+                thread_unread_group: Vec::new(),
                 created: None,
                 last_message: None,
                 avatar_etag: None,
@@ -1742,6 +1756,23 @@ mod tests {
             r#"{"threads":[],"count":0,"offset":0,"total":0}"#,
             0
         ));
+    }
+
+    // ACT-011
+    #[test]
+    fn a_subscription_lists_its_unread_threads_and_those_that_mention_and_leaves_them_out_when_empty()
+     {
+        let body = br#"{"update":[
+            {"rid":"r1","t":"c","open":true,"tunread":["a","b"],"tunreadUser":["b"],"tunreadGroup":["a"]},
+            {"rid":"r2","t":"c","open":true}
+        ]}"#;
+        let rooms = parse_subscriptions(body).unwrap();
+        assert_eq!(rooms[0].thread_unread, ["a", "b"]);
+        assert_eq!(rooms[0].thread_unread_user, ["b"]);
+        assert_eq!(rooms[0].thread_unread_group, ["a"]);
+        // The server leaves the fields out when nothing is unread.
+        assert!(rooms[1].thread_unread.is_empty());
+        assert!(rooms[1].thread_unread_user.is_empty() && rooms[1].thread_unread_group.is_empty());
     }
 
     // ACT-004

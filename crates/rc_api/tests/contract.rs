@@ -2248,6 +2248,174 @@ async fn a_pushed_parent_lists_its_followers_as_the_server_has_them() {
     assert!(!next.thread_followers.contains(&fixture.user.id));
 }
 
+/// A channel with the user's thread "mine" (started by them, so followed) and admin's "theirs"
+/// (not followed), both with a first reply by the other side.
+struct UnreadFixture {
+    room_id: String,
+    mine: String,
+    theirs: String,
+}
+
+fn unread_fixture(fixture: &Fixture) -> UnreadFixture {
+    let (room_id, _) = fixture.create_channel();
+    let me = Admin::login_as(&fixture.user.username, &fixture.user.password);
+    let mine = me.post_message(&room_id, "mine").id;
+    let theirs = fixture.admin.post_message(&room_id, "theirs").id;
+    UnreadFixture {
+        room_id,
+        mine,
+        theirs,
+    }
+}
+
+fn subscription_of<'a>(rooms: &'a [Subscription], room_id: &str) -> &'a Subscription {
+    rooms.iter().find(|s| s.room_id == room_id).unwrap()
+}
+
+// ACT-011
+#[tokio::test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+async fn the_subscription_lists_the_threads_with_unread_replies_and_those_that_mention() {
+    let fixture = Fixture::new();
+    let unread = unread_fixture(&fixture);
+    let room_id = &unread.room_id;
+    let session = fixture.client.session(fixture.login().await.credentials);
+
+    // Nothing is unread: the server leaves the fields out, which reads as empty.
+    let rooms = session.subscriptions().await.unwrap();
+    let sub = subscription_of(&rooms, room_id);
+    assert!(sub.thread_unread.is_empty() && sub.thread_unread_user.is_empty());
+
+    // A plain reply of somebody else in a thread the user follows (they started it).
+    fixture
+        .admin
+        .post_in_thread(room_id, &unread.mine, "plain", false);
+    let rooms = subscriptions_when(&session, |rooms| {
+        !subscription_of(rooms, room_id).thread_unread.is_empty()
+    })
+    .await;
+    let sub = subscription_of(&rooms, room_id);
+    assert_eq!(sub.thread_unread, std::slice::from_ref(&unread.mine));
+    assert!(sub.thread_unread_user.is_empty() && sub.thread_unread_group.is_empty());
+
+    // A plain reply in a thread the user doesn't follow is nothing to them.
+    fixture
+        .admin
+        .post_in_thread(room_id, &unread.theirs, "not for you", false);
+    // A reply that mentions them is, followed or not, and it is a mention.
+    let name = &fixture.user.username;
+    fixture
+        .admin
+        .post_in_thread(room_id, &unread.theirs, &format!("hey @{name}"), false);
+    let rooms = subscriptions_when(&session, |rooms| {
+        subscription_of(rooms, room_id).thread_unread.len() == 2
+    })
+    .await;
+    let sub = subscription_of(&rooms, room_id);
+    assert!(sub.thread_unread.contains(&unread.theirs));
+    assert_eq!(sub.thread_unread_user, std::slice::from_ref(&unread.theirs));
+
+    // `@all` in a thread the user follows says so apart from the user's own mentions.
+    fixture
+        .admin
+        .post_in_thread(room_id, &unread.mine, "@all news", false);
+    let rooms = subscriptions_when(&session, |rooms| {
+        !subscription_of(rooms, room_id)
+            .thread_unread_group
+            .is_empty()
+            || !subscription_of(rooms, room_id)
+                .thread_unread_user
+                .is_empty()
+    })
+    .await;
+    let sub = subscription_of(&rooms, room_id);
+    assert_eq!(sub.thread_unread_group, std::slice::from_ref(&unread.mine));
+    assert_eq!(sub.thread_unread_user, std::slice::from_ref(&unread.theirs));
+    // No count per thread anywhere: the subscription lists ids only.
+    assert_eq!(sub.thread_unread.len(), 2);
+}
+
+// ACT-011
+#[tokio::test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+async fn the_unread_threads_of_the_list_are_those_of_the_subscription() {
+    let fixture = Fixture::new();
+    let unread = unread_fixture(&fixture);
+    let room_id = &unread.room_id;
+    let session = fixture.client.session(fixture.login().await.credentials);
+    let name = &fixture.user.username;
+    fixture
+        .admin
+        .post_in_thread(room_id, &unread.mine, "plain", false);
+    fixture
+        .admin
+        .post_in_thread(room_id, &unread.theirs, &format!("hey @{name}"), false);
+    let rooms = subscriptions_when(&session, |rooms| {
+        subscription_of(rooms, room_id).thread_unread.len() == 2
+    })
+    .await;
+    let mut ids = subscription_of(&rooms, room_id).thread_unread.clone();
+
+    let page = session
+        .threads_list(room_id, ThreadsKind::Unread, 50, 0)
+        .await
+        .unwrap();
+
+    let mut listed: Vec<String> = page.threads.iter().map(|m| m.id.clone()).collect();
+    ids.sort();
+    listed.sort();
+    assert_eq!(listed, ids);
+    assert_eq!((page.total, page.reached_end), (2, true));
+}
+
+// ACT-011
+#[tokio::test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+async fn a_changed_subscription_is_pushed_when_a_thread_gets_unread_and_when_it_is_read() {
+    let fixture = Fixture::new();
+    let unread = unread_fixture(&fixture);
+    let room_id = &unread.room_id;
+    let login = fixture.login().await;
+    let session = fixture.client.session(login.credentials.clone());
+    let (client, mut events) = connect_and_login(&login.credentials).await;
+    client
+        .subscribe_subscription_changes(&fixture.user.id)
+        .await
+        .unwrap();
+
+    fixture
+        .admin
+        .post_in_thread(room_id, &unread.mine, "plain", false);
+    let pushed = event_where(&mut events, |e| {
+        matches!(e, DdpEvent::SubscriptionChanged(s)
+            if s.room_id == *room_id && s.thread_unread == [unread.mine.clone()])
+    })
+    .await;
+    assert!(matches!(pushed, DdpEvent::SubscriptionChanged(_)));
+
+    // Fetching the replies does not read the thread.
+    session.thread_messages(&unread.mine, 50, 0).await.unwrap();
+    let rooms = session.subscriptions().await.unwrap();
+    assert_eq!(
+        subscription_of(&rooms, room_id).thread_unread,
+        std::slice::from_ref(&unread.mine)
+    );
+
+    // Reading it is the `readThreads` method, as the web client calls it, and the server pushes
+    // the subscription without the thread.
+    client.read_thread(&unread.mine).await.unwrap();
+    let pushed = event_where(&mut events, |e| {
+        matches!(e, DdpEvent::SubscriptionChanged(s)
+            if s.room_id == *room_id && s.thread_unread.is_empty())
+    })
+    .await;
+    assert!(matches!(pushed, DdpEvent::SubscriptionChanged(_)));
+    let rooms = session.subscriptions().await.unwrap();
+    assert!(subscription_of(&rooms, room_id).thread_unread.is_empty());
+    // Reading a thread that isn't unread is no error.
+    client.read_thread(&unread.mine).await.unwrap();
+}
+
 // ACT-004
 #[tokio::test]
 #[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]

@@ -389,6 +389,10 @@ pub struct Realtime {
     /// it closes. Only one room is followed at a time. What can't be followed is logged and
     /// nothing else.
     pub watch: UnboundedSender<Option<RoomId>>,
+    /// Tells the server the user has read a thread, by its parent's id, which takes the thread
+    /// out of the room subscription's unread threads: the server only lets a connection do it,
+    /// there is no REST call. A refusal is logged and nothing else.
+    pub read_threads: UnboundedSender<MessageId>,
 }
 
 /// What [`ServerApi::changes_since`] returns.

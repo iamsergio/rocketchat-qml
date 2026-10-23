@@ -4,13 +4,13 @@
 //! The list of the open room's threads: its pages and live updates.
 
 use crate::client::Event;
-use crate::domain::{AvatarOwner, Message, MessageId, MessageKind};
+use crate::domain::{AvatarOwner, Message, MessageId, MessageKind, RoomId};
 use crate::ports::{ApiError, Connector, ServerApi};
 use crate::session::SessionState;
 use crate::threads::{ThreadFilter, ThreadList, ThreadListChange, ThreadListStatus};
 use crate::timeline::TimelineError;
 
-use super::{Actor, Done, ThreadsListDone};
+use super::{Actor, Done, ThreadsListDone, ThreadsListParentDone};
 
 /// The thread list of the open room and the request for its pages.
 pub(super) struct OpenThreadList {
@@ -193,6 +193,7 @@ impl<C: Connector> Actor<C> {
     /// Takes in a pushed message: a parent that changed, or that was removed.
     pub(super) fn push_to_thread_list(&mut self, message: &Message) {
         let me = self.own_user().map(|user| user.id.clone());
+        let unread = self.unread_threads_of(&message.room_id);
         let Some(open) = self
             .thread_list
             .as_mut()
@@ -207,9 +208,118 @@ impl<C: Connector> Actor<C> {
         let changes = if message.is_deleted_parent() {
             open.list.removed(&message.id).into_iter().collect()
         } else {
-            open.list.pushed(message, me.as_ref())
+            open.list.pushed(message, me.as_ref(), &unread)
         };
         self.emit_thread_list_changes(changes);
+    }
+
+    /// The threads of the room with replies the user hasn't read, as its subscription says.
+    fn unread_threads_of(&self, room: &RoomId) -> Vec<MessageId> {
+        (self.rooms.get(room))
+            .map(|room| room.unread_threads.clone())
+            .unwrap_or_default()
+    }
+
+    /// The subscription of a room changed, and with it the threads that are unread: the list of
+    /// unread threads loses the ones that were read, and takes in the parents of the ones that
+    /// weren't unread before, which it fetches since the push doesn't carry them. The thread that
+    /// is open is read, if it isn't.
+    pub(super) fn threads_unread_changed(
+        &mut self,
+        room: &RoomId,
+        before: &[MessageId],
+        after: &[MessageId],
+    ) {
+        let unread_list = self.thread_list.as_ref().is_some_and(|open| {
+            open.list.room() == room && open.list.filter() == ThreadFilter::Unread
+        });
+        if unread_list {
+            for id in before.iter().filter(|id| !after.contains(id)) {
+                self.remove_from_thread_list(id);
+            }
+            // One the list holds is there already: its row follows the pushes of the parent.
+            let held = |id: &MessageId| {
+                (self.thread_list.as_ref()).is_some_and(|open| open.list.message(id).is_some())
+            };
+            let added: Vec<_> = (after.iter())
+                .filter(|id| !before.contains(id) && !held(id))
+                .collect();
+            for id in added {
+                self.fetch_listed_parent(id);
+            }
+        }
+        self.read_open_thread_if_unread();
+    }
+
+    /// Fetches the parent of a thread that became unread, to put it in the list.
+    fn fetch_listed_parent(&mut self, id: &MessageId) {
+        let Some(session) = &self.session else {
+            return;
+        };
+        let id = id.clone();
+        let api = session.api.clone();
+        let credentials = session.credentials.clone();
+        let done = self.done_tx.clone();
+        self.thread_list_parents.spawn(async move {
+            let outcome = api.message(&credentials, &id).await;
+            // Fails only if the actor is gone.
+            let _ = done.send(Done::ThreadsListParent(ThreadsListParentDone {
+                id,
+                outcome,
+            }));
+        });
+    }
+
+    pub(super) fn handle_threads_list_parent_done(&mut self, done: ThreadsListParentDone) {
+        let message = match done.outcome {
+            Ok(message) => message,
+            Err(ApiError::Unauthorized) => {
+                self.expire_session();
+                return;
+            }
+            Err(error) => {
+                tracing::warn!(%error, thread = %done.id, "can't fetch the unread thread's parent");
+                return;
+            }
+        };
+        // Still wanted: the list is the unread one of the parent's room, and the thread is unread.
+        let unread = self.unread_threads_of(&message.room_id);
+        let me = self.own_user().map(|user| user.id.clone());
+        let Some(open) = self.thread_list.as_mut().filter(|open| {
+            open.list.room() == &message.room_id && open.list.filter() == ThreadFilter::Unread
+        }) else {
+            tracing::debug!("answer of a fetch for a closed thread list dropped");
+            return;
+        };
+        let changes = open.list.pushed(&message, me.as_ref(), &unread);
+        self.emit_thread_list_changes(changes);
+    }
+
+    /// Tells the server the open thread is read, if the room's subscription lists it as unread:
+    /// opening a thread reads it, and so does a reply that comes while it is open. Once for each
+    /// time it is unread; the server answers with the subscription, without the thread.
+    pub(super) fn read_open_thread_if_unread(&mut self) {
+        let Some(thread) = &self.open_thread else {
+            self.read_requested = None;
+            return;
+        };
+        let id = thread.parent.id.clone();
+        if !self.unread_threads_of(thread.timeline.room()).contains(&id) {
+            if self.read_requested.as_ref() == Some(&id) {
+                self.read_requested = None;
+            }
+            return;
+        }
+        if self.read_requested.as_ref() == Some(&id) {
+            return;
+        }
+        let Some(read) = &self.realtime_read else {
+            tracing::debug!(thread = %id, "the thread is not marked read: no connection");
+            return;
+        };
+        if read.send(id.clone()).is_ok() {
+            self.read_requested = Some(id);
+        }
     }
 
     /// The parent with this id was deleted or changed otherwise: the copy the list holds.
@@ -273,6 +383,7 @@ impl<C: Connector> Actor<C> {
         if let Some(task) = self.thread_list_task.take() {
             task.abort();
         }
+        self.thread_list_parents.abort_all();
         if self.thread_list.take().is_some() {
             (self.on_event)(Event::ThreadList(vec![ThreadListChange::Reset(Vec::new())]));
             self.emit_thread_list_status();

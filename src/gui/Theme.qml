@@ -88,6 +88,7 @@ QtObject {
     readonly property real fontSizeTitle: fontSizeBase * 1.7
     readonly property real avatarFontScale: 0.4
     readonly property int fontWeightNormal: Font.Normal
+    readonly property int fontWeightMedium: Font.Medium
     readonly property int fontWeightSemibold: Font.DemiBold
     readonly property int fontWeightBold: 650
 
@@ -201,6 +202,15 @@ QtObject {
     readonly property int threadRowTextLines: 2
     readonly property int threadFilterHeight: 28
     readonly property int threadBackIconSize: 14
+    // The badge on the room's threads button: a pill of at least this height and width, at the
+    // button's top right corner, sticking out of it by the overhangs, with a ring in the header's
+    // colour around it so that it reads as cut out.
+    readonly property int threadsBadgeHeight: 16
+    readonly property int threadsBadgeMinWidth: 16
+    readonly property int threadsBadgePaddingH: 4
+    readonly property int threadsBadgeRing: 2
+    readonly property int threadsBadgeOverhangX: 5
+    readonly property int threadsBadgeOverhangY: 5
     // The line "alice is typing…" over the composer. Its height is always taken, with or without
     // text, so the messages don't move when someone starts or stops typing.
     readonly property int typingLineHeight: 20

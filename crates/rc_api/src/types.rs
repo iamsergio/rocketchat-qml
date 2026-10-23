@@ -85,6 +85,13 @@ pub struct Subscription {
     pub open: bool,
     /// Whether the user marked the room as a favorite (`f`; absent for a room never favorited).
     pub favorite: bool,
+    /// The ids of the threads with replies the user hasn't read (`tunread`); empty when there are
+    /// none, as the server leaves the field out.
+    pub thread_unread: Vec<String>,
+    /// Those among them with a reply that mentions the user (`tunreadUser`).
+    pub thread_unread_user: Vec<String>,
+    /// Those among them with a reply that mentions the room, `@all` or `@here` (`tunreadGroup`).
+    pub thread_unread_group: Vec<String>,
     /// When the user joined the room.
     pub created: Option<jiff::Timestamp>,
     /// The time of the room's last message. Only [`RestSession::subscriptions`] fills it in, from
@@ -273,6 +280,8 @@ pub enum ThreadsKind {
     All,
     /// The threads the user follows.
     Following,
+    /// The threads with replies the user hasn't read: those of the subscription's `tunread`.
+    Unread,
 }
 
 /// One page of the threads of a room, as their parent messages.

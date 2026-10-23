@@ -936,6 +936,27 @@ async fn threads_list_asks_for_the_room_the_kind_and_the_page() {
     assert_eq!(following.threads.len(), 2);
 }
 
+// ACT-011
+#[tokio::test]
+async fn threads_list_asks_for_the_unread_threads() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/chat.getThreadsList"))
+        .and(query_param("type", "unread"))
+        .and(query_param("rid", "room"))
+        .respond_with(json_response(200, THREADS_LIST))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let page = session(&RestClient::new(&server.uri()).unwrap())
+        .threads_list("room", ThreadsKind::Unread, 50, 0)
+        .await
+        .unwrap();
+
+    assert_eq!(page.threads.len(), 2);
+}
+
 // ACT-010
 #[tokio::test]
 async fn threads_list_of_a_missing_room_is_a_server_error_and_an_expired_token_unauthorized() {

@@ -20,6 +20,8 @@ pub enum ThreadFilter {
     All,
     /// The threads the user follows: those they started or replied to, until they unfollow.
     Following,
+    /// The threads with replies the user hasn't read: those the room's subscription lists.
+    Unread,
 }
 
 /// What the frontend shows next to the thread list.
@@ -82,8 +84,9 @@ impl ThreadList {
     }
 
     /// Whether a message belongs in the list as it stands: a sent text message that is not a reply
-    /// and has replies, and for the followed threads one the user follows.
-    fn lists(&self, message: &Message, me: Option<&UserId>) -> bool {
+    /// and has replies, and for the followed threads one the user follows, and for the unread ones
+    /// one of those the room's subscription lists as `unread`.
+    fn lists(&self, message: &Message, me: Option<&UserId>, unread: &[MessageId]) -> bool {
         message.room_id == self.room
             && message.thread_id.is_none()
             && message.thread_replies > 0
@@ -94,6 +97,7 @@ impl ThreadList {
                 ThreadFilter::Following => {
                     me.is_some_and(|me| message.thread_followers.contains(me))
                 }
+                ThreadFilter::Unread => unread.contains(&message.id),
             }
     }
 
@@ -153,9 +157,10 @@ impl ThreadList {
         &mut self,
         message: &Message,
         me: Option<&UserId>,
+        unread: &[MessageId],
     ) -> Vec<ThreadListChange> {
         let held = self.rows.iter().position(|row| row.id == message.id);
-        if !self.lists(message, me) {
+        if !self.lists(message, me, unread) {
             return held
                 .map(|index| self.remove_at(index))
                 .into_iter()
@@ -311,7 +316,7 @@ mod tests {
             thread_replies: 2,
             ..parent("c", 10, &[])
         };
-        let changes = list.pushed(&newer, Some(&me()));
+        let changes = list.pushed(&newer, Some(&me()), &[]);
         assert_eq!(
             changes,
             [ListChange::Moved {
@@ -327,7 +332,7 @@ mod tests {
             ..parent("c", 11, &[])
         };
         assert_eq!(
-            list.pushed(&again, Some(&me())),
+            list.pushed(&again, Some(&me()), &[]),
             [ListChange::Updated {
                 index: 0,
                 item: again
@@ -348,7 +353,7 @@ mod tests {
             ..parent("b", 8, &[])
         };
         assert_eq!(
-            list.pushed(&edited, Some(&me())),
+            list.pushed(&edited, Some(&me()), &[]),
             [ListChange::Updated {
                 index: 1,
                 item: edited
@@ -362,7 +367,7 @@ mod tests {
         let mut list = list_of(ThreadFilter::All, vec![parent("a", 9, &[])], false);
         let new = parent("n", 10, &[]);
         assert_eq!(
-            list.pushed(&new, Some(&me())),
+            list.pushed(&new, Some(&me()), &[]),
             [ListChange::Inserted {
                 index: 0,
                 item: new
@@ -376,10 +381,16 @@ mod tests {
     fn an_old_thread_that_is_not_held_is_left_to_the_pages_to_come() {
         let mut list = list_of(ThreadFilter::All, vec![parent("a", 9, &[])], false);
         // An edit of a thread further down: its last reply is older than the last one held.
-        assert!(list.pushed(&parent("old", 3, &[]), Some(&me())).is_empty());
+        assert!(
+            list.pushed(&parent("old", 3, &[]), Some(&me()), &[])
+                .is_empty()
+        );
         // With every thread held, it would have been there.
         let mut whole = list_of(ThreadFilter::All, vec![parent("a", 9, &[])], true);
-        assert_eq!(whole.pushed(&parent("old", 3, &[]), Some(&me())).len(), 1);
+        assert_eq!(
+            whole.pushed(&parent("old", 3, &[]), Some(&me()), &[]).len(),
+            1
+        );
         assert_eq!(ids(&whole), ["a", "old"]);
     }
 
@@ -393,25 +404,57 @@ mod tests {
         );
         // Somebody else's thread gets a reply: not for this list.
         assert!(
-            list.pushed(&parent("x", 10, &["you"]), Some(&me()))
+            list.pushed(&parent("x", 10, &["you"]), Some(&me()), &[])
                 .is_empty()
         );
         // One the user replied to comes in.
         assert_eq!(
-            list.pushed(&parent("y", 11, &["you", "me"]), Some(&me()))
+            list.pushed(&parent("y", 11, &["you", "me"]), Some(&me()), &[])
                 .len(),
             1
         );
         assert_eq!(ids(&list), ["y", "a", "b"]);
         // A copy that no longer lists the user takes the thread out.
         assert_eq!(
-            list.pushed(&parent("a", 12, &["you"]), Some(&me())),
+            list.pushed(&parent("a", 12, &["you"]), Some(&me()), &[]),
             [ListChange::Removed { index: 1 }]
         );
         assert_eq!(ids(&list), ["y", "b"]);
         // Nobody is followed by an unknown user.
         assert_eq!(
-            list.pushed(&parent("b", 13, &["me"]), None),
+            list.pushed(&parent("b", 13, &["me"]), None, &[]),
+            [ListChange::Removed { index: 1 }]
+        );
+    }
+
+    // ACT-011
+    #[test]
+    fn only_the_unread_threads_are_in_the_unread_list() {
+        let mut list = list_of(ThreadFilter::Unread, vec![parent("a", 9, &[])], true);
+        let unread: Vec<MessageId> = vec!["a".to_owned().into(), "c".to_owned().into()];
+        // A new reply to a thread that is unread: it stays, and moves to the front of the list.
+        let newer = parent("a", 12, &[]);
+        assert_eq!(
+            list.pushed(&newer, Some(&me()), &unread),
+            [ListChange::Updated {
+                index: 0,
+                item: newer
+            }]
+        );
+        // One that is not unread is not for it, and one that is comes in.
+        assert!(
+            list.pushed(&parent("b", 13, &[]), Some(&me()), &unread)
+                .is_empty()
+        );
+        assert_eq!(
+            list.pushed(&parent("c", 14, &[]), Some(&me()), &unread)
+                .len(),
+            1
+        );
+        assert_eq!(ids(&list), ["c", "a"]);
+        // Read: the subscription no longer lists it, and its next push takes it out.
+        assert_eq!(
+            list.pushed(&parent("a", 15, &[]), Some(&me()), &unread[1..]),
             [ListChange::Removed { index: 1 }]
         );
     }
@@ -438,7 +481,7 @@ mod tests {
             ..parent("c", 7, &[])
         };
         assert_eq!(
-            list.pushed(&emptied, Some(&me())),
+            list.pushed(&emptied, Some(&me()), &[]),
             [ListChange::Removed { index: 1 }]
         );
         assert_eq!(ids(&list), ["a"]);
@@ -461,7 +504,7 @@ mod tests {
             ..parent("s", 5, &[])
         };
         for message in [elsewhere, reply, system] {
-            assert!(list.pushed(&message, Some(&me())).is_empty());
+            assert!(list.pushed(&message, Some(&me()), &[]).is_empty());
         }
     }
 

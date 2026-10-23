@@ -171,6 +171,48 @@ Rectangle {
                             width: Theme.iconButtonIconSize
                         }
                     }
+
+                    // How many threads have replies the user hasn't read: grey, or red when one of
+                    // them mentions the user, with a ring in the header's colour around it.
+                    Rectangle {
+                        objectName: "roomThreadsBadgeRing"
+                        anchors.right: parent.right
+                        anchors.rightMargin: -Theme.threadsBadgeOverhangX
+                        anchors.top: parent.top
+                        anchors.topMargin: -Theme.threadsBadgeOverhangY
+                        color: Theme.surface
+                        implicitHeight: Theme.threadsBadgeHeight + 2 * Theme.threadsBadgeRing
+                        implicitWidth: Math.max(badgeLabel.implicitWidth + 2 * Theme.threadsBadgePaddingH, Theme.threadsBadgeMinWidth) + 2 * Theme.threadsBadgeRing
+                        radius: height / 2
+                        visible: ThreadList.unreadCount > 0
+
+                        Rectangle {
+                            objectName: "roomThreadsBadge"
+
+                            // What the tests read: `mention` while it is red, else `unread`.
+                            property string text: ThreadList.unreadMention ? "mention" : "unread"
+
+                            anchors.fill: parent
+                            anchors.margins: Theme.threadsBadgeRing
+                            color: ThreadList.unreadMention ? Theme.signal : Theme.raisedHover
+                            radius: height / 2
+
+                            // Its `text` is the count.
+                            Label {
+                                id: badgeLabel
+
+                                objectName: "roomThreadsBadgeCount"
+                                anchors.centerIn: parent
+                                color: ThreadList.unreadMention ? Theme.textOnSignal : Theme.text
+                                font.features: ({
+                                        "tnum": 1
+                                    })
+                                font.pointSize: Theme.fontSizeTiny
+                                font.weight: Theme.fontWeightBold
+                                text: ThreadList.unreadCount
+                            }
+                        }
+                    }
                 }
             }
 

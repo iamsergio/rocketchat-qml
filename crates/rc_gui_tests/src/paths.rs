@@ -196,6 +196,11 @@ pub mod main_window {
     /// In the header of the room: shows the pane with the room's threads, or closes the pane if it
     /// shows anything. Its `checked` is not used; the pane's visibility says what it did.
     pub const ROOM_THREADS_BUTTON: &str = "mainWindow/roomThreadsButton";
+    /// On the threads button: how many threads of the room have replies the user hasn't read.
+    /// Visible only while there are some. Its `text` is `unread` (grey) or `mention` (red: one of
+    /// them mentions the user), and the count is the `text` of [`ROOM_THREADS_BADGE_COUNT`].
+    pub const ROOM_THREADS_BADGE: &str = "mainWindow/roomThreadsBadge";
+    pub const ROOM_THREADS_BADGE_COUNT: &str = "mainWindow/roomThreadsBadgeCount";
     /// "Threads", in the header of the pane while it shows the list.
     pub const THREAD_LIST_TITLE: &str = "mainWindow/threadListTitle";
     /// The list of the room's threads in the pane: visible while the pane shows it, kept (hidden)
@@ -207,6 +212,10 @@ pub mod main_window {
     /// that kind of thread from the first page.
     pub const THREAD_LIST_FILTER_ALL: &str = "mainWindow/threadListFilterAll";
     pub const THREAD_LIST_FILTER_FOLLOWING: &str = "mainWindow/threadListFilterFollowing";
+    /// The threads with replies the user hasn't read. After its label it says how many there are,
+    /// in [`THREAD_LIST_FILTER_UNREAD_COUNT`], visible only while there are some.
+    pub const THREAD_LIST_FILTER_UNREAD: &str = "mainWindow/threadListFilterUnread";
+    pub const THREAD_LIST_FILTER_UNREAD_COUNT: &str = "mainWindow/threadListFilterUnreadCount";
     /// Shown while the first page loads, and under the last row while a later one does.
     pub const THREAD_LIST_LOADING: &str = "mainWindow/threadListLoading";
     pub const THREAD_LIST_LOADING_MORE: &str = "mainWindow/threadListLoadingMore";
@@ -393,6 +402,11 @@ pub mod thread_list_row_part {
     pub const TEXT: &str = "threadListText";
     /// "N replies" (or "1 reply"), as its `text`.
     pub const SUMMARY: &str = "threadListSummary";
+    /// "New", visible while the thread has replies the user hasn't read. The server says which
+    /// threads are unread, not how many replies.
+    pub const NEW: &str = "threadListNew";
+    /// "@", visible while one of those mentions the user.
+    pub const MENTION: &str = "threadListMention";
     /// The author's avatar, visible once its file has loaded: its `text` is the file URL.
     pub const AVATAR: &str = "threadListAvatar";
     /// The initials on a colour, visible until the avatar has loaded.

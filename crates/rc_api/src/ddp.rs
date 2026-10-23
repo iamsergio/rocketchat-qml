@@ -121,6 +121,19 @@ impl DdpClient {
         Ok(())
     }
 
+    /// Tells the server the user has read the thread whose parent message is `thread_id`
+    /// (`readThreads`): it takes the thread out of the subscription's unread threads and pushes
+    /// the changed subscription. There is no REST call for it.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::ConnectionClosed`] if the connection ended, or [`Error::Refused`] if the server
+    /// refuses.
+    pub async fn read_thread(&self, thread_id: &str) -> Result<(), Error> {
+        self.call("readThreads", json!([thread_id])).await?;
+        Ok(())
+    }
+
     /// When any user's or room's avatar changes, as [`DdpEvent::AvatarChanged`]
     /// (`stream-notify-logged` with `updateAvatar`). Needs a login.
     ///

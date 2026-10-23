@@ -205,6 +205,7 @@ impl ServerApi for RestApi {
         let kind = match filter {
             ThreadFilter::All => rc_api::ThreadsKind::All,
             ThreadFilter::Following => rc_api::ThreadsKind::Following,
+            ThreadFilter::Unread => rc_api::ThreadsKind::Unread,
         };
         let page = session
             .threads_list(room.as_str(), kind, count, offset)
@@ -322,10 +323,12 @@ impl ServerApi for RestApi {
         }
         let (pushed, receiver) = mpsc::unbounded_channel();
         let (watch, watched) = mpsc::unbounded_channel();
-        tokio::spawn(forward(ddp, events, pushed, watched));
+        let (read_threads, reads) = mpsc::unbounded_channel();
+        tokio::spawn(forward(ddp, events, pushed, watched, reads));
         Ok(Realtime {
             events: receiver,
             watch,
+            read_threads,
         })
     }
 
@@ -346,9 +349,11 @@ async fn forward(
     mut events: DdpEvents,
     pushed: mpsc::UnboundedSender<Pushed>,
     mut watched: mpsc::UnboundedReceiver<Option<RoomId>>,
+    mut reads: mpsc::UnboundedReceiver<MessageId>,
 ) {
     let mut followed: Vec<SubscriptionId> = Vec::new();
     let mut watching = true;
+    let mut reading = true;
     loop {
         tokio::select! {
             room = watched.recv(), if watching => {
@@ -361,6 +366,15 @@ async fn forward(
                 }
                 if let Some(room) = room {
                     followed = follow(&ddp, &room).await;
+                }
+            }
+            thread = reads.recv(), if reading => {
+                let Some(thread) = thread else {
+                    reading = false;
+                    continue;
+                };
+                if let Err(error) = ddp.read_thread(thread.as_str()).await {
+                    tracing::warn!(%error, %thread, "can't mark the thread read");
                 }
             }
             event = events.recv() => {
