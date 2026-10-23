@@ -17,6 +17,7 @@ path = "src/main.rs"
 # Optional, behind `spix`: the search API of Slint's testing backend, which the Spix server needs
 # and which must match Slint's version exactly.
 i-slint-backend-testing = { workspace = true, optional = true }
+open.workspace = true
 rc_core.workspace = true
 rc_view.workspace = true
 secrecy.workspace = true
@@ -39,6 +40,8 @@ spix = [
 
 [dev-dependencies]
 i-slint-backend-testing.workspace = true
+jiff.workspace = true
+rc_api.workspace = true
 
 [build-dependencies]
 slint-build.workspace = true

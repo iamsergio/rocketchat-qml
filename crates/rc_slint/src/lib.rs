@@ -6,6 +6,7 @@
 //! core.
 
 pub mod app;
+pub mod rich_markdown;
 mod room_model;
 mod rows;
 

@@ -12,7 +12,8 @@ import { StartupPage } from "startup_page.slint";
 import { AccountTile, LoginMode, RoomRow, RoomSection, SessionStatus } from "structs.slint";
 import { Theme } from "theme.slint";
 
-export { AccountTile, LoginMode, RoomRow, RoomSection, SessionStatus }
+// The theme, for Rust: the colours it writes into rich text.
+export { AccountTile, LoginMode, RoomRow, RoomSection, SessionStatus, Theme }
 
 export component MainWindow inherits Window {
     // The version of the app, set from Rust (`rc_core::VERSION`).
@@ -46,7 +47,9 @@ export component MainWindow inherits Window {
     in property <string> room-id;
     in property <string> room-name;
     in property <string> room-kind;
-    in property <string> room-topic;
+    // The topic as styled text, and as the HTML that the GUI tests read.
+    in property <styled-text> room-topic;
+    in property <string> room-topic-html;
 
     callback login(string, string, string);
     // Removes the account on screen: Cancel, Remove this server and Log out in the settings menu.
@@ -55,6 +58,10 @@ export component MainWindow inherits Window {
     callback add-account();
     callback remove-account(string);
     callback open-room(string);
+    // Opens the address of a link of a text in the browser.
+    callback open-link(string);
+    // Logs what Slint knows about the display.
+    callback dump-info();
 
     title: @tr("RocketChatQml");
     background: Theme.base;
@@ -87,6 +94,9 @@ export component MainWindow inherits Window {
         logout => {
             root.logout();
         }
+        dump-info => {
+            root.dump-info();
+        }
     }
 
     // One page per session state, in the space right of the rail. While logging in the state is
@@ -107,8 +117,12 @@ export component MainWindow inherits Window {
             room-name: root.room-name;
             room-kind: root.room-kind;
             room-topic: root.room-topic;
+            room-topic-html: root.room-topic-html;
             open-room(id) => {
                 root.open-room(id);
+            }
+            open-link(url) => {
+                root.open-link(url);
             }
         }
 
