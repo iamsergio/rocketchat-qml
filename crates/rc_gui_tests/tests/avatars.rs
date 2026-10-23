@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 
 use rc_gui_tests::paths::{message, message_row, room, room_row};
 use rc_gui_tests::{App, Gui};
-use rc_test_server::Admin;
+use rc_test_server::{Admin, TestUser};
 
 use common::{TIMEOUT, file_of, launch, log_in_and_wait_for_room, open_room};
 
@@ -44,6 +44,13 @@ fn assert_cached_image(file: &Path, app: &App, name: &str) {
 fn initials_of(gui: &Gui, path: &str) -> String {
     gui.wait_until_visible(path, TIMEOUT).unwrap();
     gui.text(path).unwrap()
+}
+
+/// The initials of the display name `Admin::create_user` gives: "Contract 1234-5-6" is "C1".
+fn initials_of_test_user(user: &TestUser) -> String {
+    let words: Vec<&str> = user.name.split_whitespace().collect();
+    assert_eq!(words[0], "Contract", "{}", user.name);
+    format!("C{}", words[1].chars().next().unwrap())
 }
 
 // RICH-004
@@ -76,17 +83,19 @@ fn an_author_with_an_avatar_of_their_own_shows_it_as_a_file_in_the_cache() {
 fn an_author_without_one_shows_their_initials_on_a_colour() {
     let admin = Admin::login();
     let user = admin.create_user();
-    let (channel_id, _) = admin.create_channel(&[&user.username]);
-    let posted = admin.post_message(&channel_id, "who am I");
+    // Someone who has no avatar, whatever the shared server's admin has.
+    let author = admin.create_user();
+    let (channel_id, _) = admin.create_channel(&[&user.username, &author.username]);
+    let posted =
+        Admin::login_as(&author.username, &author.password).post_message(&channel_id, "who am I");
     let app = launch();
     let gui = app.gui();
     log_in_and_wait_for_room(gui, &user, &channel_id);
 
     open_room(gui, &channel_id);
 
-    // The admin's display name is "Administrator".
     let initials = initials_of(gui, &message(&posted.id, message_row::AVATAR_INITIALS));
-    assert_eq!(initials, "A");
+    assert_eq!(initials, initials_of_test_user(&author));
     // No image is loaded, and none ever comes: the user has none of their own.
     assert!(
         !gui.exists_and_visible(&message(&posted.id, message_row::AVATAR))
@@ -107,8 +116,11 @@ fn the_room_list_shows_an_avatar_for_a_room_that_has_one_and_initials_for_the_ot
     let (with, _) = admin.create_channel(&[&user.username]);
     let (without, without_name) = admin.create_channel(&[&user.username]);
     admin.set_room_avatar(&with);
-    let dm_id = admin.create_dm(&user.username);
-    admin.post_message(&dm_id, "hello");
+    // The other side of the direct message has no avatar, whatever the shared server's admin has.
+    let other = admin.create_user();
+    let other_side = Admin::login_as(&other.username, &other.password);
+    let dm_id = other_side.create_dm(&user.username);
+    other_side.post_message(&dm_id, "hello");
     let app = launch();
     let gui = app.gui();
 
@@ -130,7 +142,7 @@ fn the_room_list_shows_an_avatar_for_a_room_that_has_one_and_initials_for_the_ot
     gui.wait_until_visible(&room(&dm_id, room_row::NAME), TIMEOUT)
         .unwrap();
     let dm = initials_of(gui, &room(&dm_id, room_row::AVATAR_INITIALS));
-    assert_eq!(dm, "A");
+    assert_eq!(dm, initials_of_test_user(&other));
 }
 
 // RICH-004

@@ -624,8 +624,11 @@ fn rooms_and_users_with_the_generated_avatar_get_none() {
     let admin = Admin::login();
     let user = admin.create_user();
     let (channel_id, _) = admin.create_channel(&[&user.username]);
-    let dm_id = admin.create_dm(&user.username);
-    admin.post_message(&dm_id, "hi");
+    // The other side of the direct message has no avatar, whatever the shared server's admin has.
+    let other = admin.create_user();
+    let other_side = Admin::login_as(&other.username, &other.password);
+    let dm_id = other_side.create_dm(&user.username);
+    other_side.post_message(&dm_id, "hi");
     let cache = CacheDir::new();
     let (client, events) = start_with_cache(MemoryStore::default(), DiskFileCache::new(&cache.0));
     client
