@@ -23,8 +23,11 @@ jobs:
 
     strategy:
       fail-fast: false
+      # `dev-slint` builds rocketchat_slint and runs the GUI tests of `slint.txt` against it
+      # (ctest). The frontend-agnostic steps and qmllint below stay on `dev`, so they don't run
+      # twice and qmllint still lints the QML of the Qt app.
       matrix:
-        preset: [dev]
+        preset: [dev, dev-slint]
 
     steps:
     - name: Checkout code
@@ -35,19 +38,27 @@ jobs:
       run: git submodule update --init
 
     - name: Check licensing (REUSE)
+      if: matrix.preset == 'dev'
       run: reuse lint
 
     # Qt comes from the runner image (on PATH): rc_qt's build script needs qmake.
     - name: Check Rust formatting
+      if: matrix.preset == 'dev'
       run: cargo fmt --all --check
 
     - name: Run clippy
-      run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      if: matrix.preset == 'dev'
+      run: |
+        cargo clippy --workspace --all-targets --locked -- -D warnings
+        # Also with the spix feature: `rc_slint`'s `cfg(feature = "spix")` code is never linted otherwise.
+        cargo clippy --workspace --all-targets --locked --features rc_slint/spix -- -D warnings
 
     - name: Check dependencies (licenses, advisories)
+      if: matrix.preset == 'dev'
       run: cargo deny check
 
     - name: Run Rust tests
+      if: matrix.preset == 'dev'
       run: cargo test --workspace --locked
 
     - name: Check the Rocket.Chat test server
@@ -58,6 +69,7 @@ jobs:
     # Only these two suites: --workspace --ignored would also run the GUI tests (they need the built
     # app) and the OS keyring test, which must never run in CI.
     - name: Run contract tests
+      if: matrix.preset == 'dev'
       run: |
         cargo test -p rc_api --test contract --locked -- --ignored
         cargo test -p rc_core --test contract --locked -- --ignored
@@ -69,6 +81,7 @@ jobs:
       run: cmake --build build-${{ matrix.preset }}
 
     - name: Run qmllint
+      if: matrix.preset == 'dev'
       run: ninja -C ./build-${{ matrix.preset }} all_qmllint
 
     # The Rust tests again, then the GUI tests against the app just built.

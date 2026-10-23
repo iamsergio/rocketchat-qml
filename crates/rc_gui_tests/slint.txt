@@ -1,0 +1,30 @@
+# SPDX-FileCopyrightText: 2026 Sergio Martins
+# SPDX-License-Identifier: MIT
+
+# The GUI tests that pass against rocketchat_slint, one per line as
+# `<test file stem>::<test function>`, sorted by file and, within one, in the file's own order.
+# `#` comments and blank lines are allowed. ctest runs what is here (CMakeLists.txt), and INFRA-005
+# checks that this list and the Slint column of TRACEABILITY.md say the same thing.
+# The list grows with each feature and never shrinks.
+accounts::a_second_server_is_added_from_the_rail_and_adding_can_be_cancelled
+accounts::clicking_a_tile_shows_the_rooms_of_that_account
+accounts::a_mention_in_the_background_shows_on_the_tile_until_the_room_is_opened
+accounts::logging_out_removes_the_tile_and_shows_the_next_account
+accounts::logging_out_from_the_tile_of_an_account_that_is_not_on_screen_leaves_the_other
+accounts::adding_the_same_account_again_is_refused
+accounts::every_account_comes_back_after_a_restart
+accounts::an_expired_account_logs_in_again_with_its_server_and_username_filled_in
+accounts::an_expired_server_can_be_removed
+accounts::another_accounts_login_page_starts_empty_whatever_was_typed_on_this_one
+accounts::an_account_stored_without_a_token_starts_expired_after_a_restart
+app::shows_the_version_from_rust
+auth::logging_in_shows_the_rooms_and_the_user
+auth::a_wrong_password_shows_an_error_on_the_login_page
+auth::an_unreachable_server_shows_an_error
+auth::the_session_resumes_after_a_restart
+auth::logging_out_returns_to_the_login_page
+rooms::the_rooms_are_listed_with_their_names_and_kinds
+rooms::unread_and_mention_counts_are_shown
+rooms::opening_a_room_clears_its_badges
+rooms::rooms_are_listed_with_the_most_recently_active_first
+rooms::a_quiet_direct_message_leaves_the_list_and_comes_back_with_a_message
