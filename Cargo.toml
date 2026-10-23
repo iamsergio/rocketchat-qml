@@ -36,6 +36,8 @@ keyring-core = "1.0.0"
 linkify = "0.10.0"
 # Opens a link in the default browser.
 open = "5.4.5"
+# Reads the screenshots of the GUI tests.
+png = "0.18.1"
 # Markdown for the topic of a room, parsed to events: no HTML renderer.
 pulldown-cmark = { version = "0.13.4", default-features = false }
 # Runs the Slint frontend in a terminal (`rc_tui`).

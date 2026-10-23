@@ -5171,6 +5171,7 @@ dependencies = [
 name = "rc_gui_tests"
 version = "0.0.0"
 dependencies = [
+ "png",
  "rc_test_server",
  "roxmltree",
  "thiserror 2.0.21",
@@ -6101,6 +6102,7 @@ name = "spix_slint"
 version = "0.0.0"
 dependencies = [
  "i-slint-backend-testing",
+ "png",
  "roxmltree",
  "slint",
  "thiserror 2.0.21",

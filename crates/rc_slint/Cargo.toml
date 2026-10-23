@@ -15,8 +15,9 @@ path = "src/main.rs"
 
 [dependencies]
 # Optional, behind `spix`: the search API of Slint's testing backend, which the Spix server needs
-# and which must match Slint's version exactly.
-i-slint-backend-testing = { workspace = true, optional = true }
+# and which must match Slint's version exactly. Its software renderer gives the windows pixels, for
+# the Spix call `takeScreenshot`.
+i-slint-backend-testing = { workspace = true, features = ["renderer-software"], optional = true }
 jiff.workspace = true
 open.workspace = true
 rc_core.workspace = true
