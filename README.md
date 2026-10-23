@@ -84,3 +84,8 @@ CI runs on a self-hosted runner in a container (`.github/Dockerfile`). Start it 
 The runner joins the `rc-test` network, and CI runs the `rc_api` and `rc_core` contract tests against
 the test server. It has to be running on the same host (`scripts/run_test_server.sh`). After changing
 `scripts/run_ci_runner.sh`, restart the runner with it.
+
+More runners run more jobs at once. Each one is a container of its own, numbered from 1, and they all
+share the one test server:
+
+    RC_RUNNER=2 scripts/run_ci_runner.sh
