@@ -12,6 +12,8 @@
 mod app;
 mod gui;
 pub mod paths;
+#[cfg(test)]
+mod slint_list;
 mod xmlrpc;
 
 pub use app::{APP_ENV, App, LaunchError, QuitError};

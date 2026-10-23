@@ -185,3 +185,36 @@ if(ROCKETCHATQML_QT AND ROCKETCHATQML_SPIX)
     WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
   set_tests_properties(gui_tests PROPERTIES ENVIRONMENT "${cargo_test_env};RC_GUI_TEST_APP=$<TARGET_FILE:rocketchat_qml>")
 endif()
+if(ROCKETCHATQML_SLINT AND ROCKETCHATQML_SPIX)
+  # The GUI tests listed in slint.txt, the ones that pass against rocketchat_slint: one ctest entry
+  # per test file they are in, running exactly those functions. The list grows with each feature and
+  # never shrinks, so it is read here at configure time and read again when it changes.
+  set(slint_gui_tests ${PROJECT_SOURCE_DIR}/crates/rc_gui_tests/slint.txt)
+  set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${slint_gui_tests})
+  file(STRINGS ${slint_gui_tests} slint_gui_test_lines)
+  # `<test file stem>::<test function>`, grouped by file: cargo test runs one file at a time.
+  set(slint_gui_test_files)
+  foreach(line ${slint_gui_test_lines})
+    if(line MATCHES "^ *#" OR line STREQUAL "")
+      continue()
+    endif()
+    if(NOT line MATCHES "^ *([^: ]+)::([^ ]+) *$")
+      message(FATAL_ERROR "slint.txt: not a <file stem>::<test function> line: ${line}")
+    endif()
+    set(slint_gui_test_stem ${CMAKE_MATCH_1})
+    list(APPEND slint_gui_test_names_${slint_gui_test_stem} ${CMAKE_MATCH_2})
+    if(NOT slint_gui_test_stem IN_LIST slint_gui_test_files)
+      list(APPEND slint_gui_test_files ${slint_gui_test_stem})
+    endif()
+  endforeach()
+  foreach(stem ${slint_gui_test_files})
+    set(slint_gui_test_names_var slint_gui_test_names_${stem})
+    # The GUI tests are #[ignore]d so that plain cargo test, which has no app, skips them.
+    add_test(
+      NAME gui_tests_slint_${stem}
+      COMMAND $<TARGET_FILE:Rust::Cargo> test --package rc_gui_tests --test ${stem} --locked --
+        --ignored --exact ${${slint_gui_test_names_var}}
+      WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
+    set_tests_properties(gui_tests_slint_${stem} PROPERTIES ENVIRONMENT "${cargo_test_env};RC_GUI_TEST_APP=$<TARGET_FILE:rocketchat_slint>")
+  endforeach()
+endif()
