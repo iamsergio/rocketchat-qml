@@ -2302,6 +2302,8 @@ fn live_replies_arrive_in_the_thread_and_the_parent_follows_their_count() {
         message_saying(&m.thread, "loudly").is_some()
             && message_saying(&m.room, "loudly").is_some()
             && m.thread[0].thread_replies == 2
+            // The thread's copy of the parent is announced before the room's.
+            && message_saying(&m.room, "theirs").is_some_and(|p| p.thread_replies == 2)
     });
     assert_eq!(texts(&mirrors.thread), ["theirs", "quietly", "loudly"]);
     // Only the one sent to the channel is in the room.
