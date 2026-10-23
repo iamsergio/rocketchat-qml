@@ -7,7 +7,10 @@
 //! or room shows the initials of its name instead.
 //!
 //! The test server accepts uploaded avatars (a one-pixel PNG) and says who has one, so the file in
-//! the cache is that PNG; what the image shows is not looked at, only that it is loaded.
+//! the cache is that PNG; most of these tests look at none of the image, only that it is loaded.
+//! One uploads [`rc_test_server::QUADRANTS_PNG`] instead and reads pixels from a screenshot of the
+//! avatar (`Gui::screenshot`) to see *how* it is drawn: the whole image scaled into the box that
+//! shows it, or one corner of the image blown up and clipped by it.
 
 // Helpers outside the tests: a failed step should just fail the test.
 #![allow(clippy::unwrap_used, clippy::panic)]
@@ -18,7 +21,7 @@ use std::path::{Path, PathBuf};
 
 use rc_gui_tests::paths::{message, message_row, room, room_row};
 use rc_gui_tests::{App, Gui};
-use rc_test_server::{Admin, TestUser};
+use rc_test_server::{Admin, QUADRANTS, TestUser};
 
 use common::{TIMEOUT, file_of, launch, log_in_and_wait_for_room, open_room};
 
@@ -176,4 +179,61 @@ fn the_cache_keeps_the_avatars_for_the_next_session_and_logging_out_keeps_the_fi
         loaded_avatar(gui, &room(&channel_id, room_row::AVATAR)),
         before
     );
+}
+
+// The two `expect`s below are one line each: `slint_list` reads a test's attributes line by line.
+// RICH-004
+#[test]
+#[ignore = "needs the app and a Rocket.Chat server: run through ctest"]
+#[expect(clippy::cast_possible_truncation, reason = "inside the image")]
+#[expect(clippy::cast_sign_loss, reason = "at least zero")]
+fn the_room_avatar_shows_the_whole_image_scaled_into_its_box() {
+    /// How far a drawn pixel may be from the flat colour it comes from: the scaling of an image
+    /// blends two colours only near an edge, and these samples sit in the middle of a quadrant,
+    /// while a sample of another quadrant is off by 255 in some channel.
+    const TOLERANCE: u8 = 48;
+
+    let admin = Admin::login();
+    let user = admin.create_user();
+    let (channel_id, _) = admin.create_channel(&[&user.username]);
+    admin.set_quadrant_room_avatar(&channel_id);
+    let app = launch();
+    let gui = app.gui();
+    log_in_and_wait_for_room(gui, &user, &channel_id);
+    let avatar = room(&channel_id, room_row::AVATAR);
+    gui.wait_until_visible(&avatar, TIMEOUT).unwrap();
+
+    let file = std::env::temp_dir().join(format!("rc-avatar-{}.png", rc_test_server::unique()));
+    let png = gui.screenshot(&avatar, &file).unwrap();
+    let _ = std::fs::remove_file(&file);
+    let mut reader = png::Decoder::new(std::io::Cursor::new(png))
+        .read_info()
+        .unwrap();
+    let mut pixels = vec![0_u8; reader.output_buffer_size().unwrap()];
+    let info = reader.next_frame(&mut pixels).unwrap();
+    // Qt saves red, green and blue, Slint adds alpha: the first three samples are the colour.
+    assert!(matches!(
+        info.color_type,
+        png::ColorType::Rgb | png::ColorType::Rgba
+    ));
+    let samples = info.color_type.samples();
+    let (width, height) = (info.width, info.height);
+
+    // The middle of each quadrant of the uploaded image, and the colour it must have come out as
+    // in the box: all four, or the box is not showing the whole image scaled into it.
+    for (at_x, at_y, expected) in QUADRANTS {
+        let x = (f64::from(width) * at_x) as u32;
+        let y = (f64::from(height) * at_y) as u32;
+        let at = (y * width + x) as usize * samples;
+        let [red, green, blue] = [pixels[at], pixels[at + 1], pixels[at + 2]];
+        let [want_red, want_green, want_blue] = expected;
+        assert!(
+            red.abs_diff(want_red) <= TOLERANCE
+                && green.abs_diff(want_green) <= TOLERANCE
+                && blue.abs_diff(want_blue) <= TOLERANCE,
+            "the avatar shows rgb({red}, {green}, {blue}) at ({at_x}, {at_y}) of its \
+             {width}x{height} box, where the image has rgb({want_red}, {want_green}, {want_blue}) \
+             there: the box is not the whole image scaled into it"
+        );
+    }
 }
