@@ -49,3 +49,10 @@ An element is only found by its `accessible-id` if it also has an `accessible-ro
 
 - **Workaround:** none yet. It's one of PLAN.md's "Slint GUI gaps".
 - **Possible patch:** a way to drop one entry from the cache, or to key it on the file's modification time.
+
+## The mock renderer of the testing backend has no pixels
+
+The testing backend keeps a mock renderer by default, which measures text with fixed metrics but draws nothing, so `Window::take_snapshot`, the only way a Spix test can see what the app drew, fails on it. Its software rasterizer gives it pixels, behind the crate's `renderer-software` feature, which adds a `renderer_name` option to `TestingBackendOptions`.
+
+- **Workaround:** `rc_slint --spix-port` sets the testing backend itself with `renderer_name: Some("software".into())`, and `spix_slint`'s `takeScreenshot` crops its PNG from the snapshot. The software renderer also measures text with real fonts, so layouts differ slightly from the mock's.
+- **Possible patch:** `init_integration_test_with_system_time` taking the renderer name, so that no one has to build the platform by hand.

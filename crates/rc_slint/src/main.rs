@@ -16,7 +16,15 @@ fn main() -> Result<(), Box<dyn Error>> {
     // `--spix-port` uses the testing backend unless SLINT_BACKEND picks another (winit, to watch the app).
     #[cfg(feature = "spix")]
     if args.spix_port.is_some() && std::env::var_os("SLINT_BACKEND").is_none() {
-        i_slint_backend_testing::init_integration_test_with_system_time();
+        use i_slint_backend_testing::{TestingBackend, TestingBackendOptions};
+
+        // Real time, as `init_integration_test_with_system_time` does, but with the software
+        // renderer: the mock one has no pixels for `takeScreenshot` (SLINT.md).
+        slint::platform::set_platform(Box::new(TestingBackend::new(TestingBackendOptions {
+            mock_time: false,
+            threading: true,
+            renderer_name: Some("software".into()),
+        })))?;
     }
     // The window first: the core's events hop to the event loop, which the backend provides.
     let window = rc_slint::new_main_window()?;

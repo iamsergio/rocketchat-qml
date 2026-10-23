@@ -6,6 +6,7 @@
 
 use std::cell::Cell;
 use std::ops::BitOr;
+use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -29,6 +30,12 @@ pub enum GuiError {
     Spix(Vec<String>),
     #[error("Spix call {method} returned an unexpected value: {value:?}")]
     UnexpectedValue { method: &'static str, value: Value },
+    #[error("can't read the screenshot {}", .path.display())]
+    Screenshot {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
     #[error("timed out after {timeout:?} waiting for {what}{}", .last.as_ref().map_or_else(String::new, |last| format!(" ({last})")))]
     Timeout {
         what: String,
@@ -229,6 +236,25 @@ impl Gui {
             },
             value => Err(unexpected("getBoundingBox", value)),
         }
+    }
+
+    /// A PNG of the element at `path`, cropped from the window, written to `file` by the app and
+    /// returned. Both servers write it before they answer. An old `file` is removed first, so one
+    /// the app didn't write can't pass for the screenshot.
+    pub fn screenshot(&self, path: &str, file: &Path) -> Result<Vec<u8>> {
+        let io = |source| GuiError::Screenshot {
+            path: file.to_path_buf(),
+            source,
+        };
+        match std::fs::remove_file(file) {
+            Err(error) if error.kind() != std::io::ErrorKind::NotFound => return Err(io(error)),
+            _ => {}
+        }
+        self.command(
+            "takeScreenshot",
+            &[path.into(), file.to_string_lossy().as_ref().into()],
+        )?;
+        std::fs::read(file).map_err(io)
     }
 
     /// Calls `check` until it says true, for up to `timeout`: the core works asynchronously, so the
