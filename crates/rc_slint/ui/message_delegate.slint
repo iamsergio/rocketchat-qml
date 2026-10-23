@@ -1,0 +1,183 @@
+// SPDX-FileCopyrightText: 2026 Sergio Martins
+// SPDX-License-Identifier: MIT
+
+import { Avatar } from "avatar.slint";
+import { MessageRow } from "structs.slint";
+import { Theme } from "theme.slint";
+
+// One message of the open room, named `msg_<id>` by its message id. Its parts are named like the
+// Qt app's: `msgDaySeparator` (on the first message of a day), `msgAvatar`, `msgAuthor`, `msgTime`,
+// `msgMentionsMe`, `msgBody` (the message as written, holding `msgBodyHtml`, what is shown), and
+// `msgSystem` for a system message, which has no author and no body.
+export component MessageDelegate inherits Rectangle {
+    in property <MessageRow> message;
+    // A link of the body was clicked.
+    callback open-link(string);
+
+    // The width that wrapped texts have: the row's, less the space around them. Given explicitly,
+    // since a wrapped text can't tell its height from the width a layout will give it.
+    property <length> text-width: root.width - 2 * Theme.spacing-xxxl;
+    property <length> body-width: root.text-width - Theme.avatar-size - Theme.spacing-xxl;
+
+    accessible-role: list-item;
+    accessible-id: "msg_" + root.message.id;
+    preferred-height: column.preferred-height;
+
+    column := VerticalLayout {
+        padding: Theme.spacing-none;
+        spacing: Theme.spacing-xs;
+
+        // A heading above the first message of each day.
+        if root.message.first-of-day: HorizontalLayout {
+            padding-left: Theme.spacing-xxxl;
+            padding-right: Theme.spacing-xxxl;
+            padding-top: Theme.spacing-xxxl;
+            padding-bottom: Theme.spacing-l;
+            spacing: Theme.spacing-xxl;
+
+            Rectangle {
+                horizontal-stretch: 1;
+                height: Theme.separator-width;
+                background: Theme.line;
+            }
+
+            Text {
+                accessible-id: "msgDaySeparator";
+                color: Theme.text-muted;
+                font-size: Theme.font-size-small;
+                font-weight: Theme.font-weight-semibold;
+                text: root.message.day-label;
+            }
+
+            Rectangle {
+                horizontal-stretch: 1;
+                height: Theme.separator-width;
+                background: Theme.line;
+            }
+        }
+
+        if !root.message.is-system: Rectangle {
+            preferred-height: content.preferred-height;
+
+            // The row washed in the colour of mentions, and an edge at its left.
+            if root.message.mentions-me: Rectangle {
+                accessible-id: "msgMentionsMe";
+                accessible-role: text;
+                accessible-label: @tr("Mentions you");
+                background: Theme.signal-wash;
+
+                Rectangle {
+                    x: Theme.spacing-none;
+                    width: Theme.accent-bar-width;
+                    background: Theme.signal;
+                }
+            }
+
+            content := HorizontalLayout {
+                padding-left: Theme.spacing-xxxl;
+                padding-right: Theme.spacing-xxxl;
+                padding-top: Theme.message-padding-v;
+                padding-bottom: Theme.message-padding-v;
+                spacing: Theme.spacing-xxl;
+
+                VerticalLayout {
+                    alignment: start;
+                    width: Theme.avatar-size;
+                    padding: Theme.spacing-none;
+                    spacing: Theme.spacing-none;
+
+                    Avatar {
+                        width: Theme.avatar-size;
+                        height: Theme.avatar-size;
+                        source: root.message.avatar;
+                        has-image: root.message.has-avatar;
+                        url: root.message.avatar-url;
+                        initials: root.message.initials;
+                        fill-color: root.message.initials-color;
+                        image-name: "msgAvatar";
+                        placeholder-name: "msgAvatarPlaceholder";
+                        initials-name: "msgAvatarInitials";
+                    }
+                }
+
+                VerticalLayout {
+                    horizontal-stretch: 1;
+                    padding: Theme.spacing-none;
+                    spacing: Theme.spacing-xs;
+
+                    HorizontalLayout {
+                        padding: Theme.spacing-none;
+                        spacing: Theme.spacing-l;
+
+                        Text {
+                            accessible-id: "msgAuthor";
+                            color: Theme.text;
+                            font-weight: Theme.font-weight-semibold;
+                            overflow: elide;
+                            text: root.message.author;
+                        }
+
+                        Text {
+                            accessible-id: "msgTime";
+                            color: Theme.text-faint;
+                            font-size: Theme.font-size-tiny;
+                            text: root.message.time;
+                        }
+
+                        Rectangle {
+                            horizontal-stretch: 1;
+                        }
+                    }
+
+                    // `accessible-value` is the message as written, which the tests read;
+                    // `msgBodyHtml` is what is shown.
+                    Rectangle {
+                        accessible-id: "msgBody";
+                        accessible-role: text;
+                        accessible-value: root.message.body;
+                        preferred-height: body-text.preferred-height;
+
+                        body-text := StyledText {
+                            accessible-id: "msgBodyHtml";
+                            accessible-role: text;
+                            accessible-value: root.message.body-html;
+                            x: Theme.spacing-none;
+                            y: Theme.spacing-none;
+                            width: root.body-width;
+                            default-color: Theme.text;
+                            default-font-size: root.message.big-emoji ? Theme.font-size-big-emoji : Theme.font-size-base;
+                            link-color: Theme.own;
+                            text: root.message.body-styled;
+                            link-clicked(url) => {
+                                root.open-link(url);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if root.message.is-system: HorizontalLayout {
+            padding-left: Theme.spacing-xxxl;
+            padding-right: Theme.spacing-xxxl;
+            padding-top: Theme.message-padding-v;
+            padding-bottom: Theme.message-padding-v;
+            spacing: Theme.spacing-l;
+
+            Text {
+                accessible-id: "msgSystem";
+                width: root.text-width - system-time.preferred-width - Theme.spacing-l;
+                color: Theme.text-muted;
+                font-size: Theme.font-size-small;
+                wrap: word-wrap;
+                text: root.message.system-text;
+            }
+
+            system-time := Text {
+                color: Theme.text-faint;
+                font-size: Theme.font-size-tiny;
+                text: root.message.time;
+            }
+        }
+    }
+}

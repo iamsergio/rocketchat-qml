@@ -37,6 +37,8 @@ export global Theme {
     out property <color> warning: #e8b44f;
     // Warning at 12%.
     out property <color> warning-wash: #e8b44f1f;
+    // Signal at 9%: the wash behind a message that mentions the user.
+    out property <color> signal-wash: #f5455c17;
     out property <color> error: #ff8a66;
     out property <color> on-avatar: Colors.white;
     out property <color> transparent: Colors.transparent;
@@ -51,6 +53,8 @@ export global Theme {
     // The letter of a server's tile.
     out property <length> font-size-rail-tile: font-size-base * 1.13;
     out property <length> font-size-title: font-size-base * 1.7;
+    // The default font size of a message of nothing but emoji.
+    out property <length> font-size-big-emoji: 32px;
     out property <float> avatar-font-scale: 0.4;
     out property <int> font-weight-normal: 400;
     out property <int> font-weight-semibold: 600;
@@ -71,6 +75,8 @@ export global Theme {
     out property <length> button-padding-h: 14px;
     out property <length> field-padding-h: 12px;
     out property <length> row-padding-h: 8px;
+    // The space above and below a message, inside its tint.
+    out property <length> message-padding-v: 6px;
     // How far the rounded background of a room row is from the edges of the list.
     out property <length> room-row-inset: 8px;
     // How far a menu is from the edges of the window, and its inner padding.
@@ -86,11 +92,15 @@ export global Theme {
     out property <length> separator-width: 1px;
 
     // Sizes
+    // The bar at the left of a message that mentions the user.
+    out property <length> accent-bar-width: 3px;
     out property <length> avatar-size: 36px;
     out property <length> busy-indicator-large-size: 40px;
     out property <length> busy-indicator-size: 32px;
     out property <length> button-height: 30px;
     out property <length> field-height: 38px;
+    // Above the oldest message: the start of the conversation, or a busy indicator.
+    out property <length> history-footer-height: 40px;
     out property <length> icon-button-size: 30px;
     out property <length> icon-button-icon-size: 17px;
     out property <length> login-form-width: 340px;
@@ -145,6 +155,11 @@ export global Theme {
     out property <angle> rail-ring-arc-end: -45deg;
     out property <angle> rail-ring-turn: 360deg;
     out property <length> path-unit: 1px;
+
+    // Scrolling: where a flickable's content is at its top, and how far from its bottom it still
+    // counts as being there.
+    out property <length> scroll-top: 0px;
+    out property <length> scroll-tolerance: 1px;
 
     // Opacity
     out property <float> disabled-opacity: 0.6;

@@ -28,6 +28,7 @@ use rc_view::switchboard::{Shown, Switchboard};
 use secrecy::SecretString;
 use slint::{ComponentHandle, Model, ModelRc, VecModel, Weak};
 
+use crate::message_model::MessageModel;
 use crate::rich_markdown::{self, Palette};
 use crate::room_model::RoomModel;
 use crate::rows::tile;
@@ -48,6 +49,8 @@ struct App {
     /// The room list of the current account, in the core's order, favorites first, with the
     /// headings of its sections.
     rooms: Rc<RoomModel>,
+    /// The messages of the open room, oldest first.
+    messages: Rc<MessageModel>,
 }
 
 /// The directory for downloaded files: `$XDG_CACHE_HOME/rocketchat_slint`, else
@@ -87,8 +90,12 @@ pub fn start(window: &MainWindow) {
 
     let tiles: Rc<VecModel<AccountTile>> = Rc::new(VecModel::default());
     let rooms = Rc::new(RoomModel::default());
+    let messages = Rc::new(MessageModel::new(Palette::from_theme(
+        &window.global::<Theme>(),
+    )));
     window.set_tiles(ModelRc::from(Rc::clone(&tiles)));
     window.set_rooms(ModelRc::from(Rc::clone(&rooms)));
+    window.set_messages(ModelRc::from(Rc::clone(&messages)));
     window.set_prefill_password(dev_login::prefill().password.into());
     connect_commands(window);
 
@@ -99,6 +106,7 @@ pub fn start(window: &MainWindow) {
             window: window.as_weak(),
             tiles,
             rooms,
+            messages,
         });
     });
 }
@@ -123,6 +131,7 @@ fn connect_commands(window: &MainWindow) {
     window.on_add_account(|| App::with(App::add_account));
     window.on_remove_account(|id| App::with(|app| app.remove_account(&id)));
     window.on_open_room(|id| App::with(|app| app.open_room(&id)));
+    window.on_load_older(|| App::with(|app| app.load_older()));
     window.on_open_link(|url| open_link(&url));
     let weak = window.as_weak();
     window.on_dump_info(move || {
@@ -217,35 +226,71 @@ impl App {
     }
 
     /// Shows an event of the current account, which its cache has taken in. What the GUI doesn't
-    /// show yet (messages, threads, emoji, images, answers to actions) is ignored.
+    /// show yet (threads, emoji, answers to actions) is ignored.
     fn show(&self, event: Event) {
         match event {
-            Event::Session(_) | Event::Connection(_) | Event::Identity(_) => {
+            Event::Session(_) | Event::Connection(_) => {
+                self.messages
+                    .set_viewer(self.switchboard.accounts().current_cache().viewer());
                 self.show_session(&self.switchboard.accounts().session_view());
             }
+            Event::Identity(_) => {
+                self.show_session(&self.switchboard.accounts().session_view());
+            }
+            Event::MessagePolicy(_) => self
+                .messages
+                .set_viewer(self.switchboard.accounts().current_cache().viewer()),
             Event::Rooms(changes) => {
                 self.rooms.apply(&changes);
                 // The open room's name may have changed.
                 self.show_room();
             }
+            Event::Timeline(changes) => {
+                self.messages.apply(&changes);
+                self.show_counters();
+            }
             Event::TimelineStatus(_) => self.show_room(),
             Event::Avatars(updates) => {
                 let cache = self.switchboard.accounts().current_cache();
-                self.rooms.set_avatars(&cache.avatar_changes(&updates));
+                let changes = cache.avatar_changes(&updates);
+                self.rooms.set_avatars(&changes);
+                self.messages.set_avatars(&changes);
+            }
+            Event::Images(updates) => {
+                let cache = self.switchboard.accounts().current_cache();
+                self.messages.set_images(&cache.image_changes(&updates));
             }
             _ => {}
         }
     }
 
     /// Replaces everything with what the current account says: its rooms and their avatars, the
-    /// session and the open room.
+    /// open room's messages, the session and the open room.
     fn show_all(&self) {
         let cache = self.switchboard.accounts().current_cache();
         let mut rooms = Vec::new();
         cache.rooms_snapshot().apply(&mut rooms);
         self.rooms.show(rooms, cache.avatars());
+        self.messages.show(
+            &cache.timeline_snapshot(),
+            cache.viewer(),
+            cache.avatars(),
+            cache.images(),
+        );
+        self.show_counters();
         self.show_session(&self.switchboard.accounts().session_view());
         self.show_room();
+    }
+
+    // The messages
+
+    /// Tells the list how many times messages went in at its top and how many times it was
+    /// replaced, which is how it knows what a change of its height means.
+    fn show_counters(&self) {
+        if let Some(window) = self.window.upgrade() {
+            window.set_prepends(self.messages.prepends());
+            window.set_resets(self.messages.resets());
+        }
     }
 
     // The session
@@ -296,6 +341,8 @@ impl App {
         let palette = Palette::from_theme(&window.global::<Theme>());
         window.set_room_topic(rich_markdown::topic(&state.topic, &viewer, &palette));
         window.set_room_topic_html(rich_html::topic_html(&state.topic, &viewer).into());
+        window.set_reached_start(state.reached_start);
+        window.set_loading_older(state.loading_older);
     }
 
     // The commands
@@ -341,6 +388,12 @@ impl App {
     /// rail, and the screen if it was on it, when the core says `Removed`.
     fn remove_account(&self, id: &str) {
         self.client.remove_account(&AccountId::from(id.to_owned()));
+    }
+
+    /// Asks for the messages before the first one loaded. The core ignores it when there are none
+    /// or a load is going on already.
+    fn load_older(&self) {
+        self.current_account("load_older", |account| account.load_older());
     }
 
     fn open_room(&self, id: &str) {

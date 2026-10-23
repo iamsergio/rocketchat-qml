@@ -1,0 +1,155 @@
+// SPDX-FileCopyrightText: 2026 Sergio Martins
+// SPDX-License-Identifier: MIT
+
+import { BusyIndicator } from "busy_indicator.slint";
+import { MessageDelegate } from "message_delegate.slint";
+import { MessageRow } from "structs.slint";
+import { Theme } from "theme.slint";
+
+// The messages of the open room, oldest first, bottom-aligned when they don't fill the list.
+//
+// Not a lazy `ListView`: that one can't keep its place when rows are inserted above the ones in
+// view, or bottom-align a few rows (SLINT.md). Every loaded message is a row of one layout in a
+// flickable, and the layout is the height of its rows, so keeping the place is a matter of moving
+// the flickable by the height that was added above.
+//
+// Rust counts the insertions at the top (`prepends`) and the replacements of the whole model
+// (`resets`); whatever the layout's height does after one is taken as that one's doing. A message
+// that arrives in the same event loop turn as a page of older ones adds its height to the move, so
+// the view then shifts by that message: rare, and better than a hand-off with Rust that could stall
+// the list.
+export component MessageList inherits FocusScope {
+    in property <[MessageRow]> messages;
+    in property <string> room-id;
+    // Above the first message: the conversation starts there, or older messages are on their way.
+    in property <bool> reached-start;
+    in property <bool> loading-older;
+    in property <int> prepends;
+    in property <int> resets;
+    // The view is at its top: Rust loads older messages.
+    callback load-older();
+    // A link of a body was clicked.
+    callback open-link(string);
+
+    property <int> seen-prepends;
+    property <int> seen-resets;
+    // The height of the content when the layout last changed.
+    property <length> last-height;
+    // Changes with every change of the rows, unlike the content height, which stays the list's
+    // height while the rows don't fill it.
+    property <length> rows-height: lay.preferred-height;
+    property <bool> at-top: flick.content-y >= Theme.scroll-top;
+
+    vertical-stretch: 1;
+    horizontal-stretch: 1;
+
+    // The lowest the content goes: its bottom at the bottom of the list, or the top when it fits.
+    function bottom-y() -> length {
+        min(Theme.scroll-top, flick.height - flick.content-height)
+    }
+
+    function scroll-to(y: length) {
+        flick.content-y = max(min(y, Theme.scroll-top), root.bottom-y());
+    }
+
+    // Keys go to the list, and a room that opens takes the focus, so that Home works at once.
+    init => {
+        root.focus();
+    }
+    changed room-id => {
+        root.focus();
+    }
+
+    key-pressed(event) => {
+        if (event.text == Key.Home) {
+            root.scroll-to(Theme.scroll-top);
+            return accept;
+        }
+        if (event.text == Key.End) {
+            root.scroll-to(root.bottom-y());
+            return accept;
+        }
+        if (event.text == Key.PageUp) {
+            root.scroll-to(flick.content-y + flick.height);
+            return accept;
+        }
+        if (event.text == Key.PageDown) {
+            root.scroll-to(flick.content-y - flick.height);
+            return accept;
+        }
+        reject
+    }
+
+    // Reaching the top asks for older messages; the core ignores the request when there is nothing
+    // to load or a load is in progress.
+    changed at-top => {
+        if (root.at-top && root.messages.length > 0) {
+            root.load-older();
+        }
+    }
+
+    changed rows-height => {
+        if (root.resets != root.seen-resets) {
+            // Another room: its newest messages.
+            root.seen-resets = root.resets;
+            root.scroll-to(root.bottom-y());
+        } else if (root.prepends != root.seen-prepends) {
+            // Older messages came in above: stay where we were.
+            flick.content-y -= flick.content-height - root.last-height;
+        } else if (flick.content-y <= flick.height - root.last-height + Theme.scroll-tolerance) {
+            // Was at the bottom: follow it.
+            root.scroll-to(root.bottom-y());
+        }
+        root.seen-prepends = root.prepends;
+        root.last-height = flick.content-height;
+    }
+
+    flick := Flickable {
+        accessible-id: "messageList";
+        accessible-role: list;
+        accessible-item-count: root.messages.length;
+        width: parent.width;
+        height: parent.height;
+        content-width: self.width;
+        content-height: max(self.height, lay.preferred-height);
+
+        lay := VerticalLayout {
+            alignment: end;
+            min-height: flick.height;
+            width: flick.width;
+            height: flick.content-height;
+            padding: Theme.spacing-none;
+            spacing: Theme.spacing-none;
+
+            // The start of the conversation, or a spinner while older messages load.
+            if root.reached-start || root.loading-older: Rectangle {
+                height: Theme.history-footer-height;
+
+                if root.reached-start: Text {
+                    accessible-id: "historyStart";
+                    color: Theme.text-faint;
+                    font-size: Theme.font-size-small;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                    text: @tr("Start of the conversation");
+                }
+
+                if root.loading-older: BusyIndicator {
+                    accessible-id: "loadingOlder";
+                    accessible-role: image;
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    width: Theme.busy-indicator-size;
+                    height: Theme.busy-indicator-size;
+                }
+            }
+
+            for message in root.messages: MessageDelegate {
+                message: message;
+                open-link(url) => {
+                    root.open-link(url);
+                }
+            }
+        }
+    }
+}

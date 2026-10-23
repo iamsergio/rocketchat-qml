@@ -9,11 +9,11 @@ import { LoginPage } from "login_page.slint";
 import { RoomPage } from "room_page.slint";
 import { ServerRail } from "server_rail.slint";
 import { StartupPage } from "startup_page.slint";
-import { AccountTile, LoginMode, RoomRow, RoomSection, SessionStatus } from "structs.slint";
+import { AccountTile, LoginMode, MessageRow, RoomRow, RoomSection, SessionStatus } from "structs.slint";
 import { Theme } from "theme.slint";
 
 // The theme, for Rust: the colours it writes into rich text.
-export { AccountTile, LoginMode, RoomRow, RoomSection, SessionStatus, Theme }
+export { AccountTile, LoginMode, MessageRow, RoomRow, RoomSection, SessionStatus, Theme }
 
 export component MainWindow inherits Window {
     // The version of the app, set from Rust (`rc_core::VERSION`).
@@ -50,6 +50,12 @@ export component MainWindow inherits Window {
     // The topic as styled text, and as the HTML that the GUI tests read.
     in property <styled-text> room-topic;
     in property <string> room-topic-html;
+    // The open room's messages, oldest first, and the state of its list (see `message_list.slint`).
+    in property <[MessageRow]> messages;
+    in property <bool> reached-start;
+    in property <bool> loading-older;
+    in property <int> prepends;
+    in property <int> resets;
 
     callback login(string, string, string);
     // Removes the account on screen: Cancel, Remove this server and Log out in the settings menu.
@@ -58,6 +64,8 @@ export component MainWindow inherits Window {
     callback add-account();
     callback remove-account(string);
     callback open-room(string);
+    // The list of messages is at its top: older ones are wanted.
+    callback load-older();
     // Opens the address of a link of a text in the browser.
     callback open-link(string);
     // Logs what Slint knows about the display.
@@ -118,8 +126,16 @@ export component MainWindow inherits Window {
             room-kind: root.room-kind;
             room-topic: root.room-topic;
             room-topic-html: root.room-topic-html;
+            messages: root.messages;
+            reached-start: root.reached-start;
+            loading-older: root.loading-older;
+            prepends: root.prepends;
+            resets: root.resets;
             open-room(id) => {
                 root.open-room(id);
+            }
+            load-older => {
+                root.load-older();
             }
             open-link(url) => {
                 root.open-link(url);
