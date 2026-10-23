@@ -18,6 +18,8 @@ export component ServerRail inherits Rectangle {
     callback remove-account(string);
     // Log out of the account on screen.
     callback logout();
+    // Log what is known about the display.
+    callback dump-info();
 
     accessible-id: "serverRail";
     accessible-role: list;
@@ -143,7 +145,7 @@ export component ServerRail inherits Rectangle {
             x: parent.width;
             y: parent.height - self.height;
             width: Theme.menu-width;
-            height: Theme.menu-item-height + 2 * Theme.menu-padding + 2 * Theme.border-width;
+            height: 2 * Theme.menu-item-height + 2 * Theme.menu-padding + 2 * Theme.border-width;
 
             Rectangle {
                 background: Theme.raised;
@@ -154,6 +156,15 @@ export component ServerRail inherits Rectangle {
                 VerticalLayout {
                     padding: Theme.menu-padding;
                     spacing: Theme.spacing-none;
+
+                    MenuItem {
+                        accessible-id: "dumpInfoAction";
+                        text: @tr("Dump info");
+                        triggered => {
+                            settings-menu.close();
+                            root.dump-info();
+                        }
+                    }
 
                     MenuItem {
                         accessible-id: "settingsLogoutAction";

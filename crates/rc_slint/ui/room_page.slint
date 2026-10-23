@@ -17,12 +17,16 @@ export component RoomPage inherits Rectangle {
     in property <string> username;
     // The room list, with the headings of its sections.
     in property <[RoomRow]> rooms;
-    // The open room, empty for none: its name, its kind (the name of its icon) and its topic.
+    // The open room, empty for none: its name, its kind (the name of its icon) and its topic: the
+    // text to show, and its HTML, which the GUI tests read (the contract with the QML app).
     in property <string> room-id;
     in property <string> room-name;
     in property <string> room-kind;
-    in property <string> room-topic;
+    in property <styled-text> room-topic;
+    in property <string> room-topic-html;
     callback open-room(string);
+    // A link of the topic was clicked.
+    callback open-link(string);
 
     VerticalLayout {
         padding: Theme.spacing-none;
@@ -146,12 +150,18 @@ export component RoomPage inherits Rectangle {
                                 text: root.room-name;
                             }
 
-                            if !root.room-topic.is-empty: Text {
+                            if !root.room-topic-html.is-empty: StyledText {
                                 accessible-id: "roomTopic";
-                                color: Theme.text-muted;
-                                font-size: Theme.font-size-small;
-                                overflow: elide;
+                                accessible-role: text;
+                                accessible-value: root.room-topic-html;
+                                default-color: Theme.text-muted;
+                                default-font-size: Theme.font-size-small;
+                                link-color: Theme.own;
+                                max-lines: 1;
                                 text: root.room-topic;
+                                link-clicked(url) => {
+                                    root.open-link(url);
+                                }
                             }
                         }
                     }

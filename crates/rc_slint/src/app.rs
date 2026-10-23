@@ -21,15 +21,17 @@ use rc_core::domain::{AccountId, RoomId};
 use rc_core::{AccountHandle, Client, Event};
 use rc_view::accounts::AccountChange;
 use rc_view::dev_login;
+use rc_view::rich_html;
 use rc_view::session_view::{LoginMode, SessionView, Status};
 use rc_view::startup;
 use rc_view::switchboard::{Shown, Switchboard};
 use secrecy::SecretString;
 use slint::{ComponentHandle, Model, ModelRc, VecModel, Weak};
 
+use crate::rich_markdown::{self, Palette};
 use crate::room_model::RoomModel;
 use crate::rows::tile;
-use crate::ui::{self, AccountTile, MainWindow};
+use crate::ui::{self, AccountTile, MainWindow, Theme};
 
 thread_local! {
     // The one app of the GUI thread: set by `start`, taken by `stop`.
@@ -121,6 +123,43 @@ fn connect_commands(window: &MainWindow) {
     window.on_add_account(|| App::with(App::add_account));
     window.on_remove_account(|id| App::with(|app| app.remove_account(&id)));
     window.on_open_room(|id| App::with(|app| app.open_room(&id)));
+    window.on_open_link(|url| open_link(&url));
+    let weak = window.as_weak();
+    window.on_dump_info(move || {
+        if let Some(window) = weak.upgrade() {
+            dump_info(&window);
+        }
+    });
+}
+
+/// Opens the address in the default browser. The renderer only makes links of the web and mail.
+fn open_link(url: &str) {
+    if let Err(error) = open::that_detached(url) {
+        tracing::warn!(%error, url, "can't open the link");
+    }
+}
+
+/// Logs what Slint knows about the display: the window's size in both units and where it is, and
+/// the scale between them.
+fn dump_info(window: &MainWindow) {
+    let window = window.window();
+    let scale_factor = window.scale_factor();
+    let physical = window.size();
+    let logical = physical.to_logical(scale_factor);
+    let position = window.position();
+    tracing::info!(
+        scale_factor,
+        physical_width = physical.width,
+        physical_height = physical.height,
+        logical_width = logical.width,
+        logical_height = logical.height,
+        x = position.x,
+        y = position.y,
+        fullscreen = window.is_fullscreen(),
+        maximized = window.is_maximized(),
+        minimized = window.is_minimized(),
+        "display info"
+    );
 }
 
 /// What a login page starts with: `value`, or `prefill` (the developer-mode default) if empty.
@@ -252,8 +291,11 @@ impl App {
         window.set_room_id(state.room_id.into());
         window.set_room_name(state.name.into());
         window.set_room_kind(state.kind.into());
-        // The topic is markdown: shown as written, for now.
-        window.set_room_topic(state.topic.into());
+        // The topic is markdown. The GUI tests read it as the HTML the Qt app shows.
+        let viewer = self.switchboard.accounts().current_cache().viewer();
+        let palette = Palette::from_theme(&window.global::<Theme>());
+        window.set_room_topic(rich_markdown::topic(&state.topic, &viewer, &palette));
+        window.set_room_topic_html(rich_html::topic_html(&state.topic, &viewer).into());
     }
 
     // The commands
