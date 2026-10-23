@@ -57,6 +57,10 @@ same way. Start one with `scripts/run_test_server.sh`, then:
     RC_TEST_SERVER_URL=http://127.0.0.1:3000 cargo test -p rc_api --test contract -- --ignored
     RC_TEST_SERVER_URL=http://127.0.0.1:3000 cargo test -p rc_core --test contract -- --ignored
 
+`scripts/check.sh` runs these with short output, one line per step and only the failing lines of a
+step that fails: `quick -p <crate> -g <gui test file>` while working, `full` before a commit (what
+CI runs on the `dev` preset).
+
 The GUI tests and these create their own users and rooms (`crates/rc_test_server`), so they can run
 repeatedly against the same server. The admin login comes from `RC_ADMIN_USER` / `RC_ADMIN_PASS` (default `admin` / `admin`).
 
