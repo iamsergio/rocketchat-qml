@@ -17,6 +17,10 @@ use crate::wire;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+/// How long an idle connection is kept for the next request. Shorter than the 5 s after which
+/// Node's HTTP server, which Rocket.Chat runs on, closes one: a request sent on a connection the
+/// server is closing fails with an incomplete message.
+const POOL_IDLE_TIMEOUT: Duration = Duration::from_secs(4);
 const MAX_REDIRECTS: usize = 10;
 
 const USER_ID_HEADER: HeaderName = HeaderName::from_static("x-user-id");
@@ -42,6 +46,7 @@ impl RestClient {
         let http = reqwest::Client::builder()
             .connect_timeout(CONNECT_TIMEOUT)
             .timeout(REQUEST_TIMEOUT)
+            .pool_idle_timeout(POOL_IDLE_TIMEOUT)
             .redirect(redirect_policy())
             .build()
             .map_err(Error::Unreachable)?;
