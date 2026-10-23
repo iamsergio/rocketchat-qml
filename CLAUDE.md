@@ -2,6 +2,7 @@
 
 - Plan and progress: [PLAN.md](PLAN.md). Design: [ARCHITECTURE.md](ARCHITECTURE.md). Features and their tests: [TRACEABILITY.md](TRACEABILITY.md).
 - cxx-qt limitations, our workarounds and possible upstream patches: [CXX-QT.md](CXX-QT.md). Add to it when you hit a new one.
+- The same for Slint: [SLINT.md](SLINT.md).
 - QML takes every size, spacing, margin, padding, border width, radius, font size, opacity and
   colour from `src/gui/Theme.qml` (or the Controls palette), so the GUI can be themed in one place.
   No literals, not even `0`, and don't lean on a default (layout spacing, control padding,
