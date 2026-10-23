@@ -880,7 +880,7 @@ mod tests {
         let with_topic = |topic: &str| {
             Event::Rooms(vec![RoomChange::Updated {
                 index: 0,
-                room: Room {
+                item: Room {
                     topic: topic.to_owned(),
                     ..room("a", "alpha")
                 },

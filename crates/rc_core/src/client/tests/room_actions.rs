@@ -105,7 +105,7 @@ fn flush_pushed_rooms(fake: &Fake, harness: &Harness) {
         panic!("not a room change");
     };
     assert!(
-        matches!(&changes[..], [RoomChange::Updated { room, .. }] if room.unread == 99),
+        matches!(&changes[..], [RoomChange::Updated { item: room, .. }] if room.unread == 99),
         "{changes:?}"
     );
 }
@@ -122,7 +122,7 @@ fn a_new_favorite_moves_to_the_top_at_once_and_is_answered() {
         rooms_change(RoomChange::Moved {
             from: 1,
             to: 0,
-            room: favorite_room(room("2", "secret", RoomKind::Private)),
+            item: favorite_room(room("2", "secret", RoomKind::Private)),
         }),
         room_action_event("2", RoomAction::Favorite, Ok(())),
     ]);
@@ -141,7 +141,7 @@ fn a_favorite_taken_back_moves_down_at_once_and_is_answered() {
         rooms_change(RoomChange::Moved {
             from: 0,
             to: 1,
-            room: room("2", "secret", RoomKind::Private),
+            item: room("2", "secret", RoomKind::Private),
         }),
         room_action_event("2", RoomAction::Unfavorite, Ok(())),
     ]);
@@ -172,7 +172,7 @@ fn a_favorite_that_stays_first_updates_in_place() {
     harness.expect_events(vec![
         rooms_change(RoomChange::Updated {
             index: 0,
-            room: favorite_room(room("1", "general", RoomKind::Channel)),
+            item: favorite_room(room("1", "general", RoomKind::Channel)),
         }),
         room_action_event("1", RoomAction::Favorite, Ok(())),
     ]);
@@ -188,7 +188,7 @@ fn the_push_of_a_favorite_after_the_answer_changes_nothing() {
         rooms_change(RoomChange::Moved {
             from: 1,
             to: 0,
-            room: favorite_room(room("2", "secret", RoomKind::Private)),
+            item: favorite_room(room("2", "secret", RoomKind::Private)),
         }),
         room_action_event("2", RoomAction::Favorite, Ok(())),
     ]);
@@ -218,7 +218,7 @@ fn the_push_of_a_favorite_before_the_answer_leaves_nothing_for_the_answer_to_cha
     let moved = RoomChange::Moved {
         from: 1,
         to: 0,
-        room: favorite_room(room("2", "secret", RoomKind::Private)),
+        item: favorite_room(room("2", "secret", RoomKind::Private)),
     };
     assert!(fake.push(
         0,
@@ -249,7 +249,7 @@ fn a_favorite_set_elsewhere_arrives_as_a_push_and_moves_the_room() {
     harness.expect_events(vec![rooms_change(RoomChange::Moved {
         from: 2,
         to: 0,
-        room: favorite_room(room("3", "zed", RoomKind::Direct)),
+        item: favorite_room(room("3", "zed", RoomKind::Direct)),
     })]);
 }
 
@@ -272,7 +272,7 @@ fn activity_in_another_room_does_not_lift_it_above_the_favorites() {
     harness.expect_events(vec![rooms_change(RoomChange::Moved {
         from: 2,
         to: 1,
-        room: Room {
+        item: Room {
             last_activity: at(50),
             ..room("3", "zed", RoomKind::Direct)
         },
@@ -313,7 +313,7 @@ fn marking_a_room_read_clears_its_counts_at_once_and_is_answered() {
     harness.expect_events(vec![
         rooms_change(RoomChange::Updated {
             index: 0,
-            room: room("1", "general", RoomKind::Channel),
+            item: room("1", "general", RoomKind::Channel),
         }),
         room_action_event("1", RoomAction::MarkRead, Ok(())),
     ]);
@@ -329,7 +329,7 @@ fn the_push_of_a_mark_read_after_the_answer_changes_nothing() {
     harness.expect_events(vec![
         rooms_change(RoomChange::Updated {
             index: 0,
-            room: room("1", "general", RoomKind::Channel),
+            item: room("1", "general", RoomKind::Channel),
         }),
         room_action_event("1", RoomAction::MarkRead, Ok(())),
     ]);
@@ -373,7 +373,7 @@ fn marking_a_room_unread_shows_one_unread_message_and_the_alert_at_once() {
     harness.expect_events(vec![
         rooms_change(RoomChange::Updated {
             index: 1,
-            room: unread,
+            item: unread,
         }),
         room_action_event("2", RoomAction::MarkUnread, Ok(())),
     ]);
@@ -432,7 +432,7 @@ fn marking_unread_keeps_the_mentions_and_a_room_that_shows_unread_already_does_n
     harness.expect_events(vec![
         rooms_change(RoomChange::Updated {
             index: 0,
-            room: general,
+            item: general,
         }),
         room_action_event("1", RoomAction::MarkUnread, Ok(())),
     ]);
@@ -533,7 +533,7 @@ fn flush_pushed_rooms_after_removal(fake: &Fake, harness: &Harness) {
         panic!("not a room change");
     };
     assert!(
-        matches!(&changes[..], [RoomChange::Updated { index: 1, room }] if room.unread == 99),
+        matches!(&changes[..], [RoomChange::Updated { index: 1, item: room }] if room.unread == 99),
         "{changes:?}"
     );
 }

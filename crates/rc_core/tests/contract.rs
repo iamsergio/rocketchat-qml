@@ -367,9 +367,9 @@ fn wait_for<T>(events: &Receiver<Event>, mut found: impl FnMut(&Event) -> Option
 /// The room a change inserts, updates or moves, as it is afterwards.
 fn changed_room(change: &RoomChange) -> Option<&Room> {
     match change {
-        RoomChange::Inserted { room, .. }
-        | RoomChange::Updated { room, .. }
-        | RoomChange::Moved { room, .. } => Some(room),
+        RoomChange::Inserted { item: room, .. }
+        | RoomChange::Updated { item: room, .. }
+        | RoomChange::Moved { item: room, .. } => Some(room),
         _ => None,
     }
 }
@@ -787,7 +787,7 @@ fn a_channel_created_with_the_user_appears_in_the_room_list() {
             return None;
         };
         changes.iter().find_map(|change| match change {
-            RoomChange::Inserted { room, .. } if room.id.as_str() == id => Some(room.clone()),
+            RoomChange::Inserted { item: room, .. } if room.id.as_str() == id => Some(room.clone()),
             _ => None,
         })
     });
@@ -1206,7 +1206,8 @@ fn rooms_are_listed_by_last_message_and_a_new_message_moves_its_room_up() {
             return None;
         };
         for change in changes {
-            moved |= matches!(change, RoomChange::Moved { room, .. } if room.id.as_str() == first);
+            moved |=
+                matches!(change, RoomChange::Moved { item: room, .. } if room.id.as_str() == first);
             assert!(
                 !matches!(change, RoomChange::Reset(_)),
                 "a move is not a reset"
@@ -1251,7 +1252,7 @@ fn a_client_catches_up_after_the_connection_was_cut() {
                     "the room list was reset: {changes:?}"
                 );
                 for change in changes {
-                    if let RoomChange::Inserted { room, .. } = change
+                    if let RoomChange::Inserted { item: room, .. } = change
                         && room.id.as_str() == new_id
                     {
                         new_room = Some(room.clone());

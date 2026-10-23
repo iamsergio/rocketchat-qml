@@ -73,7 +73,7 @@ fn a_message_in_the_open_room_does_not_raise_its_unread_count() {
         appended("c", 3),
         rooms_change(RoomChange::Updated {
             index: 1,
-            room: secret_room,
+            item: secret_room,
         }),
     ]);
     // And the server is told again, once.
@@ -93,7 +93,7 @@ fn a_subscription_change_of_the_open_room_that_shows_read_is_not_marked_again() 
     assert!(fake.push(0, Pushed::Subscription(renamed)));
     harness.expect_events(vec![rooms_change(RoomChange::Updated {
         index: 0,
-        room: room("1", "main", RoomKind::Channel),
+        item: room("1", "main", RoomKind::Channel),
     })]);
     assert_eq!(fake.state().mark_read_calls, ["1"]);
 }
@@ -117,7 +117,7 @@ fn a_closed_room_counts_new_messages_again() {
     assert!(fake.push(0, Pushed::Subscription(general_with(2))));
     harness.expect_events(vec![rooms_change(RoomChange::Inserted {
         index: 0,
-        room: general_room(2),
+        item: general_room(2),
     })]);
     assert_eq!(fake.state().mark_read_calls, ["1"]);
 }

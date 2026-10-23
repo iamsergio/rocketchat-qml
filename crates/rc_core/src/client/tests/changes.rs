@@ -190,7 +190,7 @@ fn a_message_deleted_while_the_page_loads_does_not_come_back_with_the_page() {
     ));
     harness.expect_events(vec![rooms_change(RoomChange::Inserted {
         index: 0,
-        room: room("3", "alpha", RoomKind::Channel),
+        item: room("3", "alpha", RoomKind::Channel),
     })]);
     gate.notify_one();
 
@@ -369,7 +369,7 @@ fn a_catch_up_changes_only_what_is_held() {
     ));
     harness.expect_events(vec![rooms_change(RoomChange::Inserted {
         index: 0,
-        room: room("3", "alpha", RoomKind::Channel),
+        item: room("3", "alpha", RoomKind::Channel),
     })]);
     gate.notify_one();
     harness.expect_events(vec![status("1", false, false, false, None)]);

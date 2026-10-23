@@ -48,11 +48,11 @@ fn what_is_pushed_before_the_rooms_are_listed_is_replayed_on_the_list() {
         ]),
         rooms_change(RoomChange::Updated {
             index: 1,
-            room: secret,
+            item: secret,
         }),
         rooms_change(RoomChange::Inserted {
             index: 0,
-            room: room("3", "alpha", RoomKind::Channel),
+            item: room("3", "alpha", RoomKind::Channel),
         }),
     ]);
     assert_eq!(
@@ -73,7 +73,7 @@ fn a_subscription_change_inserts_updates_or_moves_the_room() {
     ));
     harness.expect_events(vec![rooms_change(RoomChange::Inserted {
         index: 2,
-        room: room("3", "zulu", RoomKind::Direct),
+        item: room("3", "zulu", RoomKind::Direct),
     })]);
     // Same place, new counts.
     let mut mentioned = subscription("1", "general", rc_api::RoomType::Channel);
@@ -87,7 +87,7 @@ fn a_subscription_change_inserts_updates_or_moves_the_room() {
     general.alert = true;
     harness.expect_events(vec![rooms_change(RoomChange::Updated {
         index: 0,
-        room: general,
+        item: general,
     })]);
     // Renamed.
     assert!(fake.push(
@@ -97,7 +97,7 @@ fn a_subscription_change_inserts_updates_or_moves_the_room() {
     harness.expect_events(vec![rooms_change(RoomChange::Moved {
         from: 1,
         to: 0,
-        room: room("2", "alpha", RoomKind::Private),
+        item: room("2", "alpha", RoomKind::Private),
     })]);
 }
 
@@ -197,7 +197,7 @@ fn a_message_pushed_while_the_room_loads_joins_the_page() {
     ));
     harness.expect_events(vec![rooms_change(RoomChange::Inserted {
         index: 0,
-        room: room("3", "alpha", RoomKind::Channel),
+        item: room("3", "alpha", RoomKind::Channel),
     })]);
     gate.notify_one();
     harness.expect_events(vec![
@@ -291,16 +291,16 @@ fn a_lost_connection_is_reopened_and_the_rooms_synced_without_a_reset() {
             RoomChange::Removed { index: 1 },
             RoomChange::Inserted {
                 index: 0,
-                room: room("3", "alpha", RoomKind::Channel),
+                item: room("3", "alpha", RoomKind::Channel),
             },
             RoomChange::Updated {
                 index: 1,
-                room: general_room(2),
+                item: general_room(2),
             },
         ]),
         rooms_change(RoomChange::Updated {
             index: 1,
-            room: general_room(5),
+            item: general_room(5),
         }),
     ]);
     assert_eq!(fake.state().realtime_calls.len(), 2);
@@ -311,7 +311,7 @@ fn a_lost_connection_is_reopened_and_the_rooms_synced_without_a_reset() {
     ));
     harness.expect_events(vec![rooms_change(RoomChange::Inserted {
         index: 2,
-        room: room("4", "zulu", RoomKind::Channel),
+        item: room("4", "zulu", RoomKind::Channel),
     })]);
 }
 
@@ -516,7 +516,7 @@ fn a_failed_room_fetch_ends_the_cycle_and_is_retried_after_a_wait() {
 
     harness.expect_events(vec![rooms_change(RoomChange::Updated {
         index: 0,
-        room: general_room(1),
+        item: general_room(1),
     })]);
     // Connection 1 was dropped when its fetch failed, and connection 2 came after a wait.
     assert!(
@@ -553,7 +553,7 @@ fn logout_ends_the_connection_and_the_next_session_gets_its_own() {
     ));
     harness.expect_events(vec![rooms_change(RoomChange::Inserted {
         index: 0,
-        room: room("5", "new", RoomKind::Channel),
+        item: room("5", "new", RoomKind::Channel),
     })]);
 }
 
@@ -599,7 +599,7 @@ fn a_connection_that_opens_after_logout_is_dropped() {
     ));
     harness.expect_events(vec![rooms_change(RoomChange::Inserted {
         index: 1,
-        room: room("5", "other", RoomKind::Channel),
+        item: room("5", "other", RoomKind::Channel),
     })]);
 }
 

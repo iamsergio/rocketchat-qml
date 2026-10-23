@@ -95,7 +95,7 @@ fn activity_moves_the_room_to_the_front() {
     harness.expect_events(vec![rooms_change(RoomChange::Moved {
         from: 2,
         to: 0,
-        room: active_room("1", "alpha", 40),
+        item: active_room("1", "alpha", 40),
     })]);
 }
 
@@ -125,12 +125,12 @@ fn a_message_raises_the_unread_count_and_then_moves_the_room() {
     harness.expect_events(vec![
         rooms_change(RoomChange::Updated {
             index: 1,
-            room: updated,
+            item: updated,
         }),
         rooms_change(RoomChange::Moved {
             from: 1,
             to: 0,
-            room: moved,
+            item: moved,
         }),
     ]);
 }
@@ -148,7 +148,7 @@ fn a_subscription_change_keeps_the_known_activity() {
 
     harness.expect_events(vec![rooms_change(RoomChange::Updated {
         index: 2,
-        room: active_room("1", "omega", 10),
+        item: active_room("1", "omega", 10),
     })]);
 }
 
@@ -205,7 +205,7 @@ fn a_push_sets_changes_and_clears_the_topic_of_a_room() {
     let with_topic = |topic: &str| {
         rooms_change(RoomChange::Updated {
             index: 2,
-            room: Room {
+            item: Room {
                 topic: topic.to_owned(),
                 ..active_room("1", "alpha", 10)
             },
@@ -246,11 +246,11 @@ fn a_push_with_a_message_and_a_topic_changes_both_at_once() {
         RoomChange::Moved {
             from: 2,
             to: 0,
-            room: active_room("1", "alpha", 40),
+            item: active_room("1", "alpha", 40),
         },
         RoomChange::Updated {
             index: 0,
-            room: Room {
+            item: Room {
                 topic: "Plans".to_owned(),
                 ..active_room("1", "alpha", 40)
             },
@@ -285,7 +285,7 @@ fn the_topic_of_a_room_survives_a_subscription_push() {
 
     harness.expect_events(vec![rooms_change(RoomChange::Updated {
         index: 0,
-        room: Room { unread: 1, ..alpha },
+        item: Room { unread: 1, ..alpha },
     })]);
 }
 
@@ -303,7 +303,7 @@ fn a_new_room_comes_in_at_its_activity() {
     fresh.last_activity = at(25);
     harness.expect_events(vec![rooms_change(RoomChange::Inserted {
         index: 1,
-        room: fresh,
+        item: fresh,
     })]);
 }
 
@@ -342,6 +342,6 @@ fn a_snapshot_after_reconnecting_moves_the_rooms_that_were_busy() {
     harness.expect_events(vec![Event::Rooms(vec![RoomChange::Moved {
         from: 1,
         to: 0,
-        room: active_room("1", "alpha", 50),
+        item: active_room("1", "alpha", 50),
     }])]);
 }

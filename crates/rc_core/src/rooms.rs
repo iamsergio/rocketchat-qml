@@ -8,56 +8,12 @@ use std::cmp::Ordering;
 use std::collections::HashMap;
 
 use crate::domain::{Room, RoomId, RoomKind};
+use crate::list_change::ListChange;
 use crate::ports::ApiError;
 
-/// One step for a frontend's mirror of the room list. Apply the changes in order.
-#[derive(Clone, Debug, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum RoomChange {
-    /// The whole list, in order. After logging in or resuming; empty after logging out.
-    Reset(Vec<Room>),
-    Inserted {
-        index: usize,
-        room: Room,
-    },
-    /// Same position, new content.
-    Updated {
-        index: usize,
-        room: Room,
-    },
-    /// The room moved; the content may have changed too. `to` is its index once the move is done
-    /// (`Vec::remove(from)` then `Vec::insert(to, ..)`). Qt's `beginMoveRows` takes a different
-    /// destination, so `rc_qt` converts.
-    Moved {
-        from: usize,
-        to: usize,
-        room: Room,
-    },
-    Removed {
-        index: usize,
-    },
-}
-
-impl RoomChange {
-    /// Applies the change to a frontend's mirror of the room list. The mirror must be in the state
-    /// the change was made against, i.e. all earlier changes were applied in order, and the indices
-    /// must be in range: a change that doesn't fit is a bug in the caller, and panics like the
-    /// `Vec` operation it stands for.
-    pub fn apply(&self, rooms: &mut Vec<Room>) {
-        match self {
-            Self::Reset(all) => rooms.clone_from(all),
-            Self::Inserted { index, room } => rooms.insert(*index, room.clone()),
-            Self::Updated { index, room } => rooms[*index] = room.clone(),
-            Self::Moved { from, to, room } => {
-                rooms.remove(*from);
-                rooms.insert(*to, room.clone());
-            }
-            Self::Removed { index } => {
-                rooms.remove(*index);
-            }
-        }
-    }
-}
+/// One step for a frontend's mirror of the room list. Apply the changes in order. After logging in
+/// or resuming the first one is a `Reset` to the rooms; after logging out, a `Reset` to nothing.
+pub type RoomChange = ListChange<Room>;
 
 /// How long a direct message may go without activity before the list stops showing it.
 pub const QUIET_AFTER: jiff::SignedDuration = jiff::SignedDuration::from_hours(10 * 24);
@@ -240,7 +196,7 @@ impl RoomList {
             self.hidden_touched |= self.hidden.remove(&room.id).is_some();
             let index = self.insertion_index(&room);
             self.shown.insert(index, room.clone());
-            return Some(RoomChange::Inserted { index, room });
+            return Some(RoomChange::Inserted { index, item: room });
         };
         if self.shown[from] == room {
             return None;
@@ -249,9 +205,16 @@ impl RoomList {
         let to = self.insertion_index(&room);
         self.shown.insert(to, room.clone());
         Some(if to == from {
-            RoomChange::Updated { index: from, room }
+            RoomChange::Updated {
+                index: from,
+                item: room,
+            }
         } else {
-            RoomChange::Moved { from, to, room }
+            RoomChange::Moved {
+                from,
+                to,
+                item: room,
+            }
         })
     }
 
@@ -478,7 +441,7 @@ mod tests {
             change,
             Some(RoomChange::Inserted {
                 index: 1,
-                room: room("b", "b")
+                item: room("b", "b")
             })
         );
         assert_eq!(names(&list), ["a", "b", "c"]);
@@ -494,7 +457,7 @@ mod tests {
             list.upsert(changed.clone(), now()),
             Some(RoomChange::Updated {
                 index: 1,
-                room: changed.clone()
+                item: changed.clone()
             })
         );
         assert_eq!(list.rooms()[1], changed);
@@ -511,7 +474,7 @@ mod tests {
             Some(RoomChange::Moved {
                 from: 0,
                 to: 2,
-                room: room("a", "d")
+                item: room("a", "d")
             })
         );
         assert_eq!(names(&list), ["b", "c", "d"]);
@@ -522,7 +485,7 @@ mod tests {
             Some(RoomChange::Moved {
                 from: 2,
                 to: 0,
-                room: room("a", "a")
+                item: room("a", "a")
             })
         );
         assert_eq!(names(&list), ["a", "b", "c"]);
@@ -573,16 +536,16 @@ mod tests {
                 RoomChange::Removed { index: 1 },
                 RoomChange::Inserted {
                     index: 1,
-                    room: room("n", "bb")
+                    item: room("n", "bb")
                 },
                 RoomChange::Updated {
                     index: 3,
-                    room: busy
+                    item: busy
                 },
                 RoomChange::Moved {
                     from: 0,
                     to: 3,
-                    room: room("a", "e")
+                    item: room("a", "e")
                 },
             ]
         );
@@ -738,7 +701,7 @@ mod tests {
             Some(RoomChange::Moved {
                 from: 2,
                 to: 0,
-                room: favorite(active("c", "c", 10))
+                item: favorite(active("c", "c", 10))
             })
         );
         assert_eq!(names(&list), ["c", "a", "b"]);
@@ -755,7 +718,7 @@ mod tests {
             list.upsert(busy.clone(), now()),
             Some(RoomChange::Updated {
                 index: 0,
-                room: busy
+                item: busy
             })
         );
         assert_eq!(
@@ -763,7 +726,7 @@ mod tests {
             Some(RoomChange::Moved {
                 from: 0,
                 to: 1,
-                room: active("a", "a", 10)
+                item: active("a", "a", 10)
             })
         );
         assert_eq!(names(&list), ["b", "a"]);
@@ -783,7 +746,7 @@ mod tests {
             Some(RoomChange::Moved {
                 from: 2,
                 to: 1,
-                room: active("b", "b", 40)
+                item: active("b", "b", 40)
             })
         );
         assert_eq!(names(&list), ["f", "b", "a"]);
@@ -805,7 +768,7 @@ mod tests {
             [RoomChange::Moved {
                 from: 1,
                 to: 0,
-                room: favorite(active("b", "b", 20))
+                item: favorite(active("b", "b", 20))
             }]
         );
     }
@@ -884,7 +847,7 @@ mod tests {
             Some(RoomChange::Moved {
                 from: 2,
                 to: 0,
-                room: active("c", "c", 40)
+                item: active("c", "c", 40)
             })
         );
         assert_eq!(names(&list), ["c", "a", "b"]);
@@ -898,7 +861,7 @@ mod tests {
             list.bump(&"a".to_owned().into(), at(35), now()),
             Some(RoomChange::Updated {
                 index: 0,
-                room: active("a", "a", 35)
+                item: active("a", "a", 35)
             })
         );
     }
@@ -925,7 +888,7 @@ mod tests {
             list.set_topic(&"b".to_owned().into(), "Plans".to_owned(), now()),
             Some(RoomChange::Updated {
                 index: 1,
-                room: with_topic
+                item: with_topic
             })
         );
         assert_eq!(
@@ -941,7 +904,7 @@ mod tests {
             list.set_topic(&"b".to_owned().into(), String::new(), now()),
             Some(RoomChange::Updated {
                 index: 1,
-                room: active("b", "b", 20)
+                item: active("b", "b", 20)
             })
         );
     }
@@ -956,7 +919,7 @@ mod tests {
             [RoomChange::Moved {
                 from: 1,
                 to: 0,
-                room: active("b", "b", 40)
+                item: active("b", "b", 40)
             }]
         );
     }
@@ -1104,7 +1067,7 @@ mod tests {
             list.set_open(Some(id("a")), now()),
             [RoomChange::Inserted {
                 index: 0,
-                room: dm("a", "a", QUIET + 1)
+                item: dm("a", "a", QUIET + 1)
             }]
         );
         // Another one opens: the first one goes, the second one comes.
@@ -1114,7 +1077,7 @@ mod tests {
                 RoomChange::Removed { index: 0 },
                 RoomChange::Inserted {
                     index: 0,
-                    room: dm("b", "b", QUIET + 1)
+                    item: dm("b", "b", QUIET + 1)
                 }
             ]
         );
@@ -1153,7 +1116,7 @@ mod tests {
             back,
             Some(RoomChange::Inserted {
                 index: 1,
-                room: Room {
+                item: Room {
                     last_activity: at(1_000_000 - 50),
                     ..dm("h", "hidden", 0)
                 }
@@ -1174,7 +1137,7 @@ mod tests {
             list.upsert(counted.clone(), now()),
             Some(RoomChange::Inserted {
                 index: 0,
-                room: counted.clone()
+                item: counted.clone()
             })
         );
         // Read again, it is quiet again.
@@ -1243,7 +1206,7 @@ mod tests {
                 RoomChange::Removed { index: 0 },
                 RoomChange::Inserted {
                     index: 1,
-                    room: dm("h", "h", 3)
+                    item: dm("h", "h", 3)
                 },
                 RoomChange::Removed { index: 2 },
             ]
