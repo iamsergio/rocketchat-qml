@@ -149,7 +149,8 @@ use core::pin::Pin;
 use cxx_qt::{CxxQtType, Threading};
 
 use crate::hub;
-use crate::message_mirror::{MessageMirror, message_model};
+use crate::message_mirror::message_model;
+use rc_view::message_list::MessageList;
 
 use qobject::MessageListModel;
 
@@ -157,13 +158,13 @@ use qobject::MessageListModel;
 /// core's changes and held newest first.
 #[derive(Default)]
 pub struct MessageListModelRust {
-    mirror: MessageMirror,
+    mirror: MessageList,
 }
 
 impl cxx_qt::Initialize for MessageListModel {
     fn initialize(mut self: Pin<&mut Self>) {
         let (snapshot, viewer, avatars, images) = hub::register_messages(self.qt_thread());
-        self.as_mut().rust_mut().mirror = MessageMirror::new(viewer, avatars, images);
+        self.as_mut().rust_mut().mirror = MessageList::new(viewer, avatars, images);
         self.as_mut().apply(&[snapshot]);
     }
 }

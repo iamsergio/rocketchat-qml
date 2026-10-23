@@ -13,6 +13,7 @@ pub mod avatar_view;
 pub mod cache;
 pub mod dev_login;
 pub mod emoji_picker_view;
+pub mod message_list;
 pub mod message_view;
 pub mod quote_view;
 pub mod reaction_view;
