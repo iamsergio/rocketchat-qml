@@ -125,12 +125,12 @@ fn enter_opens_the_first_result_and_clears_the_search() {
 // ROOM-010
 #[test]
 #[ignore = "needs the app and a Rocket.Chat server: run through ctest"]
-fn down_moves_to_the_next_result() {
+fn up_moves_to_the_next_result() {
     let admin = Admin::login();
     let user = admin.create_user();
     let (channel_id, _) = admin.create_channel(&[&user.username]);
     let (group_id, group_name) = admin.create_group(&[&user.username]);
-    // The channel is the most recently active, so it is the first result.
+    // The channel is the most recently active, so it is the best match.
     admin.post_message(&group_id, "first");
     admin.post_message(&channel_id, "second");
     let app = App::launch().unwrap();
@@ -142,16 +142,22 @@ fn down_moves_to_the_next_result() {
         gui.wait_until_visible(&search_result(id, room_row::NAME), TIMEOUT)
             .unwrap();
     }
-    gui.wait_until(&format!("{channel_id} first"), TIMEOUT, || {
-        let y = |id: &str| {
-            gui.bounding_box(&search_result(id, room_row::NAME))
-                .map(|rect| rect.y)
-        };
-        Ok(y(&channel_id)? < y(&group_id)?)
-    })
+    // The best match is right above the field, and the next one above it.
+    gui.wait_until(
+        &format!("{channel_id} just above the field"),
+        TIMEOUT,
+        || {
+            let y = |id: &str| {
+                gui.bounding_box(&search_result(id, room_row::NAME))
+                    .map(|rect| rect.y)
+            };
+            let field = gui.bounding_box(main_window::ROOM_SEARCH_FIELD)?.y;
+            Ok(y(&channel_id)? > y(&group_id)? && y(&channel_id)? < field)
+        },
+    )
     .unwrap();
 
-    press(gui, Key::DOWN);
+    press(gui, Key::UP);
     press(gui, Key::RETURN);
 
     gui.wait_until_text(main_window::ROOM_TITLE, &group_name, TIMEOUT)

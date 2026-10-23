@@ -48,7 +48,7 @@ pub mod main_window {
     pub const ROOM_SECTION_ROOMS: &str = "mainWindow/roomSection_rooms";
     /// Its heading ("Rooms"), as its `text`. Visible only while the user has favorites.
     pub const ROOM_SECTION_ROOMS_HEADER: &str = "mainWindow/roomSection_rooms/roomSectionHeader";
-    /// The search field above the room list (Ctrl+K focuses it): its `text` is the query. While it
+    /// The search field below the room list (Ctrl+K focuses it): its `text` is the query. While it
     /// holds something, `ROOM_SEARCH_RESULTS` is shown in place of the room list.
     pub const ROOM_SEARCH_FIELD: &str = "mainWindow/roomSearchField";
     /// The rooms that match the query, in place of the room list. Visible only while searching; its

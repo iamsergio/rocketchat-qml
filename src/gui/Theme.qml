@@ -173,12 +173,15 @@ QtObject {
     // The space between the avatar and the name in a room row.
     readonly property int roomRowSpacing: spacingL
     // Where the avatar and the name start in a room row, from the left edge of its background, and
-    // the middle of the avatar: what the search field above the list lines up with.
+    // the middle of the avatar: what the search field below the list lines up with.
     readonly property int roomAvatarInset: rowPaddingH
     readonly property int roomNameInset: roomAvatarInset + roomAvatarSize + roomRowSpacing
     readonly property real roomAvatarCenter: roomAvatarInset + roomAvatarSize / 2
-    // The search field at the top of the room list, and the magnifier in it.
+    // The search field at the bottom of the room list, and the magnifier in it.
     readonly property int searchFieldHeight: 32
+    // Its distance from the bottom edge: the settings button of the rail beside it sits spacingXXL
+    // from the edge, so this puts the middle of the field on the middle of that button.
+    readonly property real searchFieldBottomMargin: spacingXXL + (iconButtonSize - searchFieldHeight) / 2
     readonly property int searchIconSize: 14
     // The button that clears it, and the cross in it, and the keycap that hints at Ctrl+K.
     readonly property int searchClearSize: 22

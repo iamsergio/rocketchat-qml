@@ -72,17 +72,144 @@ ColumnLayout {
                 }
             }
 
-            // Searches the user's rooms by name. While it holds something, the results replace the
-            // list. The focus stays here while typing: Up and Down move through the results, Enter
-            // opens one. Enter, a click on a result and Escape clear the field and hand the focus on.
+            // The rooms that match, in place of the list below.
+            ListView {
+                id: searchResults
+
+                objectName: "roomSearchResults"
+                Layout.fillHeight: true
+                Layout.fillWidth: true
+                clip: true
+                model: RoomSearch
+                // The best match is right above the field, and the rest pile up from there.
+                verticalLayoutDirection: ListView.BottomToTop
+                visible: RoomSearch.active
+
+                delegate: RoomDelegate {
+                    id: result
+
+                    // The one Enter would open.
+                    cursor: result.index === searchResults.currentIndex
+                    menuEnabled: false
+                    namePrefix: "searchResult_"
+
+                    // The normal list is back, with the room open.
+                    onClicked: searchField.leave(true)
+                }
+
+                ScrollBar.vertical: ScrollBar {}
+
+                onCurrentIndexChanged: positionViewAtIndex(currentIndex, ListView.Contain)
+
+                // A reset leaves nothing current; Enter opens the first result unless Up moved.
+                Connections {
+                    function onModelReset() {
+                        searchResults.currentIndex = 0;
+                    }
+
+                    target: searchResults.model
+                }
+            }
+
+            // One list, so that everything scrolls together. The favorites come first, and the
+            // sections show only while there are any.
+            ListView {
+                objectName: "roomList"
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                clip: true
+                model: RoomList
+                visible: !RoomSearch.active
+                section.criteria: ViewSection.FullString
+                section.property: "favorite"
+                delegate: RoomDelegate {}
+
+                ScrollBar.vertical: ScrollBar {}
+
+                // The value of `section` is the text of the bool: "true" for the favorites.
+                section.delegate: Rectangle {
+                    id: header
+
+                    // The name of the section it heads, as `roomKind_<kind>` names a kind.
+                    readonly property bool favorites: section === "true"
+                    required property string section
+
+                    clip: true
+                    color: Theme.base
+                    // The view decides whether a section item is visible, so without favorites it
+                    // is left empty and with no height.
+                    height: RoomList.hasFavorites ? headerLabel.implicitHeight + Theme.spacingXXL : 0
+                    objectName: "roomSection_" + (favorites ? "favorites" : "rooms")
+                    width: ListView.view.width
+
+                    Label {
+                        id: headerLabel
+
+                        objectName: "roomSectionHeader"
+                        anchors.left: parent.left
+                        anchors.leftMargin: Theme.roomRowInset + Theme.rowPaddingH
+                        anchors.verticalCenter: parent.verticalCenter
+                        color: Theme.textFaint
+                        font.pointSize: Theme.fontSizeSmall
+                        font.weight: Theme.fontWeightSemibold
+                        text: header.favorites ? qsTr("Favorites") : qsTr("Rooms")
+                        visible: RoomList.hasFavorites
+                    }
+                }
+            }
+
+            // Why the last command on a room failed, until it is dismissed or the user tries again.
+            RowLayout {
+                objectName: "roomListError"
+                Layout.fillWidth: true
+                Layout.margins: Theme.spacingL
+                spacing: Theme.spacingL
+                visible: RoomList.roomActionError !== ""
+
+                Label {
+                    objectName: "roomListErrorText"
+                    Layout.fillWidth: true
+                    color: Theme.error
+                    font.pointSize: Theme.fontSizeSmall
+                    text: RoomList.roomActionError
+                    textFormat: Text.PlainText
+                    wrapMode: Text.Wrap
+                }
+
+                FlatButton {
+                    objectName: "roomListErrorDismiss"
+                    text: qsTr("Dismiss")
+                    onClicked: RoomList.dismissRoomActionError()
+                }
+            }
+
+            Label {
+                objectName: "roomSearchEmpty"
+                Layout.fillWidth: true
+                // Under the text of the field.
+                Layout.leftMargin: Theme.roomRowInset + Theme.roomNameInset
+                Layout.rightMargin: Theme.roomRowInset + Theme.rowPaddingH
+                color: Theme.textFaint
+                elide: Text.ElideRight
+                font.pointSize: Theme.fontSizeSmall
+                text: qsTr("No rooms match “%1”").arg(RoomSearch.trimmedQuery)
+                textFormat: Text.PlainText
+                visible: RoomSearch.active && searchResults.count === 0
+            }
+
+            // Searches the user's rooms by name, at the bottom of the sidebar. While it holds
+            // something, the results replace the list and pile up from here. The focus stays here
+            // while typing: Up and Down move through the results, away from the field and back.
+            // Enter, a click on a result and Escape clear the field and hand the focus on.
             InputField {
                 id: searchField
 
                 objectName: "roomSearchField"
-                Layout.bottomMargin: Theme.spacingL
+                Layout.bottomMargin: Theme.searchFieldBottomMargin
                 Layout.fillWidth: true
                 Layout.leftMargin: Theme.roomRowInset
                 Layout.rightMargin: Theme.roomRowInset
+                Layout.topMargin: Theme.spacingL
                 implicitHeight: Theme.searchFieldHeight
                 // The text starts where the room names do, and the magnifier is over the avatars.
                 leftPadding: Theme.roomNameInset
@@ -91,7 +218,7 @@ ColumnLayout {
                 // Under neither the cross nor the hint.
                 rightPadding: Theme.fieldPaddingH + Math.max(hint.width, clearButton.width)
 
-                Keys.onDownPressed: searchResults.incrementCurrentIndex()
+                Keys.onDownPressed: searchResults.decrementCurrentIndex()
                 // Clears the field and gives up the focus: to the composer of the open room, or of the
                 // one being opened. With no room, nobody has it.
                 function leave(opened) {
@@ -103,7 +230,7 @@ ColumnLayout {
                 }
 
                 Keys.onEscapePressed: leave(false)
-                Keys.onUpPressed: searchResults.decrementCurrentIndex()
+                Keys.onUpPressed: searchResults.incrementCurrentIndex()
                 onAccepted: {
                     if (RoomSearch.open(searchResults.currentIndex))
                         leave(true);
@@ -186,129 +313,6 @@ ColumnLayout {
                 Shortcut {
                     sequence: "Ctrl+K"
                     onActivated: searchField.forceActiveFocus()
-                }
-            }
-
-            Label {
-                objectName: "roomSearchEmpty"
-                Layout.fillWidth: true
-                // Under the text of the field.
-                Layout.leftMargin: Theme.roomRowInset + Theme.roomNameInset
-                Layout.rightMargin: Theme.roomRowInset + Theme.rowPaddingH
-                color: Theme.textFaint
-                elide: Text.ElideRight
-                font.pointSize: Theme.fontSizeSmall
-                text: qsTr("No rooms match “%1”").arg(RoomSearch.trimmedQuery)
-                textFormat: Text.PlainText
-                visible: RoomSearch.active && searchResults.count === 0
-            }
-
-            // The rooms that match, in place of the list below.
-            ListView {
-                id: searchResults
-
-                objectName: "roomSearchResults"
-                Layout.fillHeight: true
-                Layout.fillWidth: true
-                clip: true
-                model: RoomSearch
-                visible: RoomSearch.active
-
-                delegate: RoomDelegate {
-                    id: result
-
-                    // The one Enter would open.
-                    cursor: result.index === searchResults.currentIndex
-                    menuEnabled: false
-                    namePrefix: "searchResult_"
-
-                    // The normal list is back, with the room open.
-                    onClicked: searchField.leave(true)
-                }
-
-                ScrollBar.vertical: ScrollBar {}
-
-                onCurrentIndexChanged: positionViewAtIndex(currentIndex, ListView.Contain)
-
-                // A reset leaves nothing current; Enter opens the first result unless Down moved.
-                Connections {
-                    function onModelReset() {
-                        searchResults.currentIndex = 0;
-                    }
-
-                    target: searchResults.model
-                }
-            }
-
-            // One list, so that everything scrolls together. The favorites come first, and the
-            // sections show only while there are any.
-            ListView {
-                objectName: "roomList"
-                Layout.fillWidth: true
-                Layout.fillHeight: true
-                clip: true
-                model: RoomList
-                visible: !RoomSearch.active
-                section.criteria: ViewSection.FullString
-                section.property: "favorite"
-                delegate: RoomDelegate {}
-
-                ScrollBar.vertical: ScrollBar {}
-
-                // The value of `section` is the text of the bool: "true" for the favorites.
-                section.delegate: Rectangle {
-                    id: header
-
-                    // The name of the section it heads, as `roomKind_<kind>` names a kind.
-                    readonly property bool favorites: section === "true"
-                    required property string section
-
-                    clip: true
-                    color: Theme.base
-                    // The view decides whether a section item is visible, so without favorites it
-                    // is left empty and with no height.
-                    height: RoomList.hasFavorites ? headerLabel.implicitHeight + Theme.spacingXXL : 0
-                    objectName: "roomSection_" + (favorites ? "favorites" : "rooms")
-                    width: ListView.view.width
-
-                    Label {
-                        id: headerLabel
-
-                        objectName: "roomSectionHeader"
-                        anchors.left: parent.left
-                        anchors.leftMargin: Theme.roomRowInset + Theme.rowPaddingH
-                        anchors.verticalCenter: parent.verticalCenter
-                        color: Theme.textFaint
-                        font.pointSize: Theme.fontSizeSmall
-                        font.weight: Theme.fontWeightSemibold
-                        text: header.favorites ? qsTr("Favorites") : qsTr("Rooms")
-                        visible: RoomList.hasFavorites
-                    }
-                }
-            }
-
-            // Why the last command on a room failed, until it is dismissed or the user tries again.
-            RowLayout {
-                objectName: "roomListError"
-                Layout.fillWidth: true
-                Layout.margins: Theme.spacingL
-                spacing: Theme.spacingL
-                visible: RoomList.roomActionError !== ""
-
-                Label {
-                    objectName: "roomListErrorText"
-                    Layout.fillWidth: true
-                    color: Theme.error
-                    font.pointSize: Theme.fontSizeSmall
-                    text: RoomList.roomActionError
-                    textFormat: Text.PlainText
-                    wrapMode: Text.Wrap
-                }
-
-                FlatButton {
-                    objectName: "roomListErrorDismiss"
-                    text: qsTr("Dismiss")
-                    onClicked: RoomList.dismissRoomActionError()
                 }
             }
         }
