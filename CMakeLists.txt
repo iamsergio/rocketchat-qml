@@ -11,7 +11,7 @@ if(NOT ROCKETCHATQML_QT AND NOT ROCKETCHATQML_SLINT)
 endif()
 
 # Before project(): that's where the vcpkg toolchain installs the manifest's features.
-option(ROCKETCHATQML_SPIX "Build the Spix UI test server into the app, for the GUI tests" OFF)
+option(ROCKETCHATQML_SPIX "Build the Spix UI test server into the app, for the GUI tests (C++ Spix for Qt, the Rust server of rc_slint for Slint)" OFF)
 if(ROCKETCHATQML_SPIX AND ROCKETCHATQML_QT)
   list(APPEND VCPKG_MANIFEST_FEATURES spix)
 endif()
@@ -44,9 +44,11 @@ endif()
 set(submodules corrosion)
 if(ROCKETCHATQML_QT)
   list(APPEND submodules cxx-qt-cmake)
-  if(ROCKETCHATQML_SPIX)
-    list(APPEND submodules spix)
-  endif()
+endif()
+# Spix: the C++ test server of the Qt app, and its repository also holds `spix_slint`, the Rust
+# server the Slint app embeds.
+if(ROCKETCHATQML_SPIX)
+  list(APPEND submodules spix)
 endif()
 foreach(submodule ${submodules})
   if(NOT EXISTS ${PROJECT_SOURCE_DIR}/3rdparty/${submodule}/CMakeLists.txt)
@@ -68,10 +70,19 @@ else()
 endif()
 
 if(ROCKETCHATQML_SLINT)
-  # Only the binary: nothing links against rc_slint's lib.
-  set(rc_slint_features)
+  # Only the binary: nothing links against rc_slint's lib. `spix` turns on the Rust Spix server
+  # behind `--spix-port`, which the GUI tests drive the app with (test-file-store keeps the session
+  # between two of its runs).
+  set(rc_slint_feature_list)
   if(ROCKETCHATQML_DEVELOPER_MODE)
-    set(rc_slint_features FEATURES developer-mode)
+    list(APPEND rc_slint_feature_list developer-mode)
+  endif()
+  if(ROCKETCHATQML_SPIX)
+    list(APPEND rc_slint_feature_list spix)
+  endif()
+  set(rc_slint_features)
+  if(rc_slint_feature_list)
+    set(rc_slint_features FEATURES ${rc_slint_feature_list})
   endif()
   corrosion_import_crate(
     MANIFEST_PATH

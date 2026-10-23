@@ -60,6 +60,12 @@ crate = "slint-build"
 [[licenses.exceptions]]
 allow = ["GPL-3.0-only", "LicenseRef-Slint-Royalty-free-2.0"]
 crate = "slint-macros"
+[[licenses.exceptions]]
+# The search API of the testing backend, which `spix_slint` uses as a normal dependency (it was
+# only a dev-dependency of rc_slint until then, which the license check skips). Same licence as
+# the Slint crates above, and the same choice still to be made.
+allow = ["GPL-3.0-only", "LicenseRef-Slint-Royalty-free-2.0"]
+crate = "i-slint-backend-testing"
 
 [bans]
 # Duplicates come from build dependencies (cxx-qt's generators), which we don't control.

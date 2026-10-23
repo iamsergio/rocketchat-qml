@@ -14,15 +14,28 @@ name = "rocketchat_slint"
 path = "src/main.rs"
 
 [dependencies]
+# Optional, behind `spix`: the search API of Slint's testing backend, which the Spix server needs
+# and which must match Slint's version exactly.
+i-slint-backend-testing = { workspace = true, optional = true }
 rc_core.workspace = true
 rc_view.workspace = true
 secrecy.workspace = true
 slint.workspace = true
+# Optional, behind `spix`: the Spix test server that speaks to the GUI test suite.
+spix_slint = { path = "../../3rdparty/spix/rust/spix_slint", optional = true }
 tracing.workspace = true
 
 [features]
 # Also log to a file next to the executable, and `--dev` fills the login page in.
 developer-mode = ["rc_view/developer-mode"]
+# `--spix-port` starts the Spix test server, on Slint's testing backend: headless, so the GUI tests
+# need no display. `test-file-store` keeps the session token in a plain file, for the GUI tests that
+# restart the app, as rc_qt's feature of the same name does.
+spix = [
+    "dep:spix_slint",
+    "dep:i-slint-backend-testing",
+    "rc_view/test-file-store",
+]
 
 [dev-dependencies]
 i-slint-backend-testing.workspace = true

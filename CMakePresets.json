@@ -65,7 +65,8 @@
         "CMAKE_BUILD_TYPE": "Debug",
         "ROCKETCHATQML_DEVELOPER_MODE": "ON",
         "ROCKETCHATQML_QT": "OFF",
-        "ROCKETCHATQML_SLINT": "ON"
+        "ROCKETCHATQML_SLINT": "ON",
+        "ROCKETCHATQML_SPIX": "ON"
       }
     },
     {
