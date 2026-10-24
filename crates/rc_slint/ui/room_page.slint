@@ -27,6 +27,8 @@ export component RoomPage inherits Rectangle {
     in property <string> room-kind;
     in property <styled-text> room-topic;
     in property <string> room-topic-html;
+    // Who is typing in the open room, as a line; empty for nobody.
+    in property <string> typing;
     // The messages of the open room, oldest first, and what the list shows around them: whether the
     // conversation starts above them, whether older ones are loading, and the counters that the
     // list's view keeps its place by (see `message_list.slint`).
@@ -272,6 +274,27 @@ export component RoomPage inherits Rectangle {
                         }
                         open-link(url) => {
                             root.open-link(url);
+                        }
+                    }
+
+                    // Empty most of the time, but its height is always taken.
+                    HorizontalLayout {
+                        padding-left: Theme.spacing-xxxl;
+                        padding-right: Theme.spacing-xxxl;
+                        padding-top: Theme.spacing-none;
+                        padding-bottom: Theme.spacing-none;
+                        spacing: Theme.spacing-none;
+
+                        Text {
+                            accessible-id: "roomTyping";
+                            accessible-role: text;
+                            accessible-value: root.typing;
+                            height: Theme.typing-line-height;
+                            color: Theme.text-muted;
+                            font-size: Theme.font-size-small;
+                            overflow: elide;
+                            vertical-alignment: center;
+                            text: root.typing;
                         }
                     }
 

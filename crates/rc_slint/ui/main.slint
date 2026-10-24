@@ -51,6 +51,7 @@ export component MainWindow inherits Window {
     // The topic as styled text, and as the HTML that the GUI tests read.
     in property <styled-text> room-topic;
     in property <string> room-topic-html;
+    in property <string> typing;
     // The open room's messages, oldest first, and the state of its list (see `message_list.slint`).
     in property <[MessageRow]> messages;
     in property <bool> reached-start;
@@ -144,6 +145,7 @@ export component MainWindow inherits Window {
             room-kind: root.room-kind;
             room-topic: root.room-topic;
             room-topic-html: root.room-topic-html;
+            typing: root.typing;
             room-action-error: root.room-action-error;
             messages: root.messages;
             reached-start: root.reached-start;
