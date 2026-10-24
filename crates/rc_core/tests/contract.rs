@@ -2179,30 +2179,51 @@ fn follow_both(
     mut done: impl FnMut(&Mirrors) -> bool,
 ) {
     wait_for(events, |event| {
-        match event {
-            Event::Timeline(changes) => changes
-                .iter()
-                .for_each(|change| change.apply(&mut mirrors.room)),
-            Event::ThreadTimeline(changes) => changes
-                .iter()
-                .for_each(|change| change.apply(&mut mirrors.thread)),
-            Event::ThreadStatus(status) => mirrors.status = status.clone(),
-            Event::ThreadList(changes) => changes
-                .iter()
-                .for_each(|change| change.apply(&mut mirrors.list)),
-            Event::ThreadListStatus(status) => mirrors.list_status = status.clone(),
-            // The rooms listed at the login came before the mirror: it keeps the latest copy of
-            // each room that changes.
-            Event::Rooms(changes) => {
-                for room in changes.iter().filter_map(changed_room) {
-                    mirrors.rooms.retain(|held| held.id != room.id);
-                    mirrors.rooms.push(room.clone());
-                }
-            }
-            _ => {}
-        }
+        show(event, mirrors);
         done(mirrors).then_some(())
     });
+}
+
+/// Like [`follow_both`], but takes in the events that are waiting already first, and stops there
+/// if `done` accepts what they show: what it waits for may have come before the events that an
+/// earlier step waited for.
+fn follow_queued(
+    events: &Receiver<Event>,
+    mirrors: &mut Mirrors,
+    mut done: impl FnMut(&Mirrors) -> bool,
+) {
+    while let Ok(event) = events.try_recv() {
+        show(&event, mirrors);
+    }
+    if !done(mirrors) {
+        follow_both(events, mirrors, done);
+    }
+}
+
+/// Puts what `event` changes into the mirrors.
+fn show(event: &Event, mirrors: &mut Mirrors) {
+    match event {
+        Event::Timeline(changes) => changes
+            .iter()
+            .for_each(|change| change.apply(&mut mirrors.room)),
+        Event::ThreadTimeline(changes) => changes
+            .iter()
+            .for_each(|change| change.apply(&mut mirrors.thread)),
+        Event::ThreadStatus(status) => mirrors.status = status.clone(),
+        Event::ThreadList(changes) => changes
+            .iter()
+            .for_each(|change| change.apply(&mut mirrors.list)),
+        Event::ThreadListStatus(status) => mirrors.list_status = status.clone(),
+        // The rooms listed at the login came before the mirror: it keeps the latest copy of
+        // each room that changes.
+        Event::Rooms(changes) => {
+            for room in changes.iter().filter_map(changed_room) {
+                mirrors.rooms.retain(|held| held.id != room.id);
+                mirrors.rooms.push(room.clone());
+            }
+        }
+        _ => {}
+    }
 }
 
 /// The mirrors of an open channel whose message `theirs` has the thread open, with `replies`
@@ -3007,7 +3028,7 @@ fn opening_an_unread_thread_reads_it_and_it_leaves_the_unread_list() {
         message_saying(&m.thread, "while open").is_some()
     });
     std::thread::sleep(Duration::from_millis(500));
-    follow_both(&open.events, &mut mirrors, |m| {
+    follow_queued(&open.events, &mut mirrors, |m| {
         room_of(m, &open).is_some_and(|room| room.unread_threads.is_empty())
     });
 }
