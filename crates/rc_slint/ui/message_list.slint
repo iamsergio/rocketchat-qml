@@ -34,6 +34,7 @@ export component MessageList inherits FocusScope {
     callback open-link(string);
     callback retry(string);
     callback menu-allowed(string) -> MessageMenu;
+    callback quote(string);
     callback edit(string);
     callback delete(string);
 
@@ -178,6 +179,9 @@ export component MessageList inherits FocusScope {
                 }
                 menu-allowed(id) => {
                     return root.menu-allowed(id);
+                }
+                quote(id) => {
+                    root.quote(id);
                 }
                 edit(id) => {
                     root.edit(id);

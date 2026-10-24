@@ -24,7 +24,7 @@ use rc_core::{AccountHandle, Client, Event};
 use rc_view::accounts::AccountChange;
 use rc_view::avatar_view::AvatarUrls;
 use rc_view::dev_login;
-use rc_view::message_view::{can_delete, can_edit};
+use rc_view::message_view::{can_delete, can_edit, can_quote};
 use rc_view::rich_html;
 use rc_view::room_search::{search_rooms, trimmed};
 use rc_view::room_view::outgoing;
@@ -150,9 +150,9 @@ fn connect_commands(window: &MainWindow) {
     window.on_remove_account(|id| App::with(|app| app.remove_account(&id)));
     window.on_open_room(|id| App::with(|app| app.open_room(&id)));
     window.on_search(|query| App::with(|app| app.search(&query)));
-    window.on_send(|text| {
+    window.on_send(|text, quoted| {
         let mut sent = false;
-        App::with(|app| sent = app.send(&text));
+        App::with(|app| sent = app.send(&text, &quoted));
         sent
     });
     window.on_retry(|id| App::with(|app| app.retry(&id)));
@@ -171,6 +171,11 @@ fn connect_commands(window: &MainWindow) {
         let mut text = String::new();
         App::with(|app| text = app.message_text(&id));
         text.into()
+    });
+    window.on_message_author(|id| {
+        let mut author = String::new();
+        App::with(|app| author = app.message_author(&id));
+        author.into()
     });
     window.on_last_editable(|| {
         let mut id = String::new();
@@ -508,16 +513,17 @@ impl App {
         self.current_account("load_older", |account| account.load_older());
     }
 
-    /// Sends `text` to the open room. False if there is nothing to send (no room is open or the
-    /// text is blank), so that the composer keeps its text.
-    fn send(&self, text: &str) -> bool {
+    /// Sends `text` to the open room, quoting the message `quoted` (empty for none). False if there
+    /// is nothing to send (no room is open or the text is blank), so that the composer keeps its
+    /// text.
+    fn send(&self, text: &str, quoted: &str) -> bool {
         let room_id = self
             .switchboard
             .accounts()
             .current_cache()
             .room_state()
             .room_id;
-        let Some((room, text, quote)) = outgoing(&room_id, text, "") else {
+        let Some((room, text, quote)) = outgoing(&room_id, text, quoted) else {
             return false;
         };
         self.current_account("send_message", |account| {
@@ -578,6 +584,7 @@ impl App {
         cache
             .held(id)
             .map_or_else(MessageMenu::default, |message| MessageMenu {
+                can_quote: can_quote(message),
                 can_edit: can_edit(message, &viewer, now),
                 can_delete: can_delete(message, &viewer, now),
             })
@@ -589,6 +596,15 @@ impl App {
             .accounts()
             .current_cache()
             .message_text(id)
+            .map_or_else(String::new, str::to_owned)
+    }
+
+    /// Who wrote a message, as the composer's quote bar names them; empty if it isn't held.
+    fn message_author(&self, id: &str) -> String {
+        self.switchboard
+            .accounts()
+            .current_cache()
+            .message_author(id)
             .map_or_else(String::new, str::to_owned)
     }
 

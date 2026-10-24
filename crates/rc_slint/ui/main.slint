@@ -95,6 +95,7 @@ export component MainWindow inherits Window {
     // edit, and saves a new text. The answer to the last save is the counter, the message and
     // whether it worked.
     callback message-text(string) -> string;
+    callback message-author(string) -> string;
     callback last-editable() -> string;
     callback save-edit(string, string);
     in property <int> edit-answers;
@@ -105,7 +106,7 @@ export component MainWindow inherits Window {
     // Opens the address of a link of a text in the browser.
     callback open-link(string);
     // Sends the text to the open room; false if it refuses it (blank), which keeps the composer's.
-    callback send(string) -> bool;
+    callback send(string, string) -> bool;
     callback retry(string);
     // Logs what Slint knows about the display.
     callback dump-info();
@@ -221,6 +222,9 @@ export component MainWindow inherits Window {
             message-text(id) => {
                 return root.message-text(id);
             }
+            message-author(id) => {
+                return root.message-author(id);
+            }
             last-editable => {
                 return root.last-editable();
             }
@@ -233,8 +237,8 @@ export component MainWindow inherits Window {
             open-link(url) => {
                 root.open-link(url);
             }
-            send(text) => {
-                return root.send(text);
+            send(text, quoted) => {
+                return root.send(text, quoted);
             }
             retry(id) => {
                 root.retry(id);

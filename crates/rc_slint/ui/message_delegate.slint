@@ -4,7 +4,7 @@
 import { Avatar } from "avatar.slint";
 import { FlatButton } from "flat_button.slint";
 import { MenuItem } from "menu_item.slint";
-import { MessageMenu, MessageRow } from "structs.slint";
+import { MessageMenu, MessageRow, QuoteRow } from "structs.slint";
 import { Theme } from "theme.slint";
 
 // One message of the open room, named `msg_<id>` by its message id. Its parts are named like the
@@ -23,6 +23,7 @@ export component MessageDelegate inherits Rectangle {
     // What the menu of the message (by its id) offers now, asked when it opens.
     callback menu-allowed(string) -> MessageMenu;
     // The menu's commands. Deleting is only asked for: the page asks the user first.
+    callback quote(string);
     callback edit(string);
     callback delete(string);
 
@@ -30,9 +31,12 @@ export component MessageDelegate inherits Rectangle {
     // since a wrapped text can't tell its height from the width a layout will give it.
     property <length> text-width: root.width - 2 * Theme.spacing-xxxl;
     property <length> body-width: root.text-width - Theme.avatar-size - Theme.spacing-xxl;
+    // What a quote's text has: the body's, less its bar and the space after it.
+    property <length> quote-width: root.body-width - Theme.quote-bar-width - Theme.spacing-xxl;
 
     // What the menu offers, as of when it was opened; and where it opens, in the message's own
     // coordinates.
+    property <bool> can-quote;
     property <bool> can-edit;
     property <bool> can-delete;
     property <length> menu-x;
@@ -44,9 +48,10 @@ export component MessageDelegate inherits Rectangle {
             return;
         }
         let allowed = root.menu-allowed(root.message.id);
+        root.can-quote = allowed.can-quote;
         root.can-edit = allowed.can-edit;
         root.can-delete = allowed.can-delete;
-        if allowed.can-edit || allowed.can-delete {
+        if allowed.can-quote || allowed.can-edit || allowed.can-delete {
             root.menu-x = x;
             root.menu-y = y;
             menu.show();
@@ -242,9 +247,84 @@ export component MessageDelegate inherits Rectangle {
                         }
                     }
 
+                    // The messages this one quotes, above what it says: a bar down the left, who
+                    // said it and when, and what it said. `quoteBody` has the text as written,
+                    // which the tests read; `quoteBodyHtml` is what is shown.
+                    for quote[index] in root.message.quotes: Rectangle {
+                        accessible-id: "quote" + index;
+                        accessible-role: groupbox;
+                        preferred-height: quote-row.preferred-height;
+
+                        quote-row := HorizontalLayout {
+                            padding: Theme.spacing-none;
+                            spacing: Theme.spacing-xxl;
+
+                            Rectangle {
+                                width: Theme.quote-bar-width;
+                                background: Theme.raised-hover;
+                            }
+
+                            VerticalLayout {
+                                horizontal-stretch: 1;
+                                padding: Theme.spacing-none;
+                                spacing: Theme.spacing-xxs;
+
+                                HorizontalLayout {
+                                    padding: Theme.spacing-none;
+                                    spacing: Theme.spacing-m;
+
+                                    Text {
+                                        accessible-id: "quoteAuthor";
+                                        color: Theme.text;
+                                        font-size: Theme.font-size-small;
+                                        font-weight: Theme.font-weight-semibold;
+                                        overflow: elide;
+                                        text: quote.author;
+                                    }
+
+                                    Text {
+                                        accessible-id: "quoteTime";
+                                        vertical-alignment: center;
+                                        color: Theme.text-faint;
+                                        font-size: Theme.font-size-tiny;
+                                        text: quote.time;
+                                    }
+
+                                    Rectangle {
+                                        horizontal-stretch: 1;
+                                    }
+                                }
+
+                                Rectangle {
+                                    accessible-id: "quoteBody";
+                                    accessible-role: text;
+                                    accessible-value: quote.body;
+                                    preferred-height: quote-text.preferred-height;
+
+                                    quote-text := StyledText {
+                                        accessible-id: "quoteBodyHtml";
+                                        accessible-role: text;
+                                        accessible-value: quote.body-html;
+                                        x: Theme.spacing-none;
+                                        y: Theme.spacing-none;
+                                        width: root.quote-width;
+                                        default-color: Theme.text-muted;
+                                        default-font-size: Theme.font-size-small;
+                                        link-color: Theme.own;
+                                        text: quote.body-styled;
+                                        link-clicked(url) => {
+                                            root.open-link(url);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
                     // `accessible-value` is the message as written, which the tests read;
-                    // `msgBodyHtml` is what is shown.
-                    Rectangle {
+                    // `msgBodyHtml` is what is shown. Hidden when a message of only quotes has no
+                    // text to leave a blank line for.
+                    if !root.message.body.is-empty || root.message.quotes.length == 0: Rectangle {
                         accessible-id: "msgBody";
                         accessible-role: text;
                         accessible-value: root.message.body;
@@ -313,6 +393,17 @@ export component MessageDelegate inherits Rectangle {
             items := VerticalLayout {
                 padding: Theme.menu-padding;
                 spacing: Theme.spacing-none;
+
+                MenuItem {
+                    accessible-id: "msgQuoteAction";
+                    visible: root.can-quote;
+                    height: self.visible ? Theme.menu-item-height : Theme.spacing-none;
+                    text: @tr("Quote");
+                    triggered => {
+                        menu.close();
+                        root.quote(root.message.id);
+                    }
+                }
 
                 MenuItem {
                     accessible-id: "msgEditAction";

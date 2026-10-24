@@ -67,6 +67,7 @@ export component RoomPage inherits Rectangle {
     // The composer edits a message: its text and the newest editable one are asked for, the new
     // text is saved, and the answer comes back as the counter going up (see `composer.slint`).
     callback message-text(string) -> string;
+    callback message-author(string) -> string;
     callback last-editable() -> string;
     callback save-edit(string, string);
     in property <int> edit-answers;
@@ -77,7 +78,7 @@ export component RoomPage inherits Rectangle {
     // A link of the topic or of a message was clicked.
     callback open-link(string);
     // Sends the text to the open room; false if it refuses it, which leaves the composer as it is.
-    callback send(string) -> bool;
+    callback send(string, string) -> bool;
     // Sends a message that failed to send again, by its id.
     callback retry(string);
 
@@ -421,6 +422,9 @@ export component RoomPage inherits Rectangle {
                             menu-allowed(id) => {
                                 return root.menu-allowed(id);
                             }
+                            quote(id) => {
+                                composer.begin-quote(id);
+                            }
                             edit(id) => {
                                 composer.begin-edit(id);
                             }
@@ -502,14 +506,17 @@ export component RoomPage inherits Rectangle {
                                 focused => {
                                     root.composer-wanted = false;
                                 }
-                                send(text) => {
-                                    return root.send(text);
+                                send(text, quoted) => {
+                                    return root.send(text, quoted);
                                 }
                                 save-edit(id, text) => {
                                     root.save-edit(id, text);
                                 }
                                 message-text(id) => {
                                     return root.message-text(id);
+                                }
+                                message-author(id) => {
+                                    return root.message-author(id);
                                 }
                                 last-editable => {
                                     return root.last-editable();

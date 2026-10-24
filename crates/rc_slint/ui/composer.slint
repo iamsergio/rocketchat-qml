@@ -11,9 +11,14 @@ import { Theme } from "theme.slint";
 // It also edits a message of the user's: `begin-edit` puts the message's text in the field, a bar
 // above it says so, and Enter saves instead of sending. Escape, the bar's button or another room
 // ends it, and the draft that was in the field comes back; so does a saved edit.
+//
+// And it quotes a message: `begin-quote` shows a bar above the field with the author and a line of
+// the text, and sending passes the message's id. Sending, Escape, the bar's button and another room
+// drop the quote. Quoting and editing exclude each other.
 export component Composer inherits Rectangle {
-    // Sends the text; false if it is refused, which leaves the field as it is.
-    callback send(string) -> bool;
+    // Sends the text, quoting the message with the id (empty for none); false if it is refused,
+    // which leaves the field as it is.
+    callback send(string, string) -> bool;
     // The search field hands the focus on: to this composer when it is made or when the room
     // changes while `focus-wanted`, and at once when `focus-requests` goes up. `focused` says that
     // the composer has it, so that the wish is over.
@@ -27,6 +32,8 @@ export component Composer inherits Rectangle {
     // The text of a message as written, and the id of the newest one that can be edited now (both
     // empty if there is none).
     callback message-text(string) -> string;
+    // Who wrote a message as the quote bar names them, empty if it isn't known.
+    callback message-author(string) -> string;
     callback last-editable() -> string;
     // The answer to the last edit: how many there have been, which message it was about and
     // whether it worked. A failure stays in edit mode, with the text.
@@ -41,8 +48,16 @@ export component Composer inherits Rectangle {
     // The edit was sent and the answer is awaited.
     property <bool> saving;
     property <bool> editing: root.editing-id != "";
+    // The message being quoted, or empty, with what the bar shows of it.
+    property <string> quoting-id;
+    property <string> quoted-author;
+    property <string> quoted-text;
+    property <bool> quoting: root.quoting-id != "";
     // The edit bar: its row and the line under it.
     property <length> bar-height: Theme.button-height + 2 * Theme.spacing-l + Theme.separator-width;
+    // The quote bar: the author over a line of text, or the button if that is taller.
+    property <length> quote-lines-height: 2 * Theme.font-size-small * Theme.line-height-scale + Theme.spacing-xxs;
+    property <length> quote-bar-height: max(root.quote-lines-height, Theme.button-height) + 2 * Theme.spacing-l + Theme.separator-width;
     // A position past any text: the cursor goes to the end.
     property <int> end-of-text: 2147483647;
 
@@ -55,9 +70,38 @@ export component Composer inherits Rectangle {
     function submit() {
         if root.editing {
             root.save();
-        } else if root.send(input.text) {
+        } else if root.send(input.text, root.quoting-id) {
             input.text = "";
+            root.drop-quote();
         }
+    }
+
+    // Starts quoting a message of the open room, ending an edit first. Nothing happens if the
+    // message isn't known.
+    public function begin-quote(id: string) {
+        let author = root.message-author(id);
+        if author.is-empty {
+            return;
+        }
+        if root.editing {
+            root.end-edit();
+        }
+        root.quoting-id = id;
+        root.quoted-author = author;
+        root.quoted-text = root.message-text(id);
+        input.focus();
+    }
+
+    function drop-quote() {
+        root.quoting-id = "";
+        root.quoted-author = "";
+        root.quoted-text = "";
+    }
+
+    // Stops quoting and gives the field the focus back.
+    function end-quote() {
+        root.drop-quote();
+        input.focus();
     }
 
     function save() {
@@ -77,6 +121,7 @@ export component Composer inherits Rectangle {
         if !root.editing {
             root.draft = input.text;
         }
+        root.drop-quote();
         root.editing-id = id;
         root.saving = false;
         input.text = text;
@@ -102,6 +147,7 @@ export component Composer inherits Rectangle {
         if root.editing {
             root.end-edit();
         }
+        root.drop-quote();
         if root.focus-wanted {
             input.focus();
         }
@@ -122,7 +168,7 @@ export component Composer inherits Rectangle {
 
     // Its height follows the text, and it never takes more: the extra goes to the messages above.
     min-height: root.preferred-height;
-    preferred-height: root.field-height + 2 * Theme.spacing-l + 2 * Theme.border-width + (root.editing ? root.bar-height : Theme.spacing-none);
+    preferred-height: root.field-height + 2 * Theme.spacing-l + 2 * Theme.border-width + (root.editing ? root.bar-height : Theme.spacing-none) + (root.quoting ? root.quote-bar-height : Theme.spacing-none);
     vertical-stretch: 0;
     background: Theme.raised;
     border-width: Theme.border-width;
@@ -135,6 +181,77 @@ export component Composer inherits Rectangle {
         spacing: Theme.spacing-none;
 
         // Over a line.
+        if root.quoting: Rectangle {
+            accessible-id: "composerQuoteBar";
+            accessible-role: groupbox;
+            height: root.quote-bar-height;
+
+            HorizontalLayout {
+                y: Theme.spacing-none;
+                height: parent.height - Theme.separator-width;
+                padding-left: Theme.composer-padding-h;
+                padding-right: Theme.spacing-xl;
+                padding-top: Theme.spacing-l;
+                padding-bottom: Theme.spacing-l;
+                spacing: Theme.spacing-xl;
+
+                Rectangle {
+                    width: Theme.quote-bar-width;
+                    background: Theme.own;
+                    border-radius: Theme.quote-bar-width;
+                }
+
+                VerticalLayout {
+                    horizontal-stretch: 1;
+                    alignment: center;
+                    padding: Theme.spacing-none;
+                    spacing: Theme.spacing-xxs;
+
+                    Text {
+                        accessible-id: "composerQuoteAuthor";
+                        color: Theme.text;
+                        font-size: Theme.font-size-small;
+                        font-weight: Theme.font-weight-semibold;
+                        overflow: elide;
+                        text: root.quoted-author;
+                    }
+
+                    // The text as written is the element's, whole; only its first line shows.
+                    Rectangle {
+                        accessible-id: "composerQuoteText";
+                        accessible-role: text;
+                        accessible-value: root.quoted-text;
+                        clip: true;
+                        height: Theme.font-size-small * Theme.line-height-scale;
+
+                        Text {
+                            x: Theme.spacing-none;
+                            y: Theme.spacing-none;
+                            width: parent.width;
+                            color: Theme.text-muted;
+                            font-size: Theme.font-size-small;
+                            overflow: elide;
+                            text: root.quoted-text;
+                        }
+                    }
+                }
+
+                FlatButton {
+                    accessible-id: "composerQuoteCancel";
+                    text: @tr("Cancel");
+                    clicked => {
+                        root.end-quote();
+                    }
+                }
+            }
+
+            Rectangle {
+                y: parent.height - self.height;
+                height: Theme.separator-width;
+                background: Theme.raised-hover;
+            }
+        }
+
         if root.editing: Rectangle {
             accessible-id: "composerEditBar";
             accessible-role: groupbox;
@@ -194,8 +311,12 @@ export component Composer inherits Rectangle {
                         root.submit();
                         return accept;
                     }
-                    if event.text == Key.Escape && root.editing {
-                        root.end-edit();
+                    if event.text == Key.Escape && (root.editing || root.quoting) {
+                        if root.editing {
+                            root.end-edit();
+                        } else {
+                            root.end-quote();
+                        }
                         return accept;
                     }
                     // Up in an empty box edits the user's newest message.
