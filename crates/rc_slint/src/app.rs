@@ -262,6 +262,7 @@ impl App {
                 self.show_counters();
             }
             Event::TimelineStatus(_) => self.show_room(),
+            Event::Typing { .. } => self.show_typing(),
             Event::RoomAction { outcome, .. } => {
                 // A failure is shown until dismissed or the next command; a success clears it.
                 let text = outcome
@@ -360,8 +361,19 @@ impl App {
         let palette = Palette::from_theme(&window.global::<Theme>());
         window.set_room_topic(rich_markdown::topic(&state.topic, &viewer, &palette));
         window.set_room_topic_html(rich_html::topic_html(&state.topic, &viewer).into());
+        window.set_typing(state.typing.into());
         window.set_reached_start(state.reached_start);
         window.set_loading_older(state.loading_older);
+    }
+
+    /// Shows who is typing in the open room. Typists emit every few seconds, so this leaves the
+    /// rest of the header alone.
+    fn show_typing(&self) {
+        let Some(window) = self.window.upgrade() else {
+            return;
+        };
+        let state = self.switchboard.accounts().current_cache().room_state();
+        window.set_typing(state.typing.into());
     }
 
     // The commands
