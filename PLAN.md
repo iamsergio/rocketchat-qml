@@ -81,6 +81,7 @@ The Slint app grows one feature at a time, and CI stays green throughout: a seco
 - [ ] Slint GUI gaps against the QML app: tooltips, the room menu and its error strip, the list's scrollbar, the login fields following an identity that arrives after a switch, a replaced avatar file refreshing (SLINT.md), custom emoji and inline images, which `StyledText` can't show (SLINT.md)
 - [x] Spix server in Rust for Slint (`spix_slint`, in the spix fork), `--spix-port`, on Slint's `ElementHandle` search API, element names from `accessible-id`. Headless in CI: Slint's testing backend, in real time with its software renderer, in Spix builds, so that `takeScreenshot` (a PNG of an element) works and GUI tests can read pixels
 - [x] ctest runs the GUI tests in `slint.txt` against `rocketchat_slint`. TRACEABILITY.md gets its Slint column, and a check that the list and the column agree
+- [x] Slint sending (SEND-001, SEND-002): the composer under the open room's messages (Enter sends, Shift+Enter starts a line, the field grows with its text up to a height), the Send button, and the pending, failed and retry states in a message's header. `send` and `retry` go through `rc_view::room_view::outgoing` and the account's commands, as `rc_qt`'s room view model does. Without editing, quoting, the thread composer, the typing line and "also send to", which come with their own steps
 - [ ] Features, in the order of the GUI test files: auth, accounts, rooms, messages, realtime, sending, room menu, reactions, threads
 
 ## Phase 8: personal nice to haves

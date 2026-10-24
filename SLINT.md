@@ -56,3 +56,10 @@ The testing backend keeps a mock renderer by default, which measures text with f
 
 - **Workaround:** `rc_slint --spix-port` sets the testing backend itself with `renderer_name: Some("software".into())`, and `spix_slint`'s `takeScreenshot` crops its PNG from the snapshot. The software renderer also measures text with real fonts, so layouts differ slightly from the mock's.
 - **Possible patch:** `init_integration_test_with_system_time` taking the renderer name, so that no one has to build the platform by hand.
+
+## A multi-line `TextInput` is only a text input
+
+`TextInput` has no placeholder, doesn't grow with its text and doesn't keep the cursor in view in a `Flickable`. Enter in a multi-line one starts a line before any handler of an ancestor sees it.
+
+- **Workaround:** `composer.slint` puts the `TextInput` in a `Flickable` inside a `FocusScope`, whose `capture-key-pressed` takes Enter without Shift before the input does (`reject` for the rest). The field's height follows the input's `preferred-height`, clamped. A `Text` over it is the placeholder, and `cursor-position-changed` moves the `Flickable` to the cursor's line, whose height is estimated from the font size.
+- **Possible patch:** a `placeholder-text` on `TextInput`, and its own scrolling and `cursor-rect` property.

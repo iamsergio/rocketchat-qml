@@ -11,7 +11,9 @@ use rc_view::avatar_view::{
     AvatarUrls, color, file_path, initials, message_owner, room_placeholder,
 };
 use rc_view::message_list::MessageList;
-use rc_view::message_view::{author_name, body, day_label, mentions_me, system_text, time_text};
+use rc_view::message_view::{
+    author_name, body, day_label, delivery_name, mentions_me, system_text, time_text,
+};
 use rc_view::rich_html::message_html;
 use rc_view::room_view::kind_name;
 use rc_view::viewer::Clock;
@@ -100,6 +102,7 @@ pub fn message_row(list: &MessageList, row: usize, palette: &Palette) -> Option<
         first_of_day: list.first_of_day(row),
         day_label: day_label(message.ts, list.zone(), now).into(),
         mentions_me: mentions_me(message, list.viewer()),
+        delivery: delivery_name(message.delivery).into(),
         initials: initials(author_name(&message.author)).into(),
         initials_color: parse_color(&color(&message.author.username)),
         avatar_url: url.into(),

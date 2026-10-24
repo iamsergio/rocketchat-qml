@@ -30,6 +30,7 @@ export component MessageList inherits FocusScope {
     callback load-older();
     // A link of a body was clicked.
     callback open-link(string);
+    callback retry(string);
 
     property <int> seen-prepends;
     property <int> seen-resets;
@@ -39,6 +40,10 @@ export component MessageList inherits FocusScope {
     // height while the rows don't fill it.
     property <length> rows-height: lay.preferred-height;
     property <bool> at-top: flick.content-y >= Theme.scroll-top;
+    // The height of the view, and what it was when it last changed: the banner or a taller
+    // composer makes it shorter, which must not hide the newest message.
+    property <length> view-height: flick.height;
+    property <length> last-view-height;
 
     vertical-stretch: 1;
     horizontal-stretch: 1;
@@ -54,6 +59,7 @@ export component MessageList inherits FocusScope {
 
     // Keys go to the list, and a room that opens takes the focus, so that Home works at once.
     init => {
+        root.last-view-height = flick.height;
         root.focus();
     }
     changed room-id => {
@@ -104,6 +110,15 @@ export component MessageList inherits FocusScope {
         root.last-height = flick.content-height;
     }
 
+    // Was at the bottom: stays there when the view changes its height.
+    changed view-height => {
+        if flick.content-y <= root.last-view-height - root.last-height + Theme.scroll-tolerance {
+            root.scroll-to(root.bottom-y());
+        }
+        root.last-view-height = root.view-height;
+        root.last-height = flick.content-height;
+    }
+
     flick := Flickable {
         accessible-id: "messageList";
         accessible-role: list;
@@ -146,6 +161,9 @@ export component MessageList inherits FocusScope {
 
             for message in root.messages: MessageDelegate {
                 message: message;
+                retry(id) => {
+                    root.retry(id);
+                }
                 open-link(url) => {
                     root.open-link(url);
                 }

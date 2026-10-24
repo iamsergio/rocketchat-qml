@@ -17,11 +17,12 @@ use std::path::PathBuf;
 use std::rc::Rc;
 
 use rc_core::adapters::DiskFileCache;
-use rc_core::domain::{AccountId, RoomId};
+use rc_core::domain::{AccountId, MessageId, RoomId};
 use rc_core::{AccountHandle, Client, Event};
 use rc_view::accounts::AccountChange;
 use rc_view::dev_login;
 use rc_view::rich_html;
+use rc_view::room_view::outgoing;
 use rc_view::session_view::{LoginMode, SessionView, Status};
 use rc_view::startup;
 use rc_view::switchboard::{Shown, Switchboard};
@@ -131,6 +132,12 @@ fn connect_commands(window: &MainWindow) {
     window.on_add_account(|| App::with(App::add_account));
     window.on_remove_account(|id| App::with(|app| app.remove_account(&id)));
     window.on_open_room(|id| App::with(|app| app.open_room(&id)));
+    window.on_send(|text| {
+        let mut sent = false;
+        App::with(|app| sent = app.send(&text));
+        sent
+    });
+    window.on_retry(|id| App::with(|app| app.retry(&id)));
     window.on_load_older(|| App::with(|app| app.load_older()));
     window.on_open_link(|url| open_link(&url));
     let weak = window.as_weak();
@@ -394,6 +401,31 @@ impl App {
     /// or a load is going on already.
     fn load_older(&self) {
         self.current_account("load_older", |account| account.load_older());
+    }
+
+    /// Sends `text` to the open room. False if there is nothing to send (no room is open or the
+    /// text is blank), so that the composer keeps its text.
+    fn send(&self, text: &str) -> bool {
+        let room_id = self
+            .switchboard
+            .accounts()
+            .current_cache()
+            .room_state()
+            .room_id;
+        let Some((room, text, quote)) = outgoing(&room_id, text, "") else {
+            return false;
+        };
+        self.current_account("send_message", |account| {
+            account.send_message(room, &text, quote, None, false);
+        });
+        true
+    }
+
+    /// Sends a message that failed to send again.
+    fn retry(&self, id: &str) {
+        self.current_account("retry_message", |account| {
+            account.retry_message(MessageId::from(id.to_owned()));
+        });
     }
 
     fn open_room(&self, id: &str) {

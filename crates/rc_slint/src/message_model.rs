@@ -408,4 +408,28 @@ mod tests {
         assert_eq!(ids(&model), ["z", "a", "b", "c"]);
         assert_eq!(first_of_day(&model), [true, false, false, true]);
     }
+
+    // SEND-002
+    #[test]
+    fn a_message_shows_its_delivery_and_the_row_follows_it() {
+        let mut unsent = message("a", "2026-10-01T09:00:00Z");
+        unsent.delivery = Delivery::Pending;
+        let model = shown(vec![unsent.clone()]);
+        let delivery = |model: &MessageModel| model.row_data(0).unwrap().delivery.to_string();
+        assert_eq!(delivery(&model), "pending");
+
+        unsent.delivery = Delivery::Failed;
+        model.apply(&[TimelineChange::Updated {
+            index: 0,
+            message: unsent.clone(),
+        }]);
+        assert_eq!(delivery(&model), "failed");
+
+        unsent.delivery = Delivery::Sent;
+        model.apply(&[TimelineChange::Updated {
+            index: 0,
+            message: unsent,
+        }]);
+        assert_eq!(delivery(&model), "sent");
+    }
 }
