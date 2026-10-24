@@ -3,19 +3,28 @@
 
 import { Avatar } from "avatar.slint";
 import { KindIcon } from "icon.slint";
+import { MenuItem } from "menu_item.slint";
 import { RoomRow, RoomSection } from "structs.slint";
 import { Theme } from "theme.slint";
 
 // One row of the room list: a room, or the heading of a section (`roomSection_favorites` or
 // `roomSection_rooms`, with the heading `roomSectionHeader`). A room is named by its id: room names
 // aren't unique. Its icon is named after the room kind: `roomKind_channel`, `roomKind_private`,
-// `roomKind_direct`.
+// `roomKind_direct`. A right-click opens the menu of the room, whose items are popups, found from
+// the window by their names while it is open.
 export component RoomDelegate inherits Rectangle {
     in property <RoomRow> room;
     // Whether this is the open room.
     in property <bool> highlighted;
     callback clicked();
+    // The menu's commands. Leaving is only asked for: the page asks the user first.
+    callback set-favorite(bool);
+    callback mark-read();
+    callback mark-unread();
+    callback leave();
 
+    // The open room stays read, so it can't be marked unread; a direct message can't be left.
+    property <bool> can-mark-unread: !root.room.has-unread && !root.highlighted;
     property <bool> is-room: root.room.section == RoomSection.room;
 
     accessible-id: root.is-room ? "room_" + root.room.id : root.room.section == RoomSection.favorites ? "roomSection_favorites" : "roomSection_rooms";
@@ -166,6 +175,73 @@ export component RoomDelegate inherits Rectangle {
         touch := TouchArea {
             clicked => {
                 root.clicked();
+            }
+            pointer-event(event) => {
+                if event.button == PointerEventButton.right && event.kind == PointerEventKind.up {
+                    menu.show();
+                }
+            }
+        }
+
+        // Opens at the pointer; Slint keeps it inside the window.
+        menu := PopupWindow {
+            x: touch.mouse-x;
+            y: touch.mouse-y;
+            width: Theme.menu-width;
+            height: items.preferred-height + 2 * Theme.border-width;
+
+            Rectangle {
+                background: Theme.raised;
+                border-color: Theme.raised-hover;
+                border-width: Theme.border-width;
+                border-radius: Theme.radius-control;
+
+                items := VerticalLayout {
+                    padding: Theme.menu-padding;
+                    spacing: Theme.spacing-none;
+
+                    MenuItem {
+                        accessible-id: "roomFavoriteAction";
+                        text: root.room.favorite ? @tr("Remove from favorites") : @tr("Add to favorites");
+                        triggered => {
+                            menu.close();
+                            root.set-favorite(!root.room.favorite);
+                        }
+                    }
+
+                    MenuItem {
+                        accessible-id: "roomMarkReadAction";
+                        visible: root.room.has-unread;
+                        height: self.visible ? Theme.menu-item-height : Theme.spacing-none;
+                        text: @tr("Mark as read");
+                        triggered => {
+                            menu.close();
+                            root.mark-read();
+                        }
+                    }
+
+                    MenuItem {
+                        accessible-id: "roomMarkUnreadAction";
+                        visible: root.can-mark-unread;
+                        height: self.visible ? Theme.menu-item-height : Theme.spacing-none;
+                        text: @tr("Mark as unread");
+                        triggered => {
+                            menu.close();
+                            root.mark-unread();
+                        }
+                    }
+
+                    MenuItem {
+                        accessible-id: "roomLeaveAction";
+                        visible: root.room.can-leave;
+                        height: self.visible ? Theme.menu-item-height : Theme.spacing-none;
+                        text: @tr("Leave");
+                        triggered => {
+                            menu.close();
+                            root.leave();
+                        }
+                    }
+                }
             }
         }
     }

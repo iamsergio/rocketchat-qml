@@ -30,6 +30,13 @@ On success the core applies the change to the room as it is by then, without wai
 - **QML:** one `ListView` with `section.property: "favorite"` (a bool section value is the text "true" or "false"). The section item always exists and has no height without favorites, because the view decides whether it is visible. Menu items take their text and visibility from the roles, with no branching in QML: `roomMarkReadAction` is visible when `hasUnread`, and `roomMarkUnreadAction` when not `hasUnread` and the row is not the open room. The menu and the confirmation are parented to the window's overlay while open.
 - **Spix:** the menu opens with a right-click (`MouseArea`, as `TapHandler` doesn't react to Spix clicks) on the row `room_<id>`; its items and the dialog are addressed from the window and exist only while open. A test closes the menu with Escape. See [GUI testing contract](gui-testing.md) for the names.
 
+## Slint side
+
+- **Rows:** `RoomRow` has `favorite` and `can-leave` (from `Room::can_leave`) besides `has-unread`; the menu offers what they say, with the open room excluded from "Mark as unread" as in QML.
+- **Menu:** `room_delegate.slint` has a `PopupWindow` at the pointer, opened by a right-click (`pointer-event`), of `MenuItem`s. Slint keeps a popup inside the window, so a row near an edge needs nothing of ours. The three conditional items are always there and take no height while hidden (`visible` and a height of zero): an `if` item in a popup is not clicked where the test backend aims (SLINT.md).
+- **Leaving:** the item only asks: `main.slint` holds the room's id and name and shows `leave_dialog.slint`, which dims and blocks the whole window (Escape cancels). Confirming calls `leave-room`.
+- **Errors:** `room-action-error` of the window is the text of the last failed `Event::RoomAction`, cleared by the next command (set to empty in `app.rs` before each one) and by the Dismiss button; it shows as `roomListError` under the list. It is a few lines, so it is not shared with `rc_qt`'s model.
+
 ## Search
 
 A field below the room list, at the bottom of the sidebar (Ctrl+K focuses it) finds the user's own rooms by name. It is local: no server call, so it finds what the account has: the rooms of the list and the quiet direct messages the list holds back (ROOM-008), which is how an old direct message is found by name. Searching the directory, for people and channels the user isn't in, comes later and will add to this field.

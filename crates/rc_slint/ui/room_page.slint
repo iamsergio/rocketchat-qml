@@ -3,6 +3,7 @@
 
 import { Composer } from "composer.slint";
 import { KindIcon } from "icon.slint";
+import { FlatButton } from "flat_button.slint";
 import { ListView } from "list_view.slint";
 import { MessageList } from "message_list.slint";
 import { RoomDelegate } from "room_delegate.slint";
@@ -34,7 +35,16 @@ export component RoomPage inherits Rectangle {
     in property <bool> loading-older;
     in property <int> prepends;
     in property <int> resets;
+    // Why the last command on a room failed; empty for none.
+    in property <string> room-action-error;
     callback open-room(string);
+    // The room's menu: a favorite is set or taken back, the room is marked read or unread, or
+    // leaving is asked for (the id and the name, for the dialog that asks).
+    callback set-favorite(string, bool);
+    callback mark-read(string);
+    callback mark-unread(string);
+    callback leave(string, string);
+    callback dismiss-room-action-error();
     // The list of messages is at its top: older ones are wanted.
     callback load-older();
     // A link of the topic or of a message was clicked.
@@ -112,6 +122,54 @@ export component RoomPage inherits Rectangle {
                         highlighted: room.id == root.room-id;
                         clicked => {
                             root.open-room(room.id);
+                        }
+                        set-favorite(favorite) => {
+                            root.set-favorite(room.id, favorite);
+                        }
+                        mark-read => {
+                            root.mark-read(room.id);
+                        }
+                        mark-unread => {
+                            root.mark-unread(room.id);
+                        }
+                        leave => {
+                            root.leave(room.id, room.name);
+                        }
+                    }
+                }
+
+                // Why the last command on a room failed, until it is dismissed or the user tries
+                // again.
+                if !root.room-action-error.is-empty: Rectangle {
+                    accessible-id: "roomListError";
+                    accessible-role: groupbox;
+
+                    HorizontalLayout {
+                        padding: Theme.spacing-l;
+                        spacing: Theme.spacing-l;
+
+                        Text {
+                            accessible-id: "roomListErrorText";
+                            horizontal-stretch: 1;
+                            color: Theme.error;
+                            font-size: Theme.font-size-small;
+                            vertical-alignment: center;
+                            wrap: word-wrap;
+                            text: root.room-action-error;
+                        }
+
+                        VerticalLayout {
+                            alignment: center;
+                            padding: Theme.spacing-none;
+                            spacing: Theme.spacing-none;
+
+                            FlatButton {
+                                accessible-id: "roomListErrorDismiss";
+                                text: @tr("Dismiss");
+                                clicked => {
+                                    root.dismiss-room-action-error();
+                                }
+                            }
                         }
                     }
                 }

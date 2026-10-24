@@ -58,6 +58,10 @@ export struct RoomRow {
     mentions: int,
     // The room has something new for the user, which its name shows.
     has-unread: bool,
+    // The room is one of the user's favorites, and the user can leave it (not a direct message):
+    // what its menu offers.
+    favorite: bool,
+    can-leave: bool,
     // The initials and the colour behind them, shown while there is no avatar image.
     initials: string,
     initials-color: color,

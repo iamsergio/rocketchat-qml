@@ -16,6 +16,13 @@ The limitations we hit in Slint (1.18.1) and its testing crate, how we work arou
 - **Workaround:** `spix_slint` clicks with the public `single_click`/`double_click`, which use `absolute_center()`. `getBoundingBox` of a popup item is still relative to the popup; no GUI test reads it.
 - **Possible patch:** make `absolute_center()` public, or give `absolute_position()` a popup-aware sibling.
 
+## A click on an `if` item inside a `PopupWindow` misses
+
+The testing backend's click on an element made by an `if` (a conditional child) of a `PopupWindow` lands somewhere other than the element: the popup closes as for a click outside it, and the item's `triggered` doesn't run. Items made unconditionally are hit.
+
+- **Workaround:** `room_delegate.slint` makes every item of the room menu always, with `visible` and a height of zero while hidden, instead of `if`.
+- **Possible patch:** make the popup-aware position of `absolute_center()` take the repeater's offset into account.
+
 ## The testing crate is internal
 
 `i-slint-backend-testing` must match `slint`'s version exactly (`=1.18.1` in `Cargo.toml`), and has no stability promise. Its `internal` feature doesn't build from crates.io: it `include_bytes!`s fonts that only exist in Slint's repository.

@@ -5,6 +5,7 @@
 import "../../../src/gui/fonts/InstrumentSans.ttf";
 import "../../../src/gui/fonts/InstrumentSans-Italic.ttf";
 
+import { LeaveDialog } from "leave_dialog.slint";
 import { LoginPage } from "login_page.slint";
 import { RoomPage } from "room_page.slint";
 import { ServerRail } from "server_rail.slint";
@@ -63,7 +64,16 @@ export component MainWindow inherits Window {
     callback select-account(string);
     callback add-account();
     callback remove-account(string);
+    // Why the last command on a room failed; empty for none.
+    in property <string> room-action-error;
     callback open-room(string);
+    // The room's menu: a favorite is set or taken back, the room is marked read or unread, the
+    // user confirmed leaving it, or dismissed the error.
+    callback set-favorite(string, bool);
+    callback mark-read(string);
+    callback mark-unread(string);
+    callback leave-room(string);
+    callback dismiss-room-action-error();
     // The list of messages is at its top: older ones are wanted.
     callback load-older();
     // Opens the address of a link of a text in the browser.
@@ -73,6 +83,11 @@ export component MainWindow inherits Window {
     callback retry(string);
     // Logs what Slint knows about the display.
     callback dump-info();
+
+    // The room that leaving was asked for, until the user answers: its id, and its name for the
+    // dialog.
+    property <string> leaving-id;
+    property <string> leaving-name;
 
     title: @tr("RocketChatQml");
     background: Theme.base;
@@ -129,6 +144,7 @@ export component MainWindow inherits Window {
             room-kind: root.room-kind;
             room-topic: root.room-topic;
             room-topic-html: root.room-topic-html;
+            room-action-error: root.room-action-error;
             messages: root.messages;
             reached-start: root.reached-start;
             loading-older: root.loading-older;
@@ -136,6 +152,22 @@ export component MainWindow inherits Window {
             resets: root.resets;
             open-room(id) => {
                 root.open-room(id);
+            }
+            set-favorite(id, favorite) => {
+                root.set-favorite(id, favorite);
+            }
+            mark-read(id) => {
+                root.mark-read(id);
+            }
+            mark-unread(id) => {
+                root.mark-unread(id);
+            }
+            leave(id, name) => {
+                root.leaving-id = id;
+                root.leaving-name = name;
+            }
+            dismiss-room-action-error => {
+                root.dismiss-room-action-error();
             }
             load-older => {
                 root.load-older();
@@ -173,6 +205,23 @@ export component MainWindow inherits Window {
             logout => {
                 root.logout();
             }
+        }
+    }
+
+    // Over everything, the rail included.
+    if !root.leaving-id.is-empty: LeaveDialog {
+        x: Theme.spacing-none;
+        y: Theme.spacing-none;
+        width: parent.width;
+        height: parent.height;
+        z: Theme.z-modal;
+        room-name: root.leaving-name;
+        confirmed => {
+            root.leave-room(root.leaving-id);
+            root.leaving-id = "";
+        }
+        cancelled => {
+            root.leaving-id = "";
         }
     }
 }
