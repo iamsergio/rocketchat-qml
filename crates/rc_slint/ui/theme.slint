@@ -123,6 +123,11 @@ export global Theme {
     out property <length> login-form-width: 340px;
     out property <length> menu-item-height: 30px;
     out property <length> menu-width: 160px;
+    // The "..." button of a message, which opens its menu.
+    out property <length> menu-button-width: 28px;
+    out property <length> menu-button-height: 22px;
+    // The bar at the left of what the composer edits.
+    out property <length> quote-bar-width: 2px;
     out property <length> room-avatar-size: 22px;
     // Two lines fit: the name and the topic.
     out property <length> room-header-height: 56px;
@@ -201,6 +206,8 @@ export global Theme {
     // Opacity
     out property <float> disabled-opacity: 0.6;
     out property <float> opaque: 1;
+    // What shows only while the pointer is over its row: clear but still clickable.
+    out property <float> clear: 0;
 
     // The factor that makes the main button brighter under the pointer.
     out property <float> hover-brighter: 0.08;

@@ -10,7 +10,7 @@ import { LoginPage } from "login_page.slint";
 import { RoomPage } from "room_page.slint";
 import { ServerRail } from "server_rail.slint";
 import { StartupPage } from "startup_page.slint";
-import { AccountTile, LoginMode, MessageRow, RoomRow, RoomSection, SessionStatus } from "structs.slint";
+import { AccountTile, LoginMode, MessageMenu, MessageRow, RoomRow, RoomSection, SessionStatus } from "structs.slint";
 import { Theme } from "theme.slint";
 
 // The theme, for Rust: the colours it writes into rich text.
@@ -84,6 +84,22 @@ export component MainWindow inherits Window {
     callback mark-unread(string);
     callback leave-room(string);
     callback dismiss-room-list-error();
+    // Why the last edit or deletion of a message failed; empty for none.
+    in property <string> room-action-error;
+    callback dismiss-room-action-error();
+    // The menu of a message asks what it offers when it opens; the user confirmed deleting a
+    // message.
+    callback menu-allowed(string) -> MessageMenu;
+    callback delete-message(string);
+    // The composer edits a message: it asks for the text of one and for the newest the user can
+    // edit, and saves a new text. The answer to the last save is the counter, the message and
+    // whether it worked.
+    callback message-text(string) -> string;
+    callback last-editable() -> string;
+    callback save-edit(string, string);
+    in property <int> edit-answers;
+    in property <string> edit-answer-id;
+    in property <bool> edit-answer-ok;
     // The list of messages is at its top: older ones are wanted.
     callback load-older();
     // Opens the address of a link of a text in the browser.
@@ -98,6 +114,8 @@ export component MainWindow inherits Window {
     // dialog.
     property <string> leaving-id;
     property <string> leaving-name;
+    // The message that deleting was asked for, until the user answers.
+    property <string> deleting-id;
 
     title: @tr("RocketChatQml");
     background: Theme.base;
@@ -156,6 +174,10 @@ export component MainWindow inherits Window {
             room-topic-html: root.room-topic-html;
             typing: root.typing;
             room-list-error: root.room-list-error;
+            room-action-error: root.room-action-error;
+            edit-answers: root.edit-answers;
+            edit-answer-id: root.edit-answer-id;
+            edit-answer-ok: root.edit-answer-ok;
             search-active: root.search-active;
             search-trimmed: root.search-trimmed;
             search-results: root.search-results;
@@ -186,6 +208,24 @@ export component MainWindow inherits Window {
             }
             dismiss-room-list-error => {
                 root.dismiss-room-list-error();
+            }
+            dismiss-room-action-error => {
+                root.dismiss-room-action-error();
+            }
+            menu-allowed(id) => {
+                return root.menu-allowed(id);
+            }
+            delete-message(id) => {
+                root.deleting-id = id;
+            }
+            message-text(id) => {
+                return root.message-text(id);
+            }
+            last-editable => {
+                return root.last-editable();
+            }
+            save-edit(id, text) => {
+                root.save-edit(id, text);
             }
             load-older => {
                 root.load-older();
@@ -245,6 +285,27 @@ export component MainWindow inherits Window {
         }
         cancelled => {
             root.leaving-id = "";
+        }
+    }
+
+    if !root.deleting-id.is-empty: ConfirmDialog {
+        x: Theme.spacing-none;
+        y: Theme.spacing-none;
+        width: parent.width;
+        height: parent.height;
+        z: Theme.z-modal;
+        title: @tr("Delete message");
+        question: @tr("Delete this message for everyone? This can't be undone.");
+        confirm-text: @tr("Delete");
+        question-id: "deleteDialog";
+        confirm-id: "deleteConfirm";
+        cancel-id: "deleteCancel";
+        confirmed => {
+            root.delete-message(root.deleting-id);
+            root.deleting-id = "";
+        }
+        cancelled => {
+            root.deleting-id = "";
         }
     }
 }

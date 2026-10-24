@@ -9,7 +9,7 @@ import { MessageList } from "message_list.slint";
 import { RoomDelegate } from "room_delegate.slint";
 import { RoomSearchField } from "room_search_field.slint";
 import { RoomSearchResults } from "room_search_results.slint";
-import { MessageRow, RoomRow } from "structs.slint";
+import { MessageMenu, MessageRow, RoomRow } from "structs.slint";
 import { Theme } from "theme.slint";
 
 // The page of a logged-in account: the sidebar with the server, the user and the room list, and
@@ -57,6 +57,21 @@ export component RoomPage inherits Rectangle {
     callback mark-unread(string);
     callback leave(string, string);
     callback dismiss-room-list-error();
+    // Why the last edit or deletion of a message failed; empty for none.
+    in property <string> room-action-error;
+    callback dismiss-room-action-error();
+    // The menu of a message: what it offers now, asked when it opens, and the user's choices.
+    // Deleting is only asked for: the window asks the user first.
+    callback menu-allowed(string) -> MessageMenu;
+    callback delete-message(string);
+    // The composer edits a message: its text and the newest editable one are asked for, the new
+    // text is saved, and the answer comes back as the counter going up (see `composer.slint`).
+    callback message-text(string) -> string;
+    callback last-editable() -> string;
+    callback save-edit(string, string);
+    in property <int> edit-answers;
+    in property <string> edit-answer-id;
+    in property <bool> edit-answer-ok;
     // The list of messages is at its top: older ones are wanted.
     callback load-older();
     // A link of the topic or of a message was clicked.
@@ -403,6 +418,50 @@ export component RoomPage inherits Rectangle {
                             open-link(url) => {
                                 root.open-link(url);
                             }
+                            menu-allowed(id) => {
+                                return root.menu-allowed(id);
+                            }
+                            edit(id) => {
+                                composer.begin-edit(id);
+                            }
+                            delete(id) => {
+                                root.delete-message(id);
+                            }
+                        }
+
+                        // Why the last edit or deletion failed, until it is dismissed or the user
+                        // tries again.
+                        if !root.room-action-error.is-empty: Rectangle {
+                            accessible-id: "roomActionError";
+                            accessible-role: groupbox;
+
+                            HorizontalLayout {
+                                padding: Theme.spacing-l;
+                                spacing: Theme.spacing-l;
+
+                                Text {
+                                    accessible-id: "roomActionErrorText";
+                                    horizontal-stretch: 1;
+                                    color: Theme.error;
+                                    vertical-alignment: center;
+                                    wrap: word-wrap;
+                                    text: root.room-action-error;
+                                }
+
+                                VerticalLayout {
+                                    alignment: center;
+                                    padding: Theme.spacing-none;
+                                    spacing: Theme.spacing-none;
+
+                                    FlatButton {
+                                        accessible-id: "roomActionErrorDismiss";
+                                        text: @tr("Dismiss");
+                                        clicked => {
+                                            root.dismiss-room-action-error();
+                                        }
+                                    }
+                                }
+                            }
                         }
 
                         // Empty most of the time, but its height is always taken.
@@ -433,7 +492,10 @@ export component RoomPage inherits Rectangle {
                             padding-bottom: Theme.spacing-xxxl;
                             spacing: Theme.spacing-none;
 
-                            Composer {
+                            composer := Composer {
+                                edit-answers: root.edit-answers;
+                                edit-answer-id: root.edit-answer-id;
+                                edit-answer-ok: root.edit-answer-ok;
                                 focus-wanted: root.composer-wanted;
                                 focus-requests: root.composer-requests;
                                 room-id: root.room-id;
@@ -442,6 +504,15 @@ export component RoomPage inherits Rectangle {
                                 }
                                 send(text) => {
                                     return root.send(text);
+                                }
+                                save-edit(id, text) => {
+                                    root.save-edit(id, text);
+                                }
+                                message-text(id) => {
+                                    return root.message-text(id);
+                                }
+                                last-editable => {
+                                    return root.last-editable();
                                 }
                             }
                         }

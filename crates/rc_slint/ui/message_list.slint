@@ -3,7 +3,7 @@
 
 import { BusyIndicator } from "busy_indicator.slint";
 import { MessageDelegate } from "message_delegate.slint";
-import { MessageRow } from "structs.slint";
+import { MessageMenu, MessageRow } from "structs.slint";
 import { Theme } from "theme.slint";
 
 // The messages of the open room, oldest first, bottom-aligned when they don't fill the list.
@@ -33,6 +33,9 @@ export component MessageList inherits FocusScope {
     // A link of a body was clicked.
     callback open-link(string);
     callback retry(string);
+    callback menu-allowed(string) -> MessageMenu;
+    callback edit(string);
+    callback delete(string);
 
     property <int> seen-prepends;
     property <int> seen-resets;
@@ -172,6 +175,15 @@ export component MessageList inherits FocusScope {
                 }
                 open-link(url) => {
                     root.open-link(url);
+                }
+                menu-allowed(id) => {
+                    return root.menu-allowed(id);
+                }
+                edit(id) => {
+                    root.edit(id);
+                }
+                delete(id) => {
+                    root.delete(id);
                 }
             }
         }

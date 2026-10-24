@@ -16,12 +16,15 @@ use std::cell::RefCell;
 use std::path::PathBuf;
 use std::rc::Rc;
 
+use jiff::Timestamp;
 use rc_core::adapters::DiskFileCache;
 use rc_core::domain::{AccountId, MessageId, RoomId};
+use rc_core::policy::{ActionError, MessageAction};
 use rc_core::{AccountHandle, Client, Event};
 use rc_view::accounts::AccountChange;
 use rc_view::avatar_view::AvatarUrls;
 use rc_view::dev_login;
+use rc_view::message_view::{can_delete, can_edit};
 use rc_view::rich_html;
 use rc_view::room_search::{search_rooms, trimmed};
 use rc_view::room_view::outgoing;
@@ -29,14 +32,14 @@ use rc_view::session_view::{LoginMode, SessionView, Status};
 use rc_view::startup;
 use rc_view::switchboard::{Shown, Switchboard};
 use secrecy::SecretString;
-use slint::{ComponentHandle, Model, ModelRc, VecModel, Weak};
+use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel, Weak};
 
 use crate::message_model::MessageModel;
 use crate::rich_markdown::{self, Palette};
 use crate::room_model::RoomModel;
 use crate::room_search_model::RoomSearchModel;
 use crate::rows::tile;
-use crate::ui::{self, AccountTile, MainWindow, Theme};
+use crate::ui::{self, AccountTile, MainWindow, MessageMenu, Theme};
 
 thread_local! {
     // The one app of the GUI thread: set by `start`, taken by `stop`.
@@ -158,6 +161,24 @@ fn connect_commands(window: &MainWindow) {
     window.on_mark_unread(|id| App::with(|app| app.mark_unread(&id)));
     window.on_leave_room(|id| App::with(|app| app.leave_room(&id)));
     window.on_dismiss_room_list_error(|| App::with(|app| app.show_room_list_error("")));
+    window.on_dismiss_room_action_error(|| App::with(|app| app.show_room_action_error("")));
+    window.on_menu_allowed(|id| {
+        let mut allowed = MessageMenu::default();
+        App::with(|app| allowed = app.menu_allowed(&id));
+        allowed
+    });
+    window.on_message_text(|id| {
+        let mut text = String::new();
+        App::with(|app| text = app.message_text(&id));
+        text.into()
+    });
+    window.on_last_editable(|| {
+        let mut id = String::new();
+        App::with(|app| id = app.last_editable());
+        id.into()
+    });
+    window.on_save_edit(|id, text| App::with(|app| app.edit_message(&id, &text)));
+    window.on_delete_message(|id| App::with(|app| app.delete_message(&id)));
     window.on_load_older(|| App::with(|app| app.load_older()));
     window.on_open_link(|url| open_link(&url));
     let weak = window.as_weak();
@@ -287,6 +308,11 @@ impl App {
                     .map_or_else(String::new, |error| error.to_string());
                 self.show_room_list_error(&text);
             }
+            Event::MessageAction {
+                id,
+                action,
+                outcome,
+            } => self.finish_action(&id, action, &outcome),
             Event::Avatars(updates) => {
                 let cache = self.switchboard.accounts().current_cache();
                 let changes = cache.avatar_changes(&updates);
@@ -404,6 +430,10 @@ impl App {
             return;
         };
         let state = self.switchboard.accounts().current_cache().room_state();
+        // What failed in one room means nothing in another.
+        if window.get_room_id().as_str() != state.room_id {
+            window.set_room_action_error(SharedString::default());
+        }
         window.set_room_id(state.room_id.into());
         window.set_room_name(state.name.into());
         window.set_room_kind(state.kind.into());
@@ -508,6 +538,83 @@ impl App {
         if let Some(window) = self.window.upgrade() {
             window.set_room_list_error(text.into());
         }
+    }
+
+    /// Shows why the last edit or deletion of a message failed, or nothing for the empty text.
+    fn show_room_action_error(&self, text: &str) {
+        if let Some(window) = self.window.upgrade() {
+            window.set_room_action_error(text.into());
+        }
+    }
+
+    /// Takes the core's answer to an edit or a deletion in: a failure is shown, and the composer
+    /// is told how an edit ended.
+    fn finish_action(
+        &self,
+        id: &MessageId,
+        action: MessageAction,
+        outcome: &Result<(), ActionError>,
+    ) {
+        let text = outcome
+            .as_ref()
+            .err()
+            .map_or_else(String::new, ToString::to_string);
+        self.show_room_action_error(&text);
+        if action == MessageAction::Edit
+            && let Some(window) = self.window.upgrade()
+        {
+            window.set_edit_answer_id(id.as_str().into());
+            window.set_edit_answer_ok(outcome.is_ok());
+            window.set_edit_answers(window.get_edit_answers().wrapping_add(1));
+        }
+    }
+
+    /// What the menu of the message offers now: the policy has time limits, so this is asked when
+    /// the menu opens and not worked out with the row.
+    fn menu_allowed(&self, id: &str) -> MessageMenu {
+        let cache = self.switchboard.accounts().current_cache();
+        let viewer = cache.viewer();
+        let now = Timestamp::now();
+        cache
+            .held(id)
+            .map_or_else(MessageMenu::default, |message| MessageMenu {
+                can_edit: can_edit(message, &viewer, now),
+                can_delete: can_delete(message, &viewer, now),
+            })
+    }
+
+    /// The text of a message as written, empty if it isn't held.
+    fn message_text(&self, id: &str) -> String {
+        self.switchboard
+            .accounts()
+            .current_cache()
+            .message_text(id)
+            .map_or_else(String::new, str::to_owned)
+    }
+
+    /// The id of the newest message of the open room that the user can edit now, or empty.
+    fn last_editable(&self) -> String {
+        self.switchboard
+            .accounts()
+            .current_cache()
+            .last_editable(Timestamp::now())
+            .map_or_else(String::new, |message| message.id.to_string())
+    }
+
+    /// Saves the new text of a message. The answer is `Event::MessageAction`.
+    fn edit_message(&self, id: &str, text: &str) {
+        self.show_room_action_error("");
+        self.current_account("edit_message", |account| {
+            account.edit_message(MessageId::from(id.to_owned()), text);
+        });
+    }
+
+    /// Deletes a message. The answer is `Event::MessageAction`.
+    fn delete_message(&self, id: &str) {
+        self.show_room_action_error("");
+        self.current_account("delete_message", |account| {
+            account.delete_message(MessageId::from(id.to_owned()));
+        });
     }
 
     /// Marks the room as a favorite, or takes it back.

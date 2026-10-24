@@ -448,4 +448,24 @@ mod tests {
         assert!(model.row_data(0).unwrap().edited);
         assert!(!model.row_data(1).unwrap().edited);
     }
+
+    // ACT-001, ACT-002
+    #[test]
+    fn a_message_of_the_user_has_a_menu_and_the_row_follows_the_viewer() {
+        let model = shown(days(&["a"]));
+        assert!(!model.row_data(0).unwrap().has_menu);
+
+        model.set_viewer(Viewer {
+            user_id: Some("u".to_owned().into()),
+            ..Viewer::default()
+        });
+        assert!(model.row_data(0).unwrap().has_menu);
+
+        // Somebody else's message has none.
+        model.set_viewer(Viewer {
+            user_id: Some("someone else".to_owned().into()),
+            ..Viewer::default()
+        });
+        assert!(!model.row_data(0).unwrap().has_menu);
+    }
 }
