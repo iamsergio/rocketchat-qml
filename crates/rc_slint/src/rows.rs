@@ -103,6 +103,7 @@ pub fn message_row(list: &MessageList, row: usize, palette: &Palette) -> Option<
         system_text: system_text(message).into(),
         first_of_day: list.first_of_day(row),
         day_label: day_label(message.ts, list.zone(), now).into(),
+        edited: message.edited,
         mentions_me: mentions_me(message, list.viewer()),
         delivery: delivery_name(message.delivery).into(),
         initials: initials(author_name(&message.author)).into(),

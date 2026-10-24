@@ -432,4 +432,20 @@ mod tests {
         }]);
         assert_eq!(delivery(&model), "sent");
     }
+
+    // RICH-006
+    #[test]
+    fn an_edited_message_is_marked_and_the_row_follows_it() {
+        let mut edited = message("a", "2026-10-01T09:00:00Z");
+        let model = shown(vec![edited.clone(), message("b", "2026-10-01T10:00:00Z")]);
+        assert!(!model.row_data(0).unwrap().edited);
+
+        edited.edited = true;
+        model.apply(&[TimelineChange::Updated {
+            index: 0,
+            message: edited,
+        }]);
+        assert!(model.row_data(0).unwrap().edited);
+        assert!(!model.row_data(1).unwrap().edited);
+    }
 }
