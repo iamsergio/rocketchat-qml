@@ -3,24 +3,55 @@
 
 import { Avatar } from "avatar.slint";
 import { FlatButton } from "flat_button.slint";
-import { MessageRow } from "structs.slint";
+import { MenuItem } from "menu_item.slint";
+import { MessageMenu, MessageRow } from "structs.slint";
 import { Theme } from "theme.slint";
 
 // One message of the open room, named `msg_<id>` by its message id. Its parts are named like the
 // Qt app's: `msgDaySeparator` (on the first message of a day), `msgAvatar`, `msgAuthor`, `msgTime`,
 // `msgMentionsMe`, `msgBody` (the message as written, holding `msgBodyHtml`, what is shown), and
-// `msgSystem` for a system message, which has no author and no body.
+// `msgSystem` for a system message, which has no author and no body. A message with a menu has the
+// button `msgMenuButton`, clear until the pointer is over the message; it and a right-click on the
+// message open the menu, whose items are popups, found from the window by their names while it is
+// open.
 export component MessageDelegate inherits Rectangle {
     in property <MessageRow> message;
     // A link of the body was clicked.
     callback open-link(string);
     // The id of a message that failed to send, to send again.
     callback retry(string);
+    // What the menu of the message (by its id) offers now, asked when it opens.
+    callback menu-allowed(string) -> MessageMenu;
+    // The menu's commands. Deleting is only asked for: the page asks the user first.
+    callback edit(string);
+    callback delete(string);
 
     // The width that wrapped texts have: the row's, less the space around them. Given explicitly,
     // since a wrapped text can't tell its height from the width a layout will give it.
     property <length> text-width: root.width - 2 * Theme.spacing-xxxl;
     property <length> body-width: root.text-width - Theme.avatar-size - Theme.spacing-xxl;
+
+    // What the menu offers, as of when it was opened; and where it opens, in the message's own
+    // coordinates.
+    property <bool> can-edit;
+    property <bool> can-delete;
+    property <length> menu-x;
+    property <length> menu-y;
+
+    // Opens the menu at `x`, `y` unless it would be empty.
+    function open-menu(x: length, y: length) {
+        if !root.message.has-menu {
+            return;
+        }
+        let allowed = root.menu-allowed(root.message.id);
+        root.can-edit = allowed.can-edit;
+        root.can-delete = allowed.can-delete;
+        if allowed.can-edit || allowed.can-delete {
+            root.menu-x = x;
+            root.menu-y = y;
+            menu.show();
+        }
+    }
 
     accessible-role: list-item;
     accessible-id: "msg_" + root.message.id;
@@ -76,6 +107,15 @@ export component MessageDelegate inherits Rectangle {
                 }
             }
 
+            // Behind the message, so that what is on it takes its own clicks.
+            row-touch := TouchArea {
+                pointer-event(event) => {
+                    if event.button == PointerEventButton.right && event.kind == PointerEventKind.up {
+                        root.open-menu(self.absolute-position.x + self.mouse-x - root.absolute-position.x, self.absolute-position.y + self.mouse-y - root.absolute-position.y);
+                    }
+                }
+            }
+
             content := HorizontalLayout {
                 padding-left: Theme.spacing-xxxl;
                 padding-right: Theme.spacing-xxxl;
@@ -114,6 +154,7 @@ export component MessageDelegate inherits Rectangle {
 
                         Text {
                             accessible-id: "msgAuthor";
+                            vertical-alignment: center;
                             color: Theme.text;
                             font-weight: Theme.font-weight-semibold;
                             overflow: elide;
@@ -122,6 +163,7 @@ export component MessageDelegate inherits Rectangle {
 
                         Text {
                             accessible-id: "msgTime";
+                            vertical-alignment: center;
                             color: Theme.text-faint;
                             font-size: Theme.font-size-tiny;
                             text: root.message.time;
@@ -129,6 +171,7 @@ export component MessageDelegate inherits Rectangle {
 
                         if root.message.edited: Text {
                             accessible-id: "msgEdited";
+                            vertical-alignment: center;
                             color: Theme.text-faint;
                             font-size: Theme.font-size-tiny;
                             text: @tr("(edited)");
@@ -138,10 +181,45 @@ export component MessageDelegate inherits Rectangle {
                             horizontal-stretch: 1;
                         }
 
+                        // Keeps its place the rest of the time, so the rows don't change height.
+                        VerticalLayout {
+                            alignment: center;
+                            width: Theme.menu-button-width;
+                            padding: Theme.spacing-none;
+                            spacing: Theme.spacing-none;
+
+                            menu-button := Rectangle {
+                                accessible-id: "msgMenuButton";
+                                accessible-role: button;
+                                accessible-label: @tr("Message menu");
+                                visible: root.message.has-menu;
+                                height: Theme.menu-button-height;
+                                opacity: row-touch.has-hover || button-touch.has-hover || menu.is-open ? Theme.opaque : Theme.clear;
+                                background: Theme.raised;
+                                border-color: Theme.raised-hover;
+                                border-width: Theme.border-width;
+                                border-radius: Theme.radius-control;
+
+                                Text {
+                                    color: button-touch.has-hover ? Theme.text : Theme.text-muted;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                    text: "\u{22EF}";
+                                }
+
+                                button-touch := TouchArea {
+                                    clicked => {
+                                        root.open-menu(menu-button.absolute-position.x - root.absolute-position.x, menu-button.absolute-position.y - root.absolute-position.y + menu-button.height);
+                                    }
+                                }
+                            }
+                        }
+
                         // These exist only while the message is in that state, so that a test can
                         // find the one unsent message without knowing its id.
                         if root.message.delivery == "pending": Text {
                             accessible-id: "msgPending";
+                            vertical-alignment: center;
                             color: Theme.text-faint;
                             font-size: Theme.font-size-tiny;
                             text: @tr("Sending…");
@@ -149,6 +227,7 @@ export component MessageDelegate inherits Rectangle {
 
                         if root.message.delivery == "failed": Text {
                             accessible-id: "msgFailed";
+                            vertical-alignment: center;
                             color: Theme.error;
                             font-size: Theme.font-size-tiny;
                             text: @tr("Not sent");
@@ -212,6 +291,50 @@ export component MessageDelegate inherits Rectangle {
                 color: Theme.text-faint;
                 font-size: Theme.font-size-tiny;
                 text: root.message.time;
+            }
+        }
+    }
+
+    // Opens at the pointer or under the button; Slint keeps it inside the window. The items
+    // that don't apply are hidden with no height and not left out with `if`, which a click
+    // would miss (SLINT.md). Quote, reaction and thread items go above Edit.
+    menu := PopupWindow {
+        x: root.menu-x;
+        y: root.menu-y;
+        width: Theme.menu-width;
+        height: items.preferred-height + 2 * Theme.border-width;
+
+        Rectangle {
+            background: Theme.raised;
+            border-color: Theme.raised-hover;
+            border-width: Theme.border-width;
+            border-radius: Theme.radius-control;
+
+            items := VerticalLayout {
+                padding: Theme.menu-padding;
+                spacing: Theme.spacing-none;
+
+                MenuItem {
+                    accessible-id: "msgEditAction";
+                    visible: root.can-edit;
+                    height: self.visible ? Theme.menu-item-height : Theme.spacing-none;
+                    text: @tr("Edit");
+                    triggered => {
+                        menu.close();
+                        root.edit(root.message.id);
+                    }
+                }
+
+                MenuItem {
+                    accessible-id: "msgDeleteAction";
+                    visible: root.can-delete;
+                    height: self.visible ? Theme.menu-item-height : Theme.spacing-none;
+                    text: @tr("Delete");
+                    triggered => {
+                        menu.close();
+                        root.delete(root.message.id);
+                    }
+                }
             }
         }
     }

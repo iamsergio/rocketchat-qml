@@ -12,7 +12,8 @@ use rc_view::avatar_view::{
 };
 use rc_view::message_list::MessageList;
 use rc_view::message_view::{
-    author_name, body, day_label, delivery_name, mentions_me, system_text, time_text,
+    author_name, body, can_delete, can_edit, day_label, delivery_name, mentions_me, system_text,
+    time_text,
 };
 use rc_view::rich_html::message_html;
 use rc_view::room_view::kind_name;
@@ -105,6 +106,7 @@ pub fn message_row(list: &MessageList, row: usize, palette: &Palette) -> Option<
         day_label: day_label(message.ts, list.zone(), now).into(),
         edited: message.edited,
         mentions_me: mentions_me(message, list.viewer()),
+        has_menu: can_edit(message, list.viewer(), now) || can_delete(message, list.viewer(), now),
         delivery: delivery_name(message.delivery).into(),
         initials: initials(author_name(&message.author)).into(),
         initials_color: parse_color(&color(&message.author.username)),

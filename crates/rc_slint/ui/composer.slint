@@ -1,11 +1,16 @@
 // SPDX-FileCopyrightText: 2026 Sergio Martins
 // SPDX-License-Identifier: MIT
 
+import { FlatButton } from "flat_button.slint";
 import { PrimaryButton } from "primary_button.slint";
 import { Theme } from "theme.slint";
 
 // The box under the messages of the open room. Enter sends, Shift+Enter starts a new line. The
 // field grows with its text up to a height, then scrolls.
+//
+// It also edits a message of the user's: `begin-edit` puts the message's text in the field, a bar
+// above it says so, and Enter saves instead of sending. Escape, the bar's button or another room
+// ends it, and the draft that was in the field comes back; so does a saved edit.
 export component Composer inherits Rectangle {
     // Sends the text; false if it is refused, which leaves the field as it is.
     callback send(string) -> bool;
@@ -16,6 +21,30 @@ export component Composer inherits Rectangle {
     in property <int> focus-requests;
     in property <string> room-id;
     callback focused();
+    // Saves the text as the new text of the message with this id. The answer comes as
+    // `edit-answers` going up.
+    callback save-edit(string, string);
+    // The text of a message as written, and the id of the newest one that can be edited now (both
+    // empty if there is none).
+    callback message-text(string) -> string;
+    callback last-editable() -> string;
+    // The answer to the last edit: how many there have been, which message it was about and
+    // whether it worked. A failure stays in edit mode, with the text.
+    in property <int> edit-answers;
+    in property <string> edit-answer-id;
+    in property <bool> edit-answer-ok;
+
+    // The message being edited, or empty when the box writes a new message.
+    property <string> editing-id;
+    // The text that was in the field when editing began.
+    property <string> draft;
+    // The edit was sent and the answer is awaited.
+    property <bool> saving;
+    property <bool> editing: root.editing-id != "";
+    // The edit bar: its row and the line under it.
+    property <length> bar-height: Theme.button-height + 2 * Theme.spacing-l + Theme.separator-width;
+    // A position past any text: the cursor goes to the end.
+    property <int> end-of-text: 2147483647;
 
     // The field: its text with the space above and below it, between the least and the most.
     property <length> field-height: clamp(
@@ -24,9 +53,44 @@ export component Composer inherits Rectangle {
         Theme.composer-max-height);
 
     function submit() {
-        if root.send(input.text) {
+        if root.editing {
+            root.save();
+        } else if root.send(input.text) {
             input.text = "";
         }
+    }
+
+    function save() {
+        if root.saving || input.text.is-empty {
+            return;
+        }
+        root.saving = true;
+        root.save-edit(root.editing-id, input.text);
+    }
+
+    // Starts editing a message of the open room. Nothing happens if its text isn't known.
+    public function begin-edit(id: string) {
+        let text = root.message-text(id);
+        if text.is-empty {
+            return;
+        }
+        if !root.editing {
+            root.draft = input.text;
+        }
+        root.editing-id = id;
+        root.saving = false;
+        input.text = text;
+        input.focus();
+        input.set-selection-offsets(root.end-of-text, root.end-of-text);
+    }
+
+    // Leaves edit mode and puts the draft back.
+    function end-edit() {
+        root.editing-id = "";
+        root.saving = false;
+        input.text = root.draft;
+        root.draft = "";
+        input.focus();
     }
 
     init => {
@@ -35,6 +99,9 @@ export component Composer inherits Rectangle {
         }
     }
     changed room-id => {
+        if root.editing {
+            root.end-edit();
+        }
         if root.focus-wanted {
             input.focus();
         }
@@ -42,91 +109,165 @@ export component Composer inherits Rectangle {
     changed focus-requests => {
         input.focus();
     }
+    changed edit-answers => {
+        // Answers about other messages (a race) are none of this edit's.
+        if root.editing && root.edit-answer-id == root.editing-id {
+            if root.edit-answer-ok {
+                root.end-edit();
+            } else {
+                root.saving = false;
+            }
+        }
+    }
 
     // Its height follows the text, and it never takes more: the extra goes to the messages above.
     min-height: root.preferred-height;
-    preferred-height: root.field-height + 2 * Theme.spacing-l + 2 * Theme.border-width;
+    preferred-height: root.field-height + 2 * Theme.spacing-l + 2 * Theme.border-width + (root.editing ? root.bar-height : Theme.spacing-none);
     vertical-stretch: 0;
     background: Theme.raised;
     border-width: Theme.border-width;
     border-color: input.has-focus ? Theme.own-border : Theme.raised-hover;
     border-radius: Theme.radius-panel;
 
-    HorizontalLayout {
-        padding-left: Theme.border-width + Theme.composer-padding-h;
-        padding-right: Theme.border-width + Theme.spacing-l;
-        padding-top: Theme.border-width + Theme.spacing-l;
-        padding-bottom: Theme.border-width + Theme.spacing-l;
-        spacing: Theme.spacing-m;
+    // Inside the border.
+    VerticalLayout {
+        padding: Theme.border-width;
+        spacing: Theme.spacing-none;
 
-        // Enter is taken before the text input, which would start a line with it.
-        FocusScope {
-            horizontal-stretch: 1;
-            capture-key-pressed(event) => {
-                if event.text == Key.Return && !event.modifiers.shift {
-                    root.submit();
-                    return accept;
+        // Over a line.
+        if root.editing: Rectangle {
+            accessible-id: "composerEditBar";
+            accessible-role: groupbox;
+            height: root.bar-height;
+
+            HorizontalLayout {
+                y: Theme.spacing-none;
+                height: parent.height - Theme.separator-width;
+                padding-left: Theme.composer-padding-h;
+                padding-right: Theme.spacing-xl;
+                padding-top: Theme.spacing-l;
+                padding-bottom: Theme.spacing-l;
+                spacing: Theme.spacing-xl;
+
+                Rectangle {
+                    width: Theme.quote-bar-width;
+                    background: Theme.own;
+                    border-radius: Theme.quote-bar-width;
                 }
-                return reject;
-            }
 
-            field := Flickable {
-                content-width: self.width;
-                content-height: input.height + 2 * Theme.text-area-padding-v;
-                interactive: false;
+                Text {
+                    horizontal-stretch: 1;
+                    color: Theme.text-muted;
+                    font-size: Theme.font-size-small;
+                    vertical-alignment: center;
+                    text: @tr("Editing message");
+                }
 
-                input := TextInput {
-                    accessible-id: "composerField";
-                    x: Theme.spacing-none;
-                    y: Theme.text-area-padding-v;
-                    width: field.width;
-                    height: self.preferred-height;
-                    color: Theme.text;
-                    font-size: Theme.font-size-base;
-                    wrap: word-wrap;
-                    single-line: false;
-                    changed has-focus => {
-                        if self.has-focus && root.focus-wanted {
-                            root.focused();
-                        }
-                    }
-                    cursor-position-changed(position) => {
-                        // Keeps the line with the cursor in view.
-                        let line = Theme.font-size-base * Theme.line-height-scale;
-                        let top = position.y;
-                        let bottom = position.y + line + 2 * Theme.text-area-padding-v;
-                        if -field.content-y > top {
-                            field.content-y = -top;
-                        } else if bottom - field.content-y > field.height {
-                            field.content-y = field.height - bottom;
-                        }
+                FlatButton {
+                    accessible-id: "composerEditCancel";
+                    text: @tr("Cancel");
+                    clicked => {
+                        root.end-edit();
                     }
                 }
             }
 
-            Text {
-                color: Theme.text-faint;
-                font-size: Theme.font-size-base;
-                text: @tr("Message");
-                x: Theme.spacing-none;
-                y: Theme.text-area-padding-v;
-                horizontal-alignment: left;
-                visible: input.text.is-empty;
+            Rectangle {
+                y: parent.height - self.height;
+                height: Theme.separator-width;
+                background: Theme.raised-hover;
             }
         }
 
-        // Aligned to the bottom, whatever the height of the field. A plain rectangle and not a
-        // layout: a layout would pass the button's fixed height up as the composer's largest.
-        Rectangle {
-            width: send-button.min-width;
+        HorizontalLayout {
+            padding-left: Theme.composer-padding-h;
+            padding-right: Theme.spacing-l;
+            padding-top: Theme.spacing-l;
+            padding-bottom: Theme.spacing-l;
+            spacing: Theme.spacing-m;
 
-            send-button := PrimaryButton {
-                accessible-id: "composerSend";
-                y: parent.height - self.height;
-                text: @tr("Send");
-                enabled: !input.text.is-empty;
-                clicked => {
-                    root.submit();
+            // Enter is taken before the text input, which would start a line with it.
+            FocusScope {
+                horizontal-stretch: 1;
+                capture-key-pressed(event) => {
+                    if event.text == Key.Return && !event.modifiers.shift {
+                        root.submit();
+                        return accept;
+                    }
+                    if event.text == Key.Escape && root.editing {
+                        root.end-edit();
+                        return accept;
+                    }
+                    // Up in an empty box edits the user's newest message.
+                    if event.text == Key.UpArrow && !root.editing && input.text.is-empty {
+                        let id = root.last-editable();
+                        if !id.is-empty {
+                            root.begin-edit(id);
+                        }
+                        return accept;
+                    }
+                    return reject;
+                }
+
+                field := Flickable {
+                    content-width: self.width;
+                    content-height: input.height + 2 * Theme.text-area-padding-v;
+                    interactive: false;
+
+                    input := TextInput {
+                        accessible-id: "composerField";
+                        x: Theme.spacing-none;
+                        y: Theme.text-area-padding-v;
+                        width: field.width;
+                        height: self.preferred-height;
+                        color: Theme.text;
+                        font-size: Theme.font-size-base;
+                        wrap: word-wrap;
+                        single-line: false;
+                        read-only: root.saving;
+                        changed has-focus => {
+                            if self.has-focus && root.focus-wanted {
+                                root.focused();
+                            }
+                        }
+                        cursor-position-changed(position) => {
+                            // Keeps the line with the cursor in view.
+                            let line = Theme.font-size-base * Theme.line-height-scale;
+                            let top = position.y;
+                            let bottom = position.y + line + 2 * Theme.text-area-padding-v;
+                            if -field.content-y > top {
+                                field.content-y = -top;
+                            } else if bottom - field.content-y > field.height {
+                                field.content-y = field.height - bottom;
+                            }
+                        }
+                    }
+                }
+
+                Text {
+                    color: Theme.text-faint;
+                    font-size: Theme.font-size-base;
+                    text: @tr("Message");
+                    x: Theme.spacing-none;
+                    y: Theme.text-area-padding-v;
+                    horizontal-alignment: left;
+                    visible: input.text.is-empty;
+                }
+            }
+
+            // Aligned to the bottom, whatever the height of the field. A plain rectangle and not a
+            // layout: a layout would pass the button's fixed height up as the composer's largest.
+            Rectangle {
+                width: send-button.min-width;
+
+                send-button := PrimaryButton {
+                    accessible-id: "composerSend";
+                    y: parent.height - self.height;
+                    text: root.editing ? @tr("Save") : @tr("Send");
+                    enabled: !input.text.is-empty && !root.saving;
+                    clicked => {
+                        root.submit();
+                    }
                 }
             }
         }

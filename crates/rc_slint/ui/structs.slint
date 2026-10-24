@@ -94,6 +94,10 @@ export struct MessageRow {
     edited: bool,
     // The message mentions the user.
     mentions-me: bool,
+    // The message had a menu when the row was made (the user could edit or delete it): the button
+    // shows and a right-click opens. What the menu offers is asked for when it opens, since the
+    // time limits of the server's policy run out.
+    has-menu: bool,
     // `sent`, `pending` or `failed`.
     delivery: string,
     // The author's avatar, as the room list has it.
@@ -102,4 +106,10 @@ export struct MessageRow {
     avatar-url: string,
     has-avatar: bool,
     avatar: image,
+}
+
+// What the menu of a message offers now, from the `menu-allowed` callback.
+export struct MessageMenu {
+    can-edit: bool,
+    can-delete: bool,
 }

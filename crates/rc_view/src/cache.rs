@@ -384,7 +384,8 @@ impl Cache {
     }
 
     /// A held message of the open room or the open thread, which hold some messages in common.
-    fn held(&self, id: &str) -> Option<&Message> {
+    #[must_use]
+    pub fn held(&self, id: &str) -> Option<&Message> {
         self.messages
             .iter()
             .chain(&self.thread_messages)
@@ -769,6 +770,14 @@ mod tests {
         let cache = cache_with_four_messages();
         assert_eq!(cache.message_text("c"), Some("c"));
         assert_eq!(cache.message_text("nope"), None);
+    }
+
+    // ACT-001, ACT-002
+    #[test]
+    fn a_held_message_is_found_by_its_id() {
+        let cache = cache_with_four_messages();
+        assert_eq!(cache.held("b").map(|m| m.id.as_str()), Some("b"));
+        assert_eq!(cache.held("nope"), None);
     }
 
     // ACT-005
