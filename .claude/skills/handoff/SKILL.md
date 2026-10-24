@@ -10,9 +10,10 @@ Code) gets its brief as the agent prompt and reports in its reply: it doesn't lo
 the lead doesn't use these files for it.
 
 Two roles. The **lead** (Claude) designs, writes the brief, answers, reviews and commits. The
-**implementer** (DeepSeek through opencode) implements in a worktree and reports. The user starts
-each turn ("your turn"); the files say on what. The implementer also follows
-`.claude/agents/implementer.md`, except where this file or the brief says otherwise.
+**implementer** (DeepSeek through opencode) implements and reports. The user starts each turn
+("your turn"); the files say on what. The implementer also follows `.claude/agents/implementer.md`,
+except where this file or the brief says otherwise. It runs no git writes: no commit, stash,
+checkout, branch or `git loom`.
 
 ## Files
 
@@ -28,8 +29,8 @@ One directory per task, outside the repo, never committed:
   004-lead-review.md
 ```
 
-- `<TASK>` is a short upper-case id (`ELIDE`). It also names the worktree
-  (`/pub_data/sources/rocketchat-qml-<task>`, lower case) and the message ids (`ELIDE-003`).
+- `<TASK>` is a short upper-case id (`ELIDE`). It also names the message ids (`ELIDE-003`) and the
+  worktree, if there is one (`/pub_data/sources/rocketchat-qml-<task>`, lower case).
 - Messages are numbered in the order they're written and never edited afterwards, so "ELIDE-003"
   means one thing for good. The one exception is the brief: an answer that changes it edits it in
   place, marks the changed text `(amended by 002)` and lists the change.
@@ -74,11 +75,14 @@ One directory per task, outside the repo, never committed:
 
 **report** (implementer), short, in this order:
 1. what changed, one line per file;
-2. decisions the brief didn't settle;
-3. doubts, and anything the brief got wrong;
-4. `git status --short --ignore-submodules=all` from the worktree;
-5. the check summary lines (`scripts/check.sh full`, `ninja -C build-dev all_qmllint`, reruns);
-6. screenshot paths.
+2. for a bug fix: the other places with the same pattern (the search it ran), each fixed or left
+   with why;
+3. decisions the brief didn't settle;
+4. doubts, and anything the brief got wrong;
+5. `git status --short --ignore-submodules=all` from where it works;
+6. the check summary lines (`scripts/check.sh full`, `ninja -C build-dev all_qmllint`, reruns);
+   for a bug fix, also the new test's failing line with the fix reverted;
+7. screenshot paths.
 
 **review** (lead): findings numbered for the next round, or "accepted".
 
@@ -99,12 +103,17 @@ No code listings in any message: name the file and line, quote only failing line
 
 - Reproduce the bug, or check the server behaviour the task relies on.
 - Dry-run every claim about tooling the brief makes: the test list a new test lands in and what
-  INFRA-005 says about it, the `check.sh` flags, the worktree recipe.
+  INFRA-005 says about it, the `check.sh` flags, the worktree recipe if there is a worktree.
 - Mark what you didn't check as *assumed*. A wrong brief costs a full round.
 
-## Worktree
+## Where the implementer works
 
-The lead creates it (or gives the user the command) before writing `STATE`:
+In the main checkout (`/pub_data/sources/rocketchat-qml`), when it's the only session working on
+the repo. A worktree only when another session works in the main checkout at the same time: two
+sessions in one checkout share the sources, `build-dev*` and `target/check-logs`, and break each
+other's builds and tests. The brief says which.
+
+The lead creates a worktree (or gives the user the command) before writing `STATE`:
 
 ```sh
 cd /pub_data/sources/rocketchat-qml
@@ -116,8 +125,12 @@ git submodule update --init 3rdparty/corrosion 3rdparty/cxx-qt-cmake 3rdparty/vc
 
 - With the spix symlink a plain `git status` fails; use `git status --short --ignore-submodules=all`.
 - The first `scripts/check.sh` run there builds `build-dev` (and `build-dev-slint`) from scratch.
-- The implementer works only in the worktree and runs no git writes: no commit, stash, checkout,
-  branch or `git loom`. The symlink is never committed.
+- The implementer works only in the worktree. The symlink is never committed, and loom's commands
+  fail while it's there (the same "not to be a symbolic link"): before `git loom commit`, the lead
+  puts the empty directory back (`rm 3rdparty/spix && mkdir 3rdparty/spix`). Or commits from the
+  main checkout, when it's free: `git diff --ignore-submodules=all` in the worktree, then
+  `git apply --3way` of that in the main checkout, which also copes with a worktree behind
+  `origin/main`.
 - The lead commits per the tech-lead skill. Once the task is done (committed, nothing more goes
   back to the implementer), the lead drops its worktree (`git loom wt drop`) and deletes the task
   directory. Other worktrees stay: those of other tasks or sessions may still be in use.
