@@ -313,9 +313,10 @@ Item {
 
                     Label {
                         objectName: "msgAuthor"
-                        // A long name gives way to the time and the menu button, in a narrow list.
+                        // The layout rounds the width down, so the ceiling keeps a name that fits
+                        // from eliding; a longer name still gives way to the time and the menu.
                         Layout.fillWidth: true
-                        Layout.maximumWidth: implicitWidth
+                        Layout.maximumWidth: Math.ceil(implicitWidth)
                         elide: Text.ElideRight
                         font.weight: Theme.fontWeightSemibold
                         text: root.author

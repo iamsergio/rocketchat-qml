@@ -202,6 +202,11 @@ impl Gui {
         self.bool_property(path, "checked")
     }
 
+    /// The `truncated` property of a text element: whether its text is elided.
+    pub fn truncated(&self, path: &str) -> Result<bool> {
+        self.bool_property(path, "truncated")
+    }
+
     pub fn set_checked(&self, path: &str, checked: bool) -> Result<()> {
         self.set_property(path, "checked", if checked { "true" } else { "false" })
     }

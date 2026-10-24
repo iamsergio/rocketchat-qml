@@ -61,6 +61,7 @@ The `Slint` column is how much of a feature's GUI tests run against `rocketchat_
 | MSG-003 | Message shows author and timestamp | done | unit: `crates/rc_api/src/wire.rs`, `crates/rc_core/src/domain.rs`, `crates/rc_view/src/message_view.rs`; contract: `crates/rc_api/tests/contract.rs`, `crates/rc_core/tests/contract.rs`; GUI: `crates/rc_gui_tests/tests/messages.rs` |
 | MSG-004 | Day separators between days | done | unit: `crates/rc_view/src/message_list.rs`, `crates/rc_slint/src/message_model.rs`, `crates/rc_view/src/message_view.rs`; GUI: `crates/rc_gui_tests/tests/messages.rs` |
 | MSG-005 | System messages rendered distinctly | done | unit: `crates/rc_api/src/wire.rs`, `crates/rc_core/src/domain.rs`, `crates/rc_view/src/message_view.rs`; contract: `crates/rc_api/tests/contract.rs`; GUI: `crates/rc_gui_tests/tests/messages.rs` |
+| MSG-006 | A name that fits is shown whole, not elided | todo | GUI: `crates/rc_gui_tests/tests/messages.rs` |
 
 ## Realtime
 

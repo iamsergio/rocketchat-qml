@@ -32,6 +32,7 @@ Done when: day-to-day use works. Edit, delete, react, threads, DMs, search and u
 - [x] Search the room list by name (ROOM-010): a field below the room list, Ctrl+K focuses it, the matching rooms replace the list while it holds something. Only the user's own rooms, filtered locally: see [Search](docs/design/room-list.md#search)
 - [x] A room's threads in the pane beside it (ACT-010): a header button opens the list, all or followed, the one with the most recent reply first, paged on scrolling; a row opens the thread, whose back button leads to the list: see [Threads](docs/design/threads.md#thread-list)
 - [x] Unread threads (ACT-011): the header button's badge (grey, red for a mention), a row's emphasis, "New" and "@", and the "Unread" filter, from the subscription's `tunread`; opening a thread reads it (`readThreads`): see [Threads](docs/design/threads.md#unread-threads)
+- [x] An author's name that fits is shown whole (MSG-006): the layout rounds the label's width down, so it takes the ceiling of its text width
 - [ ] Start a DM, search the directory, join a channel. The directory search extends the field below the room list with the server's results
 - [ ] File upload with progress
 - [ ] Features ACT-001…ACT-009 tested
