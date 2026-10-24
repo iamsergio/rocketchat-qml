@@ -195,7 +195,7 @@ impl Model for MessageModel {
 
 #[cfg(test)]
 mod tests {
-    use rc_core::domain::{Author, Delivery, Message, MessageKind};
+    use rc_core::domain::{Author, Delivery, Message, MessageKind, Quote};
     use slint::Color;
 
     use super::*;
@@ -449,23 +449,49 @@ mod tests {
         assert!(!model.row_data(1).unwrap().edited);
     }
 
-    // ACT-001, ACT-002
+    // ACT-001, ACT-002, ACT-005
     #[test]
-    fn a_message_of_the_user_has_a_menu_and_the_row_follows_the_viewer() {
+    fn a_message_that_can_be_quoted_has_a_menu_whoever_wrote_it() {
         let model = shown(days(&["a"]));
-        assert!(!model.row_data(0).unwrap().has_menu);
-
+        assert!(model.row_data(0).unwrap().has_menu);
         model.set_viewer(Viewer {
             user_id: Some("u".to_owned().into()),
             ..Viewer::default()
         });
         assert!(model.row_data(0).unwrap().has_menu);
-
-        // Somebody else's message has none.
         model.set_viewer(Viewer {
             user_id: Some("someone else".to_owned().into()),
             ..Viewer::default()
         });
-        assert!(!model.row_data(0).unwrap().has_menu);
+        assert!(model.row_data(0).unwrap().has_menu);
+
+        // An unsent message can't be quoted, and it isn't the viewer's to change either.
+        let mut unsent = message("b", "2026-10-02T10:00:00Z");
+        unsent.delivery = Delivery::Pending;
+        model.apply(&[TimelineChange::Appended(vec![unsent])]);
+        assert!(!model.row_data(1).unwrap().has_menu);
+    }
+
+    // ACT-005
+    #[test]
+    fn the_quotes_of_a_message_are_rows_of_their_own_and_most_messages_have_none() {
+        let mut reply = message("a", "2026-10-01T09:00:00Z");
+        reply.quotes = vec![Quote {
+            message: Some("q".to_owned().into()),
+            link: "http://s/channel/c?msg=q".to_owned(),
+            author: "bob".to_owned(),
+            text: "say it".into(),
+            ts: Some("2026-10-01T08:00:00Z".parse().unwrap()),
+        }];
+        let model = shown(vec![reply, message("b", "2026-10-02T10:00:00Z")]);
+
+        let quotes = model.row_data(0).unwrap().quotes;
+        assert_eq!(quotes.row_count(), 1);
+        let quote = quotes.row_data(0).unwrap();
+        assert_eq!(quote.author, "bob");
+        assert!(!quote.time.is_empty());
+        assert_eq!(quote.body, "say it");
+        assert!(quote.body_html.contains("say it"));
+        assert_eq!(model.row_data(1).unwrap().quotes.row_count(), 0);
     }
 }

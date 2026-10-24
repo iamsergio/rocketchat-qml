@@ -72,6 +72,19 @@ export struct RoomRow {
     avatar: image,
 }
 
+// One message quoted by a message: an `rc_view::quote_view::QuoteView`.
+export struct QuoteRow {
+    // The username of the quoted message's author.
+    author: string,
+    // The time of day it was sent; empty if unknown.
+    time: string,
+    // What it said as written, and as the HTML that the GUI tests read.
+    body: string,
+    body-html: string,
+    // What it said as the styled text that is shown.
+    body-styled: styled-text,
+}
+
 // One message of the open room: an `rc_view` message list's row, as `rc_qt`'s roles give it.
 export struct MessageRow {
     id: string,
@@ -94,9 +107,11 @@ export struct MessageRow {
     edited: bool,
     // The message mentions the user.
     mentions-me: bool,
-    // The message had a menu when the row was made (the user could edit or delete it): the button
-    // shows and a right-click opens. What the menu offers is asked for when it opens, since the
-    // time limits of the server's policy run out.
+    // What the message quotes, in order. Most have none, and then no model is made.
+    quotes: [QuoteRow],
+    // The message had a menu when the row was made (the user could quote, edit or delete it):
+    // the button shows and a right-click opens. What the menu offers is asked for when it opens,
+    // since the time limits of the server's policy run out.
     has-menu: bool,
     // `sent`, `pending` or `failed`.
     delivery: string,
@@ -110,6 +125,7 @@ export struct MessageRow {
 
 // What the menu of a message offers now, from the `menu-allowed` callback.
 export struct MessageMenu {
+    can-quote: bool,
     can-edit: bool,
     can-delete: bool,
 }

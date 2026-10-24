@@ -5,23 +5,24 @@
 //! decisions of its own.
 
 use jiff::Timestamp;
-use rc_core::domain::{MessageKind, Room};
+use rc_core::domain::{Message, MessageKind, Room};
 use rc_view::accounts::{AccountView, Status};
 use rc_view::avatar_view::{
     AvatarUrls, color, file_path, initials, message_owner, room_placeholder,
 };
 use rc_view::message_list::MessageList;
 use rc_view::message_view::{
-    author_name, body, can_delete, can_edit, day_label, delivery_name, mentions_me, system_text,
-    time_text,
+    author_name, body, can_delete, can_edit, can_quote, day_label, delivery_name, mentions_me,
+    system_text, time_text,
 };
-use rc_view::rich_html::message_html;
+use rc_view::quote_view::quotes;
+use rc_view::rich_html::{message_html, render};
 use rc_view::room_view::kind_name;
-use rc_view::viewer::Clock;
-use slint::{Color, Image, StyledText};
+use rc_view::viewer::{Clock, Viewer};
+use slint::{Color, Image, ModelRc, StyledText, VecModel};
 
 use crate::rich_markdown::{self, Palette};
-use crate::ui::{AccountTile, MessageRow, RoomRow, RoomSection};
+use crate::ui::{AccountTile, MessageRow, QuoteRow, RoomRow, RoomSection};
 
 /// Counts are `u32`, Slint's are `int`: saturate.
 fn count(value: u32) -> i32 {
@@ -106,7 +107,10 @@ pub fn message_row(list: &MessageList, row: usize, palette: &Palette) -> Option<
         day_label: day_label(message.ts, list.zone(), now).into(),
         edited: message.edited,
         mentions_me: mentions_me(message, list.viewer()),
-        has_menu: can_edit(message, list.viewer(), now) || can_delete(message, list.viewer(), now),
+        quotes: quote_rows(message, list.viewer(), clock, palette),
+        has_menu: can_quote(message)
+            || can_edit(message, list.viewer(), now)
+            || can_delete(message, list.viewer(), now),
         delivery: delivery_name(message.delivery).into(),
         initials: initials(author_name(&message.author)).into(),
         initials_color: parse_color(&color(&message.author.username)),
@@ -114,6 +118,30 @@ pub fn message_row(list: &MessageList, row: usize, palette: &Palette) -> Option<
         has_avatar: image.is_some(),
         avatar: image.unwrap_or_default(),
     })
+}
+
+/// The quotes of the message, as a model of their own; the empty model, which allocates nothing,
+/// for the many messages that have none.
+fn quote_rows(
+    message: &Message,
+    viewer: &Viewer,
+    clock: Clock,
+    palette: &Palette,
+) -> ModelRc<QuoteRow> {
+    if message.quotes.is_empty() {
+        return ModelRc::default();
+    }
+    let rows: Vec<QuoteRow> = quotes(message, clock)
+        .into_iter()
+        .map(|quote| QuoteRow {
+            body_html: render(&quote.text, viewer, clock).into(),
+            body_styled: rich_markdown::styled(&quote.text, viewer, clock, palette),
+            author: quote.author.into(),
+            time: quote.time.into(),
+            body: quote.body.into(),
+        })
+        .collect();
+    ModelRc::new(VecModel::from(rows))
 }
 
 /// The colour of `#rrggbb`, which `rc_view` gives for the disc behind the initials; transparent if
