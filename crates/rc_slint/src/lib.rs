@@ -9,6 +9,7 @@ pub mod app;
 mod message_model;
 pub mod rich_markdown;
 mod room_model;
+mod room_search_model;
 mod rows;
 
 // The code Slint generates doesn't follow the workspace's lints (it unwraps).

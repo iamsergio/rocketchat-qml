@@ -14,6 +14,8 @@ export global Theme {
     out property <color> base: #15181e;
     // The rail of servers at the left of the window: darker than the sidebar.
     out property <color> rail: #111319;
+    // An input field set into the sidebar until it has the focus.
+    out property <color> field-quiet: rail;
     // The conversation, and the input fields.
     out property <color> surface: #1b1f26;
     // What sits on the surface: menus and popups.
@@ -93,6 +95,7 @@ export global Theme {
     out property <float> line-height-scale: 1.3;
     out property <float> avatar-radius-ratio: 0.25;
     out property <length> radius-control: 7px;
+    out property <length> radius-check-box: 4px;
     out property <length> radius-panel: 12px;
 
     // Lines
@@ -126,6 +129,24 @@ export global Theme {
     out property <length> room-header-icon-size: 18px;
     out property <length> room-icon-size: 14px;
     out property <length> room-row-height: 34px;
+    // Where the avatar and the name start in a room row, from the left edge of its background, and
+    // the middle of the avatar: what the search field below the list lines up with.
+    out property <length> room-avatar-inset: row-padding-h;
+    out property <length> room-name-inset: room-avatar-inset + room-avatar-size + room-row-spacing;
+    out property <length> room-avatar-center: room-avatar-inset + room-avatar-size / 2;
+    // The space between the avatar and the name in a room row.
+    out property <length> room-row-spacing: spacing-l;
+    // The search field at the bottom of the room list, and the magnifier in it.
+    out property <length> search-field-height: 32px;
+    // Its distance from the bottom edge: the settings button of the rail beside it sits spacing-xxl
+    // from the edge, so this puts the middle of the field on the middle of that button.
+    out property <length> search-field-bottom-margin: spacing-xxl + (icon-button-size - search-field-height) / 2;
+    out property <length> search-icon-size: 14px;
+    // The button that clears it, and the cross in it, and the keycap that hints at Ctrl+K.
+    out property <length> search-clear-size: 22px;
+    out property <length> search-clear-icon-size: 12px;
+    out property <length> search-hint-padding-h: 6px;
+    out property <length> search-hint-padding-v: 1px;
     // A heading of the room list: its text and the space around it.
     out property <length> room-section-height: 29px;
     // The space each side of the server's name at the top of the sidebar.

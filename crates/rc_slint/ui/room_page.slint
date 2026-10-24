@@ -7,6 +7,8 @@ import { FlatButton } from "flat_button.slint";
 import { ListView } from "list_view.slint";
 import { MessageList } from "message_list.slint";
 import { RoomDelegate } from "room_delegate.slint";
+import { RoomSearchField } from "room_search_field.slint";
+import { RoomSearchResults } from "room_search_results.slint";
 import { MessageRow, RoomRow } from "structs.slint";
 import { Theme } from "theme.slint";
 
@@ -39,6 +41,14 @@ export component RoomPage inherits Rectangle {
     in property <int> resets;
     // Why the last command on a room failed; empty for none.
     in property <string> room-action-error;
+    // The search: whether the query isn't empty, and then the query without the space around it
+    // and the rooms that match, worst first (see `room_search_results.slint`), with a number that
+    // goes up with each new result set.
+    in property <bool> search-active;
+    in property <string> search-trimmed;
+    in property <[RoomRow]> search-results;
+    in property <int> search-generation;
+    callback search(string);
     callback open-room(string);
     // The room's menu: a favorite is set or taken back, the room is marked read or unread, or
     // leaving is asked for (the id and the name, for the dialog that asks).
@@ -56,269 +66,394 @@ export component RoomPage inherits Rectangle {
     // Sends a message that failed to send again, by its id.
     callback retry(string);
 
-    VerticalLayout {
-        padding: Theme.spacing-none;
-        spacing: Theme.spacing-none;
+    // Whether the composer is to take the focus when the room that is being opened shows, and how
+    // many times it was asked to take it now.
+    property <bool> composer-wanted;
+    property <int> composer-requests;
 
-        if !root.connection-text.is-empty: Rectangle {
-            background: Theme.warning-wash;
-            preferred-height: banner.preferred-height + 2 * Theme.spacing-m;
-            max-height: self.preferred-height;
+    // The search is over: the field is emptied and gives up the focus, which goes to the composer
+    // of the open room, or of the one being opened (`opened`, with its id), or to nothing.
+    function leave-search(opened: bool, id: string) {
+        search-field.clear-text();
+        search-field.give-up-focus();
+        if opened {
+            root.composer-wanted = true;
+        }
+        if (opened && id == root.room-id) || (!opened && !root.room-id.is-empty) {
+            root.composer-requests += 1;
+        }
+    }
 
-            banner := Text {
-                accessible-id: "connectionBanner";
-                x: Theme.spacing-m;
-                y: Theme.spacing-m;
-                width: parent.width - 2 * Theme.spacing-m;
-                color: Theme.warning;
-                font-size: Theme.font-size-small;
-                horizontal-alignment: center;
-                wrap: word-wrap;
-                text: root.connection-text;
+    // Ctrl+K anywhere in the page focuses the search field. The key is a control character on some
+    // platforms.
+    FocusScope {
+        width: parent.width;
+        height: parent.height;
+        capture-key-pressed(event) => {
+            if event.modifiers.control && (event.text == "k" || event.text == "\u{b}") {
+                search-field.focus-field();
+                return accept;
             }
+            return reject;
         }
 
-        HorizontalLayout {
+        VerticalLayout {
             padding: Theme.spacing-none;
             spacing: Theme.spacing-none;
 
-            VerticalLayout {
-                width: Theme.sidebar-width;
+            if !root.connection-text.is-empty: Rectangle {
+                background: Theme.warning-wash;
+                preferred-height: banner.preferred-height + 2 * Theme.spacing-m;
+                max-height: self.preferred-height;
+
+                banner := Text {
+                    accessible-id: "connectionBanner";
+                    x: Theme.spacing-m;
+                    y: Theme.spacing-m;
+                    width: parent.width - 2 * Theme.spacing-m;
+                    color: Theme.warning;
+                    font-size: Theme.font-size-small;
+                    horizontal-alignment: center;
+                    wrap: word-wrap;
+                    text: root.connection-text;
+                }
+            }
+
+            HorizontalLayout {
                 padding: Theme.spacing-none;
                 spacing: Theme.spacing-none;
 
-                // The server: its host, and who you are there.
                 VerticalLayout {
-                    padding-left: Theme.sidebar-header-padding-h;
-                    padding-right: Theme.sidebar-header-padding-h;
-                    padding-top: Theme.spacing-xxl;
-                    padding-bottom: Theme.spacing-xl;
-                    spacing: Theme.spacing-xxs;
-
-                    Text {
-                        accessible-id: "serverName";
-                        color: Theme.text;
-                        font-size: Theme.font-size-heading;
-                        font-weight: Theme.font-weight-bold;
-                        overflow: elide;
-                        text: root.host;
-                    }
-
-                    Text {
-                        accessible-id: "serverUser";
-                        color: Theme.text-faint;
-                        font-size: Theme.font-size-small;
-                        overflow: elide;
-                        text: root.username;
-                    }
-                }
-
-                // One list, so that everything scrolls together: the favorites come first, and the
-                // headings of the sections are rows of it, there only while there are favorites.
-                ListView {
-                    accessible-id: "roomList";
-                    accessible-role: list;
-
-                    for room in root.rooms: RoomDelegate {
-                        room: room;
-                        highlighted: room.id == root.room-id;
-                        clicked => {
-                            root.open-room(room.id);
-                        }
-                        set-favorite(favorite) => {
-                            root.set-favorite(room.id, favorite);
-                        }
-                        mark-read => {
-                            root.mark-read(room.id);
-                        }
-                        mark-unread => {
-                            root.mark-unread(room.id);
-                        }
-                        leave => {
-                            root.leave(room.id, room.name);
-                        }
-                    }
-                }
-
-                // Why the last command on a room failed, until it is dismissed or the user tries
-                // again.
-                if !root.room-action-error.is-empty: Rectangle {
-                    accessible-id: "roomListError";
-                    accessible-role: groupbox;
-
-                    HorizontalLayout {
-                        padding: Theme.spacing-l;
-                        spacing: Theme.spacing-l;
-
-                        Text {
-                            accessible-id: "roomListErrorText";
-                            horizontal-stretch: 1;
-                            color: Theme.error;
-                            font-size: Theme.font-size-small;
-                            vertical-alignment: center;
-                            wrap: word-wrap;
-                            text: root.room-action-error;
-                        }
-
-                        VerticalLayout {
-                            alignment: center;
-                            padding: Theme.spacing-none;
-                            spacing: Theme.spacing-none;
-
-                            FlatButton {
-                                accessible-id: "roomListErrorDismiss";
-                                text: @tr("Dismiss");
-                                clicked => {
-                                    root.dismiss-room-action-error();
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            Rectangle {
-                width: Theme.separator-width;
-                background: Theme.line;
-            }
-
-            // The open room: its kind, its name and under it its topic, over a hairline.
-            Rectangle {
-                background: Theme.surface;
-                horizontal-stretch: 1;
-
-                if !root.room-id.is-empty: Rectangle {
-                    y: Theme.spacing-none;
-                    height: Theme.room-header-height;
-
-                    HorizontalLayout {
-                        padding-left: Theme.spacing-xxxl;
-                        padding-right: Theme.spacing-xxxl;
-                        padding-top: Theme.spacing-none;
-                        padding-bottom: Theme.spacing-none;
-                        spacing: Theme.spacing-xl;
-
-                        VerticalLayout {
-                            alignment: center;
-                            width: Theme.room-header-icon-size;
-                            padding: Theme.spacing-none;
-                            spacing: Theme.spacing-none;
-
-                            KindIcon {
-                                width: Theme.room-header-icon-size;
-                                height: Theme.room-header-icon-size;
-                                kind: root.room-kind;
-                                tint: Theme.own;
-                            }
-                        }
-
-                        // Centred, so that the name of a room without a topic is in the middle.
-                        VerticalLayout {
-                            alignment: center;
-                            padding: Theme.spacing-none;
-                            spacing: Theme.spacing-xxs;
-
-                            Text {
-                                accessible-id: "roomTitle";
-                                color: Theme.text;
-                                font-size: Theme.font-size-heading;
-                                font-weight: Theme.font-weight-bold;
-                                overflow: elide;
-                                text: root.room-name;
-                            }
-
-                            if !root.room-topic-html.is-empty: StyledText {
-                                accessible-id: "roomTopic";
-                                accessible-role: text;
-                                accessible-value: root.room-topic-html;
-                                default-color: Theme.text-muted;
-                                default-font-size: Theme.font-size-small;
-                                link-color: Theme.own;
-                                max-lines: 1;
-                                text: root.room-topic;
-                                link-clicked(url) => {
-                                    root.open-link(url);
-                                }
-                            }
-                        }
-                    }
-
-                    Rectangle {
-                        y: parent.height - self.height;
-                        height: Theme.separator-width;
-                        background: Theme.line;
-                    }
-                }
-
-                // The messages, and the composer under them.
-                if !root.room-id.is-empty: VerticalLayout {
-                    y: Theme.room-header-height;
-                    width: parent.width;
-                    height: parent.height - Theme.room-header-height;
+                    width: Theme.sidebar-width;
                     padding: Theme.spacing-none;
                     spacing: Theme.spacing-none;
 
-                    MessageList {
-                        vertical-stretch: 1;
-                        messages: root.messages;
-                        room-id: root.room-id;
-                        reached-start: root.reached-start;
-                        loading-older: root.loading-older;
-                        prepends: root.prepends;
-                        resets: root.resets;
-                        load-older => {
-                            root.load-older();
+                    // The server: its host, and who you are there.
+                    VerticalLayout {
+                        padding-left: Theme.sidebar-header-padding-h;
+                        padding-right: Theme.sidebar-header-padding-h;
+                        padding-top: Theme.spacing-xxl;
+                        padding-bottom: Theme.spacing-xl;
+                        spacing: Theme.spacing-xxs;
+
+                        Text {
+                            accessible-id: "serverName";
+                            color: Theme.text;
+                            font-size: Theme.font-size-heading;
+                            font-weight: Theme.font-weight-bold;
+                            overflow: elide;
+                            text: root.host;
                         }
-                        retry(id) => {
-                            root.retry(id);
-                        }
-                        open-link(url) => {
-                            root.open-link(url);
+
+                        Text {
+                            accessible-id: "serverUser";
+                            color: Theme.text-faint;
+                            font-size: Theme.font-size-small;
+                            overflow: elide;
+                            text: root.username;
                         }
                     }
 
-                    // Empty most of the time, but its height is always taken.
-                    HorizontalLayout {
-                        padding-left: Theme.spacing-xxxl;
-                        padding-right: Theme.spacing-xxxl;
+                    // One list, so that everything scrolls together: the favorites come first, and
+                    // the headings of the sections are rows of it, there only while there are
+                    // favorites.
+                    Rectangle {
+                        vertical-stretch: 1;
+
+                        ListView {
+                            accessible-id: "roomList";
+                            accessible-role: list;
+                            width: parent.width;
+                            height: parent.height;
+                            visible: !root.search-active;
+
+                            for room in root.rooms: RoomDelegate {
+                                room: room;
+                                highlighted: room.id == root.room-id;
+                                clicked => {
+                                    root.open-room(room.id);
+                                }
+                                set-favorite(favorite) => {
+                                    root.set-favorite(room.id, favorite);
+                                }
+                                mark-read => {
+                                    root.mark-read(room.id);
+                                }
+                                mark-unread => {
+                                    root.mark-unread(room.id);
+                                }
+                                leave => {
+                                    root.leave(room.id, room.name);
+                                }
+                            }
+                        }
+
+                        // The rooms that match, in place of the list.
+                        results := RoomSearchResults {
+                            width: parent.width;
+                            height: parent.height;
+                            visible: root.search-active;
+                            results: root.search-results;
+                            generation: root.search-generation;
+                            open-id: root.room-id;
+                            clicked(id) => {
+                                root.open-room(id);
+                                root.leave-search(true, id);
+                            }
+                        }
+                    }
+
+                    // Why the last command on a room failed, until it is dismissed or the user
+                    // tries again.
+                    if !root.room-action-error.is-empty: Rectangle {
+                        accessible-id: "roomListError";
+                        accessible-role: groupbox;
+
+                        HorizontalLayout {
+                            padding: Theme.spacing-l;
+                            spacing: Theme.spacing-l;
+
+                            Text {
+                                accessible-id: "roomListErrorText";
+                                horizontal-stretch: 1;
+                                color: Theme.error;
+                                font-size: Theme.font-size-small;
+                                vertical-alignment: center;
+                                wrap: word-wrap;
+                                text: root.room-action-error;
+                            }
+
+                            VerticalLayout {
+                                alignment: center;
+                                padding: Theme.spacing-none;
+                                spacing: Theme.spacing-none;
+
+                                FlatButton {
+                                    accessible-id: "roomListErrorDismiss";
+                                    text: @tr("Dismiss");
+                                    clicked => {
+                                        root.dismiss-room-action-error();
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // Under the text of the field, just above it.
+                    if root.search-active && root.search-results.length == 0: HorizontalLayout {
+                        padding-left: Theme.room-row-inset + Theme.room-name-inset;
+                        padding-right: Theme.room-row-inset + Theme.row-padding-h;
                         padding-top: Theme.spacing-none;
                         padding-bottom: Theme.spacing-none;
                         spacing: Theme.spacing-none;
 
                         Text {
-                            accessible-id: "roomTyping";
+                            accessible-id: "roomSearchEmpty";
                             accessible-role: text;
-                            accessible-value: root.typing;
-                            height: Theme.typing-line-height;
-                            color: Theme.text-muted;
+                            accessible-value: self.text;
+                            color: Theme.text-faint;
                             font-size: Theme.font-size-small;
                             overflow: elide;
-                            vertical-alignment: center;
-                            text: root.typing;
+                            text: @tr("No rooms match “{}”", root.search-trimmed);
                         }
                     }
 
-                    HorizontalLayout {
-                        padding-left: Theme.spacing-xxxl;
-                        padding-right: Theme.spacing-xxxl;
-                        padding-top: Theme.spacing-m;
-                        padding-bottom: Theme.spacing-xxxl;
+                    // Searches the user's rooms by name. While it holds something, the results
+                    // replace the list and pile up from here. The focus stays here while typing: Up
+                    // and Down move through the results, away from the field and back. Enter, a
+                    // click on a result and Escape clear the field and hand the focus on.
+                    VerticalLayout {
+                        padding-left: Theme.room-row-inset;
+                        padding-right: Theme.room-row-inset;
+                        padding-top: Theme.spacing-l;
+                        padding-bottom: Theme.search-field-bottom-margin;
                         spacing: Theme.spacing-none;
 
-                        Composer {
-                            send(text) => {
-                                return root.send(text);
+                        search-field := RoomSearchField {
+                            query-changed(query) => {
+                                root.search(query);
+                            }
+                            changed focused => {
+                                if self.focused {
+                                    root.composer-wanted = false;
+                                }
+                            }
+                            up => {
+                                results.move-up();
+                            }
+                            down => {
+                                results.move-down();
+                            }
+                            enter => {
+                                // Nothing under the cursor opens nothing, and the search stays.
+                                if root.search-active && root.search-results.length > 0 {
+                                    let id = results.cursor-id();
+                                    root.open-room(id);
+                                    root.leave-search(true, id);
+                                }
+                            }
+                            escape => {
+                                root.leave-search(false, "");
+                            }
+                            init => {
+                                // A page made again starts with an empty field, whatever was
+                                // searched before.
+                                root.search(self.text);
                             }
                         }
                     }
                 }
 
-                if root.room-id.is-empty: Text {
-                    accessible-id: "roomPlaceholder";
-                    color: Theme.text-faint;
-                    horizontal-alignment: center;
-                    vertical-alignment: center;
-                    text: @tr("Select a room");
+                Rectangle {
+                    width: Theme.separator-width;
+                    background: Theme.line;
+                }
+
+                // The open room: its kind, its name and under it its topic, over a hairline.
+                Rectangle {
+                    background: Theme.surface;
+                    horizontal-stretch: 1;
+
+                    if !root.room-id.is-empty: Rectangle {
+                        y: Theme.spacing-none;
+                        height: Theme.room-header-height;
+
+                        HorizontalLayout {
+                            padding-left: Theme.spacing-xxxl;
+                            padding-right: Theme.spacing-xxxl;
+                            padding-top: Theme.spacing-none;
+                            padding-bottom: Theme.spacing-none;
+                            spacing: Theme.spacing-xl;
+
+                            VerticalLayout {
+                                alignment: center;
+                                width: Theme.room-header-icon-size;
+                                padding: Theme.spacing-none;
+                                spacing: Theme.spacing-none;
+
+                                KindIcon {
+                                    width: Theme.room-header-icon-size;
+                                    height: Theme.room-header-icon-size;
+                                    kind: root.room-kind;
+                                    tint: Theme.own;
+                                }
+                            }
+
+                            // Centred, so that the name of a room without a topic is in the middle.
+                            VerticalLayout {
+                                alignment: center;
+                                padding: Theme.spacing-none;
+                                spacing: Theme.spacing-xxs;
+
+                                Text {
+                                    accessible-id: "roomTitle";
+                                    color: Theme.text;
+                                    font-size: Theme.font-size-heading;
+                                    font-weight: Theme.font-weight-bold;
+                                    overflow: elide;
+                                    text: root.room-name;
+                                }
+
+                                if !root.room-topic-html.is-empty: StyledText {
+                                    accessible-id: "roomTopic";
+                                    accessible-role: text;
+                                    accessible-value: root.room-topic-html;
+                                    default-color: Theme.text-muted;
+                                    default-font-size: Theme.font-size-small;
+                                    link-color: Theme.own;
+                                    max-lines: 1;
+                                    text: root.room-topic;
+                                    link-clicked(url) => {
+                                        root.open-link(url);
+                                    }
+                                }
+                            }
+                        }
+
+                        Rectangle {
+                            y: parent.height - self.height;
+                            height: Theme.separator-width;
+                            background: Theme.line;
+                        }
+                    }
+
+                    // The messages, and the composer under them.
+                    if !root.room-id.is-empty: VerticalLayout {
+                        y: Theme.room-header-height;
+                        width: parent.width;
+                        height: parent.height - Theme.room-header-height;
+                        padding: Theme.spacing-none;
+                        spacing: Theme.spacing-none;
+
+                        MessageList {
+                            vertical-stretch: 1;
+                            composer-wanted: root.composer-wanted;
+                            messages: root.messages;
+                            room-id: root.room-id;
+                            reached-start: root.reached-start;
+                            loading-older: root.loading-older;
+                            prepends: root.prepends;
+                            resets: root.resets;
+                            load-older => {
+                                root.load-older();
+                            }
+                            retry(id) => {
+                                root.retry(id);
+                            }
+                            open-link(url) => {
+                                root.open-link(url);
+                            }
+                        }
+
+                        // Empty most of the time, but its height is always taken.
+                        HorizontalLayout {
+                            padding-left: Theme.spacing-xxxl;
+                            padding-right: Theme.spacing-xxxl;
+                            padding-top: Theme.spacing-none;
+                            padding-bottom: Theme.spacing-none;
+                            spacing: Theme.spacing-none;
+
+                            Text {
+                                accessible-id: "roomTyping";
+                                accessible-role: text;
+                                accessible-value: root.typing;
+                                height: Theme.typing-line-height;
+                                color: Theme.text-muted;
+                                font-size: Theme.font-size-small;
+                                overflow: elide;
+                                vertical-alignment: center;
+                                text: root.typing;
+                            }
+                        }
+
+                        HorizontalLayout {
+                            padding-left: Theme.spacing-xxxl;
+                            padding-right: Theme.spacing-xxxl;
+                            padding-top: Theme.spacing-m;
+                            padding-bottom: Theme.spacing-xxxl;
+                            spacing: Theme.spacing-none;
+
+                            Composer {
+                                focus-wanted: root.composer-wanted;
+                                focus-requests: root.composer-requests;
+                                room-id: root.room-id;
+                                focused => {
+                                    root.composer-wanted = false;
+                                }
+                                send(text) => {
+                                    return root.send(text);
+                                }
+                            }
+                        }
+                    }
+
+                    if root.room-id.is-empty: Text {
+                        accessible-id: "roomPlaceholder";
+                        color: Theme.text-faint;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                        text: @tr("Select a room");
+                    }
                 }
             }
         }

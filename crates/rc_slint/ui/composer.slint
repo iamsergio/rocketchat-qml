@@ -9,6 +9,13 @@ import { Theme } from "theme.slint";
 export component Composer inherits Rectangle {
     // Sends the text; false if it is refused, which leaves the field as it is.
     callback send(string) -> bool;
+    // The search field hands the focus on: to this composer when it is made or when the room
+    // changes while `focus-wanted`, and at once when `focus-requests` goes up. `focused` says that
+    // the composer has it, so that the wish is over.
+    in property <bool> focus-wanted;
+    in property <int> focus-requests;
+    in property <string> room-id;
+    callback focused();
 
     // The field: its text with the space above and below it, between the least and the most.
     property <length> field-height: clamp(
@@ -20,6 +27,20 @@ export component Composer inherits Rectangle {
         if root.send(input.text) {
             input.text = "";
         }
+    }
+
+    init => {
+        if root.focus-wanted {
+            input.focus();
+        }
+    }
+    changed room-id => {
+        if root.focus-wanted {
+            input.focus();
+        }
+    }
+    changed focus-requests => {
+        input.focus();
     }
 
     // Its height follows the text, and it never takes more: the extra goes to the messages above.
@@ -64,6 +85,11 @@ export component Composer inherits Rectangle {
                     font-size: Theme.font-size-base;
                     wrap: word-wrap;
                     single-line: false;
+                    changed has-focus => {
+                        if self.has-focus && root.focus-wanted {
+                            root.focused();
+                        }
+                    }
                     cursor-position-changed(position) => {
                         // Keeps the line with the cursor in view.
                         let line = Theme.font-size-base * Theme.line-height-scale;
