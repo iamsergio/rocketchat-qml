@@ -131,8 +131,8 @@ full)
     step clippy-spix cargo clippy --workspace --all-targets --locked --features rc_slint/spix -- -D warnings
     step deny cargo deny check
     step test cargo test --workspace --locked
-    step contract-api cargo test -p rc_api --test contract --locked -- --ignored --test-threads=3
-    step contract-core cargo test -p rc_core --test contract --locked -- --ignored --test-threads=3
+    step contract-api cargo test -p rc_api --test contract --locked -- --ignored --test-threads=6
+    step contract-core cargo test -p rc_core --test contract --locked -- --ignored --test-threads=6
     step build build_preset dev
     step build-slint build_preset dev-slint
     step qmllint ninja -C build-dev all_qmllint
