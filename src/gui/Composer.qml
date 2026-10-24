@@ -338,10 +338,11 @@ Rectangle {
 
             objectName: "composerAlsoToChannel"
             Layout.bottomMargin: Theme.spacingL
-            // As wide as its text, and no wider than the box: the room's name may be long.
+            // As wide as its text, and no wider than the box: the room's name may be long. The
+            // layout rounds the width down, so the ceiling keeps a name that fits from eliding.
             Layout.fillWidth: true
             Layout.leftMargin: Theme.composerPaddingH
-            Layout.maximumWidth: implicitWidth
+            Layout.maximumWidth: Math.ceil(implicitWidth)
             Layout.rightMargin: Theme.composerPaddingH
             // The content sits right of the box.
             leftPadding: Theme.checkBoxSize + Theme.spacingL

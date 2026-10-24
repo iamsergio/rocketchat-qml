@@ -12,7 +12,7 @@ use rc_gui_tests::paths::{main_window, message, message_row, room, room_row};
 
 use rc_test_server::{Admin, TestUser};
 
-use common::{TIMEOUT, launch, log_in_and_wait_for_room, open_room, press_home, utc_time};
+use common::{TIMEOUT, launch, log_in_and_wait_for_room, open_room, post_as, press_home, utc_time};
 
 /// More than one page of history, so that opening a room loads only the newest part.
 const TOTAL: usize = 60;
@@ -265,4 +265,34 @@ fn system_messages_are_shown_as_events_not_as_chat() {
                 .unwrap()
         );
     }
+}
+
+// MSG-006
+#[test]
+#[ignore = "needs the app and a Rocket.Chat server: run through ctest"]
+fn an_author_name_that_fits_is_not_elided() {
+    let admin = Admin::login();
+    // A fixed name: one that was elided, though it fits, until the header took the ceiling of its
+    // width. A generated name would make the test pass or fail by its length alone.
+    let user = admin.create_user_named("Sergio Martins");
+    let (channel_id, _) = admin.create_channel(&[&user.username]);
+    let posted = post_as(
+        &user,
+        &channel_id,
+        &format!("hello {}", rc_test_server::unique()),
+    );
+    let app = launch();
+    let gui = app.gui();
+    log_in_and_wait_for_room(gui, &user, &channel_id);
+
+    open_room(gui, &channel_id);
+
+    // The name fits the row, so it must be shown whole: nothing is elided.
+    let author = message(&posted.id, message_row::AUTHOR);
+    gui.wait_until_visible(&author, TIMEOUT).unwrap();
+    assert_eq!(gui.text(&author).unwrap(), user.name);
+    assert!(
+        !gui.truncated(&author).unwrap(),
+        "the author's name fits and must not be elided"
+    );
 }

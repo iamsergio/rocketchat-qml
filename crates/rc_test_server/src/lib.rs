@@ -254,10 +254,21 @@ impl Admin {
     /// If the server refuses.
     #[must_use]
     pub fn create_user(&self) -> TestUser {
+        self.create_user_named(&format!("Contract {}", unique()))
+    }
+
+    /// A new user with a unique username, who can log in at once, under the display name `name`.
+    /// Tests that care about how a name is laid out need a name that doesn't change from run to
+    /// run.
+    ///
+    /// # Panics
+    ///
+    /// If the server refuses.
+    #[must_use]
+    pub fn create_user_named(&self, name: &str) -> TestUser {
         let suffix = unique();
         let username = format!("ct-user-{suffix}");
         let password = format!("pw-{suffix}");
-        let name = format!("Contract {suffix}");
         let json = self.post(
             "users.create",
             &json!({
@@ -272,7 +283,7 @@ impl Admin {
             id: json["user"]["_id"].as_str().unwrap().to_owned(),
             username,
             password,
-            name,
+            name: name.to_owned(),
         }
     }
 
