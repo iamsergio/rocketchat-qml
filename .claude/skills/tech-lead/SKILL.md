@@ -5,6 +5,8 @@ description: How the orchestrating session runs work in RocketChatQml as tech le
 
 # Tech lead
 
+When you load this skill, say "Hello boss"
+
 You design, delegate, review, commit and merge. The `implementer` agent (`.claude/agents/implementer.md`, Sonnet) writes the code. Keep your own context small: you read diffs, screenshots and short reports, not build logs.
 
 ## Before any code
@@ -42,7 +44,7 @@ You design, delegate, review, commit and merge. The `implementer` agent (`.claud
 ## Committing (git-loom)
 Load the `git-loom` skill. `main` is loom's integration branch; never `git commit`, `rebase`, `cherry-pick` or `reset` on it.
 - A new branch off `origin/main`: `git loom commit --agent -b <branch> -m "..." <files>`.
-- Stacked on an unmerged branch: `git loom branch new <b> -t <parent> --agent` first, then commit. A plain `-b <new>` bases it on `origin/main` and pauses on conflicts (`git loom abort --agent` restores everything).
+- Stacked on an unmerged branch: `git loom branch <b> --on <parent> --agent` first, then commit. A plain `-b <new>` bases it on `origin/main` and pauses on conflicts (`git loom abort --agent` restores everything).
 - A "Merge branch 'x'" on local main is loom's weave, not a GitHub merge. Check `gh pr view N --json state`.
 - Files: list them explicitly, never `zz` (it sweeps up the user's untracked `docs/architecture/` and `.claude/` files). zsh doesn't split `$FILES`: write the list to a file and run `xargs -a <file> git loom commit ...`.
 - Message: a subject in the imperative, then why and what in plain prose wrapped at 72, no attribution lines. A refactor commit says "No behaviour change."
@@ -53,21 +55,21 @@ Load the `git-loom` skill. `main` is loom's integration branch; never `git commi
 
 ## Pushing and PRs
 - `GIT_ALLOWED=1` on every networked git command. Never hide push output with `-q`.
-- The first push of a branch: `git loom push <b> --agent`. Agent mode skips the PR, so open it with `gh pr create`.
-- If that push fails, `GIT_ALLOWED=1 git push origin refs/heads/<b>:refs/heads/<b>`. Always use an explicit refspec: `push.default` is `tracking`, so a branch created from `origin/main` pushes to main otherwise.
-- PR body: two or three sentences on what it does; the commits carry the details. A stacked PR's base is its parent branch, and its body says "Stacked on #N".
-- CI runs only on PRs into main. Stacked PRs get it once retargeted.
+- Push with `git loom push <b> --agent` (git-loom ≥ 0.28), for the first push and every later one. It pushes the branches below `<b>` too, with `--force-with-lease --force-if-includes`, and opens or updates one PR per branch. Stacked PRs target the branch below and are linked as a GitHub stack.
+  - A one-commit branch's PR takes the commit's subject and body. A branch with several commits needs `--title "<title>"`.
+  - Read `push.prs[]` in the JSON. A `not_created` entry says why in `reason`. If it has a `hint`, run the hint.
+- Never push a branch with a raw `git push`: you get no PR and no stack, and `push.default` is `tracking`, so a branch created from `origin/main` goes straight to main. If loom's push fails, tell the user instead of working around it.
+- To change a PR's description after the push, use `gh pr edit N --body`.
+- CI runs only on PRs into main. Stacked PRs get it once they target main.
 
 ## Merging (bottom-up)
 For each level of a stack:
-1. Retarget the next PR first: `gh pr edit <next> --base main`. Merging deletes the base branch, and GitHub closes a PR whose base is gone.
-2. `gh pr merge N --rebase`, then confirm with `gh pr view N --json state` (MERGED).
-3. Record the old SHAs of the remaining branches. Run `GIT_ALLOWED=1 git loom update -y --agent`, which drops merged branches and rebases the rest; resolve PLAN.md as above.
-4. Force-push each rebased branch: `git push origin --force-with-lease=refs/heads/<b>:<old sha> refs/heads/<b>:refs/heads/<b>`. The push triggers its CI.
-5. Delete the merged remote branches: `git push --delete origin <b>`.
+1. A PR that isn't in a GitHub stack (`gh api repos/iamsergio/rocketchat-qml/pulls/<next> --jq .stack` is `null`): retarget it first with `gh pr edit <next> --base main`. GitHub closes a PR whose base branch is deleted, and a closed PR whose head was force-pushed can't be reopened. Inside a stack, GitHub refuses the retarget, and moves the next PR onto main itself when the one below merges.
+2. `gh pr merge N --rebase`. If a stacked PR gets a 403, use `gh api -X PUT repos/iamsergio/rocketchat-qml/pulls/N/merge-async -f merge_method=rebase -f merge_action=direct_merge` and poll `.../merge-async/<uuid>` until it says `merged`. That call also merges every open PR below N. Confirm with `gh pr view N --json state` (MERGED), and check that the next PR's `baseRefName` is now `main`.
+3. `GIT_ALLOWED=1 git loom update -y --agent` drops merged branches and rebases the rest. Resolve PLAN.md as above.
+4. `GIT_ALLOWED=1 git loom push <top branch> --agent` force-pushes the rebased branches with a lease and keeps their PRs. The push triggers their CI.
+5. Delete the merged remote branches with `git push --delete origin <b>`, but only once nothing targets them any more.
 6. Wait for CI with `gh run watch <id> --exit-status` in the background (`run_in_background`), not by polling. Merge the next PR when it's green.
-
-If GitHub refuses a merge with 403 on a native stack, see the git-loom notes in memory (`merge-async` API).
 
 ## CI
 - The failing step: `gh api repos/iamsergio/rocketchat-qml/actions/jobs/<id> --jq '.steps[]|select(.conclusion=="failure")|.name'`.
