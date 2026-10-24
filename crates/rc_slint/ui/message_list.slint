@@ -26,6 +26,8 @@ export component MessageList inherits FocusScope {
     in property <bool> loading-older;
     in property <int> prepends;
     in property <int> resets;
+    // The search field is handing the focus to the composer: this list leaves it alone.
+    in property <bool> composer-wanted;
     // The view is at its top: Rust loads older messages.
     callback load-older();
     // A link of a body was clicked.
@@ -60,10 +62,14 @@ export component MessageList inherits FocusScope {
     // Keys go to the list, and a room that opens takes the focus, so that Home works at once.
     init => {
         root.last-view-height = flick.height;
-        root.focus();
+        if !root.composer-wanted {
+            root.focus();
+        }
     }
     changed room-id => {
-        root.focus();
+        if !root.composer-wanted {
+            root.focus();
+        }
     }
 
     key-pressed(event) => {

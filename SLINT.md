@@ -70,3 +70,15 @@ The testing backend keeps a mock renderer by default, which measures text with f
 
 - **Workaround:** `composer.slint` puts the `TextInput` in a `Flickable` inside a `FocusScope`, whose `capture-key-pressed` takes Enter without Shift before the input does (`reject` for the rest). The field's height follows the input's `preferred-height`, clamped. A `Text` over it is the placeholder, and `cursor-position-changed` moves the `Flickable` to the cursor's line, whose height is estimated from the font size.
 - **Possible patch:** a `placeholder-text` on `TextInput`, and its own scrolling and `cursor-rect` property.
+
+## A component can't name a property or function after a built-in of its base
+
+`Rectangle` and `FocusScope` already have `padding-left`, `padding-right` and `clear-focus()`, and a component that declares a property named `text` can't write `accessible-role: text` (the name resolves to the property, not to the role).
+
+- **Workaround:** other names (`text-inset-left`, `give-up-focus`), and `AccessibleRole.text` in such a component.
+
+## A hidden item keeps its place in a layout
+
+`visible: false` only stops drawing and the element search; the item still takes its share of a layout, so two stretching siblings that swap (the room list and the search results) split the height.
+
+- **Workaround:** the pair sits in one `Rectangle` that stretches, each sized to its parent, and `visible` picks one.

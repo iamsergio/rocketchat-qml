@@ -20,8 +20,10 @@ use rc_core::adapters::DiskFileCache;
 use rc_core::domain::{AccountId, MessageId, RoomId};
 use rc_core::{AccountHandle, Client, Event};
 use rc_view::accounts::AccountChange;
+use rc_view::avatar_view::AvatarUrls;
 use rc_view::dev_login;
 use rc_view::rich_html;
+use rc_view::room_search::{search_rooms, trimmed};
 use rc_view::room_view::outgoing;
 use rc_view::session_view::{LoginMode, SessionView, Status};
 use rc_view::startup;
@@ -32,6 +34,7 @@ use slint::{ComponentHandle, Model, ModelRc, VecModel, Weak};
 use crate::message_model::MessageModel;
 use crate::rich_markdown::{self, Palette};
 use crate::room_model::RoomModel;
+use crate::room_search_model::RoomSearchModel;
 use crate::rows::tile;
 use crate::ui::{self, AccountTile, MainWindow, Theme};
 
@@ -52,6 +55,12 @@ struct App {
     rooms: Rc<RoomModel>,
     /// The messages of the open room, oldest first.
     messages: Rc<MessageModel>,
+    /// The rooms that match the query, while one is typed.
+    found: Rc<RoomSearchModel>,
+    /// What the search field holds, as typed.
+    query: String,
+    /// How many result sets the view was given: it puts its cursor on the best match with each.
+    searches: i32,
 }
 
 /// The directory for downloaded files: `$XDG_CACHE_HOME/rocketchat_slint`, else
@@ -96,6 +105,8 @@ pub fn start(window: &MainWindow) {
     )));
     window.set_tiles(ModelRc::from(Rc::clone(&tiles)));
     window.set_rooms(ModelRc::from(Rc::clone(&rooms)));
+    let found = Rc::new(RoomSearchModel::default());
+    window.set_search_results(ModelRc::from(Rc::clone(&found)));
     window.set_messages(ModelRc::from(Rc::clone(&messages)));
     window.set_prefill_password(dev_login::prefill().password.into());
     connect_commands(window);
@@ -108,6 +119,9 @@ pub fn start(window: &MainWindow) {
             tiles,
             rooms,
             messages,
+            found,
+            query: String::new(),
+            searches: 0,
         });
     });
 }
@@ -132,6 +146,7 @@ fn connect_commands(window: &MainWindow) {
     window.on_add_account(|| App::with(App::add_account));
     window.on_remove_account(|id| App::with(|app| app.remove_account(&id)));
     window.on_open_room(|id| App::with(|app| app.open_room(&id)));
+    window.on_search(|query| App::with(|app| app.search(&query)));
     window.on_send(|text| {
         let mut sent = false;
         App::with(|app| sent = app.send(&text));
@@ -239,7 +254,7 @@ impl App {
 
     /// Shows an event of the current account, which its cache has taken in. What the GUI doesn't
     /// show yet (threads, emoji, answers to message actions) is ignored.
-    fn show(&self, event: Event) {
+    fn show(&mut self, event: Event) {
         match event {
             Event::Session(_) | Event::Connection(_) => {
                 self.messages
@@ -254,9 +269,11 @@ impl App {
                 .set_viewer(self.switchboard.accounts().current_cache().viewer()),
             Event::Rooms(changes) => {
                 self.rooms.apply(&changes);
+                self.refresh_search();
                 // The open room's name may have changed.
                 self.show_room();
             }
+            Event::QuietRooms(_) => self.refresh_search(),
             Event::Timeline(changes) => {
                 self.messages.apply(&changes);
                 self.show_counters();
@@ -274,6 +291,7 @@ impl App {
                 let cache = self.switchboard.accounts().current_cache();
                 let changes = cache.avatar_changes(&updates);
                 self.rooms.set_avatars(&changes);
+                self.found.set_avatars(&changes);
                 self.messages.set_avatars(&changes);
             }
             Event::Images(updates) => {
@@ -286,7 +304,7 @@ impl App {
 
     /// Replaces everything with what the current account says: its rooms and their avatars, the
     /// open room's messages, the session and the open room.
-    fn show_all(&self) {
+    fn show_all(&mut self) {
         let cache = self.switchboard.accounts().current_cache();
         let mut rooms = Vec::new();
         cache.rooms_snapshot().apply(&mut rooms);
@@ -300,6 +318,39 @@ impl App {
         self.show_counters();
         self.show_session(&self.switchboard.accounts().session_view());
         self.show_room();
+        self.refresh_search();
+    }
+
+    // The search
+
+    /// Searches the current account's rooms again, if a search is active: the rooms or the account
+    /// changed under it. The model is replaced as a whole, as for a new query.
+    fn refresh_search(&mut self) {
+        let Some(window) = self.window.upgrade() else {
+            return;
+        };
+        let query = trimmed(&self.query);
+        window.set_search_active(!query.is_empty());
+        window.set_search_trimmed(query.into());
+        if query.is_empty() {
+            // Nothing is shown while the field is at rest; drop what a search left, and leave
+            // the model alone otherwise: this runs on every change of the rooms.
+            if self.found.row_count() > 0 {
+                self.found.show(Vec::new(), AvatarUrls::default());
+            }
+            return;
+        }
+        let cache = self.switchboard.accounts().current_cache();
+        let found = search_rooms(cache.rooms(), cache.quiet_rooms(), query);
+        self.found.show(found, cache.avatars());
+        self.searches = self.searches.wrapping_add(1);
+        window.set_search_generation(self.searches);
+    }
+
+    /// The search field holds `query` now.
+    fn search(&mut self, query: &str) {
+        query.clone_into(&mut self.query);
+        self.refresh_search();
     }
 
     // The messages

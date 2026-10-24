@@ -3,13 +3,20 @@
 
 import { Theme } from "theme.slint";
 
-// A line of text on its own: the login fields. The border says which one has the focus.
+// A line of text on its own: the login fields and the room search. The border says which one has
+// the focus. `quiet` sets it into its surroundings until it has the focus: no border, and a darker
+// fill.
 export component InputField inherits Rectangle {
     in-out property <string> text <=> input.text;
     in property <string> placeholder-text;
     in property <bool> read-only;
     in property <bool> password;
     in property <bool> enabled: true;
+    in property <bool> quiet;
+    // The space between the field's edges and its text.
+    in property <length> text-inset-left: Theme.field-padding-h;
+    in property <length> text-inset-right: Theme.field-padding-h;
+    out property <bool> has-focus <=> input.has-focus;
     // The name the GUI tests find the field by: the element that holds the text has it.
     in property <string> field-id;
     callback accepted();
@@ -18,16 +25,20 @@ export component InputField inherits Rectangle {
         input.focus();
     }
 
+    public function give-up-focus() {
+        input.clear-focus();
+    }
+
     height: Theme.field-height;
-    background: root.read-only ? Theme.base : Theme.surface;
+    background: root.read-only ? Theme.base : root.quiet && !input.has-focus ? Theme.field-quiet : Theme.surface;
     border-width: Theme.border-width;
-    border-color: input.has-focus ? Theme.own : Theme.raised-hover;
+    border-color: input.has-focus ? Theme.own : root.quiet ? Theme.transparent : Theme.raised-hover;
     border-radius: Theme.radius-control;
     opacity: root.enabled ? Theme.opaque : Theme.disabled-opacity;
 
     HorizontalLayout {
-        padding-left: Theme.field-padding-h;
-        padding-right: Theme.field-padding-h;
+        padding-left: root.text-inset-left;
+        padding-right: root.text-inset-right;
         padding-top: Theme.spacing-none;
         padding-bottom: Theme.spacing-none;
         spacing: Theme.spacing-none;
@@ -57,7 +68,9 @@ export component InputField inherits Rectangle {
                 color: Theme.text-faint;
                 font-size: Theme.font-size-base;
                 text: root.placeholder-text;
+                horizontal-alignment: left;
                 vertical-alignment: center;
+                width: parent.width;
                 height: parent.height;
                 visible: input.text.is-empty;
             }

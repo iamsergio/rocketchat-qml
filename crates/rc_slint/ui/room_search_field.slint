@@ -1,0 +1,139 @@
+// SPDX-FileCopyrightText: 2026 Sergio Martins
+// SPDX-License-Identifier: MIT
+
+import { Icon } from "icon.slint";
+import { InputField } from "input_field.slint";
+import { Theme } from "theme.slint";
+
+// The search field at the bottom of the sidebar: a quiet input field whose text starts where the
+// room names do, with a magnifier over the avatars. At rest it shows the keycap that hints at
+// Ctrl+K, with text a cross that clears it and leaves the focus where it is. The focus stays in the
+// field while the results are browsed, so the keys that move through them, accept one or give up
+// are taken here before the text input sees them.
+export component RoomSearchField inherits FocusScope {
+    in-out property <string> text <=> field.text;
+    out property <bool> focused <=> field.has-focus;
+    // The text changed, typed or not.
+    callback query-changed(string);
+    // Up moves the cursor away from the field, Down back to it, Enter takes the result under it
+    // and Escape gives up.
+    callback up();
+    callback down();
+    callback enter();
+    callback escape();
+
+    public function focus-field() {
+        field.focus-field();
+    }
+
+    public function give-up-focus() {
+        field.give-up-focus();
+    }
+
+    // Empties the field without touching the focus.
+    public function clear-text() {
+        field.text = "";
+    }
+
+    height: Theme.search-field-height;
+
+    capture-key-pressed(event) => {
+        if event.text == Key.UpArrow {
+            root.up();
+            return accept;
+        }
+        if event.text == Key.DownArrow {
+            root.down();
+            return accept;
+        }
+        if event.text == Key.Return {
+            root.enter();
+            return accept;
+        }
+        if event.text == Key.Escape {
+            root.escape();
+            return accept;
+        }
+        return reject;
+    }
+
+    field := InputField {
+        field-id: "roomSearchField";
+        width: parent.width;
+        height: parent.height;
+        quiet: true;
+        placeholder-text: @tr("Search rooms");
+        // The text starts where the room names do, and stays clear of the cross and the keycap.
+        text-inset-left: Theme.room-name-inset;
+        text-inset-right: Theme.field-padding-h + max(hint.width, clear.width);
+        changed text => {
+            root.query-changed(self.text);
+        }
+    }
+
+    Icon {
+        x: Theme.room-avatar-center - Theme.search-icon-size / 2;
+        y: (parent.height - self.height) / 2;
+        width: Theme.search-icon-size;
+        height: Theme.search-icon-size;
+        source: @image-url("../../../src/gui/icons/search.svg");
+        tint: Theme.text-faint;
+    }
+
+    // Clears the field and leaves the focus where it is.
+    clear := Rectangle {
+        accessible-id: "roomSearchClear";
+        accessible-role: button;
+        accessible-label: @tr("Clear the search");
+        accessible-action-default => {
+            root.clear-text();
+            field.focus-field();
+        }
+        visible: !field.text.is-empty;
+        x: parent.width - self.width - Theme.spacing-m;
+        y: (parent.height - self.height) / 2;
+        width: Theme.search-clear-size;
+        height: Theme.search-clear-size;
+        background: clear-touch.has-hover ? Theme.raised-hover : Theme.transparent;
+        border-radius: Theme.radius-control;
+
+        Icon {
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            width: Theme.search-clear-icon-size;
+            height: Theme.search-clear-icon-size;
+            source: @image-url("../../../src/gui/icons/close.svg");
+            tint: clear-touch.has-hover ? Theme.text : Theme.text-muted;
+        }
+
+        clear-touch := TouchArea {
+            clicked => {
+                root.clear-text();
+                field.focus-field();
+            }
+        }
+    }
+
+    // The shortcut, in a keycap, while the field is at rest.
+    hint := Rectangle {
+        accessible-id: "roomSearchHint";
+        accessible-role: AccessibleRole.text;
+        accessible-label: hint-label.text;
+        visible: field.text.is-empty && !field.has-focus;
+        x: parent.width - self.width - Theme.spacing-xl;
+        y: (parent.height - self.height) / 2;
+        width: hint-label.preferred-width + 2 * Theme.search-hint-padding-h;
+        height: hint-label.preferred-height + 2 * Theme.search-hint-padding-v;
+        border-color: Theme.raised-hover;
+        border-width: Theme.border-width;
+        border-radius: Theme.radius-check-box;
+
+        hint-label := Text {
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            color: Theme.text-faint;
+            font-size: Theme.font-size-tiny;
+            text: @tr("Ctrl K");
+        }
+    }
+}

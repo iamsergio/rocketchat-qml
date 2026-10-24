@@ -9,13 +9,22 @@ import { Theme } from "theme.slint";
 
 // One row of the room list: a room, or the heading of a section (`roomSection_favorites` or
 // `roomSection_rooms`, with the heading `roomSectionHeader`). A room is named by its id: room names
-// aren't unique. Its icon is named after the room kind: `roomKind_channel`, `roomKind_private`,
-// `roomKind_direct`. A right-click opens the menu of the room, whose items are popups, found from
-// the window by their names while it is open.
+// aren't unique; in the search results the name starts with `searchResult_` and not `room_`. Its
+// icon is named after the room kind: `roomKind_channel`, `roomKind_private`, `roomKind_direct`. A
+// right-click opens the menu of the room, whose items are popups, found from the window by their
+// names while it is open.
 export component RoomDelegate inherits Rectangle {
     in property <RoomRow> room;
     // Whether this is the open room.
     in property <bool> highlighted;
+    // Whether the keyboard cursor is on the row, as in a list of search results: it looks like the
+    // pointer being over it, which the open room's look wins over.
+    in property <bool> cursor;
+    // What the name of a room starts with: the search results use another one, so that the same
+    // room is addressed in the list and in the results.
+    in property <string> id-prefix: "room_";
+    // Whether a right-click opens the menu of the room.
+    in property <bool> menu-enabled: true;
     callback clicked();
     // The menu's commands. Leaving is only asked for: the page asks the user first.
     callback set-favorite(bool);
@@ -27,7 +36,7 @@ export component RoomDelegate inherits Rectangle {
     property <bool> can-mark-unread: !root.room.has-unread && !root.highlighted;
     property <bool> is-room: root.room.section == RoomSection.room;
 
-    accessible-id: root.is-room ? "room_" + root.room.id : root.room.section == RoomSection.favorites ? "roomSection_favorites" : "roomSection_rooms";
+    accessible-id: root.is-room ? root.id-prefix + root.room.id : root.room.section == RoomSection.favorites ? "roomSection_favorites" : "roomSection_rooms";
     accessible-role: button;
     accessible-label: root.room.name;
     accessible-action-default => {
@@ -55,7 +64,7 @@ export component RoomDelegate inherits Rectangle {
         Rectangle {
             x: Theme.room-row-inset;
             width: parent.width - 2 * Theme.room-row-inset;
-            background: root.highlighted ? Theme.own-wash : touch.has-hover ? Theme.surface : Theme.transparent;
+            background: root.highlighted ? Theme.own-wash : touch.has-hover || root.cursor ? Theme.surface : Theme.transparent;
             border-radius: Theme.radius-control;
         }
 
@@ -64,7 +73,7 @@ export component RoomDelegate inherits Rectangle {
             padding-right: Theme.room-row-inset + Theme.row-padding-h;
             padding-top: Theme.spacing-none;
             padding-bottom: Theme.spacing-none;
-            spacing: Theme.spacing-l;
+            spacing: Theme.room-row-spacing;
 
             VerticalLayout {
                 alignment: center;
@@ -177,7 +186,7 @@ export component RoomDelegate inherits Rectangle {
                 root.clicked();
             }
             pointer-event(event) => {
-                if event.button == PointerEventButton.right && event.kind == PointerEventKind.up {
+                if root.menu-enabled && event.button == PointerEventButton.right && event.kind == PointerEventKind.up {
                     menu.show();
                 }
             }

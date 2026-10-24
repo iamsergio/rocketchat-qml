@@ -67,6 +67,15 @@ export component MainWindow inherits Window {
     callback remove-account(string);
     // Why the last command on a room failed; empty for none.
     in property <string> room-action-error;
+    // The room search: whether the query isn't empty, and then the query without the space around
+    // it and the rooms that match it (worst first), with a number that goes up with each result
+    // set.
+    in property <bool> search-active;
+    in property <string> search-trimmed;
+    in property <[RoomRow]> search-results;
+    in property <int> search-generation;
+    // The text of the search field changed.
+    callback search(string);
     callback open-room(string);
     // The room's menu: a favorite is set or taken back, the room is marked read or unread, the
     // user confirmed leaving it, or dismissed the error.
@@ -147,11 +156,18 @@ export component MainWindow inherits Window {
             room-topic-html: root.room-topic-html;
             typing: root.typing;
             room-action-error: root.room-action-error;
+            search-active: root.search-active;
+            search-trimmed: root.search-trimmed;
+            search-results: root.search-results;
+            search-generation: root.search-generation;
             messages: root.messages;
             reached-start: root.reached-start;
             loading-older: root.loading-older;
             prepends: root.prepends;
             resets: root.resets;
+            search(query) => {
+                root.search(query);
+            }
             open-room(id) => {
                 root.open-room(id);
             }

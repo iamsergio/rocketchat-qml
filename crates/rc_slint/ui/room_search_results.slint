@@ -1,0 +1,89 @@
+// SPDX-FileCopyrightText: 2026 Sergio Martins
+// SPDX-License-Identifier: MIT
+
+import { RoomDelegate } from "room_delegate.slint";
+import { RoomRow } from "structs.slint";
+import { Theme } from "theme.slint";
+
+// The rooms that match the search, piled up from the bottom: the best match is the last row, right
+// above the field (Rust gives them worst first), and the empty space is above the rows.
+//
+// Not the lazy `ListView`, which can't bottom-align a few rows (SLINT.md): every result is a row of
+// one layout in a flickable, so the rows are all made at once. The keyboard cursor is a row of
+// its own, moved with `move-up` (away from the field) and `move-down`, and it starts on the best
+// match with each new result set (`generation`). The field keeps the focus: the list has none.
+export component RoomSearchResults inherits Rectangle {
+    in property <[RoomRow]> results;
+    // A number that goes up with each new result set.
+    in property <int> generation;
+    // The open room, which is highlighted.
+    in property <string> open-id;
+    // The row of the cursor: an index of `results`, the last one until it is moved.
+    property <int> cursor: root.results.length - 1;
+    callback clicked(string);
+
+    // The id of the room under the cursor, empty if there are no results.
+    public function cursor-id() -> string {
+        root.results[root.cursor].id
+    }
+
+    // Away from the field: to the next result up, if there is one.
+    public function move-up() {
+        root.cursor = max(root.cursor - 1, 0);
+        root.reveal();
+    }
+
+    // Back towards the field.
+    public function move-down() {
+        root.cursor = min(root.cursor + 1, root.results.length - 1);
+        root.reveal();
+    }
+
+    // Scrolls the cursor's row into view. The rows are all the same height, and the layout is as
+    // high as the content, so where a row is follows from its index.
+    function reveal() {
+        let below = (root.results.length - root.cursor) * Theme.room-row-height;
+        let top = flick.content-height - below;
+        let bottom = top + Theme.room-row-height;
+        if top < -flick.content-y {
+            flick.content-y = -top;
+        } else if bottom > -flick.content-y + flick.height {
+            flick.content-y = flick.height - bottom;
+        }
+    }
+
+    // A new result set: the cursor on the best match, which is at the bottom, in view.
+    changed generation => {
+        root.cursor = root.results.length - 1;
+        flick.content-y = min(Theme.scroll-top, flick.height - flick.content-height);
+    }
+
+    flick := Flickable {
+        accessible-id: "roomSearchResults";
+        accessible-role: list;
+        accessible-item-count: root.results.length;
+        width: parent.width;
+        height: parent.height;
+        content-width: self.width;
+        content-height: max(self.height, root.results.length * Theme.room-row-height);
+
+        VerticalLayout {
+            alignment: end;
+            width: flick.width;
+            height: flick.content-height;
+            padding: Theme.spacing-none;
+            spacing: Theme.spacing-none;
+
+            for room[index] in root.results: RoomDelegate {
+                room: room;
+                id-prefix: "searchResult_";
+                menu-enabled: false;
+                highlighted: room.id == root.open-id;
+                cursor: index == root.cursor;
+                clicked => {
+                    root.clicked(room.id);
+                }
+            }
+        }
+    }
+}
