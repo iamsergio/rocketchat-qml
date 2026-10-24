@@ -47,6 +47,16 @@ pub fn log_out_of(gui: &Gui, tile: &str) {
     gui.mouse_click(main_window::LOGOUT_ACTION).unwrap();
 }
 
+/// Logs out of the only account and waits for the login page of the new one that takes its place.
+/// The logged-out account shows its own login page first, with its server filled in, until the
+/// core has forgotten it: what is typed there is lost when the new account's empty page replaces
+/// it.
+pub fn log_out_of_the_last(gui: &Gui) {
+    log_out_of(gui, &rc_gui_tests::paths::server_tile(0, ""));
+    gui.wait_until_text(main_window::LOGIN_SERVER_FIELD, "", TIMEOUT)
+        .unwrap();
+}
+
 /// Starts the app with the time zone set to UTC, so that the times it shows are the ones the
 /// server stored.
 pub fn launch() -> App {
