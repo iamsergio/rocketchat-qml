@@ -38,8 +38,8 @@ cargo llvm-cov clean --workspace
 cargo test --workspace --locked
 # Only these two suites: --ignored on the whole workspace would also run the GUI tests and the OS
 # keyring test, which must never run in CI.
-cargo test -p rc_api --test contract --locked -- --ignored
-cargo test -p rc_core --test contract --locked -- --ignored
+cargo test -p rc_api --test contract --locked -- --ignored --test-threads=3
+cargo test -p rc_core --test contract --locked -- --ignored --test-threads=3
 if ((gui)); then
     RC_GUI_TEST_APP=$app cargo test -p rc_gui_tests --locked -- --ignored
 fi

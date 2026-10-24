@@ -68,11 +68,13 @@ jobs:
 
     # Only these two suites: --workspace --ignored would also run the GUI tests (they need the built
     # app) and the OS keyring test, which must never run in CI.
+    # Three at a time: the test server is shared, and under the full parallel load its pushes can
+    # take longer than the tests wait for them.
     - name: Run contract tests
       if: matrix.preset == 'dev'
       run: |
-        cargo test -p rc_api --test contract --locked -- --ignored
-        cargo test -p rc_core --test contract --locked -- --ignored
+        cargo test -p rc_api --test contract --locked -- --ignored --test-threads=3
+        cargo test -p rc_core --test contract --locked -- --ignored --test-threads=3
 
     - name: Configure CMake
       run: cmake --preset=${{ matrix.preset }}
