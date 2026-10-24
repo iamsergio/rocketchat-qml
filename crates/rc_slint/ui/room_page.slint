@@ -40,7 +40,7 @@ export component RoomPage inherits Rectangle {
     in property <int> prepends;
     in property <int> resets;
     // Why the last command on a room failed; empty for none.
-    in property <string> room-action-error;
+    in property <string> room-list-error;
     // The search: whether the query isn't empty, and then the query without the space around it
     // and the rooms that match, worst first (see `room_search_results.slint`), with a number that
     // goes up with each new result set.
@@ -56,7 +56,7 @@ export component RoomPage inherits Rectangle {
     callback mark-read(string);
     callback mark-unread(string);
     callback leave(string, string);
-    callback dismiss-room-action-error();
+    callback dismiss-room-list-error();
     // The list of messages is at its top: older ones are wanted.
     callback load-older();
     // A link of the topic or of a message was clicked.
@@ -205,7 +205,7 @@ export component RoomPage inherits Rectangle {
 
                     // Why the last command on a room failed, until it is dismissed or the user
                     // tries again.
-                    if !root.room-action-error.is-empty: Rectangle {
+                    if !root.room-list-error.is-empty: Rectangle {
                         accessible-id: "roomListError";
                         accessible-role: groupbox;
 
@@ -220,7 +220,7 @@ export component RoomPage inherits Rectangle {
                                 font-size: Theme.font-size-small;
                                 vertical-alignment: center;
                                 wrap: word-wrap;
-                                text: root.room-action-error;
+                                text: root.room-list-error;
                             }
 
                             VerticalLayout {
@@ -232,7 +232,7 @@ export component RoomPage inherits Rectangle {
                                     accessible-id: "roomListErrorDismiss";
                                     text: @tr("Dismiss");
                                     clicked => {
-                                        root.dismiss-room-action-error();
+                                        root.dismiss-room-list-error();
                                     }
                                 }
                             }

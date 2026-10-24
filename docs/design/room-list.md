@@ -34,8 +34,8 @@ On success the core applies the change to the room as it is by then, without wai
 
 - **Rows:** `RoomRow` has `favorite` and `can-leave` (from `Room::can_leave`) besides `has-unread`; the menu offers what they say, with the open room excluded from "Mark as unread" as in QML.
 - **Menu:** `room_delegate.slint` has a `PopupWindow` at the pointer, opened by a right-click (`pointer-event`), of `MenuItem`s. Slint keeps a popup inside the window, so a row near an edge needs nothing of ours. The three conditional items are always there and take no height while hidden (`visible` and a height of zero): an `if` item in a popup is not clicked where the test backend aims (SLINT.md).
-- **Leaving:** the item only asks: `main.slint` holds the room's id and name and shows `leave_dialog.slint`, which dims and blocks the whole window (Escape cancels). Confirming calls `leave-room`.
-- **Errors:** `room-action-error` of the window is the text of the last failed `Event::RoomAction`, cleared by the next command (set to empty in `app.rs` before each one) and by the Dismiss button; it shows as `roomListError` under the list. It is a few lines, so it is not shared with `rc_qt`'s model.
+- **Leaving:** the item only asks: `main.slint` holds the room's id and name and shows `confirm_dialog.slint` (a generic confirmation, here asking to leave), which dims and blocks the whole window (Escape cancels). Confirming calls `leave-room`.
+- **Errors:** `room-list-error` of the window is the text of the last failed `Event::RoomAction`, cleared by the next command (set to empty in `app.rs` before each one) and by the Dismiss button; it shows as `roomListError` under the list. It is a few lines, so it is not shared with `rc_qt`'s model.
 
 ## Search
 
