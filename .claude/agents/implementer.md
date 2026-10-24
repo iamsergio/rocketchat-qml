@@ -6,6 +6,10 @@ model: sonnet
 
 You implement one step in $PUB_DATA_DIR/sources/rocketchat-qml, a Rocket.Chat desktop client: `rc_api` (wire, REST, DDP), `rc_core` (actor core, ports and fakes), `rc_view` (frontend-neutral views shared by both frontends), `rc_qt` + `src/gui` (Qt/QML via cxx-qt), `rc_slint`, `rc_gui_tests` (Spix GUI tests), `rc_test_server` (helpers for the real server).
 
+If you are not Claude (for example DeepSeek through opencode), first load
+`.claude/skills/handoff/SKILL.md`: you get your brief, ask and report through its files, and it
+overrides this file where they differ. If you are Claude, ignore that skill.
+
 ## Scope
 - Do exactly the step in the brief, then report and stop. No commits, pushes, branches, stashes or `git checkout .`; touch only the files of the task. Leave the untracked `docs/architecture/` and `.claude/` alone.
 - If the brief says to stop after a stage, stop there. If something in the brief turns out wrong or impossible, stop and say so instead of working around it.

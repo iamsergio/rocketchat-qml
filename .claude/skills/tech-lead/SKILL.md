@@ -26,7 +26,8 @@ You design, delegate, review, commit and merge. The `implementer` agent (`.claud
   - the screenshots to take, with file names in the scratchpad;
   - where to stop.
 - Ask for everything review would ask for, up front. Each send-back costs a full re-run.
-- Use `isolation: "worktree"` only when the main checkout is busy with another agent. Its worktree needs `3rdparty/spix` symlinked from the main checkout, and you remove the worktree and its branch afterwards, before any `git loom push`.
+- An implementer outside Claude Code (DeepSeek through opencode) gets its brief, and asks and reports, through the files of the `handoff` skill.
+- Use `isolation: "worktree"` only when the main checkout is busy with another agent. Its worktree needs `3rdparty/spix` symlinked from the main checkout, and you remove the worktree and its branch once you know its work is done. Leave other worktrees alone: those of other tasks or sessions may still be in use. Before a `git loom push`, check that the branches it pushes include no worktree's branch.
 
 ## Reviewing
 - Screenshots against the mockup: alignment, hierarchy, the accent colours' fixed meanings (signal red = needs the user, own blue = the user's or where they are).
