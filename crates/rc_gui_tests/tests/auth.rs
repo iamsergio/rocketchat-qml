@@ -7,11 +7,11 @@
 mod common;
 
 use rc_gui_tests::App;
-use rc_gui_tests::paths::{main_window, server_tile};
+use rc_gui_tests::paths::main_window;
 use rc_test_server::{Admin, server_url};
 use std::net::TcpListener;
 
-use common::{SessionFile, TIMEOUT, log_in, log_out_of};
+use common::{SessionFile, TIMEOUT, log_in, log_out_of_the_last};
 
 // AUTH-001
 #[test]
@@ -121,10 +121,8 @@ fn logging_out_returns_to_the_login_page() {
     gui.wait_until_visible(main_window::ROOM_LIST, TIMEOUT)
         .unwrap();
 
-    log_out_of(gui, &server_tile(0, ""));
+    log_out_of_the_last(gui);
 
-    gui.wait_until_visible(main_window::LOGIN_BUTTON, TIMEOUT)
-        .unwrap();
     assert!(!gui.exists_and_visible(main_window::ROOM_LIST).unwrap());
     // The login page starts empty again.
     assert_eq!(gui.text(main_window::LOGIN_PASSWORD_FIELD).unwrap(), "");
