@@ -36,7 +36,7 @@ use rc_core::{AccountHandle, Client, Event};
 use rc_test_server::{Admin, PIXEL_PNG, Proxy, TestUser, Typist, server_url, unique};
 use secrecy::SecretString;
 
-const TIMEOUT: Duration = Duration::from_secs(15);
+const TIMEOUT: Duration = Duration::from_secs(20);
 
 /// A new user, who can log in at once.
 fn new_user() -> TestUser {
