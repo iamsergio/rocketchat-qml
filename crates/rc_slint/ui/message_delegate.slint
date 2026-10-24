@@ -127,6 +127,13 @@ export component MessageDelegate inherits Rectangle {
                             text: root.message.time;
                         }
 
+                        if root.message.edited: Text {
+                            accessible-id: "msgEdited";
+                            color: Theme.text-faint;
+                            font-size: Theme.font-size-tiny;
+                            text: @tr("(edited)");
+                        }
+
                         Rectangle {
                             horizontal-stretch: 1;
                         }
