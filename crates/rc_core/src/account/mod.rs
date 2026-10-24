@@ -444,7 +444,7 @@ impl<C: Connector> Actor<C> {
             succeeded_at: None,
             rooms_listed: false,
             backlog: None,
-            rooms: RoomList::new(tuning.quiet_after),
+            rooms: RoomList::new(tuning.quiet_after, tuning.channel_batch),
             emoji: CustomEmojis::default(),
             emoji_task: None,
             policy: MessagePolicy::default(),
@@ -530,16 +530,21 @@ impl<C: Connector> Actor<C> {
     /// When the actor next has something to do without being asked: the earliest deadline of the
     /// concerns that have one. `None` if none has.
     fn next_deadline(&self) -> Option<jiff::Timestamp> {
-        [self.rooms.next_quiet(), self.typists.next_deadline()]
-            .into_iter()
-            .flatten()
-            .min()
+        [
+            self.rooms.next_quiet(),
+            self.rooms.next_release(),
+            self.typists.next_deadline(),
+        ]
+        .into_iter()
+        .flatten()
+        .min()
     }
 
     /// Does what the deadlines that have passed ask for. Each concern checks its own against the
     /// clock, so one that is not due changes nothing.
     fn handle_deadline(&mut self) {
         self.hide_quiet_rooms();
+        self.release_channels();
         self.expire_typists();
     }
 

@@ -139,13 +139,33 @@ pub(super) fn wait_for_expired(store: &MemoryStore) -> StoredAccount {
     })
 }
 
-/// A client whose events are read raw, none skipped, as they come.
+/// A client whose events are read raw, none skipped, as they come. Channels show their news at
+/// once.
 pub(super) fn raw_client(
     fake: &Fake,
     store: impl SecretStore,
     cache: FakeCache,
     clock: FakeClock,
     backoff: Backoff,
+) -> (Client, Receiver<(AccountId, Event)>) {
+    raw_client_batching(
+        fake,
+        store,
+        cache,
+        clock,
+        backoff,
+        jiff::SignedDuration::ZERO,
+    )
+}
+
+/// Like [`raw_client`], with channels holding their news for `channel_batch`.
+pub(super) fn raw_client_batching(
+    fake: &Fake,
+    store: impl SecretStore,
+    cache: FakeCache,
+    clock: FakeClock,
+    backoff: Backoff,
+    channel_batch: jiff::SignedDuration,
 ) -> (Client, Receiver<(AccountId, Event)>) {
     let (tx, events) = mpsc::channel();
     let client = Client::with_tuning(
@@ -158,6 +178,7 @@ pub(super) fn raw_client(
         },
         Tuning {
             backoff,
+            channel_batch,
             ..Tuning::default()
         },
     )
@@ -217,6 +238,19 @@ impl Harness {
             FakeCache::default(),
             Backoff::new(NEVER, NEVER, NEVER),
             true,
+            jiff::SignedDuration::ZERO,
+        )
+    }
+
+    /// A harness whose channels hold their news for `batch`.
+    pub(super) fn with_batch(fake: &Fake, batch: jiff::SignedDuration) -> Self {
+        Self::build_for(
+            fake,
+            MemoryStore::default(),
+            FakeCache::default(),
+            Backoff::new(NEVER, NEVER, NEVER),
+            false,
+            batch,
         )
     }
 
@@ -226,7 +260,14 @@ impl Harness {
         cache: FakeCache,
         backoff: Backoff,
     ) -> Self {
-        Self::build_for(fake, store, cache, backoff, false)
+        Self::build_for(
+            fake,
+            store,
+            cache,
+            backoff,
+            false,
+            jiff::SignedDuration::ZERO,
+        )
     }
 
     fn build_for(
@@ -235,9 +276,11 @@ impl Harness {
         cache: FakeCache,
         backoff: Backoff,
         several: bool,
+        batch: jiff::SignedDuration,
     ) -> Self {
         let clock = FakeClock::default();
-        let (client, events) = raw_client(fake, store, cache, clock.clone(), backoff);
+        let (client, events) =
+            raw_client_batching(fake, store, cache, clock.clone(), backoff, batch);
         let (account, added) = events.recv_timeout(TIMEOUT).expect("no event");
         assert_eq!(added, Event::Added);
         let mut harness = Self {

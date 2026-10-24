@@ -218,6 +218,15 @@ impl<C: Connector> Actor<C> {
         }
     }
 
+    /// Shows the news of the channels held back, if the batch is due, and tells the frontend.
+    pub(super) fn release_channels(&mut self) {
+        let now = self.clock.now();
+        if self.rooms.next_release().is_some_and(|at| at <= now) {
+            let changes = self.rooms.release(now);
+            self.emit_rooms(changes);
+        }
+    }
+
     /// Records the room the user has open, `None` for none, in the room list: the open room is
     /// always shown, and the one left may go quiet. Tells the frontend.
     pub(super) fn track_open_room(&mut self, id: Option<RoomId>) {
@@ -228,13 +237,13 @@ impl<C: Connector> Actor<C> {
     }
 
     /// Changes a listed room and tells the frontend, unless nothing changes. The open room stays
-    /// read, as for a push.
+    /// read, as for a push. The user did it, so held news is shown with it.
     fn change_room(&mut self, id: &RoomId, change: impl FnOnce(Room) -> Room) {
         let Some(held) = self.rooms.get(id).cloned() else {
             return;
         };
         let room = self.seen_if_open(change(held));
-        let change = self.rooms.upsert(room, self.clock.now());
+        let change = self.rooms.upsert_now(room, self.clock.now());
         self.emit_rooms(change.into_iter().collect());
     }
 

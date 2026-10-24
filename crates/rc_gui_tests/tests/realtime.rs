@@ -7,11 +7,15 @@
 
 mod common;
 
+use std::time::Duration;
+
+use rc_gui_tests::App;
 use rc_gui_tests::paths::{main_window, message, message_row, room, room_row};
 use rc_test_server::{Admin, Proxy, unique};
 
 use common::{
     TIMEOUT, launch, log_in_and_wait_for_room, log_in_at_and_wait_for_room, open_room, row_y,
+    shows_unread,
 };
 
 // RT-001
@@ -128,6 +132,61 @@ fn a_new_message_moves_its_room_to_the_top() {
         Ok(row_y(gui, &older_id) < row_y(gui, &newer_id))
     })
     .unwrap();
+}
+
+// ROOM-011
+#[test]
+#[ignore = "needs the app and a Rocket.Chat server: run through ctest"]
+fn the_news_of_a_channel_waits_for_the_batch_unless_it_mentions_the_user_or_is_a_direct_message() {
+    let admin = Admin::login();
+    let user = admin.create_user();
+    // Created in this order, so `a` is the oldest and at the bottom, and the direct message is the
+    // newest, at the top.
+    let (a_id, _) = admin.create_channel(&[&user.username]);
+    let (b_id, _) = admin.create_channel(&[&user.username]);
+    let (idle_id, _) = admin.create_channel(&[&user.username]);
+    let dm_id = admin.create_dm(&user.username);
+    // The server hides a direct message from the other person until it has a message.
+    admin.post_message(&dm_id, "first");
+    // Long enough for the steps below on a loaded server, short enough to wait for.
+    let app = App::launch_with(&[("TZ", "UTC"), ("RC_CHANNEL_BATCH_SECS", "12")]).unwrap();
+    let gui = app.gui();
+    log_in_and_wait_for_room(gui, &user, &a_id);
+    // Read the direct message, then leave it for a room that has nothing to read.
+    open_room(gui, &dm_id);
+    open_room(gui, &idle_id);
+    gui.wait_until("the direct message read", TIMEOUT, || {
+        Ok(!shows_unread(gui, &dm_id))
+    })
+    .unwrap();
+    assert!(!shows_unread(gui, &a_id) && !shows_unread(gui, &b_id));
+    assert!(row_y(gui, &idle_id) < row_y(gui, &a_id));
+
+    admin.post_message(&a_id, "news for later");
+    admin.post_message(&b_id, &format!("hello @{}", user.username));
+
+    // The mention is shown at once, and moves its room up. The news of `a` came before it on the
+    // same connection, so the list has heard of it by now and keeps it back.
+    gui.wait_until_text(&room(&b_id, room_row::MENTIONS), "1", TIMEOUT)
+        .unwrap();
+    gui.wait_until("the mentioned room moved up", TIMEOUT, || {
+        Ok(row_y(gui, &b_id) < row_y(gui, &dm_id))
+    })
+    .unwrap();
+    assert!(!shows_unread(gui, &a_id));
+    assert!(row_y(gui, &a_id) > row_y(gui, &idle_id));
+
+    // A direct message is shown at once too.
+    admin.post_message(&dm_id, "second");
+    gui.wait_until_text(&room(&dm_id, room_row::UNREAD), "1", TIMEOUT)
+        .unwrap();
+
+    // Then the batch comes: the channel turns bold and moves above the quiet ones.
+    gui.wait_until("the held channel moved up", Duration::from_secs(30), || {
+        Ok(row_y(gui, &a_id) < row_y(gui, &idle_id))
+    })
+    .unwrap();
+    assert!(shows_unread(gui, &a_id));
 }
 
 // RT-003, RT-002
