@@ -5,10 +5,16 @@ import { FlatButton } from "flat_button.slint";
 import { PrimaryButton } from "primary_button.slint";
 import { Theme } from "theme.slint";
 
-// Asks whether to leave a room (`roomLeaveDialog`, whose text names it), over the whole window,
-// which it dims and blocks while it is shown. Escape cancels, as in the QML app's dialog.
-export component LeaveDialog inherits Rectangle {
-    in property <string> room-name;
+// Asks the user to confirm something, over the whole window, which it dims and blocks while it is
+// shown. Escape cancels, as in the QML app's dialogs. The caller names the question, the buttons
+// and their accessible ids.
+export component ConfirmDialog inherits Rectangle {
+    in property <string> title;
+    in property <string> question;
+    in property <string> confirm-text;
+    in property <string> question-id;
+    in property <string> confirm-id;
+    in property <string> cancel-id;
     callback confirmed();
     callback cancelled();
 
@@ -48,14 +54,14 @@ export component LeaveDialog inherits Rectangle {
                 color: Theme.text;
                 font-size: Theme.font-size-base;
                 font-weight: Theme.font-weight-bold;
-                text: @tr("Leave room");
+                text: root.title;
             }
 
             Text {
-                accessible-id: "roomLeaveDialog";
+                accessible-id: root.question-id;
                 color: Theme.text;
                 wrap: word-wrap;
-                text: @tr("Leave {}?", root.room-name);
+                text: root.question;
             }
 
             // The buttons share the width, the main one first, as in the QML app's dialog.
@@ -63,16 +69,16 @@ export component LeaveDialog inherits Rectangle {
                 spacing: Theme.spacing-m;
 
                 PrimaryButton {
-                    accessible-id: "roomLeaveConfirm";
+                    accessible-id: root.confirm-id;
                     horizontal-stretch: 1;
-                    text: @tr("Leave");
+                    text: root.confirm-text;
                     clicked => {
                         root.confirmed();
                     }
                 }
 
                 FlatButton {
-                    accessible-id: "roomLeaveCancel";
+                    accessible-id: root.cancel-id;
                     horizontal-stretch: 1;
                     text: @tr("Cancel");
                     clicked => {
