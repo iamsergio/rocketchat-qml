@@ -7,6 +7,10 @@ on:
   pull_request:
     branches: [ main ]
   workflow_dispatch:
+  # A pull request runs only the checks its changes need (scripts/ci_scope.sh). Every night main
+  # gets all of them, in case the classifier let something through.
+  schedule:
+    - cron: '0 3 * * *'
 
 jobs:
   build:
@@ -30,16 +34,38 @@ jobs:
         preset: [dev, dev-slint]
 
     steps:
+    # Two commits deep: a pull request is checked out as its merge into main, and the classifier
+    # compares the merge with its first parent.
     - name: Checkout code
       uses: actions/checkout@v7
+      with:
+        fetch-depth: 2
 
     # Not recursive: Spix's own vcpkg copy isn't needed. QtCommander is skipped (update = none).
     - name: Checkout submodules
       run: git submodule update --init
 
+    # The merge's first parent is main, so the diff between the two is what the pull request
+    # changes. Any other run compares with nothing and checks everything. `app` says whether this
+    # job's app (Qt on dev, Slint on dev-slint) is to be built and tested.
+    - name: Decide what to check
+      id: scope
+      run: |
+        scope=$(
+          if [ "${{ github.event_name }}" = pull_request ]; then
+            git diff --name-only HEAD^1 HEAD
+          fi | scripts/ci_scope.sh
+        )
+        app=${{ matrix.preset == 'dev' && 'qt' || 'slint' }}
+        { echo "$scope"; echo "$scope" | sed -n "s/^$app=/app=/p"; } | tee -a "$GITHUB_OUTPUT"
+
     - name: Check licensing (REUSE)
       if: matrix.preset == 'dev'
       run: reuse lint
+
+    - name: Test the classifier
+      if: matrix.preset == 'dev'
+      run: scripts/ci_scope_test.sh
 
     # Qt comes from the runner image (on PATH): rc_qt's build script needs qmake.
     - name: Check Rust formatting
@@ -47,21 +73,24 @@ jobs:
       run: cargo fmt --all --check
 
     - name: Run clippy
-      if: matrix.preset == 'dev'
+      if: matrix.preset == 'dev' && steps.scope.outputs.rust == 'true'
       run: |
         cargo clippy --workspace --all-targets --locked -- -D warnings
         # Also with the spix feature: `rc_slint`'s `cfg(feature = "spix")` code is never linted otherwise.
         cargo clippy --workspace --all-targets --locked --features rc_slint/spix -- -D warnings
 
     - name: Check dependencies (licenses, advisories)
-      if: matrix.preset == 'dev'
+      if: matrix.preset == 'dev' && steps.scope.outputs.rust == 'true'
       run: cargo deny check
 
     - name: Run Rust tests
-      if: matrix.preset == 'dev'
+      if: matrix.preset == 'dev' && steps.scope.outputs.rust == 'true'
       run: cargo test --workspace --locked
 
     - name: Check the Rocket.Chat test server
+      if: >-
+        steps.scope.outputs.app == 'true' ||
+        (matrix.preset == 'dev' && steps.scope.outputs.contract == 'true')
       run: |
         curl -fsS --max-time 10 "$RC_TEST_SERVER_URL/api/info" ||
           { echo "::error::The Rocket.Chat test server at $RC_TEST_SERVER_URL isn't reachable. Start it on the runner host with scripts/run_test_server.sh."; exit 1; }
@@ -71,21 +100,27 @@ jobs:
     # Three at a time: the test server is shared, and under the full parallel load its pushes can
     # take longer than the tests wait for them.
     - name: Run contract tests
-      if: matrix.preset == 'dev'
+      if: matrix.preset == 'dev' && steps.scope.outputs.contract == 'true'
       run: |
         cargo test -p rc_api --test contract --locked -- --ignored --test-threads=3
         cargo test -p rc_core --test contract --locked -- --ignored --test-threads=3
 
     - name: Configure CMake
+      if: steps.scope.outputs.app == 'true'
       run: cmake --preset=${{ matrix.preset }}
 
     - name: Build
+      if: steps.scope.outputs.app == 'true'
       run: cmake --build build-${{ matrix.preset }}
 
     - name: Run qmllint
-      if: matrix.preset == 'dev'
+      if: matrix.preset == 'dev' && steps.scope.outputs.app == 'true'
       run: ninja -C ./build-${{ matrix.preset }} all_qmllint
 
-    # The Rust tests again, then the GUI tests against the app just built.
+    # The Rust tests again (unless the change needs none), then the GUI tests against the app just
+    # built.
     - name: Run tests
-      run: ctest --test-dir build-${{ matrix.preset }} --output-on-failure
+      if: steps.scope.outputs.app == 'true'
+      run: >-
+        ctest --test-dir build-${{ matrix.preset }} --output-on-failure
+        ${{ steps.scope.outputs.rust != 'true' && '--exclude-regex ^rust_tests$' || '' }}

@@ -87,6 +87,12 @@ The runner joins the `rc-test` network, and CI runs the `rc_api` and `rc_core` c
 the test server. It has to be running on the same host (`scripts/run_test_server.sh`). After changing
 `scripts/run_ci_runner.sh`, restart the runner with it.
 
+A pull request runs only the checks its changes need: `scripts/ci_scope.sh` sorts the changed paths
+into the Rust checks, the contract tests, the Qt app and the Slint app. A QML change builds and tests
+only the Qt app, a docs change runs only the formatting and licensing checks, and a path it doesn't
+know runs everything. `main` gets every check each night, and a manual run (`workflow_dispatch`)
+does too.
+
 More runners run more jobs at once. Each one is a container of its own, numbered from 1, and they all
 share the one test server:
 
