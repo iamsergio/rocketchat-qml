@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Sergio Martins
 // SPDX-License-Identifier: MIT
 
+import { Composer } from "composer.slint";
 import { KindIcon } from "icon.slint";
 import { ListView } from "list_view.slint";
 import { MessageList } from "message_list.slint";
@@ -38,6 +39,10 @@ export component RoomPage inherits Rectangle {
     callback load-older();
     // A link of the topic or of a message was clicked.
     callback open-link(string);
+    // Sends the text to the open room; false if it refuses it, which leaves the composer as it is.
+    callback send(string) -> bool;
+    // Sends a message that failed to send again, by its id.
+    callback retry(string);
 
     VerticalLayout {
         padding: Theme.spacing-none;
@@ -46,6 +51,7 @@ export component RoomPage inherits Rectangle {
         if !root.connection-text.is-empty: Rectangle {
             background: Theme.warning-wash;
             preferred-height: banner.preferred-height + 2 * Theme.spacing-m;
+            max-height: self.preferred-height;
 
             banner := Text {
                 accessible-id: "connectionBanner";
@@ -184,21 +190,45 @@ export component RoomPage inherits Rectangle {
                     }
                 }
 
-                if !root.room-id.is-empty: MessageList {
+                // The messages, and the composer under them.
+                if !root.room-id.is-empty: VerticalLayout {
                     y: Theme.room-header-height;
                     width: parent.width;
                     height: parent.height - Theme.room-header-height;
-                    messages: root.messages;
-                    room-id: root.room-id;
-                    reached-start: root.reached-start;
-                    loading-older: root.loading-older;
-                    prepends: root.prepends;
-                    resets: root.resets;
-                    load-older => {
-                        root.load-older();
+                    padding: Theme.spacing-none;
+                    spacing: Theme.spacing-none;
+
+                    MessageList {
+                        vertical-stretch: 1;
+                        messages: root.messages;
+                        room-id: root.room-id;
+                        reached-start: root.reached-start;
+                        loading-older: root.loading-older;
+                        prepends: root.prepends;
+                        resets: root.resets;
+                        load-older => {
+                            root.load-older();
+                        }
+                        retry(id) => {
+                            root.retry(id);
+                        }
+                        open-link(url) => {
+                            root.open-link(url);
+                        }
                     }
-                    open-link(url) => {
-                        root.open-link(url);
+
+                    HorizontalLayout {
+                        padding-left: Theme.spacing-xxxl;
+                        padding-right: Theme.spacing-xxxl;
+                        padding-top: Theme.spacing-m;
+                        padding-bottom: Theme.spacing-xxxl;
+                        spacing: Theme.spacing-none;
+
+                        Composer {
+                            send(text) => {
+                                return root.send(text);
+                            }
+                        }
                     }
                 }
 

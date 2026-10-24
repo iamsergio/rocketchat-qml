@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import { Avatar } from "avatar.slint";
+import { FlatButton } from "flat_button.slint";
 import { MessageRow } from "structs.slint";
 import { Theme } from "theme.slint";
 
@@ -13,6 +14,8 @@ export component MessageDelegate inherits Rectangle {
     in property <MessageRow> message;
     // A link of the body was clicked.
     callback open-link(string);
+    // The id of a message that failed to send, to send again.
+    callback retry(string);
 
     // The width that wrapped texts have: the row's, less the space around them. Given explicitly,
     // since a wrapped text can't tell its height from the width a layout will give it.
@@ -127,6 +130,30 @@ export component MessageDelegate inherits Rectangle {
                         Rectangle {
                             horizontal-stretch: 1;
                         }
+
+                        // These exist only while the message is in that state, so that a test can
+                        // find the one unsent message without knowing its id.
+                        if root.message.delivery == "pending": Text {
+                            accessible-id: "msgPending";
+                            color: Theme.text-faint;
+                            font-size: Theme.font-size-tiny;
+                            text: @tr("Sending…");
+                        }
+
+                        if root.message.delivery == "failed": Text {
+                            accessible-id: "msgFailed";
+                            color: Theme.error;
+                            font-size: Theme.font-size-tiny;
+                            text: @tr("Not sent");
+                        }
+
+                        if root.message.delivery == "failed": FlatButton {
+                            accessible-id: "msgRetry";
+                            text: @tr("Retry");
+                            clicked => {
+                                root.retry(root.message.id);
+                            }
+                        }
                     }
 
                     // `accessible-value` is the message as written, which the tests read;
@@ -135,6 +162,7 @@ export component MessageDelegate inherits Rectangle {
                         accessible-id: "msgBody";
                         accessible-role: text;
                         accessible-value: root.message.body;
+                        opacity: root.message.delivery == "sent" ? Theme.opaque : Theme.disabled-opacity;
                         preferred-height: body-text.preferred-height;
 
                         body-text := StyledText {

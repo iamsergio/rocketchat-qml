@@ -1,0 +1,108 @@
+// SPDX-FileCopyrightText: 2026 Sergio Martins
+// SPDX-License-Identifier: MIT
+
+import { PrimaryButton } from "primary_button.slint";
+import { Theme } from "theme.slint";
+
+// The box under the messages of the open room. Enter sends, Shift+Enter starts a new line. The
+// field grows with its text up to a height, then scrolls.
+export component Composer inherits Rectangle {
+    // Sends the text; false if it is refused, which leaves the field as it is.
+    callback send(string) -> bool;
+
+    // The field: its text with the space above and below it, between the least and the most.
+    property <length> field-height: clamp(
+        input.height + 2 * Theme.text-area-padding-v,
+        Theme.composer-field-min-height,
+        Theme.composer-max-height);
+
+    function submit() {
+        if root.send(input.text) {
+            input.text = "";
+        }
+    }
+
+    // Its height follows the text, and it never takes more: the extra goes to the messages above.
+    min-height: root.preferred-height;
+    preferred-height: root.field-height + 2 * Theme.spacing-l + 2 * Theme.border-width;
+    vertical-stretch: 0;
+    background: Theme.raised;
+    border-width: Theme.border-width;
+    border-color: input.has-focus ? Theme.own-border : Theme.raised-hover;
+    border-radius: Theme.radius-panel;
+
+    HorizontalLayout {
+        padding-left: Theme.border-width + Theme.composer-padding-h;
+        padding-right: Theme.border-width + Theme.spacing-l;
+        padding-top: Theme.border-width + Theme.spacing-l;
+        padding-bottom: Theme.border-width + Theme.spacing-l;
+        spacing: Theme.spacing-m;
+
+        // Enter is taken before the text input, which would start a line with it.
+        FocusScope {
+            horizontal-stretch: 1;
+            capture-key-pressed(event) => {
+                if event.text == Key.Return && !event.modifiers.shift {
+                    root.submit();
+                    return accept;
+                }
+                return reject;
+            }
+
+            field := Flickable {
+                content-width: self.width;
+                content-height: input.height + 2 * Theme.text-area-padding-v;
+                interactive: false;
+
+                input := TextInput {
+                    accessible-id: "composerField";
+                    x: Theme.spacing-none;
+                    y: Theme.text-area-padding-v;
+                    width: field.width;
+                    height: self.preferred-height;
+                    color: Theme.text;
+                    font-size: Theme.font-size-base;
+                    wrap: word-wrap;
+                    single-line: false;
+                    cursor-position-changed(position) => {
+                        // Keeps the line with the cursor in view.
+                        let line = Theme.font-size-base * Theme.line-height-scale;
+                        let top = position.y;
+                        let bottom = position.y + line + 2 * Theme.text-area-padding-v;
+                        if -field.content-y > top {
+                            field.content-y = -top;
+                        } else if bottom - field.content-y > field.height {
+                            field.content-y = field.height - bottom;
+                        }
+                    }
+                }
+            }
+
+            Text {
+                color: Theme.text-faint;
+                font-size: Theme.font-size-base;
+                text: @tr("Message");
+                x: Theme.spacing-none;
+                y: Theme.text-area-padding-v;
+                horizontal-alignment: left;
+                visible: input.text.is-empty;
+            }
+        }
+
+        // Aligned to the bottom, whatever the height of the field. A plain rectangle and not a
+        // layout: a layout would pass the button's fixed height up as the composer's largest.
+        Rectangle {
+            width: send-button.min-width;
+
+            send-button := PrimaryButton {
+                accessible-id: "composerSend";
+                y: parent.height - self.height;
+                text: @tr("Send");
+                enabled: !input.text.is-empty;
+                clicked => {
+                    root.submit();
+                }
+            }
+        }
+    }
+}

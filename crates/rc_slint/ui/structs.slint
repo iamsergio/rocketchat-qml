@@ -88,6 +88,8 @@ export struct MessageRow {
     day-label: string,
     // The message mentions the user.
     mentions-me: bool,
+    // `sent`, `pending` or `failed`.
+    delivery: string,
     // The author's avatar, as the room list has it.
     initials: string,
     initials-color: color,

@@ -74,6 +74,9 @@ export global Theme {
     out property <length> badge-padding-h: 12px;
     out property <length> button-padding-h: 14px;
     out property <length> field-padding-h: 12px;
+    // The composer: the space left of its field, and above and below the text in it.
+    out property <length> composer-padding-h: 14px;
+    out property <length> text-area-padding-v: 5px;
     out property <length> row-padding-h: 8px;
     // The space above and below a message, inside its tint.
     out property <length> message-padding-v: 6px;
@@ -84,8 +87,11 @@ export global Theme {
     out property <length> menu-item-padding-h: 12px;
 
     // Shapes
+    // The height of a line of text in a multi-line field, as a multiple of its font size.
+    out property <float> line-height-scale: 1.3;
     out property <float> avatar-radius-ratio: 0.25;
     out property <length> radius-control: 7px;
+    out property <length> radius-panel: 12px;
 
     // Lines
     out property <length> border-width: 1px;
@@ -98,6 +104,9 @@ export global Theme {
     out property <length> busy-indicator-large-size: 40px;
     out property <length> busy-indicator-size: 32px;
     out property <length> button-height: 30px;
+    // The composer's field: its height with one line, and the one from which it scrolls.
+    out property <length> composer-field-min-height: 30px;
+    out property <length> composer-max-height: 120px;
     out property <length> field-height: 38px;
     // Above the oldest message: the start of the conversation, or a busy indicator.
     out property <length> history-footer-height: 40px;

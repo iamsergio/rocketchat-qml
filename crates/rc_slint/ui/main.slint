@@ -68,6 +68,9 @@ export component MainWindow inherits Window {
     callback load-older();
     // Opens the address of a link of a text in the browser.
     callback open-link(string);
+    // Sends the text to the open room; false if it refuses it (blank), which keeps the composer's.
+    callback send(string) -> bool;
+    callback retry(string);
     // Logs what Slint knows about the display.
     callback dump-info();
 
@@ -139,6 +142,12 @@ export component MainWindow inherits Window {
             }
             open-link(url) => {
                 root.open-link(url);
+            }
+            send(text) => {
+                return root.send(text);
+            }
+            retry(id) => {
+                root.retry(id);
             }
         }
 
