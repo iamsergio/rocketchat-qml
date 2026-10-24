@@ -59,7 +59,9 @@ same way. Start one with `scripts/run_test_server.sh`, then:
 
 `scripts/check.sh` runs these with short output, one line per step and only the failing lines of a
 step that fails: `quick -p <crate> -g <gui test file>` while working, `full` before a commit (what
-CI runs on the `dev` preset).
+CI runs on the `dev` and `dev-slint` presets). `-g` runs a GUI test file against the Qt app in
+`build-dev`, `-s` runs the tests of that file listed in `crates/rc_gui_tests/slint.txt` against the
+Slint app in `build-dev-slint`.
 
 The GUI tests and these create their own users and rooms (`crates/rc_test_server`), so they can run
 repeatedly against the same server. The admin login comes from `RC_ADMIN_USER` / `RC_ADMIN_PASS` (default `admin` / `admin`).
