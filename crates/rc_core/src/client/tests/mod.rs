@@ -43,6 +43,7 @@ use crate::tuning::Tuning;
 mod accounts;
 mod activity;
 mod avatars;
+mod batch;
 mod changes;
 mod emoji;
 mod fake;

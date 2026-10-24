@@ -216,6 +216,8 @@ fn app_command(path: &OsStr, port: u16, cache: &Path, env: &[(&str, &str)]) -> C
         .env("RC_SECRET_STORE", "memory")
         // Where Qt puts the cache location on Linux: not the user's own.
         .env("XDG_CACHE_HOME", cache)
+        // Channels show their news at once, as most tests expect; the batching ones override it.
+        .env("RC_CHANNEL_BATCH_SECS", "0")
         .envs(env.iter().copied())
         .stdin(Stdio::null());
     command

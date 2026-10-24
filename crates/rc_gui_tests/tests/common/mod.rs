@@ -79,6 +79,27 @@ pub fn row_y(gui: &Gui, room_id: &str) -> f64 {
     gui.bounding_box(&room(room_id, room_row::NAME)).unwrap().y
 }
 
+/// Whether the room shows as unread (its name is emphasised): its menu offers to mark it read. A
+/// channel with news that is not a mention shows no number, so the menu is what tells.
+pub fn shows_unread(gui: &Gui, room_id: &str) -> bool {
+    gui.mouse_click_with(
+        &format!("{}/room_{room_id}", main_window::WINDOW),
+        MouseButton::Right,
+        Modifiers::NONE,
+    )
+    .unwrap();
+    gui.wait_until_visible(main_window::ROOM_FAVORITE_ACTION, TIMEOUT)
+        .unwrap();
+    let unread = gui
+        .exists_and_visible(main_window::ROOM_MARK_READ_ACTION)
+        .unwrap();
+    gui.enter_key(main_window::ROOM_LIST, Key::ESCAPE, Modifiers::NONE)
+        .unwrap();
+    gui.wait_until_hidden(main_window::ROOM_FAVORITE_ACTION, TIMEOUT)
+        .unwrap();
+    unread
+}
+
 /// The time of day (`HH:MM`) of a timestamp in the server's spelling (`2026-10-20T14:12:48.587Z`).
 /// The tests launch the app with `TZ=UTC`, which is what the messages are shown in.
 pub fn utc_time(ts: &str) -> String {

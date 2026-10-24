@@ -209,7 +209,8 @@ pub struct Client {
 impl Client {
     /// A client for real servers. See [`with_ports`](Self::with_ports) for `on_event`. The
     /// environment variable `RC_QUIET_AFTER_SECS` shortens the time after which a quiet direct
-    /// message leaves the room list: a testing aid, for the GUI tests.
+    /// message leaves the room list, and `RC_CHANNEL_BATCH_SECS` how often the news of channels
+    /// shows (`0` for at once): testing aids, for the GUI tests.
     ///
     /// # Errors
     ///

@@ -18,6 +18,10 @@ pub type RoomChange = ListChange<Room>;
 /// How long a direct message may go without activity before the list stops showing it.
 pub const QUIET_AFTER: jiff::SignedDuration = jiff::SignedDuration::from_hours(10 * 24);
 
+/// How often the list shows the news of channels: at most once in this long.
+// TODO: make this configurable from the settings dialog (PLAN.md, Phase 6).
+pub const CHANNEL_BATCH: jiff::SignedDuration = jiff::SignedDuration::from_mins(25);
+
 /// The account's rooms: the ones the frontend shows, in display order, and the ones the list holds
 /// back. Positions exist only among the shown rooms: a held-back room is found by its id.
 ///
@@ -25,6 +29,12 @@ pub const QUIET_AFTER: jiff::SignedDuration = jiff::SignedDuration::from_hours(1
 /// a favorite, shows as unread or is the open room. The room changes never mention a held-back
 /// room; the frontend hears of them only as a set, [`quiet`](RoomList::quiet). It comes back, with
 /// an `Inserted`, as soon as the rule lets it, e.g. with a new message.
+///
+/// The news of a channel or a private group (more unread, an alert, newer activity, new unread
+/// threads) is held back too, but the room stays in the list: it keeps showing what it showed
+/// until the batch is released, all channels at once, `batch_every` after the first held change.
+/// Direct messages, rooms with a mention, the open room and the rooms the user acts on are never
+/// held. See [`upsert`](RoomList::upsert) and [`release`](RoomList::release).
 #[derive(Debug)]
 pub struct RoomList {
     /// The rooms the frontend shows, in display order. `RoomChange` indices point here.
@@ -39,12 +49,21 @@ pub struct RoomList {
     quiet_after: jiff::SignedDuration,
     /// The room the user has open, which is always shown.
     open: Option<RoomId>,
+    /// The channels whose news is held: the latest real state of each. `shown` has the same room
+    /// with the news it showed before.
+    pending: HashMap<RoomId, Room>,
+    /// When the current batch started: the time of the first change held since the last release.
+    /// `Some` exactly when `pending` isn't empty.
+    held_since: Option<jiff::Timestamp>,
+    /// How often the news of channels is shown. Zero turns holding it off.
+    batch_every: jiff::SignedDuration,
 }
 
 impl Default for RoomList {
-    /// A list that holds direct messages back after [`QUIET_AFTER`].
+    /// A list that holds direct messages back after [`QUIET_AFTER`] and shows the news of channels
+    /// at once.
     fn default() -> Self {
-        Self::new(QUIET_AFTER)
+        Self::new(QUIET_AFTER, jiff::SignedDuration::ZERO)
     }
 }
 
@@ -107,19 +126,24 @@ pub struct Unread {
 }
 
 impl RoomList {
-    /// An empty list that holds direct messages back after `quiet_after`.
+    /// An empty list that holds direct messages back after `quiet_after`, and the news of channels
+    /// for `batch_every` (zero for no holding).
     #[must_use]
-    pub fn new(quiet_after: jiff::SignedDuration) -> Self {
+    pub fn new(quiet_after: jiff::SignedDuration, batch_every: jiff::SignedDuration) -> Self {
         Self {
             shown: Vec::new(),
             hidden: HashMap::new(),
             hidden_touched: false,
             quiet_after,
             open: None,
+            pending: HashMap::new(),
+            held_since: None,
+            batch_every,
         }
     }
 
-    /// The unread totals of all the rooms, the hidden ones too.
+    /// The unread totals of all the rooms, the hidden ones too, as they are shown: the news of a
+    /// held channel isn't in them.
     #[must_use]
     pub fn unread(&self) -> Unread {
         self.shown
@@ -163,8 +187,11 @@ impl RoomList {
         self.shown.is_empty() && self.hidden.is_empty()
     }
 
-    /// Replaces the content, sorting what is shown. The hidden rooms go too.
+    /// Replaces the content, sorting what is shown. The hidden rooms and the held news go too: the
+    /// rooms are the truth.
     pub fn reset(&mut self, rooms: Vec<Room>, now: jiff::Timestamp) -> RoomChange {
+        self.pending.clear();
+        self.held_since = None;
         let (mut shown, hidden): (Vec<Room>, Vec<Room>) = rooms
             .into_iter()
             .partition(|room| self.is_shown_at(room, now));
@@ -181,7 +208,90 @@ impl RoomList {
     /// Adds the room, or replaces the one with the same id, wherever it is, and puts it where the
     /// rule says: a shown room that is held back from now on is `Removed`, and a hidden one that
     /// is shown from now on is `Inserted`. `None` if the frontend's list doesn't change.
+    ///
+    /// If the room is a channel and the change is news the user may do without, the shown room
+    /// gets everything but the news, which waits for [`release`](Self::release) (the first one
+    /// starts the batch at `now`). A channel with a mention, the open room, a room that became
+    /// read and a room the list didn't show are never held, and drop the news held for them.
     pub fn upsert(&mut self, room: Room, now: jiff::Timestamp) -> Option<RoomChange> {
+        if let Some(shown) = self.holdable(&room) {
+            let held = Room {
+                unread: shown.unread,
+                alert: shown.alert,
+                last_activity: shown.last_activity,
+                unread_threads: shown.unread_threads.clone(),
+                mentioned_threads: shown.mentioned_threads.clone(),
+                ..room.clone()
+            };
+            self.pending.insert(room.id.clone(), room);
+            self.held_since.get_or_insert(now);
+            return self.place(held, now);
+        }
+        self.drop_pending(&room.id);
+        self.place(room, now)
+    }
+
+    /// Like [`upsert`](Self::upsert), but the news is shown at once: for what the user did.
+    pub fn upsert_now(&mut self, room: Room, now: jiff::Timestamp) -> Option<RoomChange> {
+        self.drop_pending(&room.id);
+        self.place(room, now)
+    }
+
+    /// Shows the news of all the held channels, moving them into place, and ends the batch.
+    pub fn release(&mut self, now: jiff::Timestamp) -> Vec<RoomChange> {
+        self.held_since = None;
+        let mut rooms: Vec<Room> = self.pending.drain().map(|(_, room)| room).collect();
+        rooms.sort_by(display_order);
+        rooms
+            .into_iter()
+            .filter_map(|room| self.place(room, now))
+            .collect()
+    }
+
+    /// When the current batch is to be released. `None` if no news is held.
+    #[must_use]
+    pub fn next_release(&self) -> Option<jiff::Timestamp> {
+        self.held_since?.checked_add(self.batch_every).ok()
+    }
+
+    /// The shown copy of `room` if the change to `room` is news to hold back: it is a channel, it
+    /// differs from the shown copy in what the news are made of, and the user would be spared.
+    fn holdable(&self, room: &Room) -> Option<&Room> {
+        if self.batch_every <= jiff::SignedDuration::ZERO
+            || !matches!(room.kind, RoomKind::Channel | RoomKind::Private)
+            || room.user_mentions > 0
+            || room.group_mentions > 0
+            || self.open.as_ref() == Some(&room.id)
+        {
+            return None;
+        }
+        let shown = self.shown.iter().find(|shown| shown.id == room.id)?;
+        // Read elsewhere: nothing to spare the user from. Read against the real state, as the
+        // shown row of a held room may never have shown the news that was read.
+        let before = self.pending.get(&room.id).unwrap_or(shown);
+        if before.has_unread() && !room.has_unread() {
+            return None;
+        }
+        let same_news = shown.unread == room.unread
+            && shown.alert == room.alert
+            && shown.last_activity == room.last_activity
+            && shown.unread_threads == room.unread_threads
+            && shown.mentioned_threads == room.mentioned_threads;
+        (!same_news).then_some(shown)
+    }
+
+    /// Forgets the news held for the room, and ends the batch if that was the last.
+    fn drop_pending(&mut self, id: &RoomId) {
+        self.pending.remove(id);
+        if self.pending.is_empty() {
+            self.held_since = None;
+        }
+    }
+
+    /// Puts the room, as it is to be shown, where the quiet rule says, in place of the one with
+    /// the same id: a shown room that is held back from now on is `Removed`, and a hidden one that
+    /// is shown from now on is `Inserted`. `None` if the frontend's list doesn't change.
+    fn place(&mut self, room: Room, now: jiff::Timestamp) -> Option<RoomChange> {
         let from = self.position(&room.id);
         if !self.is_shown_at(&room, now) {
             let id = room.id.clone();
@@ -238,6 +348,7 @@ impl RoomList {
 
     /// `None` if there's no such room, or it was hidden: the frontend has no row to remove.
     pub fn remove(&mut self, id: &RoomId) -> Option<RoomChange> {
+        self.drop_pending(id);
         let Some(index) = self.position(id) else {
             self.hidden_touched |= self.hidden.remove(id).is_some();
             return None;
@@ -325,13 +436,16 @@ impl RoomList {
             .min()
     }
 
-    /// The room with that id, shown or hidden.
+    /// The room with that id, shown or hidden, in its real state: the news held for it included,
+    /// so callers merge what the server pushes onto what the server last said.
     #[must_use]
     pub fn get(&self, id: &RoomId) -> Option<&Room> {
-        self.shown
-            .iter()
-            .find(|room| &room.id == id)
-            .or_else(|| self.hidden.get(id))
+        self.pending.get(id).or_else(|| {
+            self.shown
+                .iter()
+                .find(|room| &room.id == id)
+                .or_else(|| self.hidden.get(id))
+        })
     }
 
     /// Whether the frontend shows the room.
@@ -996,7 +1110,10 @@ mod tests {
 
     /// A list that holds direct messages back after [`QUIET`] seconds, holding `rooms`.
     fn quiet_list(rooms: Vec<Room>) -> RoomList {
-        let mut list = RoomList::new(jiff::SignedDuration::from_secs(QUIET));
+        let mut list = RoomList::new(
+            jiff::SignedDuration::from_secs(QUIET),
+            jiff::SignedDuration::ZERO,
+        );
         list.reset(rooms, now());
         list
     }
@@ -1338,7 +1455,10 @@ mod tests {
     #[test]
     fn a_mirror_following_the_changes_equals_the_list_while_rooms_come_and_go() {
         let (mut list, mut mirror) = (
-            RoomList::new(jiff::SignedDuration::from_secs(QUIET)),
+            RoomList::new(
+                jiff::SignedDuration::from_secs(QUIET),
+                jiff::SignedDuration::ZERO,
+            ),
             Vec::new(),
         );
         let l = &mut list;
@@ -1365,5 +1485,314 @@ mod tests {
         step(l, m, |l| l.remove(&id("c")));
         step(l, m, |l| l.remove(&id("e")));
         steps(l, m, |l| l.sync(vec![dm("a", "a", 1)], later));
+    }
+
+    /// How long the lists of the batch tests hold the news of channels.
+    const BATCH: i64 = 100;
+
+    fn batch_list(rooms: Vec<Room>) -> RoomList {
+        let mut list = RoomList::new(QUIET_AFTER, jiff::SignedDuration::from_secs(BATCH));
+        list.reset(rooms, now());
+        list
+    }
+
+    fn rid(id: &str) -> RoomId {
+        id.to_owned().into()
+    }
+
+    /// The room with `unread` messages and its last activity at `secs`.
+    fn with_news(room: Room, unread: u32, secs: i64) -> Room {
+        Room {
+            unread,
+            last_activity: at(secs),
+            ..room
+        }
+    }
+
+    fn bold(list: &RoomList, name: &str) -> bool {
+        list.rooms()
+            .iter()
+            .find(|room| room.name == name)
+            .is_some_and(Room::has_unread)
+    }
+
+    // ROOM-011
+    #[test]
+    fn the_news_of_a_channel_is_held_but_a_rename_shows() {
+        let mut list = batch_list(vec![active("a", "a", 10), active("b", "b", 5)]);
+        let change = list.upsert(with_news(active("b", "b", 5), 3, 20), now());
+        // Nothing the user would notice: no bold, no move.
+        assert_eq!(change, None);
+        assert_eq!(names(&list), ["a", "b"]);
+        assert!(!bold(&list, "b"));
+        assert_eq!(list.unread(), Unread::default());
+        // The real state is what `get` gives.
+        assert_eq!(list.get(&rid("b")).map(|r| r.unread), Some(3));
+        // A rename shows at once, with the news still held.
+        let renamed = Room {
+            name: "z".to_owned(),
+            ..with_news(active("b", "b", 5), 3, 20)
+        };
+        let change = list.upsert(renamed, now());
+        assert_eq!(
+            change,
+            Some(RoomChange::Updated {
+                index: 1,
+                item: Room {
+                    name: "z".to_owned(),
+                    ..active("b", "b", 5)
+                }
+            })
+        );
+        assert_eq!(list.get(&rid("b")).map(|r| r.unread), Some(3));
+    }
+
+    // ROOM-011
+    #[test]
+    fn private_groups_and_favorites_are_held_too() {
+        let mut list = batch_list(vec![
+            Room {
+                kind: RoomKind::Private,
+                ..active("p", "p", 10)
+            },
+            Room {
+                favorite: true,
+                ..active("f", "f", 5)
+            },
+        ]);
+        for (key, secs) in [("p", 10), ("f", 5)] {
+            let mut news = list.get(&rid(key)).unwrap().clone();
+            news.unread = 1;
+            news.last_activity = at(secs + 100);
+            assert_eq!(list.upsert(news, now()), None);
+        }
+        assert!(!bold(&list, "p") && !bold(&list, "f"));
+    }
+
+    // ROOM-011
+    #[test]
+    fn release_shows_all_the_held_channels_together_and_moves_them() {
+        let mut list = batch_list(vec![
+            active("a", "a", 30),
+            active("b", "b", 20),
+            active("c", "c", 10),
+        ]);
+        list.upsert(with_news(active("c", "c", 10), 1, 50), now());
+        list.upsert(with_news(active("b", "b", 20), 2, 40), now());
+        assert_eq!(names(&list), ["a", "b", "c"]);
+        let changes = list.release(now());
+        assert_eq!(
+            changes,
+            vec![
+                RoomChange::Moved {
+                    from: 2,
+                    to: 0,
+                    item: with_news(active("c", "c", 10), 1, 50)
+                },
+                RoomChange::Moved {
+                    from: 2,
+                    to: 1,
+                    item: with_news(active("b", "b", 20), 2, 40)
+                },
+            ]
+        );
+        assert_eq!(names(&list), ["c", "b", "a"]);
+        assert_eq!(list.unread().rooms, 2);
+        assert_eq!(list.next_release(), None);
+        assert_eq!(list.release(now()), []);
+    }
+
+    // ROOM-011
+    #[test]
+    fn a_mention_shows_the_room_at_once_with_its_held_news() {
+        for user in [true, false] {
+            let mut list = batch_list(vec![active("a", "a", 30), active("b", "b", 20)]);
+            list.upsert(with_news(active("b", "b", 20), 1, 40), now());
+            let mut mentioned = with_news(active("b", "b", 20), 2, 45);
+            if user {
+                mentioned.user_mentions = 1;
+            } else {
+                mentioned.group_mentions = 1;
+            }
+            let change = list.upsert(mentioned.clone(), now());
+            assert_eq!(
+                change,
+                Some(RoomChange::Moved {
+                    from: 1,
+                    to: 0,
+                    item: mentioned
+                })
+            );
+            assert_eq!(list.next_release(), None);
+            assert_eq!(list.unread().rooms, 1);
+        }
+    }
+
+    // ROOM-011
+    #[test]
+    fn a_direct_message_is_never_held() {
+        let mut list = batch_list(vec![Room {
+            kind: RoomKind::Direct,
+            ..active("d", "d", 10)
+        }]);
+        let news = Room {
+            kind: RoomKind::Direct,
+            ..with_news(active("d", "d", 10), 1, 20)
+        };
+        assert!(list.upsert(news, now()).is_some());
+        assert!(bold(&list, "d"));
+        assert_eq!(list.next_release(), None);
+    }
+
+    // ROOM-011
+    #[test]
+    fn the_open_room_is_never_held_and_opening_a_held_room_shows_it_whole() {
+        let mut list = batch_list(vec![active("a", "a", 30), active("b", "b", 20)]);
+        list.set_open(Some(rid("a")), now());
+        assert!(
+            list.upsert(with_news(active("a", "a", 30), 1, 35), now())
+                .is_some()
+        );
+        assert!(bold(&list, "a"));
+        list.upsert(with_news(active("b", "b", 20), 4, 40), now());
+        assert!(!bold(&list, "b"));
+        let changes = list.set_open(Some(rid("b")), now());
+        assert!(!changes.is_empty());
+        assert_eq!(list.rooms()[0].name, "b");
+        assert_eq!(list.rooms()[0].unread, 4);
+        assert_eq!(list.next_release(), None);
+    }
+
+    // ROOM-011
+    #[test]
+    fn becoming_read_drops_the_held_news() {
+        let mut list = batch_list(vec![with_news(active("a", "a", 30), 1, 30)]);
+        list.upsert(with_news(active("a", "a", 30), 5, 40), now());
+        assert!(list.next_release().is_some());
+        let change = list.upsert(active("a", "a", 30), now());
+        assert!(change.is_some());
+        assert!(!bold(&list, "a"));
+        assert_eq!(list.next_release(), None);
+        assert_eq!(list.get(&rid("a")).map(|r| r.unread), Some(0));
+        assert_eq!(list.release(now()), []);
+
+        // Held while the row showed it read, then read elsewhere: shown at once, moved up by its
+        // newer activity, and nothing is left to release.
+        let mut list = batch_list(vec![active("a", "a", 30), active("b", "b", 20)]);
+        list.upsert(with_news(active("b", "b", 20), 2, 40), now());
+        let change = list.upsert(active("b", "b", 40), now());
+        assert_eq!(
+            change,
+            Some(RoomChange::Moved {
+                from: 1,
+                to: 0,
+                item: active("b", "b", 40)
+            })
+        );
+        assert_eq!(list.next_release(), None);
+        assert_eq!(list.release(now()), []);
+    }
+
+    // ROOM-011
+    #[test]
+    fn a_new_room_is_shown_at_once() {
+        let mut list = batch_list(vec![]);
+        let change = list.upsert(with_news(active("a", "a", 30), 2, 30), now());
+        assert!(matches!(change, Some(RoomChange::Inserted { .. })));
+        assert!(bold(&list, "a"));
+        assert_eq!(list.next_release(), None);
+    }
+
+    // ROOM-011
+    #[test]
+    fn upsert_now_shows_the_news_and_drops_the_held() {
+        let mut list = batch_list(vec![active("a", "a", 30), active("b", "b", 20)]);
+        list.upsert(with_news(active("b", "b", 20), 1, 40), now());
+        let unread = with_news(active("b", "b", 20), 1, 40);
+        assert!(list.upsert_now(unread, now()).is_some());
+        assert!(bold(&list, "b"));
+        assert_eq!(list.next_release(), None);
+        // Held again, then an action of the user on the other room leaves it held.
+        list.upsert(with_news(active("a", "a", 30), 1, 50), now());
+        assert!(
+            list.upsert_now(with_news(active("b", "b", 20), 1, 40), now())
+                .is_none()
+        );
+        assert!(!bold(&list, "a"));
+        assert!(list.next_release().is_some());
+    }
+
+    // ROOM-011
+    #[test]
+    fn the_unread_totals_leave_out_held_news() {
+        let mut list = batch_list(vec![active("a", "a", 30), active("b", "b", 20)]);
+        list.upsert(with_news(active("a", "a", 30), 3, 40), now());
+        assert_eq!(list.unread(), Unread::default());
+        list.release(now());
+        assert_eq!(list.unread().rooms, 1);
+    }
+
+    // ROOM-011
+    #[test]
+    fn the_next_release_follows_the_first_held_change() {
+        let mut list = batch_list(vec![active("a", "a", 30), active("b", "b", 20)]);
+        assert_eq!(list.next_release(), None);
+        list.upsert(with_news(active("a", "a", 30), 1, 40), at(1_000));
+        list.upsert(with_news(active("b", "b", 20), 1, 41), at(1_050));
+        assert_eq!(list.next_release(), Some(at(1_000 + BATCH)));
+        list.release(at(1_100));
+        assert_eq!(list.next_release(), None);
+        list.upsert(with_news(active("a", "a", 30), 2, 60), at(2_000));
+        assert_eq!(list.next_release(), Some(at(2_000 + BATCH)));
+    }
+
+    // ROOM-011
+    #[test]
+    fn a_bump_and_a_subscription_while_held_keep_the_newest_activity() {
+        let mut list = batch_list(vec![active("a", "a", 30), active("b", "b", 20)]);
+        // A bump first, then the subscription push built on what `get` says.
+        assert_eq!(list.bump(&rid("b"), at(50), now()), None);
+        let mut pushed = list.get(&rid("b")).unwrap().clone();
+        pushed.unread = 1;
+        assert_eq!(list.upsert(pushed, now()), None);
+        assert_eq!(list.get(&rid("b")).map(|r| r.last_activity), Some(at(50)));
+        // The other way round.
+        let mut pushed = list.get(&rid("a")).unwrap().clone();
+        pushed.unread = 1;
+        assert_eq!(list.upsert(pushed, now()), None);
+        assert_eq!(list.bump(&rid("a"), at(60), now()), None);
+        assert_eq!(names(&list), ["a", "b"]);
+        assert_eq!(list.release(now()).len(), 2);
+        assert_eq!(list.get(&rid("a")).map(|r| r.last_activity), Some(at(60)));
+        assert_eq!(list.get(&rid("b")).map(|r| r.last_activity), Some(at(50)));
+        assert_eq!(names(&list), ["a", "b"]);
+    }
+
+    // ROOM-011
+    #[test]
+    fn reset_and_remove_clear_the_held_news() {
+        let mut list = batch_list(vec![active("a", "a", 30), active("b", "b", 20)]);
+        list.upsert(with_news(active("a", "a", 30), 1, 40), now());
+        list.upsert(with_news(active("b", "b", 20), 1, 41), now());
+        list.remove(&rid("a"));
+        assert!(list.get(&rid("a")).is_none());
+        assert!(list.next_release().is_some());
+        list.reset(vec![active("b", "b", 20)], now());
+        assert_eq!(list.next_release(), None);
+        assert_eq!(list.get(&rid("b")).map(|r| r.unread), Some(0));
+        assert_eq!(list.release(now()), []);
+    }
+
+    // ROOM-011
+    #[test]
+    fn a_zero_interval_holds_nothing() {
+        let mut list = RoomList::new(QUIET_AFTER, jiff::SignedDuration::ZERO);
+        list.reset(vec![active("a", "a", 30)], now());
+        assert!(
+            list.upsert(with_news(active("a", "a", 30), 1, 40), now())
+                .is_some()
+        );
+        assert!(bold(&list, "a"));
+        assert_eq!(list.next_release(), None);
     }
 }

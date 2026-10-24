@@ -57,7 +57,7 @@ Done when: the app starts instantly from cache (works offline read-only), shows 
 - [ ] Startup from cache, then a delta sync
 - [ ] Bound the size of the file cache (avatars and attachment images so far): evict the least recently used files, never one the GUI shows
 - [ ] Desktop notifications for DMs and mentions, unread count in the window title or tray
-- [ ] Settings page (notifications, theme)
+- [ ] Settings page (notifications, theme, the channel batch interval (ROOM-011, 25 min for now))
 - [ ] Features PERS-001, PERS-002, DESK-001…DESK-003 tested
 
 ## Phase 7: Authentication extras
@@ -91,6 +91,7 @@ The Slint app grows one feature at a time, and CI stays green throughout: a seco
 ## Phase 8: personal nice to haves
 - [ ] Move logout icon. Logout is seldom used. right lcick on the server rail on a server tile can have the logout option.
 - [ ] Channels are not showing description
+- [x] Batched channels (ROOM-011): the news of channels shows in batches at most every 25 minutes, see [Batched channels](docs/design/room-list.md#batched-channels)
 
 ## Later
 

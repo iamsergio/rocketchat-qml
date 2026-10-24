@@ -1199,7 +1199,8 @@ fn rooms_are_listed_by_last_message_and_a_new_message_moves_its_room_up() {
     let ids = [first.as_str(), second.as_str()];
     assert_eq!(order_of(&mirror, &ids), [second.as_str(), first.as_str()]);
 
-    admin.post_message(&first, "newest");
+    // A mention, since the list holds back the other news of a channel for 25 minutes (ROOM-011).
+    admin.post_message(&first, &format!("newest @{}", user.username));
 
     let mut moved = false;
     wait_for(&events, |event| {
