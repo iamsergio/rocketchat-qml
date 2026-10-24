@@ -55,6 +55,8 @@ pub fn room_row(room: &Room, avatars: &AvatarUrls) -> RoomRow {
         unread: count(room.unread),
         mentions: count(room.mention_badge()),
         has_unread: room.has_unread(),
+        favorite: room.favorite,
+        can_leave: room.can_leave(),
         initials: initials.into(),
         initials_color: parse_color(&color),
         avatar_url: url.into(),

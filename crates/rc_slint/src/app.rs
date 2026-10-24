@@ -138,6 +138,11 @@ fn connect_commands(window: &MainWindow) {
         sent
     });
     window.on_retry(|id| App::with(|app| app.retry(&id)));
+    window.on_set_favorite(|id, favorite| App::with(|app| app.set_favorite(&id, favorite)));
+    window.on_mark_read(|id| App::with(|app| app.mark_read(&id)));
+    window.on_mark_unread(|id| App::with(|app| app.mark_unread(&id)));
+    window.on_leave_room(|id| App::with(|app| app.leave_room(&id)));
+    window.on_dismiss_room_action_error(|| App::with(|app| app.show_room_action_error("")));
     window.on_load_older(|| App::with(|app| app.load_older()));
     window.on_open_link(|url| open_link(&url));
     let weak = window.as_weak();
@@ -233,7 +238,7 @@ impl App {
     }
 
     /// Shows an event of the current account, which its cache has taken in. What the GUI doesn't
-    /// show yet (threads, emoji, answers to actions) is ignored.
+    /// show yet (threads, emoji, answers to message actions) is ignored.
     fn show(&self, event: Event) {
         match event {
             Event::Session(_) | Event::Connection(_) => {
@@ -257,6 +262,13 @@ impl App {
                 self.show_counters();
             }
             Event::TimelineStatus(_) => self.show_room(),
+            Event::RoomAction { outcome, .. } => {
+                // A failure is shown until dismissed or the next command; a success clears it.
+                let text = outcome
+                    .err()
+                    .map_or_else(String::new, |error| error.to_string());
+                self.show_room_action_error(&text);
+            }
             Event::Avatars(updates) => {
                 let cache = self.switchboard.accounts().current_cache();
                 let changes = cache.avatar_changes(&updates);
@@ -425,6 +437,43 @@ impl App {
     fn retry(&self, id: &str) {
         self.current_account("retry_message", |account| {
             account.retry_message(MessageId::from(id.to_owned()));
+        });
+    }
+
+    /// Shows why the last command on a room failed, or nothing for the empty text.
+    fn show_room_action_error(&self, text: &str) {
+        if let Some(window) = self.window.upgrade() {
+            window.set_room_action_error(text.into());
+        }
+    }
+
+    /// Marks the room as a favorite, or takes it back.
+    fn set_favorite(&self, id: &str, favorite: bool) {
+        self.show_room_action_error("");
+        self.current_account("set_favorite", |account| {
+            account.set_favorite(RoomId::from(id.to_owned()), favorite);
+        });
+    }
+
+    fn mark_read(&self, id: &str) {
+        self.show_room_action_error("");
+        self.current_account("mark_read", |account| {
+            account.mark_read(RoomId::from(id.to_owned()));
+        });
+    }
+
+    fn mark_unread(&self, id: &str) {
+        self.show_room_action_error("");
+        self.current_account("mark_unread", |account| {
+            account.mark_unread(RoomId::from(id.to_owned()));
+        });
+    }
+
+    /// Leaves a channel or a private group. The row leaves the list when the server agrees.
+    fn leave_room(&self, id: &str) {
+        self.show_room_action_error("");
+        self.current_account("leave_room", |account| {
+            account.leave_room(RoomId::from(id.to_owned()));
         });
     }
 

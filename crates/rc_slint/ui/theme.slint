@@ -40,6 +40,8 @@ export global Theme {
     // Signal at 9%: the wash behind a message that mentions the user.
     out property <color> signal-wash: #f5455c17;
     out property <color> error: #ff8a66;
+    // Black at 50%: what a modal dialog dims the window with.
+    out property <color> modal-dim: #00000080;
     out property <color> on-avatar: Colors.white;
     out property <color> transparent: Colors.transparent;
 
@@ -107,6 +109,9 @@ export global Theme {
     // The composer's field: its height with one line, and the one from which it scrolls.
     out property <length> composer-field-min-height: 30px;
     out property <length> composer-max-height: 120px;
+    // A dialog: its width, and the space around its title, text and buttons.
+    out property <length> dialog-padding: 6px;
+    out property <length> dialog-width: 360px;
     out property <length> field-height: 38px;
     // Above the oldest message: the start of the conversation, or a busy indicator.
     out property <length> history-footer-height: 40px;
@@ -179,4 +184,5 @@ export global Theme {
 
     // Stacking: what shows above its siblings, like the rail above the page.
     out property <float> z-above: 1;
+    out property <float> z-modal: 2;
 }

@@ -1,0 +1,85 @@
+// SPDX-FileCopyrightText: 2026 Sergio Martins
+// SPDX-License-Identifier: MIT
+
+import { FlatButton } from "flat_button.slint";
+import { PrimaryButton } from "primary_button.slint";
+import { Theme } from "theme.slint";
+
+// Asks whether to leave a room (`roomLeaveDialog`, whose text names it), over the whole window,
+// which it dims and blocks while it is shown. Escape cancels, as in the QML app's dialog.
+export component LeaveDialog inherits Rectangle {
+    in property <string> room-name;
+    callback confirmed();
+    callback cancelled();
+
+    background: Theme.modal-dim;
+
+    // Takes the clicks that would reach the window, and the keys.
+    scope := FocusScope {
+        init => {
+            self.focus();
+        }
+        key-pressed(event) => {
+            if event.text == Key.Escape {
+                root.cancelled();
+                return accept;
+            }
+            reject
+        }
+
+        TouchArea { }
+    }
+
+    Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: Theme.dialog-width;
+        height: content.preferred-height + 2 * Theme.border-width;
+        background: Theme.raised;
+        border-color: Theme.raised-hover;
+        border-width: Theme.border-width;
+        border-radius: Theme.radius-control;
+
+        content := VerticalLayout {
+            padding: Theme.dialog-padding;
+            spacing: Theme.spacing-xl;
+
+            Text {
+                color: Theme.text;
+                font-size: Theme.font-size-base;
+                font-weight: Theme.font-weight-bold;
+                text: @tr("Leave room");
+            }
+
+            Text {
+                accessible-id: "roomLeaveDialog";
+                color: Theme.text;
+                wrap: word-wrap;
+                text: @tr("Leave {}?", root.room-name);
+            }
+
+            // The buttons share the width, the main one first, as in the QML app's dialog.
+            HorizontalLayout {
+                spacing: Theme.spacing-m;
+
+                PrimaryButton {
+                    accessible-id: "roomLeaveConfirm";
+                    horizontal-stretch: 1;
+                    text: @tr("Leave");
+                    clicked => {
+                        root.confirmed();
+                    }
+                }
+
+                FlatButton {
+                    accessible-id: "roomLeaveCancel";
+                    horizontal-stretch: 1;
+                    text: @tr("Cancel");
+                    clicked => {
+                        root.cancelled();
+                    }
+                }
+            }
+        }
+    }
+}
