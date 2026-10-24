@@ -24,7 +24,7 @@ Read only what the step needs: the files you change, their neighbours of the sam
 
 ## Testing
 - The real Rocket.Chat test server runs at http://127.0.0.1:3000 (admin/admin); there are no containers here. Never use the user's keyring: anything you launch gets `RC_SECRET_STORE=memory`.
-- While iterating: `scripts/check.sh quick -p <crate>... -g <gui test file>...` (fmt, clippy, unit tests of those crates, those GUI files; output is one line per step, full logs in target/check-logs/). Read a log only for a failing step, and only the part you need.
+- While iterating: `scripts/check.sh quick -p <crate>... -g <gui test file>... -s <gui test file>...` (fmt, clippy, unit tests of those crates, those GUI files: `-g` against the Qt app, `-s` the file's `slint.txt` tests against the Slint app; output is one line per step, full logs in target/check-logs/). Read a log only for a failing step, and only the part you need.
 - Once, before reporting: `scripts/check.sh full`. Contract tests by hand: `RC_TEST_SERVER_URL=http://127.0.0.1:3000 cargo test -p rc_core --test contract -- --ignored --exact <name>`.
 - Never paste long command output into your reasoning: pipe through `tail`/`grep`.
 - The test server is shared with CI and other agents. A "Peer disconnected" or a login timeout that passes on a rerun of that one file is load, not your change: say so in the report. A failure that repeats is yours to fix or report.
