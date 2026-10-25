@@ -13,12 +13,13 @@ use rc_core::rooms::{RoomChange, Unread};
 use rc_core::session::{LoginFailure, SessionState};
 use rc_core::threads::{ThreadFilter, ThreadListChange, ThreadListStatus};
 use rc_core::timeline::{ThreadStatus, TimelineChange, TimelineStatus};
-use rc_core::{AvatarUpdate, ImageUpdate};
+use rc_core::{AvatarUpdate, EmojiImageUpdate, ImageUpdate};
 use rc_core::{Connection, Event};
 
 use crate::accounts::{AccountView, Status, account_status, monogram};
 use crate::attachment_view::ImageUrls;
 use crate::avatar_view::AvatarUrls;
+use crate::emoji_image_view::EmojiImageUrls;
 use crate::message_view::{author_name, body, can_edit};
 use crate::room_view::{RoomState, room_state, typing_line};
 use crate::session_view::{LoginMode, SessionView, host, session_view};
@@ -75,6 +76,9 @@ pub struct Cache {
     avatars: Option<AvatarUrls>,
     /// `None` until the core sends some, like `emoji`.
     images: Option<ImageUrls>,
+    /// `None` until the core sends some, like `emoji`. Only a frontend that asked for them gets
+    /// any.
+    emoji_images: Option<EmojiImageUrls>,
 }
 
 impl Default for Cache {
@@ -133,6 +137,7 @@ impl Cache {
             emoji: None,
             avatars: None,
             images: None,
+            emoji_images: None,
         }
     }
 
@@ -169,6 +174,9 @@ impl Cache {
             }
             Event::Images(updates) => {
                 self.images.get_or_insert_default().apply(updates);
+            }
+            Event::EmojiImages(updates) => {
+                self.emoji_images.get_or_insert_default().apply(updates);
             }
             Event::Rooms(changes) => {
                 for change in changes {
@@ -434,6 +442,33 @@ impl Cache {
         updates
             .iter()
             .map(|update| (update.path.clone(), urls.url(&update.path).to_owned()))
+            .collect()
+    }
+
+    /// The custom emoji image files known now, as URLs.
+    #[must_use]
+    pub fn emoji_images(&self) -> EmojiImageUrls {
+        self.emoji_images.clone().unwrap_or_default()
+    }
+
+    /// The URL of the image file of the custom emoji `name` (without colons), as it is now: empty
+    /// if it has none, or if no frontend asked for it.
+    #[must_use]
+    pub fn emoji_image_url(&self, name: &str) -> &str {
+        self.emoji_images.as_ref().map_or("", |urls| urls.url(name))
+    }
+
+    /// The URLs, as they are now, of the emoji of `updates` (empty for a file that is gone).
+    #[must_use]
+    pub fn emoji_image_changes(&self, updates: &[EmojiImageUpdate]) -> Vec<(String, String)> {
+        updates
+            .iter()
+            .map(|update| {
+                (
+                    update.name.clone(),
+                    self.emoji_image_url(&update.name).to_owned(),
+                )
+            })
             .collect()
     }
 
@@ -1253,6 +1288,31 @@ mod tests {
             [
                 ("/b".to_owned(), "file:///c/b.png?v=1".to_owned()),
                 ("/a".to_owned(), String::new())
+            ]
+        );
+    }
+
+    // RICH-007
+    #[test]
+    fn a_model_created_late_gets_the_emoji_images_known_so_far() {
+        let mut cache = Cache::new();
+        assert_eq!(cache.emoji_image_url("party"), "");
+        let update = |name: &str, file: Option<&str>| EmojiImageUpdate {
+            name: name.to_owned(),
+            file: file.map(std::path::PathBuf::from),
+        };
+        cache.apply(&Event::EmojiImages(vec![update("party", Some("/c/p.png"))]));
+        cache.apply(&Event::EmojiImages(vec![
+            update("shrug", Some("/c/s.png")),
+            update("party", None),
+        ]));
+        assert_eq!(cache.emoji_image_url("party"), "");
+        assert_eq!(cache.emoji_images().url("shrug"), "file:///c/s.png?v=1");
+        assert_eq!(
+            cache.emoji_image_changes(&[update("shrug", Some("/c/s.png")), update("party", None)]),
+            [
+                ("shrug".to_owned(), "file:///c/s.png?v=1".to_owned()),
+                ("party".to_owned(), String::new())
             ]
         );
     }

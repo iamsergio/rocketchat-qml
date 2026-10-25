@@ -433,6 +433,37 @@ impl Harness {
         }
     }
 
+    /// Skips events until `EmojiImages` comes, and returns its updates.
+    pub(super) fn next_emoji_images(&self) -> Vec<EmojiImageUpdate> {
+        loop {
+            if let Event::EmojiImages(updates) = self.recv_timeout(TIMEOUT).expect("no event") {
+                return updates;
+            }
+        }
+    }
+
+    /// Checks that no `EmojiImages` event comes for a little while, and drops the other events.
+    pub(super) fn assert_no_emoji_images(&self) {
+        let deadline = Instant::now() + Duration::from_millis(200);
+        while let Some(left) = deadline.checked_duration_since(Instant::now()) {
+            if let Ok(Event::EmojiImages(updates)) = self.recv_timeout(left) {
+                panic!("unexpected emoji images: {updates:?}");
+            }
+        }
+    }
+
+    /// Skips events until the server's custom emoji arrive.
+    pub(super) fn wait_for_custom_emoji(&self) {
+        loop {
+            if matches!(
+                self.recv_timeout(TIMEOUT).expect("no event"),
+                Event::CustomEmoji(_)
+            ) {
+                return;
+            }
+        }
+    }
+
     /// Skips events until the open room's messages gain the one with this id.
     pub(super) fn wait_for_appended(&self, id: &str) {
         loop {

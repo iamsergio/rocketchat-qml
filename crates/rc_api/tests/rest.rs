@@ -1901,6 +1901,37 @@ async fn an_uploaded_file_is_downloaded_with_the_login_headers() {
     assert_eq!(file.content_type.as_deref(), Some("image/png"));
 }
 
+// RICH-007
+#[tokio::test]
+async fn the_image_of_a_custom_emoji_is_downloaded_with_the_login_headers() {
+    let server = MockServer::start().await;
+    mount_authenticated(&server, "GET", "/emoji-custom/party.png", png_response()).await;
+    let image = session(&RestClient::new(&server.uri()).unwrap())
+        .emoji_image("party", "png")
+        .await
+        .unwrap();
+    assert_eq!(image.bytes, PNG);
+    assert_eq!(image.content_type.as_deref(), Some("image/png"));
+}
+
+// RICH-007
+#[tokio::test]
+async fn the_name_of_a_custom_emoji_cannot_leave_its_place_in_the_path() {
+    let server = MockServer::start().await;
+    mount_authenticated(
+        &server,
+        "GET",
+        "/emoji-custom/..%2Fapi%2Fv1%2Fme.png",
+        png_response(),
+    )
+    .await;
+    let image = session(&RestClient::new(&server.uri()).unwrap())
+        .emoji_image("../api/v1/me", "png")
+        .await
+        .unwrap();
+    assert_eq!(image.bytes, PNG);
+}
+
 // RICH-005
 #[tokio::test]
 async fn an_encoded_file_name_is_not_encoded_twice() {

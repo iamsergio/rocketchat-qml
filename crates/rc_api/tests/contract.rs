@@ -778,6 +778,28 @@ async fn custom_emoji_lists_a_new_emoji_and_its_image_needs_no_login() {
     assert_eq!(status_without_login(&url), 200);
 }
 
+// RICH-007
+#[tokio::test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+async fn the_image_of_a_new_custom_emoji_is_downloaded() {
+    let fixture = Fixture::new();
+    let name = format!("ct_emoji_img_{}", unique().replace('-', "_"));
+    fixture.admin.create_emoji(&name);
+    let session = fixture.client.session(fixture.login().await.credentials);
+
+    let image = session.emoji_image(&name, "png").await.unwrap();
+
+    assert!(!image.bytes.is_empty());
+    assert!(
+        image
+            .content_type
+            .as_deref()
+            .is_some_and(|content_type| content_type.starts_with("image/")),
+        "{:?}",
+        image.content_type
+    );
+}
+
 // RICH-001, RICH-002, RICH-003
 #[tokio::test]
 #[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
