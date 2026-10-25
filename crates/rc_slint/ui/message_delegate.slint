@@ -159,6 +159,10 @@ export component MessageDelegate inherits Rectangle {
 
                         Text {
                             accessible-id: "msgAuthor";
+                            // For the GUI tests: Slint's testing API can't tell whether a Text is
+                            // elided, so spix_slint reads it from the description.
+                            accessible-description: self.preferred-width > self.width
+                                ? "truncated" : "";
                             vertical-alignment: center;
                             color: Theme.text;
                             font-weight: Theme.font-weight-semibold;

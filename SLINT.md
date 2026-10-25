@@ -82,3 +82,10 @@ The testing backend keeps a mock renderer by default, which measures text with f
 `visible: false` only stops drawing and the element search; the item still takes its share of a layout, so two stretching siblings that swap (the room list and the search results) split the height.
 
 - **Workaround:** the pair sits in one `Rectangle` that stretches, each sized to its parent, and `visible` picks one.
+
+## The testing API can't tell whether a `Text` is elided
+
+`ElementHandle` exposes size, position and the accessible properties, but no preferred size, and Slint's accessibility has no notion of elided text. A GUI test that asks whether a name is cut (Qt's `Text.truncated`) has nothing to read.
+
+- **Workaround:** the `Text` sets `accessible-description: self.preferred-width > self.width ? "truncated" : ""` (`msgAuthor` in `message_delegate.slint`, the only one that needs it), and `spix_slint` answers `truncated` as `true` when the description is exactly `truncated`, `false` otherwise. `preferred-width` of an eliding `Text` is the width of its whole text, so it reflects the cut.
+- **Possible patch:** `ElementHandle` exposing the layout info (preferred size), or an accessible "text is truncated" state.
