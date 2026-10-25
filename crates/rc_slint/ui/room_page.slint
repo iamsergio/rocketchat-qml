@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import { Composer } from "composer.slint";
-import { KindIcon } from "icon.slint";
+import { Icon, KindIcon } from "icon.slint";
 import { FlatButton } from "flat_button.slint";
 import { ListView } from "list_view.slint";
 import { MessageList } from "message_list.slint";
@@ -10,7 +10,7 @@ import { RoomDelegate } from "room_delegate.slint";
 import { RoomSearchField } from "room_search_field.slint";
 import { RoomSearchResults } from "room_search_results.slint";
 import { ThreadPane } from "thread_pane.slint";
-import { MessageMenu, MessageRow, RoomRow } from "structs.slint";
+import { MessageMenu, MessageRow, RoomRow, ThreadPaneState, ThreadRow } from "structs.slint";
 import { Theme } from "theme.slint";
 import { TypingLine } from "typing_line.slint";
 
@@ -88,8 +88,17 @@ export component RoomPage inherits Rectangle {
     // Sends a message that failed to send again, by its id.
     callback retry(string);
 
-    // The thread beside the room: the id of its parent, empty for none, which is when the pane is
-    // not there; the name of the room it is in; its messages and the counters of their list (see
+    // The pane beside the room: what it shows (it is there while it shows something), and the rows
+    // of the list of threads.
+    in property <ThreadPaneState> thread-pane;
+    in property <[ThreadRow]> thread-list;
+    // The threads button of the header, the back button of a thread, a filter chosen in the list
+    // (`all` or `following`), and the end of the list in view.
+    callback toggle-threads();
+    callback thread-back();
+    callback open-thread-list(string);
+    callback load-more-threads();
+    // The thread beside the room: the id of its parent, empty for none; the name of the room it is in; its messages and the counters of their list (see
     // `message_list.slint`); how loading goes and why it failed; and who is typing in it.
     in property <string> thread-id;
     in property <string> thread-room-name;
@@ -388,6 +397,7 @@ export component RoomPage inherits Rectangle {
 
                             // Centred, so that the name of a room without a topic is in the middle.
                             VerticalLayout {
+                                horizontal-stretch: 1;
                                 alignment: center;
                                 padding: Theme.spacing-none;
                                 spacing: Theme.spacing-xxs;
@@ -412,6 +422,43 @@ export component RoomPage inherits Rectangle {
                                     text: root.room-topic;
                                     link-clicked(url) => {
                                         root.open-link(url);
+                                    }
+                                }
+                            }
+
+                            // Shows the room's threads, or closes the pane. It is lit while the
+                            // pane shows the list or a thread. The badge of unread threads
+                            // (ACT-011) goes at its top right.
+                            VerticalLayout {
+                                alignment: center;
+                                width: Theme.icon-button-size;
+                                padding: Theme.spacing-none;
+                                spacing: Theme.spacing-none;
+
+                                Rectangle {
+                                    accessible-id: "roomThreadsButton";
+                                    accessible-role: button;
+                                    accessible-label: @tr("Threads");
+                                    accessible-action-default => {
+                                        root.toggle-threads();
+                                    }
+                                    height: Theme.icon-button-size;
+                                    background: root.thread-pane.open ? Theme.own-wash : threads-touch.has-hover ? Theme.raised : Theme.transparent;
+                                    border-radius: Theme.radius-control;
+
+                                    Icon {
+                                        x: (parent.width - self.width) / 2;
+                                        y: (parent.height - self.height) / 2;
+                                        width: Theme.icon-button-icon-size;
+                                        height: Theme.icon-button-icon-size;
+                                        source: @image-url("../../../src/gui/icons/thread.svg");
+                                        tint: root.thread-pane.open ? Theme.own : threads-touch.has-hover ? Theme.text : Theme.text-muted;
+                                    }
+
+                                    threads-touch := TouchArea {
+                                        clicked => {
+                                            root.toggle-threads();
+                                        }
                                     }
                                 }
                             }
@@ -571,9 +618,23 @@ export component RoomPage inherits Rectangle {
                     }
                 }
 
-                // The open thread, beside the room.
-                if !root.thread-id.is-empty: ThreadPane {
+                // The open thread or the list of threads, beside the room.
+                if root.thread-pane.open: ThreadPane {
                     width: Theme.thread-pane-width;
+                    state: root.thread-pane;
+                    threads: root.thread-list;
+                    back => {
+                        root.thread-back();
+                    }
+                    open-list(filter) => {
+                        root.open-thread-list(filter);
+                    }
+                    load-more-threads => {
+                        root.load-more-threads();
+                    }
+                    open-thread(id) => {
+                        root.open-thread(id);
+                    }
                     thread-id: root.thread-id;
                     room-name: root.thread-room-name;
                     messages: root.thread-messages;

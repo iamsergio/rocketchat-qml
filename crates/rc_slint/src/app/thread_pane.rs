@@ -1,17 +1,21 @@
 // SPDX-FileCopyrightText: 2026 Sergio Martins
 // SPDX-License-Identifier: MIT
 
-//! The commands and the views of the thread pane beside the room. Split from `app.rs` to keep it by
-//! concern.
+//! The commands and the views of the pane beside the room: the open thread and the list of
+//! threads. Split from `app.rs` to keep it by concern.
 
 use jiff::Timestamp;
 use rc_core::AccountHandle;
 use rc_core::domain::MessageId;
 use rc_core::threads::ThreadFilter;
-use rc_view::thread_list_view::{PaneStep, ThreadListState, close_pane_steps, escape_steps};
+use rc_view::thread_list_view::{
+    PaneStep, ThreadListState, back_steps, close_pane_steps, escape_steps, parse_filter,
+    toggle_steps,
+};
 use rc_view::thread_view::outgoing_reply;
 
 use super::App;
+use crate::ui::ThreadPaneState;
 
 impl App {
     /// Shows the open thread: where it is, and how loading its replies goes, as the current
@@ -27,6 +31,33 @@ impl App {
         window.set_thread_loading_older(state.loading_older);
         window.set_thread_error(state.error_text.into());
         window.set_thread_typing(state.typing.into());
+        // Whether a thread is open decides what the pane shows.
+        self.show_thread_list();
+    }
+
+    /// Shows what the pane beside the room is about and how the list of threads is doing, as the
+    /// current account's cache says.
+    pub(super) fn show_thread_list(&self) {
+        let Some(window) = self.window.upgrade() else {
+            return;
+        };
+        let state = self
+            .switchboard
+            .accounts()
+            .current_cache()
+            .thread_list_state();
+        window.set_thread_pane(ThreadPaneState {
+            open: state.pane_open,
+            shows_thread: state.thread_open,
+            shows_list: state.list_open && !state.thread_open,
+            filter: state.filter.into(),
+            loading: state.loading,
+            loading_more: state.loading_more,
+            error_text: state.error_text.into(),
+            empty: state.empty,
+            empty_title: state.empty_title.into(),
+            empty_hint: state.empty_hint.into(),
+        });
     }
 
     /// Shows who is typing in the open thread. Typists emit every few seconds, so this leaves the
@@ -45,6 +76,34 @@ impl App {
         self.current_account("open_thread", |account| {
             account.open_thread(MessageId::from(id.to_owned()));
         });
+    }
+
+    /// The threads button of the room's header: shows the list, or closes the pane.
+    pub(super) fn toggle_pane(&self) {
+        self.pane_command("toggle_pane", toggle_steps);
+    }
+
+    /// The back button of a thread: to the list, with the filter last used in the room.
+    pub(super) fn back_pane(&self) {
+        self.pane_command("back_pane", back_steps);
+    }
+
+    /// Lists the open room's threads with the filter the GUI calls `filter`; the same filter again
+    /// tries again if the last request failed.
+    pub(super) fn open_thread_list(&self, filter: &str) {
+        let Some(filter) = parse_filter(filter) else {
+            tracing::warn!(filter, "open_thread_list ignored: no such filter");
+            return;
+        };
+        self.current_account("open_thread_list", |account| {
+            account.open_thread_list(filter);
+        });
+    }
+
+    /// Asks for the next page of the list. The core ignores it when there is none or a load is
+    /// going on already.
+    pub(super) fn load_more_threads(&self) {
+        self.current_account("load_more_threads", |account| account.load_more_threads());
     }
 
     /// The close button of the pane.

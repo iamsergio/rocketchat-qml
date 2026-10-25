@@ -11,11 +11,11 @@ import { LoginPage } from "login_page.slint";
 import { RoomPage } from "room_page.slint";
 import { ServerRail } from "server_rail.slint";
 import { StartupPage } from "startup_page.slint";
-import { AccountTile, EmojiCell, LoginMode, MessageMenu, MessageRow, RoomRow, RoomSection, SessionStatus } from "structs.slint";
+import { AccountTile, EmojiCell, LoginMode, MessageMenu, MessageRow, RoomRow, RoomSection, SessionStatus, ThreadPaneState, ThreadRow } from "structs.slint";
 import { Theme } from "theme.slint";
 
 // The theme, for Rust: the colours it writes into rich text.
-export { AccountTile, EmojiCell, LoginMode, MessageRow, RoomRow, RoomSection, SessionStatus, Theme }
+export { AccountTile, EmojiCell, LoginMode, MessageRow, RoomRow, RoomSection, SessionStatus, Theme, ThreadPaneState, ThreadRow }
 
 export component MainWindow inherits Window {
     // The version of the app, set from Rust (`rc_core::VERSION`).
@@ -127,6 +127,12 @@ export component MainWindow inherits Window {
     in property <bool> thread-loading-older;
     in property <string> thread-error;
     in property <string> thread-typing;
+    in property <ThreadPaneState> thread-pane;
+    in property <[ThreadRow]> thread-list;
+    callback toggle-threads();
+    callback thread-back();
+    callback open-thread-list(string);
+    callback load-more-threads();
     callback open-thread(string);
     callback close-thread();
     callback thread-escape();
@@ -286,6 +292,20 @@ export component MainWindow inherits Window {
             thread-loading-older: root.thread-loading-older;
             thread-error: root.thread-error;
             thread-typing: root.thread-typing;
+            thread-pane: root.thread-pane;
+            thread-list: root.thread-list;
+            toggle-threads => {
+                root.toggle-threads();
+            }
+            thread-back => {
+                root.thread-back();
+            }
+            open-thread-list(filter) => {
+                root.open-thread-list(filter);
+            }
+            load-more-threads => {
+                root.load-more-threads();
+            }
             open-thread(id) => {
                 root.open-thread(id);
             }

@@ -12,6 +12,7 @@ pub mod rich_markdown;
 mod room_model;
 mod room_search_model;
 mod rows;
+mod thread_list_model;
 
 // The code Slint generates doesn't follow the workspace's lints (it unwraps).
 #[allow(
