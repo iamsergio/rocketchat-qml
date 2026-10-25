@@ -19,7 +19,9 @@ use rc_core::domain::AvatarOwner;
 use rc_core::timeline::TimelineChange;
 use rc_view::attachment_view::ImageUrls;
 use rc_view::avatar_view::AvatarUrls;
+use rc_view::emoji_image_view::EmojiImageUrls;
 use rc_view::message_list::MessageList;
+use rc_view::reaction_view::custom_emoji_names;
 use rc_view::row_ops::MessageOp;
 use rc_view::viewer::Viewer;
 use slint::{Model, ModelNotify, ModelTracker};
@@ -67,17 +69,22 @@ impl MessageModel {
     }
 
     /// Replaces everything with another account's (see [`MessageList::replace`]), as one reset.
+    /// Returns the custom emoji that the reactions use, for the core to download.
     pub fn show(
         &self,
         snapshot: &TimelineChange,
         viewer: Viewer,
         avatars: AvatarUrls,
         images: ImageUrls,
-    ) {
-        self.list
-            .borrow_mut()
-            .replace(snapshot, viewer, avatars, images);
+        emoji_images: EmojiImageUrls,
+    ) -> Vec<String> {
+        {
+            let mut list = self.list.borrow_mut();
+            list.replace(snapshot, viewer, avatars, images);
+            list.use_emoji_images(emoji_images);
+        }
         self.reset();
+        self.custom_emoji_names()
     }
 
     fn reset(&self) {
@@ -85,11 +92,24 @@ impl MessageModel {
         self.notify.reset();
     }
 
-    /// Applies the changes in order, and tells the view what changed.
-    pub fn apply(&self, changes: &[TimelineChange]) {
+    /// Applies the changes in order, and tells the view what changed. Returns the custom emoji
+    /// that the reactions of the messages in the changes use, for the core to download; it costs
+    /// no more than the changes themselves, however long the list is.
+    pub fn apply(&self, changes: &[TimelineChange]) -> Vec<String> {
         for change in changes {
             self.apply_one(change);
         }
+        let list = self.list.borrow();
+        custom_emoji_names(
+            changes.iter().flat_map(TimelineChange::messages),
+            list.viewer(),
+        )
+    }
+
+    /// The custom emoji that the reactions of all the messages use: it looks at every message, so
+    /// it is for when the list of emoji changes and not for each update.
+    pub fn custom_emoji_names(&self) -> Vec<String> {
+        self.list.borrow().custom_emoji_names()
     }
 
     fn apply_one(&self, change: &TimelineChange) {
@@ -166,6 +186,14 @@ impl MessageModel {
         }
     }
 
+    /// Takes new custom emoji image files in, and tells the view which rows react with them.
+    pub fn set_emoji_images(&self, changes: &[(String, String)]) {
+        let runs = self.list.borrow_mut().set_emoji_images(changes);
+        for (first, last) in runs {
+            self.rows_changed(first, last);
+        }
+    }
+
     /// Takes new image files in, and tells the view which rows show them.
     pub fn set_images(&self, changes: &[(String, String)]) {
         let runs = self.list.borrow_mut().set_images(changes);
@@ -195,7 +223,8 @@ impl Model for MessageModel {
 
 #[cfg(test)]
 mod tests {
-    use rc_core::domain::{Author, Delivery, Message, MessageKind, Quote};
+    use rc_core::domain::{Author, Delivery, Message, MessageKind, Quote, Reaction};
+    use rc_core::emoji::CustomEmojis;
     use slint::Color;
 
     use super::*;
@@ -255,6 +284,7 @@ mod tests {
             Viewer::default(),
             AvatarUrls::default(),
             ImageUrls::default(),
+            EmojiImageUrls::default(),
         );
         model
     }
@@ -326,6 +356,7 @@ mod tests {
             Viewer::default(),
             AvatarUrls::default(),
             ImageUrls::default(),
+            EmojiImageUrls::default(),
         );
 
         assert_eq!(ids(&model), ["x"]);
@@ -493,5 +524,172 @@ mod tests {
         assert_eq!(quote.body, "say it");
         assert!(quote.body_html.contains("say it"));
         assert_eq!(model.row_data(1).unwrap().quotes.row_count(), 0);
+    }
+
+    fn reaction(emoji: &str, users: &[&str]) -> Reaction {
+        Reaction {
+            emoji: emoji.to_owned(),
+            usernames: users.iter().map(|&user| user.to_owned()).collect(),
+        }
+    }
+
+    /// A viewer called "me" who knows the custom emoji "party" and "wave".
+    fn viewer_with_emoji() -> Viewer {
+        Viewer {
+            username: Some("me".to_owned()),
+            emoji: CustomEmojis::new(
+                "https://chat.example.com",
+                &["party", "wave"].map(|name| rc_api::CustomEmoji {
+                    name: name.into(),
+                    aliases: Vec::new(),
+                    extension: "png".into(),
+                }),
+            ),
+            ..Viewer::default()
+        }
+    }
+
+    fn shown_to(messages: Vec<Message>, viewer: Viewer) -> (MessageModel, Vec<String>) {
+        let model = MessageModel::new(palette());
+        let names = model.show(
+            &reset(messages),
+            viewer,
+            AvatarUrls::default(),
+            ImageUrls::default(),
+            EmojiImageUrls::default(),
+        );
+        (model, names)
+    }
+
+    fn emoji_update(name: &str, url: &str) -> (String, String) {
+        (name.to_owned(), url.to_owned())
+    }
+
+    // RICH-007, ACT-003
+    #[test]
+    fn the_reactions_of_a_message_are_rows_of_their_own_and_most_messages_have_none() {
+        let mut reacted = message("a", "2026-10-01T09:00:00Z");
+        reacted.reactions = vec![
+            reaction(":thumbsup:", &["bob", "me"]),
+            reaction(":party:", &["bob"]),
+            reaction(":nobody_knows:", &["bob"]),
+        ];
+        let (model, _) = shown_to(
+            vec![reacted, message("b", "2026-10-02T10:00:00Z")],
+            viewer_with_emoji(),
+        );
+
+        let row = model.row_data(0).unwrap();
+        assert!(row.can_react);
+        let chips: Vec<_> = row.reactions.iter().collect();
+        assert_eq!(chips.len(), 3);
+        assert_eq!(
+            (
+                chips[0].label.as_str(),
+                chips[0].text.as_str(),
+                chips[0].count
+            ),
+            ("👍", "👍", 2)
+        );
+        assert!(chips[0].mine && !chips[1].mine);
+        assert_eq!(chips[0].emoji, ":thumbsup:");
+        // A custom emoji reads as the address of its image, and is drawn as its shortcode until
+        // there is a file.
+        assert_eq!(
+            chips[1].label,
+            "https://chat.example.com/emoji-custom/party.png"
+        );
+        assert_eq!(chips[1].text, ":party:");
+        assert!(!chips[1].has_image);
+        assert_eq!(chips[2].label, ":nobody_knows:");
+        assert_eq!(model.row_data(1).unwrap().reactions.row_count(), 0);
+    }
+
+    // RICH-007
+    #[test]
+    fn a_reacted_message_follows_the_live_changes_of_its_reactions() {
+        let (model, _) = shown_to(days(&["a", "b"]), viewer_with_emoji());
+        assert_eq!(model.row_data(0).unwrap().reactions.row_count(), 0);
+
+        let mut reacted = message("a", "2026-10-01T10:00:00Z");
+        reacted.reactions = vec![reaction(":thumbsup:", &["me"])];
+        model.apply(&[TimelineChange::Updated {
+            index: 0,
+            message: reacted.clone(),
+        }]);
+        assert_eq!(model.row_data(0).unwrap().reactions.row_count(), 1);
+
+        reacted.reactions.clear();
+        model.apply(&[TimelineChange::Updated {
+            index: 0,
+            message: reacted,
+        }]);
+        assert_eq!(model.row_data(0).unwrap().reactions.row_count(), 0);
+    }
+
+    // RICH-007
+    #[test]
+    fn only_the_custom_emoji_of_the_messages_that_come_are_asked_for() {
+        let mut first = message("a", "2026-10-01T09:00:00Z");
+        first.reactions = vec![
+            reaction(":party:", &["bob"]),
+            reaction(":thumbsup:", &["bob"]),
+        ];
+        let mut second = message("b", "2026-10-02T09:00:00Z");
+        second.reactions = vec![reaction(":wave:", &["bob"]), reaction(":party:", &["me"])];
+        let (model, names) = shown_to(vec![first], viewer_with_emoji());
+        assert_eq!(names, ["party"]);
+
+        // An update of a message without any, or a new one, asks for what it brings, not for what
+        // the rest of the list has.
+        let plain = TimelineChange::Updated {
+            index: 0,
+            message: message("a", "2026-10-01T09:00:00Z"),
+        };
+        assert!(model.apply(&[plain]).is_empty());
+        let names = model.apply(&[TimelineChange::Appended(vec![second])]);
+        assert_eq!(names, ["wave", "party"]);
+        assert_eq!(model.custom_emoji_names(), ["wave", "party"]);
+    }
+
+    // RICH-007
+    #[test]
+    fn a_custom_emoji_without_a_known_url_is_not_asked_for_until_the_list_arrives() {
+        let mut reacted = message("a", "2026-10-01T09:00:00Z");
+        reacted.reactions = vec![reaction(":party:", &["bob"])];
+        let (model, names) = shown_to(vec![reacted], Viewer::default());
+        assert!(names.is_empty());
+
+        model.set_viewer(viewer_with_emoji());
+        assert_eq!(model.custom_emoji_names(), ["party"]);
+    }
+
+    // RICH-007
+    #[test]
+    fn a_new_emoji_file_changes_the_rows_that_react_with_it_and_no_others() {
+        let dir = std::env::temp_dir().join(format!("rc_slint_emoji_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("party.svg");
+        std::fs::write(
+            &file,
+            r#"<svg xmlns="http://www.w3.org/2000/svg" width="4" height="4"><rect width="4" height="4"/></svg>"#,
+        )
+        .unwrap();
+        let mut party = message("a", "2026-10-01T09:00:00Z");
+        party.reactions = vec![reaction(":party:", &["bob"])];
+        let mut wave = message("b", "2026-10-02T09:00:00Z");
+        wave.reactions = vec![reaction(":wave:", &["bob"])];
+        let (model, _) = shown_to(
+            vec![party, wave, message("c", "2026-10-03T09:00:00Z")],
+            viewer_with_emoji(),
+        );
+        let url = format!("file://{}?v=1", file.display());
+        model.set_emoji_images(&[emoji_update("party", &url)]);
+
+        let chip = |row: usize| model.row_data(row).unwrap().reactions.row_data(0).unwrap();
+        assert!(chip(0).has_image);
+        assert_eq!(chip(0).text, ":party:");
+        assert!(!chip(1).has_image);
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

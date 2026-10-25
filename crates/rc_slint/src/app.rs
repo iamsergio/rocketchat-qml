@@ -184,6 +184,7 @@ fn connect_commands(window: &MainWindow) {
     });
     window.on_save_edit(|id, text| App::with(|app| app.edit_message(&id, &text)));
     window.on_delete_message(|id| App::with(|app| app.delete_message(&id)));
+    window.on_react(|id, emoji, react| App::with(|app| app.react(&id, &emoji, react)));
     window.on_load_older(|| App::with(|app| app.load_older()));
     window.on_open_link(|url| open_link(&url));
     let weak = window.as_weak();
@@ -301,8 +302,21 @@ impl App {
             }
             Event::QuietRooms(_) => self.refresh_search(),
             Event::Timeline(changes) => {
-                self.messages.apply(&changes);
+                let names = self.messages.apply(&changes);
+                self.want_emoji_images(names);
                 self.show_counters();
+            }
+            Event::CustomEmoji(_) => {
+                // The reactions know their custom emoji now; the files of the ones the core
+                // ignored before are asked for again.
+                self.messages
+                    .set_viewer(self.switchboard.accounts().current_cache().viewer());
+                self.want_emoji_images(self.messages.custom_emoji_names());
+            }
+            Event::EmojiImages(updates) => {
+                let cache = self.switchboard.accounts().current_cache();
+                self.messages
+                    .set_emoji_images(&cache.emoji_image_changes(&updates));
             }
             Event::TimelineStatus(_) => self.show_room(),
             Event::Typing { .. } => self.show_typing(),
@@ -340,12 +354,14 @@ impl App {
         let mut rooms = Vec::new();
         cache.rooms_snapshot().apply(&mut rooms);
         self.rooms.show(rooms, cache.avatars());
-        self.messages.show(
+        let names = self.messages.show(
             &cache.timeline_snapshot(),
             cache.viewer(),
             cache.avatars(),
             cache.images(),
+            cache.emoji_images(),
         );
+        self.want_emoji_images(names);
         self.show_counters();
         self.show_session(&self.switchboard.accounts().session_view());
         self.show_room();
@@ -615,6 +631,25 @@ impl App {
             .current_cache()
             .last_editable(Timestamp::now())
             .map_or_else(String::new, |message| message.id.to_string())
+    }
+
+    /// Asks the core for the image files of custom emoji that reactions use, if there are any.
+    /// Asking again for ones it has is cheap: it keeps track.
+    fn want_emoji_images(&self, names: Vec<String>) {
+        if !names.is_empty() {
+            self.current_account("want_emoji_images", |account| {
+                account.want_emoji_images(names);
+            });
+        }
+    }
+
+    /// Adds the user's reaction to a message, or takes it back. The answer is
+    /// `Event::MessageAction`, which shows a failure.
+    fn react(&self, id: &str, emoji: &str, react: bool) {
+        self.show_room_action_error("");
+        self.current_account("react", |account| {
+            account.react(MessageId::from(id.to_owned()), emoji, react);
+        });
     }
 
     /// Saves the new text of a message. The answer is `Event::MessageAction`.

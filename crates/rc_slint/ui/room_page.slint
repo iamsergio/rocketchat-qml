@@ -57,13 +57,15 @@ export component RoomPage inherits Rectangle {
     callback mark-unread(string);
     callback leave(string, string);
     callback dismiss-room-list-error();
-    // Why the last edit or deletion of a message failed; empty for none.
+    // Why the last edit, deletion or reaction of a message failed; empty for none.
     in property <string> room-action-error;
     callback dismiss-room-action-error();
     // The menu of a message: what it offers now, asked when it opens, and the user's choices.
     // Deleting is only asked for: the window asks the user first.
     callback menu-allowed(string) -> MessageMenu;
     callback delete-message(string);
+    // The user clicked a chip of a message: add their reaction with the emoji, or take it back.
+    callback react(string, string, bool);
     // The composer edits a message: its text and the newest editable one are asked for, the new
     // text is saved, and the answer comes back as the counter going up (see `composer.slint`).
     callback message-text(string) -> string;
@@ -431,9 +433,12 @@ export component RoomPage inherits Rectangle {
                             delete(id) => {
                                 root.delete-message(id);
                             }
+                            react(id, emoji, reacted) => {
+                                root.react(id, emoji, reacted);
+                            }
                         }
 
-                        // Why the last edit or deletion failed, until it is dismissed or the user
+                        // Why the last edit, deletion or reaction failed, until it is dismissed or the user
                         // tries again.
                         if !root.room-action-error.is-empty: Rectangle {
                             accessible-id: "roomActionError";

@@ -4,16 +4,17 @@
 import { Avatar } from "avatar.slint";
 import { FlatButton } from "flat_button.slint";
 import { MenuItem } from "menu_item.slint";
-import { MessageMenu, MessageRow, QuoteRow } from "structs.slint";
+import { MessageMenu, MessageRow, QuoteRow, ReactionRow } from "structs.slint";
 import { Theme } from "theme.slint";
 
-// One message of the open room, named `msg_<id>` by its message id. Its parts are named like the
-// Qt app's: `msgDaySeparator` (on the first message of a day), `msgAvatar`, `msgAuthor`, `msgTime`,
-// `msgMentionsMe`, `msgBody` (the message as written, holding `msgBodyHtml`, what is shown), and
-// `msgSystem` for a system message, which has no author and no body. A message with a menu has the
-// button `msgMenuButton`, clear until the pointer is over the message; it and a right-click on the
-// message open the menu, whose items are popups, found from the window by their names while it is
-// open.
+// One message of the open room, named `msg_<id>` by its message id. Its parts are named like the Qt
+// app's: `msgDaySeparator` (on the first message of a day), `msgAvatar`, `msgAuthor`, `msgTime`,
+// `msgMentionsMe`, `msgBody` (the message as written, holding `msgBodyHtml`, what is shown),
+// `msgReactions` (the chips, shown when there are reactions: `reaction<index>`, which is checked
+// when the user reacted, holding `reactionEmoji` and `reactionCount`), and `msgSystem` for a system
+// message, which has no author and no body. A message with a menu has the button `msgMenuButton`,
+// clear until the pointer is over the message; it and a right-click on the message open the menu,
+// whose items are popups, found from the window by their names while it is open.
 export component MessageDelegate inherits Rectangle {
     in property <MessageRow> message;
     // A link of the body was clicked.
@@ -26,6 +27,8 @@ export component MessageDelegate inherits Rectangle {
     callback quote(string);
     callback edit(string);
     callback delete(string);
+    // The user clicked a chip: add their reaction with the emoji (the shortcode), or take it back.
+    callback react(string, string, bool);
 
     // The width that wrapped texts have: the row's, less the space around them. Given explicitly,
     // since a wrapped text can't tell its height from the width a layout will give it.
@@ -348,6 +351,84 @@ export component MessageDelegate inherits Rectangle {
                             text: root.message.body-styled;
                             link-clicked(url) => {
                                 root.open-link(url);
+                            }
+                        }
+                    }
+
+                    // What users reacted with: a chip for each emoji, in the server's order, with
+                    // its count, marked when the user is one of them. The chips wrap. A click
+                    // takes the user's reaction back or joins the others in it, if the message
+                    // can be reacted to.
+                    if root.message.reactions.length > 0: Rectangle {
+                        accessible-id: "msgReactions";
+                        accessible-role: groupbox;
+                        min-height: chips.preferred-height;
+                        preferred-height: chips.preferred-height;
+
+                        chips := FlexboxLayout {
+                            padding: Theme.spacing-none;
+                            spacing: Theme.spacing-m;
+
+                            for reaction[index] in root.message.reactions: Rectangle {
+                                accessible-id: "reaction" + index;
+                                accessible-role: checkbox;
+                                accessible-checkable: true;
+                                accessible-checked: reaction.mine;
+                                width: chip-row.preferred-width + Theme.chip-padding;
+                                height: Theme.chip-height;
+                                background: reaction.mine ? Theme.own-wash : Theme.raised;
+                                border-color: reaction.mine ? Theme.own-border : chip-touch.has-hover ? Theme.raised-hover : Theme.transparent;
+                                border-width: Theme.border-width;
+                                border-radius: self.height / 2;
+
+                                chip-row := HorizontalLayout {
+                                    alignment: center;
+                                    cross-axis-alignment: center;
+                                    padding: Theme.spacing-none;
+                                    spacing: Theme.spacing-s;
+
+                                    // `accessible-value` is what the tests read: the glyph, else
+                                    // the address of the custom emoji's image, else the shortcode.
+                                    Rectangle {
+                                        accessible-id: "reactionEmoji";
+                                        accessible-role: text;
+                                        accessible-value: reaction.label;
+                                        width: reaction.has-image ? Theme.chip-emoji-size : emoji-text.preferred-width;
+                                        height: Theme.chip-emoji-size;
+
+                                        if reaction.has-image: Image {
+                                            width: parent.width;
+                                            height: parent.height;
+                                            source: reaction.image;
+                                            image-fit: contain;
+                                        }
+
+                                        emoji-text := Text {
+                                            visible: !reaction.has-image;
+                                            vertical-alignment: center;
+                                            text: reaction.text;
+                                        }
+                                    }
+
+                                    Text {
+                                        accessible-id: "reactionCount";
+                                        accessible-role: text;
+                                        vertical-alignment: center;
+                                        color: reaction.mine ? Theme.own : Theme.text-muted;
+                                        font-size: Theme.font-size-small;
+                                        font-weight: Theme.font-weight-semibold;
+                                        text: reaction.count;
+                                    }
+                                }
+
+                                chip-touch := TouchArea {
+                                    mouse-cursor: root.message.can-react ? MouseCursor.pointer : MouseCursor.default;
+                                    clicked => {
+                                        if root.message.can-react {
+                                            root.react(root.message.id, reaction.emoji, !reaction.mine);
+                                        }
+                                    }
+                                }
                             }
                         }
                     }

@@ -89,3 +89,10 @@ The testing backend keeps a mock renderer by default, which measures text with f
 
 - **Workaround:** the `Text` sets `accessible-description: self.preferred-width > self.width ? "truncated" : ""` (`msgAuthor` in `message_delegate.slint`, the only one that needs it), and `spix_slint` answers `truncated` as `true` when the description is exactly `truncated`, `false` otherwise. `preferred-width` of an eliding `Text` is the width of its whole text, so it reflects the cut.
 - **Possible patch:** `ElementHandle` exposing the layout info (preferred size), or an accessible "text is truncated" state.
+
+## A `FlexboxLayout` reports a tall layout info to its parent
+
+Inside a `Rectangle`, the `FlexboxLayout` of `msgReactions` reported (as the `Rectangle`'s minimum and preferred height) about two lines of chips whatever the width, while its own `preferred-height` at the real width was one line. The message's column got that extra height and gave it to the body above the chips, so the chips sat about 30px lower than in the Qt app. Setting only one of `min-height` and `preferred-height` on the `Rectangle` didn't help; both are needed.
+
+- **Workaround:** `min-height` and `preferred-height` of that `Rectangle` are both `chips.preferred-height` (`message_delegate.slint`), which follows the width and so wraps right.
+- **Possible patch:** the flexbox's layout info taking the width it is given for its height.

@@ -6,13 +6,17 @@
 //! image URLs. It applies the core's changes and says which rows each update touches; the
 //! notifications the toolkit wants around them are its own.
 
+use std::collections::HashSet;
+
 use jiff::tz::TimeZone;
 use rc_core::domain::{AvatarOwner, Message};
 use rc_core::timeline::TimelineChange;
 
 use crate::attachment_view::{ImageUrls, paths, shows_image};
 use crate::avatar_view::{AvatarUrls, message_owner, owners, rows_using, runs};
+use crate::emoji_image_view::EmojiImageUrls;
 use crate::message_view::{first_of_day, thread_parent_text};
+use crate::reaction_view::{custom_emoji_names, shows_emoji};
 use crate::row_ops::{MessageOp, apply_newest_first, message_ops};
 use crate::viewer::Viewer;
 
@@ -25,6 +29,7 @@ pub struct MessageList {
     viewer: Viewer,
     avatars: AvatarUrls,
     images: ImageUrls,
+    emoji_images: EmojiImageUrls,
 }
 
 impl Default for MessageList {
@@ -47,6 +52,7 @@ impl MessageList {
             viewer,
             avatars,
             images,
+            emoji_images: EmojiImageUrls::default(),
         }
     }
 
@@ -111,6 +117,30 @@ impl MessageList {
         })
     }
 
+    /// Replaces the custom emoji image files the reactions show, with the ones known now. The
+    /// caller announces a model reset around it, like for [`replace`](Self::replace).
+    pub fn use_emoji_images(&mut self, emoji_images: EmojiImageUrls) {
+        self.emoji_images = emoji_images;
+    }
+
+    /// Takes new custom emoji image files in (by name, without colons). Returns the runs of rows
+    /// (first and last) whose message reacts with one of them.
+    pub fn set_emoji_images(&mut self, changes: &[(String, String)]) -> Vec<(usize, usize)> {
+        self.emoji_images.set(changes);
+        let names: HashSet<String> = changes.iter().map(|(name, _)| name.clone()).collect();
+        runs(self.messages.len(), |at| {
+            self.messages
+                .get(at)
+                .is_some_and(|message| shows_emoji(message, &self.viewer, &names))
+        })
+    }
+
+    /// The names of the custom emoji that the reactions of the held messages use.
+    #[must_use]
+    pub fn custom_emoji_names(&self) -> Vec<String> {
+        custom_emoji_names(&self.messages, &self.viewer)
+    }
+
     /// The message at `row`.
     #[must_use]
     pub fn message(&self, row: usize) -> Option<&Message> {
@@ -137,6 +167,11 @@ impl MessageList {
     #[must_use]
     pub fn images(&self) -> &ImageUrls {
         &self.images
+    }
+
+    #[must_use]
+    pub fn emoji_images(&self) -> &EmojiImageUrls {
+        &self.emoji_images
     }
 
     /// Whether the message at `row` is the first of its day in the zone. The message before it is
@@ -299,5 +334,42 @@ mod tests {
             ..Viewer::default()
         };
         assert_eq!(list.set_viewer(viewer), Some((0, 1)));
+    }
+
+    // RICH-007
+    #[test]
+    fn new_emoji_files_touch_the_rows_that_react_with_them() {
+        let mut party = message("a", "2026-10-20T10:00:00Z", "alice");
+        party.reactions = vec![rc_core::domain::Reaction {
+            emoji: ":party:".to_owned(),
+            usernames: vec!["bob".to_owned()],
+        }];
+        let mut list = MessageList::default();
+        list.apply(&reset(vec![
+            party.clone(),
+            message("b", "2026-10-20T11:00:00Z", "alice"),
+            party,
+        ]));
+        let viewer = Viewer {
+            emoji: rc_core::emoji::CustomEmojis::new(
+                "https://chat.example.com",
+                &[rc_api::CustomEmoji {
+                    name: "party".into(),
+                    aliases: Vec::new(),
+                    extension: "gif".into(),
+                }],
+            ),
+            ..Viewer::default()
+        };
+        list.set_viewer(viewer);
+
+        // Rows: a, b, a.
+        let runs = list.set_emoji_images(&[("party".to_owned(), "file:///p".to_owned())]);
+        assert_eq!(runs, [(0, 0), (2, 2)]);
+        assert_eq!(list.emoji_images().url("party"), "file:///p");
+        assert!(
+            list.set_emoji_images(&[("other".to_owned(), "file:///o".to_owned())])
+                .is_empty()
+        );
     }
 }

@@ -85,6 +85,23 @@ export struct QuoteRow {
     body-styled: styled-text,
 }
 
+// One reaction of a message: an `rc_view::reaction_view::ReactionView`, as drawn.
+export struct ReactionRow {
+    // The shortcode as the server has it, colons included: what reacting again sends.
+    emoji: string,
+    // What the GUI tests read: the glyph, else the server's address of the custom emoji's image,
+    // else the shortcode.
+    label: string,
+    // What is drawn as text: the glyph, or the shortcode while a custom emoji has no file.
+    text: string,
+    // Whether `image` holds the custom emoji's picture, which is drawn instead of the text.
+    has-image: bool,
+    image: image,
+    count: int,
+    // The user is one of those who reacted.
+    mine: bool,
+}
+
 // One message of the open room: an `rc_view` message list's row, as `rc_qt`'s roles give it.
 export struct MessageRow {
     id: string,
@@ -109,6 +126,10 @@ export struct MessageRow {
     mentions-me: bool,
     // What the message quotes, in order. Most have none, and then no model is made.
     quotes: [QuoteRow],
+    // What users reacted with, in the server's order. Most messages have none, and then no model
+    // is made. `can-react`: the user can add or take back a reaction by clicking a chip.
+    reactions: [ReactionRow],
+    can-react: bool,
     // The message had a menu when the row was made (the user could quote, edit or delete it):
     // the button shows and a right-click opens. What the menu offers is asked for when it opens,
     // since the time limits of the server's policy run out.
