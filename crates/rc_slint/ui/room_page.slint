@@ -9,6 +9,7 @@ import { MessageList } from "message_list.slint";
 import { RoomDelegate } from "room_delegate.slint";
 import { RoomSearchField } from "room_search_field.slint";
 import { RoomSearchResults } from "room_search_results.slint";
+import { ThreadPane } from "thread_pane.slint";
 import { MessageMenu, MessageRow, RoomRow } from "structs.slint";
 import { Theme } from "theme.slint";
 import { TypingLine } from "typing_line.slint";
@@ -86,6 +87,31 @@ export component RoomPage inherits Rectangle {
     callback send(string, string) -> bool;
     // Sends a message that failed to send again, by its id.
     callback retry(string);
+
+    // The thread beside the room: the id of its parent, empty for none, which is when the pane is
+    // not there; the name of the room it is in; its messages and the counters of their list (see
+    // `message_list.slint`); how loading goes and why it failed; and who is typing in it.
+    in property <string> thread-id;
+    in property <string> thread-room-name;
+    in property <[MessageRow]> thread-messages;
+    in property <int> thread-prepends;
+    in property <int> thread-resets;
+    in property <bool> thread-loading;
+    in property <bool> thread-loading-older;
+    in property <string> thread-error;
+    in property <string> thread-typing;
+    // Opens the thread of the message with this id, closes the pane, or does what Escape in the
+    // pane's box asks (nothing to cancel there).
+    callback open-thread(string);
+    callback close-thread();
+    callback thread-escape();
+    // The pane's list is at its top: older replies are wanted.
+    callback load-older-thread();
+    // Sends a reply in the open thread: the text, the message it quotes (empty for none) and
+    // whether to show it in the room too; false if it refuses it.
+    callback send-reply(string, string, bool) -> bool;
+    // The newest message of the thread that the user can edit now.
+    callback thread-last-editable() -> string;
 
     // Whether the composer is to take the focus when the room that is being opened shows, and how
     // many times it was asked to take it now.
@@ -411,6 +437,7 @@ export component RoomPage inherits Rectangle {
                             composer-wanted: root.composer-wanted;
                             messages: root.messages;
                             in-thread-pane: false;
+                            open-thread-id: root.thread-id;
                             room-id: root.room-id;
                             reached-start: root.reached-start;
                             loading-older: root.loading-older;
@@ -442,6 +469,9 @@ export component RoomPage inherits Rectangle {
                             }
                             add-reaction(id) => {
                                 root.add-reaction(id);
+                            }
+                            open-thread(id) => {
+                                root.open-thread(id);
                             }
                         }
 
@@ -502,12 +532,14 @@ export component RoomPage inherits Rectangle {
                             spacing: Theme.spacing-none;
 
                             composer := Composer {
+                                accessible-id: "roomComposer";
+                                accessible-role: groupbox;
                                 edit-answers: root.edit-answers;
                                 edit-answer-id: root.edit-answer-id;
                                 edit-answer-ok: root.edit-answer-ok;
                                 focus-wanted: root.composer-wanted;
                                 focus-requests: root.composer-requests;
-                                room-id: root.room-id;
+                                conversation-id: root.room-id;
                                 focused => {
                                     root.composer-wanted = false;
                                 }
@@ -536,6 +568,65 @@ export component RoomPage inherits Rectangle {
                         horizontal-alignment: center;
                         vertical-alignment: center;
                         text: @tr("Select a room");
+                    }
+                }
+
+                // The open thread, beside the room.
+                if !root.thread-id.is-empty: ThreadPane {
+                    width: Theme.thread-pane-width;
+                    thread-id: root.thread-id;
+                    room-name: root.thread-room-name;
+                    messages: root.thread-messages;
+                    prepends: root.thread-prepends;
+                    resets: root.thread-resets;
+                    loading: root.thread-loading;
+                    loading-older: root.thread-loading-older;
+                    error-text: root.thread-error;
+                    typing: root.thread-typing;
+                    edit-answers: root.edit-answers;
+                    edit-answer-id: root.edit-answer-id;
+                    edit-answer-ok: root.edit-answer-ok;
+                    close => {
+                        root.close-thread();
+                    }
+                    escape => {
+                        root.thread-escape();
+                    }
+                    load-older => {
+                        root.load-older-thread();
+                    }
+                    open-link(url) => {
+                        root.open-link(url);
+                    }
+                    retry(id) => {
+                        root.retry(id);
+                    }
+                    menu-allowed(id) => {
+                        return root.menu-allowed(id);
+                    }
+                    delete-message(id) => {
+                        root.delete-message(id);
+                    }
+                    react(id, emoji, reacted) => {
+                        root.react(id, emoji, reacted);
+                    }
+                    add-reaction(id) => {
+                        root.add-reaction(id);
+                    }
+                    message-text(id) => {
+                        return root.message-text(id);
+                    }
+                    message-author(id) => {
+                        return root.message-author(id);
+                    }
+                    last-editable => {
+                        return root.thread-last-editable();
+                    }
+                    save-edit(id, text) => {
+                        root.save-edit(id, text);
+                    }
+                    send(text, quoted, also) => {
+                        return root.send-reply(text, quoted, also);
                     }
                 }
             }

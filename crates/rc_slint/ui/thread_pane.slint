@@ -1,0 +1,272 @@
+// SPDX-FileCopyrightText: 2026 Sergio Martins
+// SPDX-License-Identifier: MIT
+
+import { BusyIndicator } from "busy_indicator.slint";
+import { Composer } from "composer.slint";
+import { Icon } from "icon.slint";
+import { MessageList } from "message_list.slint";
+import { MessageMenu, MessageRow } from "structs.slint";
+import { Theme } from "theme.slint";
+import { TypingLine } from "typing_line.slint";
+
+// The pane beside the room while a thread is open: a header with the title, where the thread is
+// and the close button, over a hairline; the thread's messages (the parent, a divider that says
+// how many replies follow, then the replies), bottom to top like the room's; who is typing; and the
+// box to reply in. It takes the focus when a thread opens, into the box.
+//
+// The messages are the room's `MessageDelegate`s, so edits, deletions, reactions and retries go
+// where the room's go, and their errors show in the room's one strip; quoting and editing begin in
+// this pane's box.
+export component ThreadPane inherits Rectangle {
+    // The parent of the open thread, the name of the room it is in, and how loading goes.
+    in property <string> thread-id;
+    in property <string> room-name;
+    in property <bool> loading;
+    in property <bool> loading-older;
+    // Why the replies couldn't be loaded; empty for nothing.
+    in property <string> error-text;
+    // Who is typing in the thread, as a line.
+    in property <string> typing;
+    // The thread's messages, oldest first, and the counters the list keeps its place by.
+    in property <[MessageRow]> messages;
+    in property <int> prepends;
+    in property <int> resets;
+    // The answer to the last edit (see `composer.slint`).
+    in property <int> edit-answers;
+    in property <string> edit-answer-id;
+    in property <bool> edit-answer-ok;
+    // The close button.
+    callback close();
+    // Escape in the box with nothing to cancel.
+    callback escape();
+    callback load-older();
+    callback open-link(string);
+    callback retry(string);
+    callback menu-allowed(string) -> MessageMenu;
+    callback delete-message(string);
+    callback react(string, string, bool);
+    callback add-reaction(string);
+    callback message-text(string) -> string;
+    callback message-author(string) -> string;
+    // The newest message of the thread that the user can edit now.
+    callback last-editable() -> string;
+    callback save-edit(string, string);
+    // Sends the text as a reply, quoting the message with the id (empty for none), and also to the
+    // room if the last is set; false if it refuses it, which leaves the box as it is.
+    callback send(string, string, bool) -> bool;
+
+    accessible-id: "threadPane";
+    accessible-role: groupbox;
+    background: Theme.surface;
+
+    // The hairline between the room and the pane.
+    Rectangle {
+        x: Theme.spacing-none;
+        width: Theme.separator-width;
+        background: Theme.line;
+    }
+
+    VerticalLayout {
+        x: Theme.separator-width;
+        width: parent.width - Theme.separator-width;
+        padding: Theme.spacing-none;
+        spacing: Theme.spacing-none;
+
+        // The title and where the thread is, over a hairline. The back button of the list of threads
+        // will go before the title.
+        Rectangle {
+            height: Theme.room-header-height;
+
+            HorizontalLayout {
+                padding-left: Theme.spacing-xxxl;
+                padding-right: Theme.spacing-xl;
+                padding-top: Theme.spacing-none;
+                padding-bottom: Theme.spacing-none;
+                spacing: Theme.spacing-xl;
+
+                HorizontalLayout {
+                    horizontal-stretch: 1;
+                    padding: Theme.spacing-none;
+                    spacing: Theme.spacing-l;
+
+                    Text {
+                        accessible-id: "threadTitle";
+                        vertical-alignment: center;
+                        color: Theme.text;
+                        font-size: Theme.font-size-heading;
+                        font-weight: Theme.font-weight-bold;
+                        text: @tr("Thread");
+                    }
+
+                    Text {
+                        horizontal-stretch: 1;
+                        vertical-alignment: center;
+                        color: Theme.text-faint;
+                        font-size: Theme.font-size-small;
+                        overflow: elide;
+                        text: "# " + root.room-name;
+                    }
+                }
+
+                VerticalLayout {
+                    alignment: center;
+                    width: Theme.icon-button-size;
+                    padding: Theme.spacing-none;
+                    spacing: Theme.spacing-none;
+
+                    Rectangle {
+                        accessible-id: "threadClose";
+                        accessible-role: button;
+                        accessible-label: @tr("Close the pane");
+                        accessible-action-default => {
+                            root.close();
+                        }
+                        height: Theme.icon-button-size;
+                        background: close-touch.has-hover ? Theme.raised : Theme.transparent;
+                        border-radius: Theme.radius-control;
+
+                        Icon {
+                            x: (parent.width - self.width) / 2;
+                            y: (parent.height - self.height) / 2;
+                            width: Theme.icon-button-icon-size;
+                            height: Theme.icon-button-icon-size;
+                            source: @image-url("../../../src/gui/icons/close.svg");
+                            tint: close-touch.has-hover ? Theme.text : Theme.text-muted;
+                        }
+
+                        close-touch := TouchArea {
+                            clicked => {
+                                root.close();
+                            }
+                        }
+                    }
+                }
+            }
+
+            Rectangle {
+                y: parent.height - self.height;
+                height: Theme.separator-width;
+                background: Theme.line;
+            }
+        }
+
+        if !root.error-text.is-empty: HorizontalLayout {
+            padding: Theme.spacing-xxxl;
+            spacing: Theme.spacing-none;
+
+            Text {
+                accessible-id: "threadError";
+                color: Theme.error;
+                font-size: Theme.font-size-small;
+                wrap: word-wrap;
+                text: root.error-text;
+            }
+        }
+
+        // The replies, with a spinner over them while the newest load.
+        Rectangle {
+            vertical-stretch: 1;
+
+            MessageList {
+                width: parent.width;
+                height: parent.height;
+                in-thread-pane: true;
+                open-thread-id: "";
+                messages: root.messages;
+                reached-start: false;
+                loading-older: root.loading-older;
+                prepends: root.prepends;
+                resets: root.resets;
+                load-older => {
+                    root.load-older();
+                }
+                retry(id) => {
+                    root.retry(id);
+                }
+                open-link(url) => {
+                    root.open-link(url);
+                }
+                menu-allowed(id) => {
+                    return root.menu-allowed(id);
+                }
+                quote(id) => {
+                    composer.begin-quote(id);
+                }
+                edit(id) => {
+                    composer.begin-edit(id);
+                }
+                delete(id) => {
+                    root.delete-message(id);
+                }
+                react(id, emoji, reacted) => {
+                    root.react(id, emoji, reacted);
+                }
+                add-reaction(id) => {
+                    root.add-reaction(id);
+                }
+            }
+
+            if root.loading: BusyIndicator {
+                accessible-id: "threadLoading";
+                accessible-role: image;
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                width: Theme.busy-indicator-large-size;
+                height: Theme.busy-indicator-large-size;
+            }
+        }
+
+        // Empty most of the time, but its height is always taken.
+        HorizontalLayout {
+            padding-left: Theme.spacing-xxxl;
+            padding-right: Theme.spacing-xxxl;
+            padding-top: Theme.spacing-none;
+            padding-bottom: Theme.spacing-none;
+            spacing: Theme.spacing-none;
+
+            TypingLine {
+                accessible-id: "threadTyping";
+                text: root.typing;
+            }
+        }
+
+        HorizontalLayout {
+            padding-left: Theme.spacing-xxxl;
+            padding-right: Theme.spacing-xxxl;
+            padding-top: Theme.spacing-m;
+            padding-bottom: Theme.spacing-xxxl;
+            spacing: Theme.spacing-none;
+
+            // Takes the focus when a thread opens (it is made then) and when another replaces it.
+            composer := Composer {
+                accessible-id: "threadComposer";
+                accessible-role: groupbox;
+                for-thread: true;
+                room-name: root.room-name;
+                conversation-id: root.thread-id;
+                focus-wanted: true;
+                edit-answers: root.edit-answers;
+                edit-answer-id: root.edit-answer-id;
+                edit-answer-ok: root.edit-answer-ok;
+                send(text, quoted) => {
+                    return root.send(text, quoted, self.also-to-channel);
+                }
+                escape => {
+                    root.escape();
+                }
+                save-edit(id, text) => {
+                    root.save-edit(id, text);
+                }
+                message-text(id) => {
+                    return root.message-text(id);
+                }
+                message-author(id) => {
+                    return root.message-author(id);
+                }
+                last-editable => {
+                    return root.last-editable();
+                }
+            }
+        }
+    }
+}

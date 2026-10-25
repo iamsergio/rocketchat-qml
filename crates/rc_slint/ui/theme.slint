@@ -34,6 +34,8 @@ export global Theme {
     out property <color> text-on-own: #0f1424;
     // Own at 14%.
     out property <color> own-wash: #7f9cff24;
+    // Own at 6%: the message whose thread is open beside the room.
+    out property <color> own-tint: #7f9cff0f;
     // Own at 50%: the border of the account on screen.
     out property <color> own-border: #7f9cff80;
     out property <color> warning: #e8b44f;
@@ -106,6 +108,15 @@ export global Theme {
     // The bar at the left of a message that mentions the user.
     out property <length> accent-bar-width: 3px;
     out property <length> avatar-size: 36px;
+    // The check box of the thread composer, and the tick in it.
+    out property <length> check-box-size: 15px;
+    out property <length> check-mark-size: 11px;
+    // The corner arrow of "Replied in a thread".
+    out property <length> in-thread-icon-size: 13px;
+    // The thread pane beside the room, and the summary of a thread under its parent.
+    out property <length> thread-pane-width: 360px;
+    out property <length> thread-summary-height: 28px;
+    out property <length> thread-summary-icon-size: 14px;
     out property <length> busy-indicator-large-size: 40px;
     out property <length> busy-indicator-size: 32px;
     out property <length> button-height: 30px;

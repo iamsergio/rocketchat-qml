@@ -23,6 +23,8 @@ export component MessageList inherits FocusScope {
     // The list of the thread pane and not the room's: it has its own names for the tests, and its
     // messages draw as in the pane (see `message_delegate.slint`).
     in property <bool> in-thread-pane;
+    // The parent of the thread that is open beside the room, for the row that marks it.
+    in property <string> open-thread-id;
     in property <string> room-id;
     // Above the first message: the conversation starts there, or older messages are on their way.
     in property <bool> reached-start;
@@ -42,6 +44,7 @@ export component MessageList inherits FocusScope {
     callback delete(string);
     callback react(string, string, bool);
     callback add-reaction(string);
+    callback open-thread(string);
 
     property <int> seen-prepends;
     property <int> seen-resets;
@@ -71,12 +74,12 @@ export component MessageList inherits FocusScope {
     // Keys go to the list, and a room that opens takes the focus, so that Home works at once.
     init => {
         root.last-view-height = flick.height;
-        if !root.composer-wanted {
+        if !root.composer-wanted && !root.in-thread-pane {
             root.focus();
         }
     }
     changed room-id => {
-        if !root.composer-wanted {
+        if !root.composer-wanted && !root.in-thread-pane {
             root.focus();
         }
     }
@@ -177,6 +180,10 @@ export component MessageList inherits FocusScope {
             for message in root.messages: MessageDelegate {
                 message: message;
                 in-thread-pane: root.in-thread-pane;
+                open-thread-id: root.open-thread-id;
+                open-thread(id) => {
+                    root.open-thread(id);
+                }
                 retry(id) => {
                     root.retry(id);
                 }

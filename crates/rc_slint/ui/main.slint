@@ -116,6 +116,23 @@ export component MainWindow inherits Window {
     // Sends the text to the open room; false if it refuses it (blank), which keeps the composer's.
     callback send(string, string) -> bool;
     callback retry(string);
+
+    // The thread beside the room (see `room_page.slint`).
+    in property <string> thread-id;
+    in property <string> thread-room-name;
+    in property <[MessageRow]> thread-messages;
+    in property <int> thread-prepends;
+    in property <int> thread-resets;
+    in property <bool> thread-loading;
+    in property <bool> thread-loading-older;
+    in property <string> thread-error;
+    in property <string> thread-typing;
+    callback open-thread(string);
+    callback close-thread();
+    callback thread-escape();
+    callback load-older-thread();
+    callback send-reply(string, string, bool) -> bool;
+    callback thread-last-editable() -> string;
     // Logs what Slint knows about the display.
     callback dump-info();
 
@@ -259,6 +276,33 @@ export component MainWindow inherits Window {
             }
             retry(id) => {
                 root.retry(id);
+            }
+            thread-id: root.thread-id;
+            thread-room-name: root.thread-room-name;
+            thread-messages: root.thread-messages;
+            thread-prepends: root.thread-prepends;
+            thread-resets: root.thread-resets;
+            thread-loading: root.thread-loading;
+            thread-loading-older: root.thread-loading-older;
+            thread-error: root.thread-error;
+            thread-typing: root.thread-typing;
+            open-thread(id) => {
+                root.open-thread(id);
+            }
+            close-thread => {
+                root.close-thread();
+            }
+            thread-escape => {
+                root.thread-escape();
+            }
+            load-older-thread => {
+                root.load-older-thread();
+            }
+            send-reply(text, quoted, also) => {
+                return root.send-reply(text, quoted, also);
+            }
+            thread-last-editable => {
+                return root.thread-last-editable();
             }
         }
 
