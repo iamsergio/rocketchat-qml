@@ -120,6 +120,19 @@ pub trait ServerApi: Clone + Send + Sync + 'static {
         path: &str,
     ) -> impl Future<Output = Result<Image, ApiError>> + Send;
 
+    /// The image of the custom emoji `name` that the server's list gives the file `extension`.
+    ///
+    /// # Errors
+    ///
+    /// [`ApiError::Server`] if the server refuses, [`ApiError::Unauthorized`] if it rejects the
+    /// credentials.
+    fn emoji_image(
+        &self,
+        credentials: &Credentials,
+        name: &str,
+        extension: &str,
+    ) -> impl Future<Output = Result<Image, ApiError>> + Send;
+
     /// A page of the room's history: the newest messages sent before `before`, or the newest of all
     /// without it, at most `count`. `before` is inclusive, so the message sent at that instant
     /// comes back too: the caller de-duplicates.
@@ -513,6 +526,8 @@ pub enum CacheKind {
     RoomAvatar,
     /// A file attached to a message, named by its path on the server.
     Attachment,
+    /// The image of a custom emoji, named by its name and extension in the server's list.
+    CustomEmoji,
 }
 
 /// Names a cached file: the server it came from, what kind of file it is, and its name there (a
@@ -540,6 +555,18 @@ impl CacheKey {
     #[must_use]
     pub fn attachment(server: &str, path: &str) -> Self {
         Self::new(server, CacheKind::Attachment, path)
+    }
+
+    /// The key of the image of the custom emoji `name` on `server`, whose list says `extension`.
+    /// The extension is part of the name, so an emoji replaced by one of another type is another
+    /// file.
+    #[must_use]
+    pub fn custom_emoji(server: &str, name: &str, extension: &str) -> Self {
+        Self::new(
+            server,
+            CacheKind::CustomEmoji,
+            &format!("{name}.{extension}"),
+        )
     }
 
     fn new(server: &str, kind: CacheKind, name: &str) -> Self {

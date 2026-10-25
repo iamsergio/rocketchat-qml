@@ -14,6 +14,7 @@ mod core;
 pub mod domain;
 mod downloads;
 pub mod emoji;
+mod emoji_images;
 mod error;
 mod images;
 pub mod list_change;
@@ -34,6 +35,7 @@ mod users;
 
 pub use avatars::AvatarUpdate;
 pub use client::{AccountHandle, Client, Connection, Event};
+pub use emoji_images::EmojiImageUpdate;
 pub use error::Error;
 pub use images::ImageUpdate;
 

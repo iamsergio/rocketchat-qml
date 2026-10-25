@@ -183,6 +183,13 @@ pub(super) struct FakeState {
     pub(super) file_running: usize,
     /// The most file downloads that ran at the same time.
     pub(super) file_max_running: usize,
+    /// One per download of a custom emoji's image by name and extension (`party.gif`); a 404 once
+    /// they run out.
+    pub(super) emoji_images: HashMap<String, VecDeque<FileScript>>,
+    pub(super) emoji_image_calls: Vec<String>,
+    pub(super) emoji_image_running: usize,
+    /// The most emoji image downloads that ran at the same time.
+    pub(super) emoji_image_max_running: usize,
     /// One per history fetch; an empty page at the start once they run out.
     pub(super) histories: VecDeque<HistoryScript>,
     pub(super) history_calls: Vec<HistoryCall>,
@@ -319,6 +326,27 @@ impl Fake {
             .entry(path.to_owned())
             .or_default()
             .push_back(FileScript { gate, result });
+    }
+
+    pub(super) fn script_emoji_image(
+        &self,
+        file: &str,
+        gate: Option<Arc<Notify>>,
+        result: Result<Image, ApiError>,
+    ) {
+        self.state()
+            .emoji_images
+            .entry(file.to_owned())
+            .or_default()
+            .push_back(FileScript { gate, result });
+    }
+
+    /// The download tasks have started and are inside `emoji_image`.
+    pub(super) fn wait_for_emoji_image_calls(&self, count: usize) -> Vec<String> {
+        wait_until(|| {
+            let calls = self.state().emoji_image_calls.clone();
+            (calls.len() >= count).then_some(calls)
+        })
     }
 
     /// The download tasks have started and are inside `file`.
@@ -741,6 +769,43 @@ impl ServerApi for Fake {
         let _running = Running(self.clone());
         let Some(script) = script else {
             return Ok(None);
+        };
+        if let Some(gate) = script.gate {
+            gate.notified().await;
+        }
+        script.result
+    }
+
+    async fn emoji_image(
+        &self,
+        _credentials: &Credentials,
+        name: &str,
+        extension: &str,
+    ) -> Result<Image, ApiError> {
+        struct Running(Fake);
+        impl Drop for Running {
+            fn drop(&mut self) {
+                self.0.state().emoji_image_running -= 1;
+            }
+        }
+        let file = format!("{name}.{extension}");
+        let script = {
+            let mut state = self.state();
+            state.emoji_image_calls.push(file.clone());
+            state.emoji_image_running += 1;
+            state.emoji_image_max_running =
+                state.emoji_image_max_running.max(state.emoji_image_running);
+            state
+                .emoji_images
+                .get_mut(&file)
+                .and_then(VecDeque::pop_front)
+        };
+        let _running = Running(self.clone());
+        let Some(script) = script else {
+            return Err(ApiError::Server {
+                status: 404,
+                message: "no such emoji".to_owned(),
+            });
         };
         if let Some(gate) = script.gate {
             gate.notified().await;
@@ -1208,11 +1273,42 @@ impl FakeCache {
             .map(|(_, bytes)| bytes.clone())
     }
 
+    /// A file held before the session starts, as the image of a custom emoji.
+    pub(super) fn seed_emoji(
+        &self,
+        server: &str,
+        name: &str,
+        list_extension: &str,
+        extension: &'static str,
+        bytes: &[u8],
+    ) {
+        let key = CacheKey::custom_emoji(server, name, list_extension);
+        self.0
+            .lock()
+            .unwrap()
+            .insert(key, (extension, bytes.to_vec()));
+    }
+
+    pub(super) fn emoji_bytes(
+        &self,
+        server: &str,
+        name: &str,
+        list_extension: &str,
+    ) -> Option<Vec<u8>> {
+        let key = CacheKey::custom_emoji(server, name, list_extension);
+        self.0
+            .lock()
+            .unwrap()
+            .get(&key)
+            .map(|(_, bytes)| bytes.clone())
+    }
+
     pub(super) fn path(key: &CacheKey, extension: &str) -> PathBuf {
         let kind = match key.kind {
             crate::ports::CacheKind::UserAvatar => "user",
             crate::ports::CacheKind::RoomAvatar => "room",
             crate::ports::CacheKind::Attachment => "attachment",
+            crate::ports::CacheKind::CustomEmoji => "emoji",
         };
         PathBuf::from(format!(
             "/cache/{}/{kind}/{}.{extension}",

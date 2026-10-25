@@ -118,6 +118,20 @@ impl ServerApi for RestApi {
         })
     }
 
+    async fn emoji_image(
+        &self,
+        credentials: &Credentials,
+        name: &str,
+        extension: &str,
+    ) -> Result<Image, ApiError> {
+        let session = self.client.session(api_credentials(credentials));
+        let download = session.emoji_image(name, extension).await?;
+        Ok(Image {
+            bytes: download.bytes,
+            content_type: download.content_type,
+        })
+    }
+
     async fn history(
         &self,
         credentials: &Credentials,

@@ -27,6 +27,7 @@ use crate::domain::{
     StoredAccount, SystemEvent, User, room_from,
 };
 use crate::emoji::CustomEmojis;
+use crate::emoji_images::EmojiImageUpdate;
 use crate::images::ImageUpdate;
 use crate::policy::{ActionError, MessageAction, MessagePolicy};
 use crate::ports::{
@@ -46,6 +47,7 @@ mod avatars;
 mod batch;
 mod changes;
 mod emoji;
+mod emoji_images;
 mod fake;
 mod harness;
 mod images;

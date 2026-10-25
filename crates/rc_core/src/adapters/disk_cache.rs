@@ -32,6 +32,7 @@ impl DiskFileCache {
             CacheKind::UserAvatar => &["avatars", "user"],
             CacheKind::RoomAvatar => &["avatars", "room"],
             CacheKind::Attachment => &["attachments"],
+            CacheKind::CustomEmoji => &["emoji"],
         };
         let mut dir = self.root.join(file_name(&key.server));
         dir.extend(kind);

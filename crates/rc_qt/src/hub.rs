@@ -628,6 +628,8 @@ impl Views {
             Event::Typing { .. } => self.show_room(cache),
             Event::Avatars(updates) => self.show_avatars(&cache.avatar_changes(&updates)),
             Event::Images(updates) => self.show_images(&cache.image_changes(&updates)),
+            // `EmojiImages` is ignored too: the Qt app never asks for them, QML loads the custom
+            // emoji by URL.
             _ => {}
         }
     }

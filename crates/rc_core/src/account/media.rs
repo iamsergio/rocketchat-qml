@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Sergio Martins
 // SPDX-License-Identifier: MIT
 
-//! Downloading avatars and attachment images.
+//! Downloading avatars, attachment images and custom emoji images.
 
 use std::fmt::Debug;
 use std::hash::Hash;
@@ -14,6 +14,7 @@ use crate::avatars::AvatarUpdate;
 use crate::client::Event;
 use crate::domain::{AvatarOwner, Credentials};
 use crate::downloads::{Change, Downloads, Fetched, Refresh};
+use crate::emoji_images::EmojiImageUpdate;
 use crate::images::ImageUpdate;
 use crate::ports::{ApiError, CacheError, CacheKey, Connector, FileCache, Image, ServerApi};
 use crate::session::SessionState;
@@ -164,6 +165,21 @@ async fn fetch_image<A: ServerApi>(
     }
 }
 
+/// Downloads the image of a custom emoji and stores it.
+async fn fetch_emoji_image<A: ServerApi>(
+    api: &A,
+    credentials: &Credentials,
+    name: &str,
+    extension: &str,
+    key: CacheKey,
+    cache: Arc<dyn FileCache>,
+) -> Fetched {
+    match api.emoji_image(credentials, name, extension).await {
+        Ok(image) => store(cache, key, image, &name, "emoji image").await,
+        Err(error) => failed(&error, &name, "emoji image"),
+    }
+}
+
 impl<C: Connector> Actor<C> {
     /// Wants the avatars of `owners`: what the cache holds goes to the frontend at once, and each
     /// avatar is downloaded again, once per session, in the background.
@@ -306,6 +322,87 @@ impl<C: Connector> Actor<C> {
         let forgotten: Vec<ImageUpdate> = self.images.clear().into_iter().map(Into::into).collect();
         if !forgotten.is_empty() {
             (self.on_event)(Event::Images(forgotten));
+        }
+    }
+
+    /// Wants the images of the custom emoji `names`: what the cache holds goes to the frontend at
+    /// once, and each is downloaded again, once per session, in the background. A name the
+    /// server's list doesn't hold is left alone, not even marked as looked at, so asking again
+    /// once the list is here works.
+    pub(super) fn want_emoji_images(&mut self, names: Vec<String>) {
+        let SessionState::LoggedIn(account) = &self.state else {
+            return;
+        };
+        let server = account.server.clone();
+        let cache = &self.cache;
+        let emoji = &self.emoji;
+        let updates: Vec<EmojiImageUpdate> = names
+            .into_iter()
+            .filter_map(|name| {
+                let (listed, extension) = emoji.file(&name)?;
+                let key = CacheKey::custom_emoji(&server, listed, extension);
+                self.emoji_images.downloads.want(name, |_| cache.get(&key))
+            })
+            .map(Into::into)
+            .collect();
+        if !updates.is_empty() {
+            (self.on_event)(Event::EmojiImages(updates));
+        }
+        self.start_emoji_image_downloads(&server);
+    }
+
+    fn start_emoji_image_downloads(&mut self, server: &str) {
+        let Some(session) = &self.session else {
+            return;
+        };
+        let (api, credentials) = (session.api.clone(), session.credentials.clone());
+        let (cache, server) = (Arc::clone(&self.cache), server.to_owned());
+        let emoji = &self.emoji;
+        self.emoji_images
+            .start(self.attempt, &self.done_tx, Done::EmojiImage, |name| {
+                // The extension is the list's of now, not of when the name was wanted.
+                let listed = emoji
+                    .file(&name)
+                    .map(|(listed, extension)| (listed.to_owned(), extension.to_owned()));
+                let (api, credentials, cache) = (api.clone(), credentials.clone(), cache.clone());
+                let server = server.clone();
+                async move {
+                    let Some((listed, extension)) = listed else {
+                        // The list changed under a queued name.
+                        return Fetched::Nothing;
+                    };
+                    let key = CacheKey::custom_emoji(&server, &listed, &extension);
+                    fetch_emoji_image(&api, &credentials, &listed, &extension, key, cache).await
+                }
+            });
+    }
+
+    pub(super) fn handle_emoji_image_done(&mut self, done: DownloadDone<String>) {
+        let SessionState::LoggedIn(account) = &self.state else {
+            return;
+        };
+        if done.attempt != self.attempt {
+            tracing::debug!("answer of a stale emoji image download dropped");
+            return;
+        }
+        let server = account.server.clone();
+        if let Some(change) = self.emoji_images.downloads.finished(done.key, done.outcome) {
+            (self.on_event)(Event::EmojiImages(vec![change.into()]));
+        }
+        self.start_emoji_image_downloads(&server);
+    }
+
+    /// Forgets the emoji images and tells the frontend, unless it had none. The cache keeps its
+    /// files.
+    pub(super) fn clear_emoji_images(&mut self) {
+        let forgotten: Vec<EmojiImageUpdate> = self
+            .emoji_images
+            .clear()
+            .into_iter()
+            .map(Into::into)
+            .collect();
+        if !forgotten.is_empty() {
+            (self.on_event)(Event::EmojiImages(forgotten));
         }
     }
 }

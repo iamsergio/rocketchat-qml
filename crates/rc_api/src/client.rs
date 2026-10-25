@@ -327,6 +327,19 @@ impl RestSession {
         self.download(&segments).await
     }
 
+    /// The image of a custom emoji (`GET /emoji-custom/<name>.<extension>`), as the emoji list
+    /// gives its name and extension. The route needs no login, but the headers go along like for
+    /// the other downloads, so a server that locks its files behind them still answers. For a name
+    /// it doesn't have, a server answers a placeholder image rather than refusing.
+    ///
+    /// # Errors
+    ///
+    /// As [`user_avatar`](Self::user_avatar).
+    pub async fn emoji_image(&self, name: &str, extension: &str) -> Result<Download, Error> {
+        self.download(&["emoji-custom", &format!("{name}.{extension}")])
+            .await
+    }
+
     /// Gets the file at `segments` below the server's base URL. Each segment is escaped, so a name
     /// can't climb out of its place in the path.
     async fn download(&self, segments: &[&str]) -> Result<Download, Error> {

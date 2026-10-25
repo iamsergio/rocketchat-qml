@@ -115,6 +115,8 @@ pub fn shortcode(text: &str) -> String {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct CustomEmojis {
     urls: HashMap<String, String>,
+    /// The name and extension of the image of each emoji, by name and alias.
+    files: HashMap<String, (String, String)>,
     /// One per emoji, by name, for the picker.
     listed: Vec<Listed>,
 }
@@ -133,11 +135,13 @@ impl CustomEmojis {
     pub fn new(server: &str, list: &[rc_api::CustomEmoji]) -> Self {
         let base = server.trim_end_matches('/');
         let mut urls = HashMap::new();
+        let mut files = HashMap::new();
         let mut listed = Vec::new();
         for emoji in list {
             let url = format!("{base}/emoji-custom/{}.{}", emoji.name, emoji.extension);
             for name in emoji.aliases.iter().chain([&emoji.name]) {
                 urls.insert(name.clone(), url.clone());
+                files.insert(name.clone(), (emoji.name.clone(), emoji.extension.clone()));
             }
             listed.push(Listed {
                 name: emoji.name.clone(),
@@ -146,7 +150,19 @@ impl CustomEmojis {
             });
         }
         listed.sort_by(|a, b| a.name.cmp(&b.name));
-        Self { urls, listed }
+        Self {
+            urls,
+            files,
+            listed,
+        }
+    }
+
+    /// The name (not an alias) and the extension of the image file of the emoji with that name or
+    /// alias: what the image is downloaded and cached by.
+    pub(crate) fn file(&self, name: &str) -> Option<(&str, &str)> {
+        self.files
+            .get(name)
+            .map(|(name, extension)| (name.as_str(), extension.as_str()))
     }
 
     /// The URL of the image of the emoji with that name or alias.

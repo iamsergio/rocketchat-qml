@@ -16,6 +16,7 @@ use crate::avatars::AvatarUpdate;
 use crate::core::{self, ActorSenders, CoreCommand};
 use crate::domain::{AccountId, Identity, MessageId, Room, RoomId};
 use crate::emoji::{self, CustomEmojis};
+use crate::emoji_images::EmojiImageUpdate;
 use crate::error::Error;
 use crate::images::ImageUpdate;
 use crate::policy::{ActionError, MessageAction, MessagePolicy};
@@ -99,6 +100,10 @@ pub enum Event {
     /// The files to show as attachment images, for the images that got one. After a logout, the
     /// ones that go.
     Images(Vec<ImageUpdate>),
+    /// The files to show as the images of custom emoji, for the ones a frontend asked for with
+    /// [`AccountHandle::want_emoji_images`]: the cached file at once if there is one, a new one
+    /// when the download brings different bytes. After a logout, the ones that go.
+    EmojiImages(Vec<EmojiImageUpdate>),
     /// What the server lets users do with their own messages, whenever it changes. Logging out
     /// resets it to the default (everything allowed), if it differed.
     MessagePolicy(MessagePolicy),
@@ -183,6 +188,8 @@ pub(crate) enum Command {
         room: RoomId,
         action: RoomAction,
     },
+    /// Without colons.
+    WantEmojiImages(Vec<String>),
 }
 
 /// The core, as seen from a frontend: commands go in, events come out through the callback given
@@ -537,6 +544,15 @@ impl AccountHandle<'_> {
             room,
             action: RoomAction::Leave,
         });
+    }
+
+    /// Asks for the image files of the custom emoji `names` (without colons; names or aliases of
+    /// the server's list). They come as [`Event::EmojiImages`]. Nothing is downloaded unless a
+    /// frontend asks, so one that shows the emoji by URL never does. A name the list doesn't hold
+    /// is ignored, and asked for again after the list changes it is looked at anew: ask again
+    /// when [`Event::CustomEmoji`] comes.
+    pub fn want_emoji_images(&self, names: Vec<String>) {
+        self.send(Command::WantEmojiImages(names));
     }
 
     fn send(&self, command: Command) {

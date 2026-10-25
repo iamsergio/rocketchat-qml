@@ -210,6 +210,7 @@ enum Done<A> {
     Policy(PolicyDone),
     Avatar(DownloadDone<AvatarOwner>),
     Image(DownloadDone<String>),
+    EmojiImage(DownloadDone<String>),
     Realtime(RealtimeReport),
     /// The wait after a lost connection is over; the cycle is the one that was lost.
     Reconnect {
@@ -334,6 +335,8 @@ struct Actor<C: Connector> {
     avatars: Media<AvatarOwner>,
     /// The attachment images, likewise.
     images: Media<String>,
+    /// The custom emoji images a frontend asked for, likewise.
+    emoji_images: Media<String>,
     /// The messages of the rooms opened so far. Cleared on logout.
     messages: Box<dyn MessageStore>,
     open: Option<OpenRoom>,
@@ -433,6 +436,7 @@ impl<C: Connector> Actor<C> {
             clock: Arc::clone(&shared.clock),
             avatars: Media::new(Refresh::OncePerSession),
             images: Media::new(Refresh::Never),
+            emoji_images: Media::new(Refresh::OncePerSession),
             messages: Box::new(MemoryMessageStore::default()),
             open: None,
             open_thread: None,
@@ -481,6 +485,7 @@ impl<C: Connector> Actor<C> {
                     Done::Policy(done) => self.handle_policy_done(done),
                     Done::Avatar(done) => self.handle_avatar_done(done),
                     Done::Image(done) => self.handle_image_done(done),
+                    Done::EmojiImage(done) => self.handle_emoji_image_done(done),
                     Done::Realtime(report) => self.handle_realtime_done(report),
                     Done::Reconnect { cycle } => self.handle_reconnect(cycle),
                     Done::History(done) => self.handle_history_done(done),
@@ -574,6 +579,7 @@ impl<C: Connector> Actor<C> {
         self.abort_realtime_task();
         self.avatars.abort();
         self.images.abort();
+        self.emoji_images.abort();
         self.abort_history_task();
         if let Some(task) = self.thread_task.take() {
             task.abort();
@@ -621,6 +627,7 @@ impl<C: Connector> Actor<C> {
             Command::DeleteMessage(id) => self.delete_own_message(id),
             Command::React { id, emoji, react } => self.react_to_message(id, emoji, react),
             Command::RoomAction { room, action } => self.act_on_room(room, action),
+            Command::WantEmojiImages(names) => self.want_emoji_images(names),
         }
     }
 
@@ -762,6 +769,7 @@ impl<C: Connector> Actor<C> {
             self.clear_policy();
             self.clear_avatars();
             self.clear_images();
+            self.clear_emoji_images();
             self.clear_timeline();
             if let Some(session) = self.session.take() {
                 self.revoke(session.api, session.credentials);
@@ -784,6 +792,7 @@ impl<C: Connector> Actor<C> {
         self.clear_policy();
         self.clear_avatars();
         self.clear_images();
+        self.clear_emoji_images();
         self.clear_timeline();
     }
 
