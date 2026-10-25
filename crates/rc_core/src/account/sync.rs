@@ -214,7 +214,7 @@ impl<C: Connector> Actor<C> {
             // The server announces everybody's: only what was looked at is looked at again, and
             // the rooms of the list, as a room that had no avatar may have one now.
             Pushed::AvatarChanged(owner) => {
-                let seen = self.avatars.invalidate(&owner);
+                let seen = self.avatars.downloads.invalidate(&owner);
                 let listed = matches!(&owner, AvatarOwner::Room(id) if self.rooms.is_shown(id));
                 if seen || listed {
                     self.want_avatars([owner]);

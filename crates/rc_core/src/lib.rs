@@ -12,6 +12,7 @@ mod backoff;
 mod client;
 mod core;
 pub mod domain;
+mod downloads;
 pub mod emoji;
 mod error;
 mod images;
