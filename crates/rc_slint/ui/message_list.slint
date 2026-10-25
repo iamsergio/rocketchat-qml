@@ -20,6 +20,9 @@ import { Theme } from "theme.slint";
 // the list.
 export component MessageList inherits FocusScope {
     in property <[MessageRow]> messages;
+    // The list of the thread pane and not the room's: it has its own names for the tests, and its
+    // messages draw as in the pane (see `message_delegate.slint`).
+    in property <bool> in-thread-pane;
     in property <string> room-id;
     // Above the first message: the conversation starts there, or older messages are on their way.
     in property <bool> reached-start;
@@ -132,7 +135,7 @@ export component MessageList inherits FocusScope {
     }
 
     flick := Flickable {
-        accessible-id: "messageList";
+        accessible-id: root.in-thread-pane ? "threadMessageList" : "messageList";
         accessible-role: list;
         accessible-item-count: root.messages.length;
         width: parent.width;
@@ -162,7 +165,7 @@ export component MessageList inherits FocusScope {
                 }
 
                 if root.loading-older: BusyIndicator {
-                    accessible-id: "loadingOlder";
+                    accessible-id: root.in-thread-pane ? "threadLoadingOlder" : "loadingOlder";
                     accessible-role: image;
                     x: (parent.width - self.width) / 2;
                     y: (parent.height - self.height) / 2;
@@ -173,6 +176,7 @@ export component MessageList inherits FocusScope {
 
             for message in root.messages: MessageDelegate {
                 message: message;
+                in-thread-pane: root.in-thread-pane;
                 retry(id) => {
                     root.retry(id);
                 }

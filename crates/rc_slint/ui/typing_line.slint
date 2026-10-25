@@ -1,0 +1,16 @@
+// SPDX-FileCopyrightText: 2026 Sergio Martins
+// SPDX-License-Identifier: MIT
+
+import { Theme } from "theme.slint";
+
+// Who is typing, as a line above a composer: the room's, and the open thread's. Empty most of the
+// time, but its height is always taken. The caller names it (`accessible-id`) and sets `text`.
+export component TypingLine inherits Text {
+    accessible-role: text;
+    accessible-value: self.text;
+    height: Theme.typing-line-height;
+    color: Theme.text-muted;
+    font-size: Theme.font-size-small;
+    overflow: elide;
+    vertical-alignment: center;
+}

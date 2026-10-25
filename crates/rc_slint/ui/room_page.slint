@@ -11,6 +11,7 @@ import { RoomSearchField } from "room_search_field.slint";
 import { RoomSearchResults } from "room_search_results.slint";
 import { MessageMenu, MessageRow, RoomRow } from "structs.slint";
 import { Theme } from "theme.slint";
+import { TypingLine } from "typing_line.slint";
 
 // The page of a logged-in account: the sidebar with the server, the user and the room list, and
 // the open room beside it: its header, and its messages.
@@ -409,6 +410,7 @@ export component RoomPage inherits Rectangle {
                             vertical-stretch: 1;
                             composer-wanted: root.composer-wanted;
                             messages: root.messages;
+                            in-thread-pane: false;
                             room-id: root.room-id;
                             reached-start: root.reached-start;
                             loading-older: root.loading-older;
@@ -486,15 +488,8 @@ export component RoomPage inherits Rectangle {
                             padding-bottom: Theme.spacing-none;
                             spacing: Theme.spacing-none;
 
-                            Text {
+                            TypingLine {
                                 accessible-id: "roomTyping";
-                                accessible-role: text;
-                                accessible-value: root.typing;
-                                height: Theme.typing-line-height;
-                                color: Theme.text-muted;
-                                font-size: Theme.font-size-small;
-                                overflow: elide;
-                                vertical-alignment: center;
                                 text: root.typing;
                             }
                         }

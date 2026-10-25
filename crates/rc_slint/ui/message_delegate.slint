@@ -17,6 +17,8 @@ import { Theme } from "theme.slint";
 // whose items are popups, found from the window by their names while it is open.
 export component MessageDelegate inherits Rectangle {
     in property <MessageRow> message;
+    // The row is in the thread pane and not in the room.
+    in property <bool> in-thread-pane;
     // A link of the body was clicked.
     callback open-link(string);
     // The id of a message that failed to send, to send again.
