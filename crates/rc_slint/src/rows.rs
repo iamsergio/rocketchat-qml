@@ -6,6 +6,7 @@
 
 use jiff::Timestamp;
 use rc_core::domain::{Message, MessageKind, Room};
+use rc_core::policy::can_react;
 use rc_view::accounts::{AccountView, Status};
 use rc_view::avatar_view::{AvatarUrls, color, initials, message_owner, room_placeholder};
 use rc_view::file_urls::file_path;
@@ -15,13 +16,14 @@ use rc_view::message_view::{
     system_text, time_text,
 };
 use rc_view::quote_view::quotes;
+use rc_view::reaction_view::reactions;
 use rc_view::rich_html::{message_html, render};
 use rc_view::room_view::kind_name;
 use rc_view::viewer::{Clock, Viewer};
 use slint::{Color, Image, ModelRc, StyledText, VecModel};
 
 use crate::rich_markdown::{self, Palette};
-use crate::ui::{AccountTile, MessageRow, QuoteRow, RoomRow, RoomSection};
+use crate::ui::{AccountTile, MessageRow, QuoteRow, ReactionRow, RoomRow, RoomSection};
 
 /// Counts are `u32`, Slint's are `int`: saturate.
 fn count(value: u32) -> i32 {
@@ -47,7 +49,7 @@ pub fn tile(view: &AccountView) -> AccountTile {
 pub fn room_row(room: &Room, avatars: &AvatarUrls) -> RoomRow {
     let (initials, color) = room_placeholder(room);
     let url = avatars.url(&room.avatar_owner());
-    let image = avatar_image(url);
+    let image = load_image(url);
     RoomRow {
         section: RoomSection::Room,
         id: room.id.as_str().into(),
@@ -66,8 +68,8 @@ pub fn room_row(room: &Room, avatars: &AvatarUrls) -> RoomRow {
     }
 }
 
-/// The picture in the avatar file at `url`, if there is a url and the file loads.
-fn avatar_image(url: &str) -> Option<Image> {
+/// The picture in the file at `url`, if there is a url and the file loads.
+fn load_image(url: &str) -> Option<Image> {
     (!url.is_empty())
         .then(|| file_path(url))
         .flatten()
@@ -91,7 +93,7 @@ pub fn message_row(list: &MessageList, row: usize, palette: &Palette) -> Option<
         MessageKind::System(_) => (StyledText::from_plain_text(""), false),
     };
     let url = message_owner(message).map_or("", |owner| list.avatars().url(&owner));
-    let image = avatar_image(url);
+    let image = load_image(url);
     Some(MessageRow {
         id: message.id.as_str().into(),
         author: author_name(&message.author).into(),
@@ -107,6 +109,8 @@ pub fn message_row(list: &MessageList, row: usize, palette: &Palette) -> Option<
         edited: message.edited,
         mentions_me: mentions_me(message, list.viewer()),
         quotes: quote_rows(message, list.viewer(), clock, palette),
+        reactions: reaction_rows(message, list),
+        can_react: can_react(message),
         has_menu: can_quote(message)
             || can_edit(message, list.viewer(), now)
             || can_delete(message, list.viewer(), now),
@@ -138,6 +142,44 @@ fn quote_rows(
             author: quote.author.into(),
             time: quote.time.into(),
             body: quote.body.into(),
+        })
+        .collect();
+    ModelRc::new(VecModel::from(rows))
+}
+
+/// The reactions of the message, as a model of their own; the empty model for the many messages
+/// that have none. A custom emoji shows its file if the core has downloaded it.
+fn reaction_rows(message: &Message, list: &MessageList) -> ModelRc<ReactionRow> {
+    if message.reactions.is_empty() {
+        return ModelRc::default();
+    }
+    let rows: Vec<ReactionRow> = reactions(message, list.viewer())
+        .into_iter()
+        .map(|reaction| {
+            let image = (!reaction.image.is_empty())
+                .then(|| load_image(list.emoji_images().url(reaction.name())))
+                .flatten();
+            let label = if !reaction.glyph.is_empty() {
+                reaction.glyph.clone()
+            } else if !reaction.image.is_empty() {
+                reaction.image.clone()
+            } else {
+                reaction.emoji.clone()
+            };
+            let text = if reaction.glyph.is_empty() {
+                reaction.emoji.clone()
+            } else {
+                reaction.glyph
+            };
+            ReactionRow {
+                emoji: reaction.emoji.into(),
+                label: label.into(),
+                text: text.into(),
+                has_image: image.is_some(),
+                image: image.unwrap_or_default(),
+                count: reaction.count,
+                mine: reaction.mine,
+            }
         })
         .collect();
     ModelRc::new(VecModel::from(rows))

@@ -5,6 +5,9 @@
 //! it, how many users reacted, whether the viewer did, and who. Plain Rust, so it can be
 //! unit-tested without Qt.
 
+use std::collections::HashSet;
+use std::hash::BuildHasher;
+
 use rc_core::domain::{Message, Reaction};
 use rc_core::emoji::Shown;
 use rc_core::rich::Emoji;
@@ -36,6 +39,45 @@ pub fn reactions(message: &Message, viewer: &Viewer) -> Vec<ReactionView> {
         .iter()
         .map(|reaction| view(reaction, viewer))
         .collect()
+}
+
+impl ReactionView {
+    /// The name of the emoji as the core's emoji image files know it: the shortcode, no colons.
+    #[must_use]
+    pub fn name(&self) -> &str {
+        self.emoji.trim_matches(':')
+    }
+}
+
+/// The names of the custom emoji that the reactions of `messages` use, each once and in the order
+/// they come: the ones a frontend that draws images from files has to ask the core for.
+#[must_use]
+pub fn custom_emoji_names<'a>(
+    messages: impl IntoIterator<Item = &'a Message>,
+    viewer: &Viewer,
+) -> Vec<String> {
+    let mut names: Vec<String> = Vec::new();
+    for message in messages {
+        for reaction in reactions(message, viewer) {
+            if !reaction.image.is_empty() && !names.iter().any(|name| name == reaction.name()) {
+                names.push(reaction.name().to_owned());
+            }
+        }
+    }
+    names
+}
+
+/// Whether a reaction of `message` is with one of the custom emoji `changed`.
+#[must_use]
+pub fn shows_emoji<S: BuildHasher>(
+    message: &Message,
+    viewer: &Viewer,
+    changed: &HashSet<String, S>,
+) -> bool {
+    !message.reactions.is_empty()
+        && reactions(message, viewer)
+            .iter()
+            .any(|reaction| !reaction.image.is_empty() && changed.contains(reaction.name()))
 }
 
 fn view(reaction: &Reaction, viewer: &Viewer) -> ReactionView {
@@ -199,5 +241,38 @@ mod tests {
             .collect();
         assert_eq!(order, [":tada:", ":thumbsup:"]);
         assert_eq!(reactions(&self::message(Vec::new()), &viewer(None)), []);
+    }
+
+    // RICH-007
+    #[test]
+    fn the_custom_emoji_of_reactions_are_named_once_without_colons() {
+        let first = message(vec![
+            reaction(":party:", &["bob"]),
+            reaction(":thumbsup:", &["bob"]),
+        ]);
+        let second = message(vec![reaction(":party:", &["alice"])]);
+        let viewer = viewer(None);
+
+        assert_eq!(custom_emoji_names([&first, &second], &viewer), ["party"]);
+        assert!(custom_emoji_names([&second], &Viewer::default()).is_empty());
+    }
+
+    // RICH-007
+    #[test]
+    fn a_message_shows_a_changed_emoji_only_if_it_reacts_with_it() {
+        let viewer = viewer(None);
+        let changed: HashSet<String> = ["party".to_owned()].into();
+
+        assert!(shows_emoji(
+            &message(vec![reaction(":party:", &["bob"])]),
+            &viewer,
+            &changed
+        ));
+        assert!(!shows_emoji(
+            &message(vec![reaction(":thumbsup:", &["bob"])]),
+            &viewer,
+            &changed
+        ));
+        assert!(!shows_emoji(&message(Vec::new()), &viewer, &changed));
     }
 }
