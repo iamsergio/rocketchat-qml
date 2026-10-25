@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import { Avatar } from "avatar.slint";
+import { Icon } from "icon.slint";
 import { FlatButton } from "flat_button.slint";
 import { MenuItem } from "menu_item.slint";
 import { MessageMenu, MessageRow, QuoteRow, ReactionRow } from "structs.slint";
@@ -17,8 +18,15 @@ import { Theme } from "theme.slint";
 // whose items are popups, found from the window by their names while it is open.
 export component MessageDelegate inherits Rectangle {
     in property <MessageRow> message;
-    // The row is in the thread pane and not in the room.
+    // The row is in the thread pane and not in the room: it has no thread of its own to start, no
+    // summary and no line to the thread it is in; under the parent it draws the divider that says
+    // how many replies follow.
     in property <bool> in-thread-pane;
+    // The parent of the thread that is open beside the room, empty for none.
+    in property <string> open-thread-id;
+    // Opens the thread of the message with this id: from its summary or its menu, or from the line
+    // of a reply that leads to its parent.
+    callback open-thread(string);
     // A link of the body was clicked.
     callback open-link(string);
     // The id of a message that failed to send, to send again.
@@ -52,6 +60,8 @@ export component MessageDelegate inherits Rectangle {
     property <length> menu-y;
     // The pointer is over a chip, which takes it from the row behind: the "+" stays.
     property <bool> over-chip;
+    // The message is the parent of the thread beside the room.
+    property <bool> thread-open: !root.in-thread-pane && root.message.id == root.open-thread-id;
 
     // Opens the menu at `x`, `y` unless it would be empty.
     function open-menu(x: length, y: length) {
@@ -63,7 +73,7 @@ export component MessageDelegate inherits Rectangle {
         root.can-react = allowed.can-react;
         root.can-edit = allowed.can-edit;
         root.can-delete = allowed.can-delete;
-        if allowed.can-quote || allowed.can-react || allowed.can-edit || allowed.can-delete {
+        if root.message.can-start-thread || allowed.can-quote || allowed.can-react || allowed.can-edit || allowed.can-delete {
             root.menu-x = x;
             root.menu-y = y;
             menu.show();
@@ -109,6 +119,14 @@ export component MessageDelegate inherits Rectangle {
 
         if !root.message.is-system: Rectangle {
             preferred-height: content.preferred-height;
+
+            // A faint tint and no edge, which means "about you": the thread of this message is open.
+            if root.thread-open: Rectangle {
+                accessible-id: "msgThreadOpen";
+                accessible-role: text;
+                accessible-label: @tr("Its thread is open");
+                background: Theme.own-tint;
+            }
 
             // The row washed in the colour of mentions, and an edge at its left.
             if root.message.mentions-me: Rectangle {
@@ -264,6 +282,52 @@ export component MessageDelegate inherits Rectangle {
                             text: @tr("Retry");
                             clicked => {
                                 root.retry(root.message.id);
+                            }
+                        }
+                    }
+
+                    // A reply that was also sent to the room says where it belongs, and leads there.
+                    // `accessible-value` is what is shown, which the tests read.
+                    if root.message.in-thread-shown: Rectangle {
+                        accessible-id: "msgInThread";
+                        accessible-role: button;
+                        accessible-value: in-thread-text.text;
+                        accessible-action-default => {
+                            root.open-thread(root.message.thread-id);
+                        }
+                        preferred-height: in-thread-row.preferred-height;
+
+                        in-thread-row := HorizontalLayout {
+                            padding: Theme.spacing-none;
+                            spacing: Theme.spacing-m;
+
+                            VerticalLayout {
+                                alignment: center;
+                                width: Theme.in-thread-icon-size;
+                                padding: Theme.spacing-none;
+                                spacing: Theme.spacing-none;
+
+                                Icon {
+                                    width: Theme.in-thread-icon-size;
+                                    height: Theme.in-thread-icon-size;
+                                    source: @image-url("../../../src/gui/icons/corner.svg");
+                                    tint: in-thread-touch.has-hover ? Theme.own : Theme.text-faint;
+                                }
+                            }
+
+                            in-thread-text := Text {
+                                horizontal-stretch: 1;
+                                color: in-thread-touch.has-hover ? Theme.own : Theme.text-faint;
+                                font-size: Theme.font-size-small;
+                                overflow: elide;
+                                text: root.message.thread-parent-text == "" ? @tr("Replied in a thread") : @tr("Replied in a thread: {}", root.message.thread-parent-text);
+                            }
+                        }
+
+                        in-thread-touch := TouchArea {
+                            mouse-cursor: MouseCursor.pointer;
+                            clicked => {
+                                root.open-thread(root.message.thread-id);
                             }
                         }
                     }
@@ -490,6 +554,108 @@ export component MessageDelegate inherits Rectangle {
                             }
                         }
                     }
+
+                    // The thread this message starts: how many replies it has and when the last
+                    // came. Clicking opens it beside the room. While it is open the button is
+                    // washed in the colour of what is the user's.
+                    if root.message.thread-replies > 0 && !root.in-thread-pane: HorizontalLayout {
+                        alignment: start;
+                        padding-left: Theme.spacing-none;
+                        padding-right: Theme.spacing-none;
+                        padding-top: Theme.spacing-m;
+                        padding-bottom: Theme.spacing-none;
+                        spacing: Theme.spacing-none;
+
+                        Rectangle {
+                            accessible-id: "msgThreadSummary";
+                            accessible-role: button;
+                            accessible-label: summary-count.text;
+                            accessible-action-default => {
+                                root.open-thread(root.message.id);
+                            }
+                            width: summary-row.preferred-width + 2 * Theme.spacing-xl;
+                            height: Theme.thread-summary-height;
+                            background: root.thread-open ? Theme.own-wash : summary-touch.has-hover ? Theme.raised : Theme.transparent;
+                            border-color: root.thread-open ? Theme.own-border : summary-touch.has-hover ? Theme.raised-hover : Theme.transparent;
+                            border-width: Theme.border-width;
+                            border-radius: Theme.radius-control;
+
+                            summary-row := HorizontalLayout {
+                                x: Theme.spacing-xl;
+                                width: self.preferred-width;
+                                padding: Theme.spacing-none;
+                                spacing: Theme.spacing-l;
+
+                                VerticalLayout {
+                                    alignment: center;
+                                    width: Theme.thread-summary-icon-size;
+                                    padding: Theme.spacing-none;
+                                    spacing: Theme.spacing-none;
+
+                                    Icon {
+                                        width: Theme.thread-summary-icon-size;
+                                        height: Theme.thread-summary-icon-size;
+                                        source: @image-url("../../../src/gui/icons/thread.svg");
+                                        tint: Theme.own;
+                                    }
+                                }
+
+                                summary-count := Text {
+                                    accessible-id: "msgThreadCount";
+                                    vertical-alignment: center;
+                                    color: Theme.own;
+                                    font-size: Theme.font-size-small;
+                                    font-weight: Theme.font-weight-bold;
+                                    text: @tr("{n} reply" | "{n} replies" % root.message.thread-replies);
+                                }
+
+                                if root.message.thread-last-reply != "": Text {
+                                    accessible-id: "msgThreadLastReply";
+                                    vertical-alignment: center;
+                                    color: Theme.text-faint;
+                                    font-size: Theme.font-size-tiny;
+                                    text: @tr("Last reply {}", root.message.thread-last-reply);
+                                }
+                            }
+
+                            summary-touch := TouchArea {
+                                mouse-cursor: MouseCursor.pointer;
+                                clicked => {
+                                    root.open-thread(root.message.id);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Under the parent in the thread pane: how many replies follow.
+        if root.in-thread-pane && root.message.thread-replies > 0: HorizontalLayout {
+            padding-left: Theme.spacing-xxxl;
+            padding-right: Theme.spacing-xxxl;
+            padding-top: Theme.spacing-xxl;
+            padding-bottom: Theme.spacing-xs;
+            spacing: Theme.spacing-xxl;
+
+            Text {
+                accessible-id: "threadReplies";
+                vertical-alignment: center;
+                color: Theme.text-muted;
+                font-size: Theme.font-size-small;
+                font-weight: Theme.font-weight-semibold;
+                text: @tr("{n} reply" | "{n} replies" % root.message.thread-replies);
+            }
+
+            VerticalLayout {
+                horizontal-stretch: 1;
+                alignment: center;
+                padding: Theme.spacing-none;
+                spacing: Theme.spacing-none;
+
+                Rectangle {
+                    height: Theme.separator-width;
+                    background: Theme.line;
                 }
             }
         }
@@ -536,6 +702,17 @@ export component MessageDelegate inherits Rectangle {
             items := VerticalLayout {
                 padding: Theme.menu-padding;
                 spacing: Theme.spacing-none;
+
+                MenuItem {
+                    accessible-id: "msgThreadAction";
+                    visible: root.message.can-start-thread;
+                    height: self.visible ? Theme.menu-item-height : Theme.spacing-none;
+                    text: @tr("Reply in thread");
+                    triggered => {
+                        menu.close();
+                        root.open-thread(root.message.id);
+                    }
+                }
 
                 MenuItem {
                     accessible-id: "msgQuoteAction";

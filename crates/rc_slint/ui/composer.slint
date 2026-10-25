@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import { FlatButton } from "flat_button.slint";
+import { Icon } from "icon.slint";
 import { PrimaryButton } from "primary_button.slint";
 import { Theme } from "theme.slint";
 
@@ -19,8 +20,13 @@ import { Theme } from "theme.slint";
 // The composer of the thread pane is the same box (`for-thread`), with its own field, bars and
 // callbacks: the caller wires them to the thread.
 export component Composer inherits Rectangle {
-    // The box writes in the open thread and not in the room.
+    // The box writes in the open thread and not in the room. Under the text it has a check box,
+    // off for each reply, that also sends the reply to the room (`room-name`, for its label), and
+    // Escape with nothing to cancel is for the caller (`escape`).
     in property <bool> for-thread;
+    in property <string> room-name;
+    out property <bool> also-to-channel;
+    callback escape();
     // Sends the text, quoting the message with the id (empty for none); false if it is refused,
     // which leaves the field as it is.
     callback send(string, string) -> bool;
@@ -29,7 +35,9 @@ export component Composer inherits Rectangle {
     // the composer has it, so that the wish is over.
     in property <bool> focus-wanted;
     in property <int> focus-requests;
-    in property <string> room-id;
+    // The conversation it writes in: the room, or for a thread its parent. Another one drops what
+    // was started for the last one.
+    in property <string> conversation-id;
     callback focused();
     // Saves the text as the new text of the message with this id. The answer comes as
     // `edit-answers` going up.
@@ -58,6 +66,8 @@ export component Composer inherits Rectangle {
     property <string> quoted-author;
     property <string> quoted-text;
     property <bool> quoting: root.quoting-id != "";
+    // The check box: as tall as its label or its box, with the space under it.
+    property <length> also-height: max(Theme.check-box-size, Theme.font-size-small * Theme.line-height-scale) + Theme.spacing-l;
     // The edit bar: its row and the line under it.
     property <length> bar-height: Theme.button-height + 2 * Theme.spacing-l + Theme.separator-width;
     // The quote bar: the author over a line of text, or the button if that is taller.
@@ -78,6 +88,7 @@ export component Composer inherits Rectangle {
         } else if root.send(input.text, root.quoting-id) {
             input.text = "";
             root.drop-quote();
+            root.also-to-channel = false;
         }
     }
 
@@ -148,11 +159,12 @@ export component Composer inherits Rectangle {
             input.focus();
         }
     }
-    changed room-id => {
+    changed conversation-id => {
         if root.editing {
             root.end-edit();
         }
         root.drop-quote();
+        root.also-to-channel = false;
         if root.focus-wanted {
             input.focus();
         }
@@ -173,7 +185,7 @@ export component Composer inherits Rectangle {
 
     // Its height follows the text, and it never takes more: the extra goes to the messages above.
     min-height: root.preferred-height;
-    preferred-height: root.field-height + 2 * Theme.spacing-l + 2 * Theme.border-width + (root.editing ? root.bar-height : Theme.spacing-none) + (root.quoting ? root.quote-bar-height : Theme.spacing-none);
+    preferred-height: root.field-height + 2 * Theme.spacing-l + 2 * Theme.border-width + (root.editing ? root.bar-height : Theme.spacing-none) + (root.quoting ? root.quote-bar-height : Theme.spacing-none) + (root.for-thread ? root.also-height : Theme.spacing-none);
     vertical-stretch: 0;
     background: Theme.raised;
     border-width: Theme.border-width;
@@ -324,6 +336,10 @@ export component Composer inherits Rectangle {
                         }
                         return accept;
                     }
+                    if event.text == Key.Escape && root.for-thread {
+                        root.escape();
+                        return accept;
+                    }
                     // Up in an empty box edits the user's newest message.
                     if event.text == Key.UpArrow && !root.editing && input.text.is-empty {
                         let id = root.last-editable();
@@ -393,6 +409,83 @@ export component Composer inherits Rectangle {
                     enabled: !input.text.is-empty && !root.saving;
                     clicked => {
                         root.submit();
+                    }
+                }
+            }
+        }
+
+        // Under the text, inside the box: also shows the reply in the room. As wide as its text
+        // and no wider than the box, since the room's name may be long.
+        if root.for-thread: HorizontalLayout {
+            padding-left: Theme.composer-padding-h;
+            padding-right: Theme.composer-padding-h;
+            padding-top: Theme.spacing-none;
+            padding-bottom: Theme.spacing-l;
+            spacing: Theme.spacing-none;
+            alignment: start;
+
+            Rectangle {
+                accessible-id: "composerAlsoToChannel";
+                accessible-role: checkbox;
+                accessible-checkable: true;
+                accessible-checked: root.also-to-channel;
+                accessible-label: @tr("Also send to #{}", root.room-name);
+                accessible-action-default => {
+                    root.also-to-channel = !root.also-to-channel;
+                }
+                height: max(Theme.check-box-size, also-row.preferred-height);
+                min-width: Theme.check-box-size;
+                preferred-width: Theme.check-box-size + Theme.spacing-l + also-row.preferred-width;
+                horizontal-stretch: 0;
+
+                Rectangle {
+                    x: Theme.spacing-none;
+                    y: (parent.height - self.height) / 2;
+                    width: Theme.check-box-size;
+                    height: Theme.check-box-size;
+                    background: root.also-to-channel ? Theme.own : Theme.surface;
+                    border-color: root.also-to-channel ? Theme.own : Theme.raised-hover;
+                    border-width: Theme.border-width;
+                    border-radius: Theme.radius-check-box;
+
+                    if root.also-to-channel: Icon {
+                        x: (parent.width - self.width) / 2;
+                        y: (parent.height - self.height) / 2;
+                        width: Theme.check-mark-size;
+                        height: Theme.check-mark-size;
+                        source: @image-url("../../../src/gui/icons/check.svg");
+                        tint: Theme.text-on-own;
+                    }
+                }
+
+                also-row := HorizontalLayout {
+                    x: Theme.check-box-size + Theme.spacing-l;
+                    width: parent.width - self.x;
+                    padding: Theme.spacing-none;
+                    spacing: Theme.spacing-s;
+
+                    Text {
+                        color: Theme.text-muted;
+                        font-size: Theme.font-size-small;
+                        vertical-alignment: center;
+                        text: @tr("Also send to");
+                    }
+
+                    Text {
+                        horizontal-stretch: 1;
+                        color: Theme.text;
+                        font-size: Theme.font-size-small;
+                        font-weight: Theme.font-weight-semibold;
+                        overflow: elide;
+                        vertical-alignment: center;
+                        text: "#" + root.room-name;
+                    }
+                }
+
+                TouchArea {
+                    mouse-cursor: MouseCursor.pointer;
+                    clicked => {
+                        root.also-to-channel = !root.also-to-channel;
                     }
                 }
             }

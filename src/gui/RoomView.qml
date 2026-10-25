@@ -403,6 +403,7 @@ Rectangle {
         Composer {
             id: composer
 
+            objectName: "roomComposer"
             Layout.fillWidth: true
             Layout.bottomMargin: Theme.spacingXXXL
             Layout.leftMargin: Theme.spacingXXXL

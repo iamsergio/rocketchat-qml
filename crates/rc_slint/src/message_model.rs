@@ -34,6 +34,8 @@ pub struct MessageModel {
     list: RefCell<MessageList>,
     /// The colours that the styled text of a body is written with.
     palette: Palette,
+    /// The rows are those of the thread pane and not of the room (see [`message_row`]).
+    in_pane: bool,
     /// How many times messages were inserted at the oldest end of a list that had some.
     prepends: Cell<i32>,
     /// How many times the whole list was replaced.
@@ -42,11 +44,12 @@ pub struct MessageModel {
 }
 
 impl MessageModel {
-    /// An empty model.
-    pub fn new(palette: Palette) -> Self {
+    /// An empty model, for the room's messages or, with `in_pane`, the open thread's.
+    pub fn new(palette: Palette, in_pane: bool) -> Self {
         Self {
             list: RefCell::new(MessageList::default()),
             palette,
+            in_pane,
             prepends: Cell::new(0),
             resets: Cell::new(0),
             notify: ModelNotify::default(),
@@ -213,7 +216,7 @@ impl Model for MessageModel {
     fn row_data(&self, index: usize) -> Option<MessageRow> {
         let list = self.list.borrow();
         let row = list.row_count().checked_sub(index + 1)?;
-        message_row(&list, row, &self.palette)
+        message_row(&list, row, &self.palette, self.in_pane)
     }
 
     fn model_tracker(&self) -> &dyn ModelTracker {
@@ -279,7 +282,7 @@ mod tests {
     }
 
     fn shown(messages: Vec<Message>) -> MessageModel {
-        let model = MessageModel::new(palette());
+        let model = MessageModel::new(palette(), false);
         model.show(
             &reset(messages),
             Viewer::default(),
@@ -562,7 +565,7 @@ mod tests {
     }
 
     fn shown_to(messages: Vec<Message>, viewer: Viewer) -> (MessageModel, Vec<String>) {
-        let model = MessageModel::new(palette());
+        let model = MessageModel::new(palette(), false);
         let names = model.show(
             &reset(messages),
             viewer,
@@ -703,5 +706,75 @@ mod tests {
         assert_eq!(chip(0).text, ":party:");
         assert!(!chip(1).has_image);
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A model of the same messages, for the room or for the pane.
+    fn shown_in(messages: Vec<Message>, in_pane: bool) -> MessageModel {
+        let model = MessageModel::new(palette(), in_pane);
+        model.show(
+            &reset(messages),
+            Viewer::default(),
+            AvatarUrls::default(),
+            ImageUrls::default(),
+            EmojiImageUrls::default(),
+        );
+        model
+    }
+
+    /// A parent "p" with two replies, "r1" only in the thread and "r2" also sent to the room.
+    fn thread() -> Vec<Message> {
+        let mut parent = message("p", "2026-10-01T10:00:00Z");
+        parent.thread_replies = 2;
+        parent.thread_last_reply = Some("2026-10-01T10:05:00Z".parse().unwrap());
+        let mut first = message("r1", "2026-10-01T10:01:00Z");
+        first.thread_id = Some("p".to_owned().into());
+        let mut second = message("r2", "2026-10-01T10:05:00Z");
+        second.thread_id = Some("p".to_owned().into());
+        second.thread_shown = true;
+        vec![parent, first, second]
+    }
+
+    // ACT-004
+    #[test]
+    fn a_parent_has_its_replies_and_a_reply_leads_to_its_parent_in_the_room() {
+        let model = shown_in(thread(), false);
+        let rows: Vec<_> = model.iter().collect();
+
+        assert_eq!(rows[0].thread_replies, 2);
+        assert!(!rows[0].thread_last_reply.is_empty());
+        assert!(rows[0].can_start_thread);
+        assert!(rows[0].has_menu);
+        assert_eq!(rows[1].thread_id, "p");
+        assert!(!rows[1].in_thread_shown);
+        assert!(rows[2].in_thread_shown);
+        assert_eq!(rows[2].thread_parent_text, "p");
+        // A reply starts no thread of its own.
+        assert!(!rows[2].can_start_thread);
+        assert_eq!(rows[2].thread_replies, 0);
+        assert!(rows[2].thread_last_reply.is_empty());
+    }
+
+    // ACT-004
+    #[test]
+    fn in_the_pane_nothing_starts_a_thread_and_no_reply_leads_anywhere() {
+        let model = shown_in(thread(), true);
+        let rows: Vec<_> = model.iter().collect();
+
+        // The count stays: the divider under the parent says it.
+        assert_eq!(rows[0].thread_replies, 2);
+        assert!(rows.iter().all(|row| !row.can_start_thread));
+        assert!(rows.iter().all(|row| !row.in_thread_shown));
+        // Quoting and reacting still give the message a menu.
+        assert!(rows.iter().all(|row| row.has_menu));
+    }
+
+    // ACT-004
+    #[test]
+    fn an_unsent_message_starts_no_thread() {
+        let mut unsent = message("u", "2026-10-01T10:00:00Z");
+        unsent.delivery = Delivery::Pending;
+        let model = shown_in(vec![unsent], false);
+
+        assert!(!model.row_data(0).unwrap().can_start_thread);
     }
 }

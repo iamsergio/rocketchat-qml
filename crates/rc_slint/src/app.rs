@@ -13,6 +13,7 @@
 //! rows incrementally.
 
 mod message_actions;
+mod thread_pane;
 
 use std::cell::RefCell;
 use std::path::PathBuf;
@@ -29,6 +30,7 @@ use rc_view::room_search::{search_rooms, trimmed};
 use rc_view::session_view::{LoginMode, SessionView, Status};
 use rc_view::startup;
 use rc_view::switchboard::{Shown, Switchboard};
+use rc_view::viewer::Viewer;
 use secrecy::SecretString;
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel, Weak};
 
@@ -57,6 +59,8 @@ struct App {
     rooms: Rc<RoomModel>,
     /// The messages of the open room, oldest first.
     messages: Rc<MessageModel>,
+    /// The messages of the open thread beside the room: the parent, then the replies.
+    thread_messages: Rc<MessageModel>,
     /// The emoji of the picker, in rows, with the current account's custom emoji.
     emoji_picker: Rc<EmojiPickerModel>,
     /// The rooms that match the query, while one is typed.
@@ -104,9 +108,14 @@ pub fn start(window: &MainWindow) {
 
     let tiles: Rc<VecModel<AccountTile>> = Rc::new(VecModel::default());
     let rooms = Rc::new(RoomModel::default());
-    let messages = Rc::new(MessageModel::new(Palette::from_theme(
-        &window.global::<Theme>(),
-    )));
+    let messages = Rc::new(MessageModel::new(
+        Palette::from_theme(&window.global::<Theme>()),
+        false,
+    ));
+    let thread_messages = Rc::new(MessageModel::new(
+        Palette::from_theme(&window.global::<Theme>()),
+        true,
+    ));
     window.set_tiles(ModelRc::from(Rc::clone(&tiles)));
     window.set_rooms(ModelRc::from(Rc::clone(&rooms)));
     let found = Rc::new(RoomSearchModel::default());
@@ -116,6 +125,7 @@ pub fn start(window: &MainWindow) {
     window.set_emoji_rows(ModelRc::from(Rc::clone(&emoji_picker)));
     window.set_search_results(ModelRc::from(Rc::clone(&found)));
     window.set_messages(ModelRc::from(Rc::clone(&messages)));
+    window.set_thread_messages(ModelRc::from(Rc::clone(&thread_messages)));
     window.set_prefill_password(dev_login::prefill().password.into());
     connect_commands(window);
 
@@ -127,6 +137,7 @@ pub fn start(window: &MainWindow) {
             tiles,
             rooms,
             messages,
+            thread_messages,
             emoji_picker,
             found,
             query: String::new(),
@@ -194,6 +205,20 @@ fn connect_commands(window: &MainWindow) {
     window.on_emoji_picker_opened(|| App::with(|app| app.open_emoji_picker()));
     window.on_emoji_query(|query| App::with(|app| app.emoji_picker.set_query(&query)));
     window.on_load_older(|| App::with(|app| app.load_older()));
+    window.on_open_thread(|id| App::with(|app| app.open_thread(&id)));
+    window.on_close_thread(|| App::with(|app| app.close_pane()));
+    window.on_thread_escape(|| App::with(|app| app.escape_pane()));
+    window.on_load_older_thread(|| App::with(|app| app.load_older_thread()));
+    window.on_send_reply(|text, quoted, also| {
+        let mut sent = false;
+        App::with(|app| sent = app.send_reply(&text, &quoted, also));
+        sent
+    });
+    window.on_thread_last_editable(|| {
+        let mut id = String::new();
+        App::with(|app| id = app.thread_last_editable());
+        id.into()
+    });
     window.on_open_link(|url| open_link(&url));
     let weak = window.as_weak();
     window.on_dump_info(move || {
@@ -292,25 +317,30 @@ impl App {
     fn show(&mut self, event: Event) {
         match event {
             Event::Session(_) | Event::Connection(_) => {
-                self.messages
-                    .set_viewer(self.switchboard.accounts().current_cache().viewer());
+                self.set_viewer(self.switchboard.accounts().current_cache().viewer());
                 self.show_session(&self.switchboard.accounts().session_view());
             }
             Event::Identity(_) => {
                 self.show_session(&self.switchboard.accounts().session_view());
             }
-            Event::MessagePolicy(_) => self
-                .messages
-                .set_viewer(self.switchboard.accounts().current_cache().viewer()),
+            Event::MessagePolicy(_) => {
+                self.set_viewer(self.switchboard.accounts().current_cache().viewer());
+            }
             Event::Rooms(changes) => {
                 self.rooms.apply(&changes);
                 self.refresh_search();
                 // The open room's name may have changed.
                 self.show_room();
+                self.show_thread();
             }
             Event::QuietRooms(_) => self.refresh_search(),
             Event::Timeline(changes) => {
                 let names = self.messages.apply(&changes);
+                self.want_emoji_images(names);
+                self.show_counters();
+            }
+            Event::ThreadTimeline(changes) => {
+                let names = self.thread_messages.apply(&changes);
                 self.want_emoji_images(names);
                 self.show_counters();
             }
@@ -320,8 +350,9 @@ impl App {
                 let cache = self.switchboard.accounts().current_cache();
                 let viewer = cache.viewer();
                 self.emoji_picker.show(&viewer.emoji, cache.emoji_images());
-                self.messages.set_viewer(viewer);
+                self.set_viewer(viewer);
                 self.want_emoji_images(self.messages.custom_emoji_names());
+                self.want_emoji_images(self.thread_messages.custom_emoji_names());
                 if self.emoji_picker_open() {
                     self.want_emoji_images(self.emoji_picker.custom_names());
                 }
@@ -330,10 +361,16 @@ impl App {
                 let cache = self.switchboard.accounts().current_cache();
                 let changes = cache.emoji_image_changes(&updates);
                 self.messages.set_emoji_images(&changes);
+                self.thread_messages.set_emoji_images(&changes);
                 self.emoji_picker.set_emoji_images(&changes);
             }
-            Event::TimelineStatus(_) => self.show_room(),
+            Event::TimelineStatus(_) => {
+                self.show_room();
+                self.show_thread();
+            }
+            Event::ThreadStatus(_) => self.show_thread(),
             Event::Typing { .. } => self.show_typing(),
+            Event::ThreadTyping { .. } => self.show_thread_typing(),
             Event::RoomAction { outcome, .. } => {
                 // A failure is shown until dismissed or the next command; a success clears it.
                 let text = outcome
@@ -352,10 +389,13 @@ impl App {
                 self.rooms.set_avatars(&changes);
                 self.found.set_avatars(&changes);
                 self.messages.set_avatars(&changes);
+                self.thread_messages.set_avatars(&changes);
             }
             Event::Images(updates) => {
                 let cache = self.switchboard.accounts().current_cache();
-                self.messages.set_images(&cache.image_changes(&updates));
+                let changes = cache.image_changes(&updates);
+                self.messages.set_images(&changes);
+                self.thread_messages.set_images(&changes);
             }
             _ => {}
         }
@@ -376,6 +416,14 @@ impl App {
             cache.emoji_images(),
         );
         self.want_emoji_images(names);
+        let names = self.thread_messages.show(
+            &cache.thread_snapshot(),
+            cache.viewer(),
+            cache.avatars(),
+            cache.images(),
+            cache.emoji_images(),
+        );
+        self.want_emoji_images(names);
         self.emoji_picker
             .show(&cache.viewer().emoji, cache.emoji_images());
         if self.emoji_picker_open() {
@@ -384,7 +432,14 @@ impl App {
         self.show_counters();
         self.show_session(&self.switchboard.accounts().session_view());
         self.show_room();
+        self.show_thread();
         self.refresh_search();
+    }
+
+    /// Shows the messages to someone else, in the room and in the thread.
+    fn set_viewer(&self, viewer: Viewer) {
+        self.messages.set_viewer(viewer.clone());
+        self.thread_messages.set_viewer(viewer);
     }
 
     // The search
@@ -427,6 +482,8 @@ impl App {
         if let Some(window) = self.window.upgrade() {
             window.set_prepends(self.messages.prepends());
             window.set_resets(self.messages.resets());
+            window.set_thread_prepends(self.thread_messages.prepends());
+            window.set_thread_resets(self.thread_messages.resets());
         }
     }
 

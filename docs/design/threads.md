@@ -46,6 +46,14 @@ The contract tests (`crates/rc_api/tests/contract.rs`, `crates/rc_core/tests/con
 - **Closing:** the close button (which closes the thread and the list), and opening another room (the core does it). Escape goes back to the list: see the thread list below.
 - **Not done:** the faces of the repliers, a count of unread replies, and a notification for a reply in a thread the user doesn't have open.
 
+## Slint
+
+- **Pane:** `thread_pane.slint` in `RoomPage` after the room, `Theme.thread-pane-width` wide, there while `thread-id` (the open thread's parent, `ThreadState.parent_id`) is not empty. The header has the title, `# room` and the close button, with room left of the title for the list's back button. The list is the room's `MessageList` with `in-thread-pane`, the box a second `Composer` with `for-thread`.
+- **Model:** a second `MessageModel` (`in_pane`), fed by `Event::ThreadTimeline`, with the viewer, avatars, images and emoji images of the room's. `show_all` rebuilds it from `Cache::thread_snapshot` and `show_thread` shows `Cache::thread_state` (parent, room name, loading flags, error, typing), also after `Event::Rooms`, `TimelineStatus`, `ThreadStatus` and `ThreadTyping`.
+- **Row:** `rows::message_row` fills `can-start-thread`, `thread-replies`, `thread-last-reply`, `thread-id`, `in-thread-shown` and `thread-parent-text` from the helpers of `message_view`. In the pane `can-start-thread` and `in-thread-shown` are false, so the menu has no "Reply in thread" and no line leads anywhere. Which thread is open is not in the row: the delegate compares `open-thread-id` with its message.
+- **Commands:** `app/thread_pane.rs`: open, close (`close_pane_steps`), Escape (`escape_steps`), older replies, send (`outgoing_reply`, the box's check box as `also_to_channel`) and the newest editable message of the thread. Edits, deletes, reactions and retries are the room's commands: `Cache::held` finds the pane's messages too.
+- **Not in Slint yet:** the thread list, its button and badge, and the back button (steps 2 and 3).
+
 ## Thread list
 
 A room's threads, in the pane beside it (ACT-010): all of them, or the ones the user follows, the one with the most recent reply first.

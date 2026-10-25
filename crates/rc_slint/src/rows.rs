@@ -12,8 +12,9 @@ use rc_view::avatar_view::{AvatarUrls, color, initials, message_owner, room_plac
 use rc_view::file_urls::file_path;
 use rc_view::message_list::MessageList;
 use rc_view::message_view::{
-    author_name, body, can_delete, can_edit, can_quote, day_label, delivery_name, mentions_me,
-    system_text, time_text,
+    author_name, body, can_delete, can_edit, can_quote, can_start_thread, day_label, delivery_name,
+    in_thread_shown, mentions_me, system_text, thread_id, thread_last_reply_text, thread_replies,
+    time_text,
 };
 use rc_view::quote_view::quotes;
 use rc_view::reaction_view::reactions;
@@ -77,8 +78,15 @@ pub fn load_image(url: &str) -> Option<Image> {
 }
 
 /// The row of the message at `row` of the list (newest first), with the avatar file it has now;
-/// `None` for a row that isn't there. What depends on the time (the day's heading) is read now.
-pub fn message_row(list: &MessageList, row: usize, palette: &Palette) -> Option<MessageRow> {
+/// `None` for a row that isn't there. What depends on the time (the day's heading, the time of the
+/// last reply) is read now. `in_pane` is for the rows of the thread pane: a message there has no
+/// thread of its own to start, and a reply is not sent to the room again.
+pub fn message_row(
+    list: &MessageList,
+    row: usize,
+    palette: &Palette,
+    in_pane: bool,
+) -> Option<MessageRow> {
     let message = list.message(row)?;
     let now = Timestamp::now();
     let clock = Clock {
@@ -95,6 +103,7 @@ pub fn message_row(list: &MessageList, row: usize, palette: &Palette) -> Option<
     let body_html = message_html(message, list.viewer(), clock);
     let url = message_owner(message).map_or("", |owner| list.avatars().url(&owner));
     let image = load_image(url);
+    let starts_thread = !in_pane && can_start_thread(message);
     Some(MessageRow {
         id: message.id.as_str().into(),
         author: author_name(&message.author).into(),
@@ -113,7 +122,14 @@ pub fn message_row(list: &MessageList, row: usize, palette: &Palette) -> Option<
         quotes: quote_rows(message, list.viewer(), clock, palette),
         reactions: reaction_rows(message, list),
         can_react: can_react(message),
-        has_menu: can_quote(message)
+        can_start_thread: starts_thread,
+        thread_replies: thread_replies(message),
+        thread_last_reply: thread_last_reply_text(message, list.zone(), now).into(),
+        thread_id: thread_id(message).into(),
+        in_thread_shown: !in_pane && in_thread_shown(message),
+        thread_parent_text: list.thread_parent_text(row).into(),
+        has_menu: starts_thread
+            || can_quote(message)
             || can_react(message)
             || can_edit(message, list.viewer(), now)
             || can_delete(message, list.viewer(), now),

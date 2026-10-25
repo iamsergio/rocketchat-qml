@@ -137,6 +137,18 @@ export struct MessageRow {
     // the button shows and a right-click opens. What the menu offers is asked for when it opens,
     // since the time limits of the server's policy run out.
     has-menu: bool,
+    // A sent text message that is not a reply can start a thread: the menu offers it, and has
+    // something to offer for that alone.
+    can-start-thread: bool,
+    // As the parent of a thread: how many replies it has, and when the last came (a time of day or
+    // the heading of its day; empty without replies).
+    thread-replies: int,
+    thread-last-reply: string,
+    // As a reply: the id of its parent, else empty. A reply also sent to the room, in the room, has
+    // a line that leads to its thread, with the start of the parent's text if the room holds it.
+    thread-id: string,
+    in-thread-shown: bool,
+    thread-parent-text: string,
     // `sent`, `pending` or `failed`.
     delivery: string,
     // The author's avatar, as the room list has it.

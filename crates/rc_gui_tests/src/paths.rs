@@ -127,24 +127,27 @@ pub mod main_window {
     /// Above the first message while older ones load.
     pub const LOADING_OLDER: &str = "mainWindow/loadingOlder";
 
+    /// The room's box to write in. Its parts are found through it, since the thread pane has a
+    /// composer of its own with parts of the same names.
+    pub const COMPOSER: &str = "mainWindow/roomComposer";
     /// Where the text to send is typed. Enter sends it, Shift+Enter starts a new line.
-    pub const COMPOSER_FIELD: &str = "mainWindow/composerField";
+    pub const COMPOSER_FIELD: &str = "mainWindow/roomComposer/composerField";
     /// Sends the text of the composer, or saves it while a message is edited (the button then
     /// says "Save"). Disabled while it is empty, and while a save is awaited.
-    pub const COMPOSER_SEND: &str = "mainWindow/composerSend";
+    pub const COMPOSER_SEND: &str = "mainWindow/roomComposer/composerSend";
     /// Above the composer while a message is edited.
-    pub const COMPOSER_EDIT_BAR: &str = "mainWindow/composerEditBar";
+    pub const COMPOSER_EDIT_BAR: &str = "mainWindow/roomComposer/composerEditBar";
     /// In the bar: stops editing and gives the composer back its draft.
-    pub const COMPOSER_EDIT_CANCEL: &str = "mainWindow/composerEditCancel";
+    pub const COMPOSER_EDIT_CANCEL: &str = "mainWindow/roomComposer/composerEditCancel";
 
     /// Above the composer while a message is quoted.
-    pub const COMPOSER_QUOTE_BAR: &str = "mainWindow/composerQuoteBar";
+    pub const COMPOSER_QUOTE_BAR: &str = "mainWindow/roomComposer/composerQuoteBar";
     /// In the bar: the name of the quoted message's author, as its `text`.
-    pub const COMPOSER_QUOTE_AUTHOR: &str = "mainWindow/composerQuoteAuthor";
+    pub const COMPOSER_QUOTE_AUTHOR: &str = "mainWindow/roomComposer/composerQuoteAuthor";
     /// In the bar: the quoted message's text as written, as its `text`. Cut to a line when shown.
-    pub const COMPOSER_QUOTE_TEXT: &str = "mainWindow/composerQuoteText";
+    pub const COMPOSER_QUOTE_TEXT: &str = "mainWindow/roomComposer/composerQuoteText";
     /// In the bar: stops quoting.
-    pub const COMPOSER_QUOTE_CANCEL: &str = "mainWindow/composerQuoteCancel";
+    pub const COMPOSER_QUOTE_CANCEL: &str = "mainWindow/roomComposer/composerQuoteCancel";
 
     /// Why the last edit, deletion or reaction failed. Visible only then.
     pub const ROOM_ACTION_ERROR: &str = "mainWindow/roomActionError";
@@ -240,7 +243,7 @@ pub mod main_window {
     /// Who is typing in the open thread, as its `text` ("alice is typing…"), over the composer;
     /// empty for nobody. Visible, with its height taken, as long as the pane is.
     pub const THREAD_TYPING: &str = "mainWindow/threadTyping";
-    /// The box to reply in. Its parts are found through it, as the room's are by name alone.
+    /// The box to reply in. Its parts are found through it, as the room's are through [`COMPOSER`].
     pub const THREAD_COMPOSER: &str = "mainWindow/threadComposer";
     /// Where the reply is typed. Enter sends it, Escape goes back to the list of threads when there
     /// is nothing to cancel.
