@@ -100,6 +100,7 @@ export global Theme {
     out property <length> radius-control: 7px;
     out property <length> radius-check-box: 4px;
     out property <length> radius-panel: 12px;
+    out property <length> radius-attachment: 8px;
 
     // Lines
     out property <length> border-width: 1px;
@@ -164,6 +165,14 @@ export global Theme {
     out property <length> emoji-cell-size: 40px;
     out property <length> emoji-image-size: 28px;
     out property <length> font-size-emoji: 18px;
+    // The picture of an attachment is shown at its size, at most this wide and tall (or as it is
+    // when the server gives none); a file is a card with an icon, at most this wide.
+    out property <length> attachment-fallback-width: 360px;
+    out property <length> attachment-fallback-height: 240px;
+    out property <length> attachment-max-width: 360px;
+    out property <length> attachment-max-height: 480px;
+    out property <length> attachment-file-icon-size: 22px;
+    out property <length> attachment-file-max-width: 340px;
     // The "..." button of a message, which opens its menu.
     out property <length> menu-button-width: 28px;
     out property <length> menu-button-height: 22px;

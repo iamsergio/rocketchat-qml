@@ -9,6 +9,7 @@ use jiff::tz::TimeZone;
 use rc_core::domain::{Message, MessageKind, Room};
 use rc_core::policy::can_react;
 use rc_view::accounts::{AccountView, Status};
+use rc_view::attachment_view::attachments;
 use rc_view::avatar_view::{AvatarUrls, color, initials, message_owner, room_placeholder};
 use rc_view::file_urls::file_path;
 use rc_view::message_list::MessageList;
@@ -26,7 +27,9 @@ use rc_view::viewer::{Clock, Viewer};
 use slint::{Color, Image, ModelRc, StyledText, VecModel};
 
 use crate::rich_markdown::{self, Palette};
-use crate::ui::{AccountTile, MessageRow, QuoteRow, ReactionRow, RoomRow, RoomSection, ThreadRow};
+use crate::ui::{
+    AccountTile, AttachmentRow, MessageRow, QuoteRow, ReactionRow, RoomRow, RoomSection, ThreadRow,
+};
 
 /// Counts are `u32`, Slint's are `int`: saturate.
 fn count(value: u32) -> i32 {
@@ -150,6 +153,7 @@ pub fn message_row(
         edited: message.edited,
         mentions_me: mentions_me(message, list.viewer()),
         quotes: quote_rows(message, list.viewer(), clock, palette),
+        attachments: attachment_rows(message, list),
         reactions: reaction_rows(message, list),
         can_react: can_react(message),
         can_start_thread: starts_thread,
@@ -193,6 +197,34 @@ fn quote_rows(
             body: quote.body.into(),
         })
         .collect();
+    ModelRc::new(VecModel::from(rows))
+}
+
+/// The files of the message, as a model of their own; the empty model for the many messages that
+/// have none. An image shows its file if the core has downloaded it.
+fn attachment_rows(message: &Message, list: &MessageList) -> ModelRc<AttachmentRow> {
+    if message.attachments.is_empty() {
+        return ModelRc::default();
+    }
+    let rows: Vec<AttachmentRow> =
+        attachments(message, list.viewer().server.as_deref(), list.images())
+            .into_iter()
+            .map(|attachment| {
+                let image = load_image(&attachment.image);
+                AttachmentRow {
+                    title: attachment.title.into(),
+                    description: attachment.description.into(),
+                    size: attachment.size.into(),
+                    link: attachment.link.into(),
+                    is_image: attachment.is_image,
+                    image_url: attachment.image.into(),
+                    has_image: image.is_some(),
+                    image: image.unwrap_or_default(),
+                    width: attachment.width,
+                    height: attachment.height,
+                }
+            })
+            .collect();
     ModelRc::new(VecModel::from(rows))
 }
 

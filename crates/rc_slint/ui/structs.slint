@@ -132,6 +132,25 @@ export struct QuoteRow {
     body-styled: styled-text,
 }
 
+// One file attached to a message: an `rc_view::attachment_view::AttachmentView`, as drawn.
+export struct AttachmentRow {
+    title: string,
+    description: string,
+    // For example `1.5 KB`; empty when the server didn't say.
+    size: string,
+    // The address of the original on the server, which a click opens.
+    link: string,
+    is-image: bool,
+    // The `file://` URL of the image's file, which the GUI tests read; empty while there is none.
+    image-url: string,
+    // Whether `image` holds the picture.
+    has-image: bool,
+    image: image,
+    // The picture's size in pixels; 0 when the server didn't say.
+    width: int,
+    height: int,
+}
+
 // One reaction of a message: an `rc_view::reaction_view::ReactionView`, as drawn.
 export struct ReactionRow {
     // The shortcode as the server has it, colons included: what reacting again sends.
@@ -173,6 +192,8 @@ export struct MessageRow {
     mentions-me: bool,
     // What the message quotes, in order. Most have none, and then no model is made.
     quotes: [QuoteRow],
+    // The files attached, in order. Most messages have none, and then no model is made.
+    attachments: [AttachmentRow],
     // What users reacted with, in the server's order. Most messages have none, and then no model
     // is made. `can-react`: the user can add or take back a reaction by clicking a chip.
     reactions: [ReactionRow],

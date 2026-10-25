@@ -11,6 +11,8 @@ import { Theme } from "theme.slint";
 // One message of the open room, named `msg_<id>` by its message id. Its parts are named like the Qt
 // app's: `msgDaySeparator` (on the first message of a day), `msgAvatar`, `msgAuthor`, `msgTime`,
 // `msgMentionsMe`, `msgBody` (the message as written, holding `msgBodyHtml`, what is shown),
+// `attachment<index>` (the files, holding `attachmentImage` and `attachmentPlaceholder`, or
+// `attachmentLink` with `attachmentTitle` and `attachmentSize`, and `attachmentDescription`),
 // `msgReactions` (the chips, shown when there are reactions: `reaction<index>`, which is checked
 // when the user reacted, holding `reactionEmoji` and `reactionCount`), and `msgSystem` for a system
 // message, which has no author and no body. A message with a menu has the button `msgMenuButton`,
@@ -409,7 +411,7 @@ export component MessageDelegate inherits Rectangle {
                     // `accessible-value` is the message as written, which the tests read;
                     // `msgBodyHtml` is what is shown. Hidden when a message of only quotes has no
                     // text to leave a blank line for.
-                    if !root.message.body.is-empty || root.message.quotes.length == 0: Rectangle {
+                    if !root.message.body.is-empty || (root.message.quotes.length == 0 && root.message.attachments.length == 0): Rectangle {
                         accessible-id: "msgBody";
                         accessible-role: text;
                         accessible-value: root.message.body;
@@ -441,6 +443,118 @@ export component MessageDelegate inherits Rectangle {
                                 if root.message.can-react {
                                     root.add-reaction(root.message.id);
                                 }
+                            }
+                        }
+                    }
+
+                    // The files: an image at its size, scaled down to fit, or a card for any other
+                    // file; both open the file's page on the server in the browser, since the app
+                    // can't hand the browser its login. A description goes under either.
+                    for attachment[index] in root.message.attachments: Rectangle {
+                        accessible-id: "attachment" + index;
+                        accessible-role: groupbox;
+                        property <length> natural-width: attachment.width > 0 ? attachment.width * 1px : Theme.attachment-fallback-width;
+                        property <length> natural-height: attachment.height > 0 ? attachment.height * 1px : Theme.attachment-fallback-height;
+                        property <float> fit: min(1, min(min(Theme.attachment-max-width, root.body-width) / self.natural-width, Theme.attachment-max-height / self.natural-height));
+                        // The text column's width, so that a message of only a file doesn't shrink
+                        // the column to the card, which would elide the author.
+                        min-width: root.body-width;
+                        preferred-height: parts.preferred-height;
+
+                        parts := VerticalLayout {
+                            alignment: start;
+                            padding: Theme.spacing-none;
+                            spacing: Theme.spacing-xs;
+
+                            if attachment.is-image: Rectangle {
+                                width: natural-width * fit;
+                                height: natural-height * fit;
+                                border-radius: Theme.radius-attachment;
+                                clip: true;
+
+                                if !attachment.has-image: Rectangle {
+                                    accessible-id: "attachmentPlaceholder";
+                                    accessible-role: image;
+                                    background: Theme.raised;
+                                }
+
+                                if attachment.has-image: Image {
+                                    accessible-id: "attachmentImage";
+                                    // The file's URL, which the GUI tests read.
+                                    accessible-label: attachment.image-url;
+                                    source: attachment.image;
+                                    image-fit: contain;
+                                }
+
+                                TouchArea {
+                                    mouse-cursor: MouseCursor.pointer;
+                                    clicked => {
+                                        root.open-link(attachment.link);
+                                    }
+                                }
+                            }
+
+                            if !attachment.is-image: Rectangle {
+                                accessible-id: "attachmentLink";
+                                accessible-role: text;
+                                // The address the file opens, which the GUI tests read.
+                                accessible-value: attachment.link;
+                                width: min(file-row.preferred-width, Theme.attachment-file-max-width);
+                                height: file-row.preferred-height;
+                                background: Theme.raised;
+                                border-radius: Theme.radius-attachment;
+
+                                file-row := HorizontalLayout {
+                                    padding-left: Theme.spacing-xl;
+                                    padding-right: Theme.spacing-xl;
+                                    padding-top: Theme.spacing-l;
+                                    padding-bottom: Theme.spacing-l;
+                                    spacing: Theme.spacing-xl;
+
+                                    Icon {
+                                        width: Theme.attachment-file-icon-size;
+                                        height: Theme.attachment-file-icon-size;
+                                        y: (parent.height - self.height) / 2;
+                                        source: @image-url("../../../src/gui/icons/file.svg");
+                                        tint: Theme.text-muted;
+                                    }
+
+                                    VerticalLayout {
+                                        padding: Theme.spacing-none;
+                                        spacing: Theme.spacing-none;
+
+                                        Text {
+                                            accessible-id: "attachmentTitle";
+                                            color: Theme.own;
+                                            font-size: Theme.font-size-small;
+                                            font-weight: Theme.font-weight-semibold;
+                                            overflow: elide;
+                                            text: attachment.title;
+                                        }
+
+                                        Text {
+                                            accessible-id: "attachmentSize";
+                                            color: Theme.text-faint;
+                                            font-size: Theme.font-size-tiny;
+                                            text: attachment.size;
+                                        }
+                                    }
+                                }
+
+                                TouchArea {
+                                    mouse-cursor: MouseCursor.pointer;
+                                    clicked => {
+                                        root.open-link(attachment.link);
+                                    }
+                                }
+                            }
+
+                            if !attachment.description.is-empty: Text {
+                                accessible-id: "attachmentDescription";
+                                color: Theme.text;
+                                font-size: Theme.font-size-base;
+                                wrap: word-wrap;
+                                text: attachment.description;
                             }
                         }
                     }

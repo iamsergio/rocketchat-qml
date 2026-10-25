@@ -226,7 +226,9 @@ impl Model for MessageModel {
 
 #[cfg(test)]
 mod tests {
-    use rc_core::domain::{Author, Delivery, Message, MessageKind, Quote, Reaction};
+    use rc_core::domain::{
+        Attachment, Author, Delivery, ImageAttachment, Message, MessageKind, Quote, Reaction,
+    };
     use rc_core::emoji::CustomEmojis;
     use rc_core::rich::RichText;
     use slint::Color;
@@ -776,5 +778,99 @@ mod tests {
         let model = shown_in(vec![unsent], false);
 
         assert!(!model.row_data(0).unwrap().can_start_thread);
+    }
+
+    /// A message with a picture of 480x360 at `/file-upload/<id>/pic.png` and a text file.
+    fn with_files(id: &str, ts: &str) -> Message {
+        let mut message = message(id, ts);
+        message.attachments = vec![
+            Attachment {
+                title: "pic.png".to_owned(),
+                link: format!("/file-upload/{id}/pic.png"),
+                description: Some("a picture".to_owned()),
+                size: Some(2048),
+                image: Some(ImageAttachment {
+                    path: format!("/file-upload/{id}/pic.png"),
+                    width: Some(480),
+                    height: Some(360),
+                }),
+            },
+            Attachment {
+                title: "notes.txt".to_owned(),
+                link: "/file-upload/n/notes.txt".to_owned(),
+                description: None,
+                size: Some(6),
+                image: None,
+            },
+        ];
+        message
+    }
+
+    // RICH-005
+    #[test]
+    fn only_a_message_with_files_has_attachment_rows() {
+        let model = MessageModel::new(palette(), false);
+        let viewer = Viewer {
+            server: Some("https://chat.example/".to_owned()),
+            ..Viewer::default()
+        };
+        model.show(
+            &reset(vec![
+                message("a", "2026-10-01T10:00:00Z"),
+                with_files("b", "2026-10-02T10:00:00Z"),
+            ]),
+            viewer,
+            AvatarUrls::default(),
+            ImageUrls::default(),
+            EmojiImageUrls::default(),
+        );
+
+        assert_eq!(model.row_data(0).unwrap().attachments.row_count(), 0);
+        let files = model.row_data(1).unwrap().attachments;
+        assert_eq!(files.row_count(), 2);
+        let picture = files.row_data(0).unwrap();
+        assert!(picture.is_image && !picture.has_image);
+        assert_eq!(picture.link, "https://chat.example/file-upload/b/pic.png");
+        assert_eq!(picture.description, "a picture");
+        assert_eq!((picture.width, picture.height), (480, 360));
+        let notes = files.row_data(1).unwrap();
+        assert!(!notes.is_image);
+        assert_eq!(
+            (notes.title.as_str(), notes.size.as_str()),
+            ("notes.txt", "6 B")
+        );
+    }
+
+    // RICH-005
+    #[test]
+    fn an_image_that_arrives_changes_only_the_rows_that_show_it() {
+        let model = shown(vec![
+            message("a", "2026-10-01T10:00:00Z"),
+            with_files("b", "2026-10-02T10:00:00Z"),
+            message("c", "2026-10-03T10:00:00Z"),
+            with_files("d", "2026-10-04T10:00:00Z"),
+        ]);
+        let file = std::env::temp_dir().join(format!("rc_slint_pic_{}.svg", std::process::id()));
+        std::fs::write(
+            &file,
+            "<svg xmlns='http://www.w3.org/2000/svg' width='4' height='4'/>",
+        )
+        .unwrap();
+        let url = rc_view::file_urls::file_url(&file, 1);
+
+        // The list is newest first: the rows of "b" and "d" are 2 and 0.
+        let runs = model
+            .list
+            .borrow_mut()
+            .set_images(&[("/file-upload/b/pic.png".to_owned(), url)]);
+        model.set_images(&[]);
+
+        assert_eq!(runs, [(2, 2)]);
+        let shown_b = model.row_data(1).unwrap().attachments.row_data(0).unwrap();
+        assert!(shown_b.has_image);
+        assert!(shown_b.image_url.starts_with("file://"));
+        let shown_d = model.row_data(3).unwrap().attachments.row_data(0).unwrap();
+        assert!(!shown_d.has_image);
+        std::fs::remove_file(file).unwrap();
     }
 }
