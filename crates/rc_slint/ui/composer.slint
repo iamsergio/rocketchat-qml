@@ -15,7 +15,12 @@ import { Theme } from "theme.slint";
 // And it quotes a message: `begin-quote` shows a bar above the field with the author and a line of
 // the text, and sending passes the message's id. Sending, Escape, the bar's button and another room
 // drop the quote. Quoting and editing exclude each other.
+//
+// The composer of the thread pane is the same box (`for-thread`), with its own field, bars and
+// callbacks: the caller wires them to the thread.
 export component Composer inherits Rectangle {
+    // The box writes in the open thread and not in the room.
+    in property <bool> for-thread;
     // Sends the text, quoting the message with the id (empty for none); false if it is refused,
     // which leaves the field as it is.
     callback send(string, string) -> bool;
@@ -368,7 +373,7 @@ export component Composer inherits Rectangle {
                 Text {
                     color: Theme.text-faint;
                     font-size: Theme.font-size-base;
-                    text: @tr("Message");
+                    text: root.for-thread ? @tr("Reply in the thread") : @tr("Message");
                     x: Theme.spacing-none;
                     y: Theme.text-area-padding-v;
                     horizontal-alignment: left;
