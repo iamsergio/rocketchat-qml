@@ -225,6 +225,7 @@ impl Model for MessageModel {
 mod tests {
     use rc_core::domain::{Author, Delivery, Message, MessageKind, Quote, Reaction};
     use rc_core::emoji::CustomEmojis;
+    use rc_core::rich::RichText;
     use slint::Color;
 
     use super::*;
@@ -501,6 +502,17 @@ mod tests {
         unsent.delivery = Delivery::Pending;
         model.apply(&[TimelineChange::Appended(vec![unsent])]);
         assert!(!model.row_data(1).unwrap().has_menu);
+    }
+
+    // ACT-003
+    #[test]
+    fn only_a_body_with_a_link_is_marked_as_having_links() {
+        let mut linked = message("a", "2026-10-01T09:00:00Z");
+        linked.kind = MessageKind::Text(RichText::from_topic("see https://example.com now"));
+        let model = shown(vec![linked, message("b", "2026-10-02T09:00:00Z")]);
+
+        assert!(model.row_data(0).unwrap().has_links);
+        assert!(!model.row_data(1).unwrap().has_links);
     }
 
     // ACT-005

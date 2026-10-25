@@ -96,3 +96,10 @@ Inside a `Rectangle`, the `FlexboxLayout` of `msgReactions` reported (as the `Re
 
 - **Workaround:** `min-height` and `preferred-height` of that `Rectangle` are both `chips.preferred-height` (`message_delegate.slint`), which follows the width and so wraps right.
 - **Possible patch:** the flexbox's layout info taking the width it is given for its height.
+
+## `StyledText` accepts every mouse event, not only those on its links
+
+In `i-slint-core` `items/text.rs` its `input_event` answers `EventAccepted` for every press, move and release (to set the pointer cursor over a link), so an item behind it never sees a click, a double-click or a right-click on the text. The message's double-click for the emoji picker is on the row behind the body.
+
+- **Workaround:** `MessageRow.has-links` (the rendered HTML has an `<a href=`) tells `message_delegate.slint` to put a `TouchArea` over a body without links, which takes the double-click. A body with links reacts to a double-click beside the text only.
+- **Possible patch:** `StyledText` ignoring events that aren't on a link.

@@ -69,7 +69,7 @@ pub fn room_row(room: &Room, avatars: &AvatarUrls) -> RoomRow {
 }
 
 /// The picture in the file at `url`, if there is a url and the file loads.
-fn load_image(url: &str) -> Option<Image> {
+pub fn load_image(url: &str) -> Option<Image> {
     (!url.is_empty())
         .then(|| file_path(url))
         .flatten()
@@ -92,6 +92,7 @@ pub fn message_row(list: &MessageList, row: usize, palette: &Palette) -> Option<
         ),
         MessageKind::System(_) => (StyledText::from_plain_text(""), false),
     };
+    let body_html = message_html(message, list.viewer(), clock);
     let url = message_owner(message).map_or("", |owner| list.avatars().url(&owner));
     let image = load_image(url);
     Some(MessageRow {
@@ -99,7 +100,8 @@ pub fn message_row(list: &MessageList, row: usize, palette: &Palette) -> Option<
         author: author_name(&message.author).into(),
         time: time_text(message.ts, list.zone()).into(),
         body: body(message).into(),
-        body_html: message_html(message, list.viewer(), clock).into(),
+        has_links: body_html.contains("<a href="),
+        body_html: body_html.into(),
         body_styled,
         big_emoji,
         is_system: matches!(message.kind, MessageKind::System(_)),
@@ -112,6 +114,7 @@ pub fn message_row(list: &MessageList, row: usize, palette: &Palette) -> Option<
         reactions: reaction_rows(message, list),
         can_react: can_react(message),
         has_menu: can_quote(message)
+            || can_react(message)
             || can_edit(message, list.viewer(), now)
             || can_delete(message, list.viewer(), now),
         delivery: delivery_name(message.delivery).into(),

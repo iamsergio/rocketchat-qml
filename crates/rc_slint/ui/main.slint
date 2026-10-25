@@ -6,15 +6,16 @@ import "../../../src/gui/fonts/InstrumentSans.ttf";
 import "../../../src/gui/fonts/InstrumentSans-Italic.ttf";
 
 import { ConfirmDialog } from "confirm_dialog.slint";
+import { EmojiPicker } from "emoji_picker.slint";
 import { LoginPage } from "login_page.slint";
 import { RoomPage } from "room_page.slint";
 import { ServerRail } from "server_rail.slint";
 import { StartupPage } from "startup_page.slint";
-import { AccountTile, LoginMode, MessageMenu, MessageRow, RoomRow, RoomSection, SessionStatus } from "structs.slint";
+import { AccountTile, EmojiCell, LoginMode, MessageMenu, MessageRow, RoomRow, RoomSection, SessionStatus } from "structs.slint";
 import { Theme } from "theme.slint";
 
 // The theme, for Rust: the colours it writes into rich text.
-export { AccountTile, LoginMode, MessageRow, RoomRow, RoomSection, SessionStatus, Theme }
+export { AccountTile, EmojiCell, LoginMode, MessageRow, RoomRow, RoomSection, SessionStatus, Theme }
 
 export component MainWindow inherits Window {
     // The version of the app, set from Rust (`rc_core::VERSION`).
@@ -92,6 +93,12 @@ export component MainWindow inherits Window {
     callback menu-allowed(string) -> MessageMenu;
     callback delete-message(string);
     callback react(string, string, bool);
+    // The emoji picker: it lists the emoji that match the query in rows of `emoji-columns` cells.
+    // Rust is told when it opens, which clears the query, and when the query changes.
+    in property <[[EmojiCell]]> emoji-rows;
+    out property <int> emoji-columns: floor((Theme.emoji-picker-width - 2 * Theme.spacing-l) / Theme.emoji-cell-size);
+    callback emoji-picker-opened();
+    callback emoji-query(string);
     // The composer edits a message: it asks for the text of one and for the newest the user can
     // edit, and saves a new text. The answer to the last save is the counter, the message and
     // whether it worked.
@@ -118,6 +125,8 @@ export component MainWindow inherits Window {
     property <string> leaving-name;
     // The message that deleting was asked for, until the user answers.
     property <string> deleting-id;
+    // The message the emoji picker is open for, until the user picks or gives up.
+    in-out property <string> picking-id;
 
     title: @tr("RocketChatQml");
     background: Theme.base;
@@ -223,6 +232,10 @@ export component MainWindow inherits Window {
             react(id, emoji, reacted) => {
                 root.react(id, emoji, reacted);
             }
+            add-reaction(id) => {
+                root.picking-id = id;
+                root.emoji-picker-opened();
+            }
             message-text(id) => {
                 return root.message-text(id);
             }
@@ -314,6 +327,25 @@ export component MainWindow inherits Window {
         }
         cancelled => {
             root.deleting-id = "";
+        }
+    }
+
+    if !root.picking-id.is-empty: EmojiPicker {
+        x: Theme.spacing-none;
+        y: Theme.spacing-none;
+        width: parent.width;
+        height: parent.height;
+        z: Theme.z-modal;
+        rows: root.emoji-rows;
+        query-changed(query) => {
+            root.emoji-query(query);
+        }
+        picked(emoji) => {
+            root.react(root.picking-id, emoji, true);
+            root.picking-id = "";
+        }
+        cancelled => {
+            root.picking-id = "";
         }
     }
 }

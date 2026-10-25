@@ -1,0 +1,116 @@
+// SPDX-FileCopyrightText: 2026 Sergio Martins
+// SPDX-License-Identifier: MIT
+
+import { InputField } from "input_field.slint";
+import { ListView } from "list_view.slint";
+import { EmojiCell } from "structs.slint";
+import { Theme } from "theme.slint";
+
+// The emoji to react with, over the whole window, which it dims and blocks while it is shown: a
+// search field and a grid of the emoji that match it. Picking one emits `picked` with its shortcode
+// (colons included); Escape and a click outside give up. Slint has no grid view, so the grid is a
+// lazy list of rows, which Rust makes as wide as the picker holds cells (`MainWindow.emoji-columns`).
+// The search field is `emojiSearch`, the list `emojiGrid`, and each cell `emojiPick_<shortcode>`
+// without the colons; the cells exist only while their row is in sight.
+export component EmojiPicker inherits Rectangle {
+    in property <[[EmojiCell]]> rows;
+    callback query-changed(string);
+    callback picked(string);
+    callback cancelled();
+
+    background: Theme.modal-dim;
+
+    scope := FocusScope {
+        init => {
+            search.focus-field();
+        }
+        capture-key-pressed(event) => {
+            if event.text == Key.Escape {
+                root.cancelled();
+                return accept;
+            }
+            return reject;
+        }
+
+        // A click outside the panel gives up.
+        TouchArea {
+            clicked => {
+                root.cancelled();
+            }
+        }
+    }
+
+    panel := Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: Theme.emoji-picker-width;
+        height: Theme.emoji-picker-height;
+        background: Theme.raised;
+        border-color: Theme.raised-hover;
+        border-width: Theme.border-width;
+        border-radius: Theme.radius-panel;
+
+        // Takes the clicks that would reach the one behind.
+        TouchArea { }
+
+        VerticalLayout {
+            padding: Theme.spacing-l;
+            spacing: Theme.spacing-l;
+
+            search := InputField {
+                field-id: "emojiSearch";
+                placeholder-text: @tr("Search emoji");
+                changed text => {
+                    root.query-changed(self.text);
+                }
+            }
+
+            ListView {
+                accessible-id: "emojiGrid";
+                accessible-role: list;
+
+                for row in root.rows: Rectangle {
+                    width: parent.width;
+                    height: Theme.emoji-cell-size;
+
+                    HorizontalLayout {
+                        alignment: start;
+                        padding: Theme.spacing-none;
+                        spacing: Theme.spacing-none;
+
+                        for cell in row: Rectangle {
+                            accessible-id: "emojiPick_" + cell.name;
+                            accessible-role: button;
+                            accessible-label: cell.emoji;
+                            width: Theme.emoji-cell-size;
+                            height: Theme.emoji-cell-size;
+                            background: cell-touch.has-hover ? Theme.own-wash : Theme.transparent;
+                            border-radius: Theme.radius-control;
+
+                            if cell.has-image: Image {
+                                width: Theme.emoji-image-size;
+                                height: Theme.emoji-image-size;
+                                source: cell.image;
+                                image-fit: contain;
+                            }
+
+                            if !cell.has-image: Text {
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                                font-size: Theme.font-size-emoji;
+                                text: cell.glyph;
+                            }
+
+                            cell-touch := TouchArea {
+                                mouse-cursor: MouseCursor.pointer;
+                                clicked => {
+                                    root.picked(cell.emoji);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

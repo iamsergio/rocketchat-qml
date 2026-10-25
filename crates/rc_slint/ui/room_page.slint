@@ -66,6 +66,8 @@ export component RoomPage inherits Rectangle {
     callback delete-message(string);
     // The user clicked a chip of a message: add their reaction with the emoji, or take it back.
     callback react(string, string, bool);
+    // The user wants to pick an emoji to react to the message with.
+    callback add-reaction(string);
     // The composer edits a message: its text and the newest editable one are asked for, the new
     // text is saved, and the answer comes back as the counter going up (see `composer.slint`).
     callback message-text(string) -> string;
@@ -435,6 +437,9 @@ export component RoomPage inherits Rectangle {
                             }
                             react(id, emoji, reacted) => {
                                 root.react(id, emoji, reacted);
+                            }
+                            add-reaction(id) => {
+                                root.add-reaction(id);
                             }
                         }
 
