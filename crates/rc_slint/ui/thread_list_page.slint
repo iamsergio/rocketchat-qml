@@ -1,0 +1,260 @@
+// SPDX-FileCopyrightText: 2026 Sergio Martins
+// SPDX-License-Identifier: MIT
+
+import { BusyIndicator } from "busy_indicator.slint";
+import { FlatButton } from "flat_button.slint";
+import { ListView } from "list_view.slint";
+import { ThreadListRow } from "thread_list_row.slint";
+import { ThreadRow } from "structs.slint";
+import { Theme } from "theme.slint";
+
+// One choice of the filter, as wide as its label. It doesn't take the focus, which stays in the
+// page for Escape.
+component Segment inherits Rectangle {
+    in property <string> text;
+    in property <bool> checked;
+    callback clicked();
+
+    accessible-role: button;
+    accessible-label: root.text;
+    accessible-checkable: true;
+    accessible-checked: root.checked;
+    accessible-action-default => {
+        root.clicked();
+    }
+
+    min-width: label.preferred-width + 2 * Theme.spacing-xxl;
+    height: Theme.thread-filter-height;
+    background: root.checked ? Theme.raised-hover : touch.has-hover ? Theme.raised : Theme.transparent;
+    border-radius: Theme.radius-control;
+
+    label := Text {
+        color: root.checked ? Theme.text : Theme.text-muted;
+        font-size: Theme.font-size-small;
+        font-weight: root.checked ? Theme.font-weight-semibold : Theme.font-weight-normal;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        text: root.text;
+    }
+
+    touch := TouchArea {
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+
+// The threads of the open room, in the pane beside it: which ones (all, or those the user follows)
+// and a row for each, the one with the most recent reply first. The pane keeps it, with its place
+// in the list, while a thread is shown. The "Unread" segment and its count (ACT-011) will be the
+// third of the filter.
+export component ThreadListPage inherits FocusScope {
+    in property <[ThreadRow]> threads;
+    // `all` or `following`.
+    in property <string> filter;
+    // The list is what the pane shows: it takes the focus, for Escape, when it comes back.
+    in property <bool> shown;
+    in property <bool> loading;
+    in property <bool> loading-more;
+    // Why the last request failed; empty for none.
+    in property <string> error-text;
+    // What a filter that has no thread says.
+    in property <bool> empty;
+    in property <string> empty-title;
+    in property <string> empty-hint;
+    // The user chose a filter, or asks to try again with the same.
+    callback open-list(string);
+    // The end of the list is in view: the next page is wanted.
+    callback load-more();
+    callback open-thread(string);
+    // Escape: the list closes.
+    callback escape();
+
+    // The end of the list is in view (or all of it is).
+    property <bool> at-end: rows.content-height + rows.content-y <= rows.visible-height + Theme.scroll-tolerance;
+
+    // Asks for the next page. The core ignores the request when there is nothing to load or a
+    // load is in progress.
+    function ask-for-more() {
+        if root.at-end && root.threads.length > 0 {
+            root.load-more();
+        }
+    }
+
+    accessible-id: "threadList";
+    accessible-role: groupbox;
+    visible: root.shown;
+
+    init => {
+        if root.shown {
+            root.focus();
+        }
+    }
+    changed shown => {
+        if root.shown {
+            root.focus();
+        }
+    }
+    changed at-end => {
+        root.ask-for-more();
+    }
+
+    key-pressed(event) => {
+        if event.text == Key.Escape {
+            root.escape();
+            return accept;
+        }
+        reject
+    }
+
+    VerticalLayout {
+        padding: Theme.spacing-none;
+        spacing: Theme.spacing-none;
+
+        // The segmented control: small, at the left, under the header.
+        HorizontalLayout {
+            padding-left: Theme.spacing-xxxl;
+            padding-top: Theme.spacing-xl;
+            padding-bottom: Theme.spacing-l;
+            padding-right: Theme.spacing-none;
+            spacing: Theme.spacing-none;
+
+            Rectangle {
+                width: filters.preferred-width + 2 * Theme.spacing-s;
+                height: Theme.thread-filter-height + 2 * Theme.spacing-s;
+                background: Theme.base;
+                border-radius: Theme.radius-control;
+
+                filters := HorizontalLayout {
+                    padding: Theme.spacing-s;
+                    spacing: Theme.spacing-s;
+
+                    Segment {
+                        accessible-id: "threadListFilterAll";
+                        checked: root.filter == "all";
+                        text: @tr("All");
+                        clicked => {
+                            root.open-list("all");
+                        }
+                    }
+
+                    Segment {
+                        accessible-id: "threadListFilterFollowing";
+                        checked: root.filter == "following";
+                        text: @tr("Following");
+                        clicked => {
+                            root.open-list("following");
+                        }
+                    }
+                }
+            }
+        }
+
+        // Why the last request failed, and the way to try again.
+        if !root.error-text.is-empty: HorizontalLayout {
+            padding: Theme.spacing-xxxl;
+            spacing: Theme.spacing-l;
+
+            Text {
+                accessible-id: "threadListError";
+                horizontal-stretch: 1;
+                color: Theme.error;
+                font-size: Theme.font-size-small;
+                vertical-alignment: center;
+                wrap: word-wrap;
+                text: root.error-text;
+            }
+
+            VerticalLayout {
+                alignment: center;
+                padding: Theme.spacing-none;
+                spacing: Theme.spacing-none;
+
+                FlatButton {
+                    accessible-id: "threadListRetry";
+                    text: @tr("Retry");
+                    clicked => {
+                        root.open-list(root.filter);
+                    }
+                }
+            }
+        }
+
+        Rectangle {
+            vertical-stretch: 1;
+
+            rows := ListView {
+                accessible-id: "threadListView";
+                accessible-role: list;
+                accessible-item-count: root.threads.length;
+                width: parent.width;
+                height: parent.height;
+
+                // A page that leaves the end in view asks for the next one.
+                changed content-height => {
+                    root.ask-for-more();
+                }
+
+                for thread in root.threads: ThreadListRow {
+                    thread: thread;
+                    clicked => {
+                        root.open-thread(thread.id);
+                    }
+                }
+            }
+
+            if root.loading: BusyIndicator {
+                accessible-id: "threadListLoading";
+                accessible-role: image;
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                width: Theme.busy-indicator-large-size;
+                height: Theme.busy-indicator-large-size;
+            }
+
+            // What the filter has nothing of.
+            if root.empty: Rectangle {
+                accessible-id: "threadListEmpty";
+                accessible-role: groupbox;
+
+                VerticalLayout {
+                    alignment: center;
+                    padding: Theme.spacing-xxxl;
+                    spacing: Theme.spacing-l;
+
+                    Text {
+                        accessible-id: "threadListEmptyTitle";
+                        color: Theme.text;
+                        font-weight: Theme.font-weight-semibold;
+                        horizontal-alignment: center;
+                        wrap: word-wrap;
+                        text: root.empty-title;
+                    }
+
+                    Text {
+                        accessible-id: "threadListEmptyHint";
+                        color: Theme.text-faint;
+                        font-size: Theme.font-size-small;
+                        horizontal-alignment: center;
+                        wrap: word-wrap;
+                        text: root.empty-hint;
+                    }
+                }
+            }
+        }
+
+        // Under the last row: a spinner while the next page loads.
+        if root.loading-more: Rectangle {
+            height: Theme.history-footer-height;
+
+            BusyIndicator {
+                accessible-id: "threadListLoadingMore";
+                accessible-role: image;
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                width: Theme.busy-indicator-size;
+                height: Theme.busy-indicator-size;
+            }
+        }
+    }
+}

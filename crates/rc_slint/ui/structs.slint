@@ -72,6 +72,46 @@ export struct RoomRow {
     avatar: image,
 }
 
+// One row of the list of a room's threads: the parent of a thread, as `rc_view::thread_list_view`
+// and `message_view` say it. The marks of a thread with unread replies (`unread`, `mentioned`)
+// will be two more fields (ACT-011).
+export struct ThreadRow {
+    // The id of the parent, which names the row.
+    id: string,
+    author: string,
+    // The time of the last reply, or the heading of its day.
+    last-reply: string,
+    // The start of the parent's text, on one line: the row clamps it to two.
+    text: string,
+    // "N replies".
+    summary: string,
+    // The author's avatar, as the room list has it.
+    initials: string,
+    initials-color: color,
+    avatar-url: string,
+    has-avatar: bool,
+    avatar: image,
+}
+
+// What the pane beside the room shows besides the thread itself: the `rc_view::thread_list_view`
+// `ThreadListState`.
+export struct ThreadPaneState {
+    // The pane shows something: the thread, or else the list.
+    open: bool,
+    shows-thread: bool,
+    shows-list: bool,
+    // `all` or `following`.
+    filter: string,
+    loading: bool,
+    loading-more: bool,
+    // Why the last request failed; empty for none.
+    error-text: string,
+    // The list is open and has nothing to show, and the words that say so.
+    empty: bool,
+    empty-title: string,
+    empty-hint: string,
+}
+
 // One message quoted by a message: an `rc_view::quote_view::QuoteView`.
 export struct QuoteRow {
     // The username of the quoted message's author.

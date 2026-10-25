@@ -5,6 +5,7 @@
 //! decisions of its own.
 
 use jiff::Timestamp;
+use jiff::tz::TimeZone;
 use rc_core::domain::{Message, MessageKind, Room};
 use rc_core::policy::can_react;
 use rc_view::accounts::{AccountView, Status};
@@ -20,11 +21,12 @@ use rc_view::quote_view::quotes;
 use rc_view::reaction_view::reactions;
 use rc_view::rich_html::{message_html, render};
 use rc_view::room_view::kind_name;
+use rc_view::thread_list_view::{row_summary, row_text};
 use rc_view::viewer::{Clock, Viewer};
 use slint::{Color, Image, ModelRc, StyledText, VecModel};
 
 use crate::rich_markdown::{self, Palette};
-use crate::ui::{AccountTile, MessageRow, QuoteRow, ReactionRow, RoomRow, RoomSection};
+use crate::ui::{AccountTile, MessageRow, QuoteRow, ReactionRow, RoomRow, RoomSection, ThreadRow};
 
 /// Counts are `u32`, Slint's are `int`: saturate.
 fn count(value: u32) -> i32 {
@@ -63,6 +65,31 @@ pub fn room_row(room: &Room, avatars: &AvatarUrls) -> RoomRow {
         can_leave: room.can_leave(),
         initials: initials.into(),
         initials_color: parse_color(&color),
+        avatar_url: url.into(),
+        has_avatar: image.is_some(),
+        avatar: image.unwrap_or_default(),
+    }
+}
+
+/// The row of a thread of the list, from its parent, with the avatar file the author has now. The
+/// time of the last reply is read now, in `zone`.
+pub fn thread_row(
+    parent: &Message,
+    avatars: &AvatarUrls,
+    zone: &TimeZone,
+    now: Timestamp,
+) -> ThreadRow {
+    let name = author_name(&parent.author);
+    let url = message_owner(parent).map_or("", |owner| avatars.url(&owner));
+    let image = load_image(url);
+    ThreadRow {
+        id: parent.id.as_str().into(),
+        author: name.into(),
+        last_reply: thread_last_reply_text(parent, zone, now).into(),
+        text: row_text(parent).into(),
+        summary: row_summary(parent).into(),
+        initials: initials(name).into(),
+        initials_color: parse_color(&color(&parent.author.username)),
         avatar_url: url.into(),
         has_avatar: image.is_some(),
         avatar: image.unwrap_or_default(),

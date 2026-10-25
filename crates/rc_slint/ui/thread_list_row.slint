@@ -1,0 +1,129 @@
+// SPDX-FileCopyrightText: 2026 Sergio Martins
+// SPDX-License-Identifier: MIT
+
+import { Avatar } from "avatar.slint";
+import { Icon } from "icon.slint";
+import { ThreadRow } from "structs.slint";
+import { Theme } from "theme.slint";
+
+// One thread of the list: who started it and when it last had a reply, the start of what they
+// wrote, clamped to two lines, and how many replies it has. Named by the parent's id, as messages
+// are. Clicking it opens the thread in the pane.
+//
+// A row is as high as its content: one or two lines of text. The marks of a thread with unread
+// replies (ACT-011) go at the end of the last line.
+export component ThreadListRow inherits Rectangle {
+    in property <ThreadRow> thread;
+    callback clicked();
+
+    accessible-id: "threadListRow_" + root.thread.id;
+    accessible-role: button;
+    accessible-label: root.thread.text;
+    accessible-action-default => {
+        root.clicked();
+    }
+
+    height: content.preferred-height;
+    background: touch.has-hover ? Theme.raised : Theme.transparent;
+
+    content := HorizontalLayout {
+        padding-left: Theme.spacing-xxxl;
+        padding-right: Theme.spacing-xxxl;
+        padding-top: Theme.spacing-xl;
+        padding-bottom: Theme.spacing-xl;
+        spacing: Theme.spacing-xl;
+
+        VerticalLayout {
+            alignment: start;
+            width: Theme.thread-row-avatar-size;
+            padding: Theme.spacing-none;
+            spacing: Theme.spacing-none;
+
+            Avatar {
+                width: Theme.thread-row-avatar-size;
+                height: Theme.thread-row-avatar-size;
+                source: root.thread.avatar;
+                has-image: root.thread.has-avatar;
+                url: root.thread.avatar-url;
+                initials: root.thread.initials;
+                fill-color: root.thread.initials-color;
+                image-name: "threadListAvatar";
+                placeholder-name: "threadListAvatarPlaceholder";
+                initials-name: "threadListAvatarInitials";
+            }
+        }
+
+        VerticalLayout {
+            horizontal-stretch: 1;
+            padding: Theme.spacing-none;
+            spacing: Theme.spacing-s;
+
+            HorizontalLayout {
+                padding: Theme.spacing-none;
+                spacing: Theme.spacing-l;
+
+                Text {
+                    accessible-id: "threadListAuthor";
+                    horizontal-stretch: 1;
+                    color: Theme.text;
+                    font-weight: Theme.font-weight-semibold;
+                    overflow: elide;
+                    text: root.thread.author;
+                }
+
+                Text {
+                    accessible-id: "threadListTime";
+                    color: Theme.text-faint;
+                    font-size: Theme.font-size-tiny;
+                    text: root.thread.last-reply;
+                }
+            }
+
+            // Wrapped at an explicit width: a layout can't tell a wrapped text its height otherwise.
+            Text {
+                accessible-id: "threadListText";
+                width: root.width - 2 * Theme.spacing-xxxl - Theme.thread-row-avatar-size - Theme.spacing-xl;
+                color: Theme.text-muted;
+                max-lines: Theme.thread-row-text-lines;
+                overflow: elide;
+                wrap: word-wrap;
+                text: root.thread.text;
+            }
+
+            HorizontalLayout {
+                padding: Theme.spacing-none;
+                spacing: Theme.spacing-m;
+
+                VerticalLayout {
+                    alignment: center;
+                    width: Theme.thread-summary-icon-size;
+                    padding: Theme.spacing-none;
+                    spacing: Theme.spacing-none;
+
+                    Icon {
+                        width: Theme.thread-summary-icon-size;
+                        height: Theme.thread-summary-icon-size;
+                        source: @image-url("../../../src/gui/icons/thread.svg");
+                        tint: Theme.own;
+                    }
+                }
+
+                Text {
+                    accessible-id: "threadListSummary";
+                    horizontal-stretch: 1;
+                    color: Theme.own;
+                    font-size: Theme.font-size-small;
+                    overflow: elide;
+                    text: root.thread.summary;
+                }
+            }
+        }
+    }
+
+    touch := TouchArea {
+        mouse-cursor: MouseCursor.pointer;
+        clicked => {
+            root.clicked();
+        }
+    }
+}

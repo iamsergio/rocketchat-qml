@@ -40,6 +40,7 @@ use crate::rich_markdown::{self, Palette};
 use crate::room_model::RoomModel;
 use crate::room_search_model::RoomSearchModel;
 use crate::rows::tile;
+use crate::thread_list_model::ThreadListModel;
 use crate::ui::{self, AccountTile, MainWindow, MessageMenu, Theme};
 
 thread_local! {
@@ -61,6 +62,8 @@ struct App {
     messages: Rc<MessageModel>,
     /// The messages of the open thread beside the room: the parent, then the replies.
     thread_messages: Rc<MessageModel>,
+    /// The threads of the open room, the one with the most recent reply first.
+    thread_list: Rc<ThreadListModel>,
     /// The emoji of the picker, in rows, with the current account's custom emoji.
     emoji_picker: Rc<EmojiPickerModel>,
     /// The rooms that match the query, while one is typed.
@@ -118,6 +121,7 @@ pub fn start(window: &MainWindow) {
     ));
     window.set_tiles(ModelRc::from(Rc::clone(&tiles)));
     window.set_rooms(ModelRc::from(Rc::clone(&rooms)));
+    let thread_list = Rc::new(ThreadListModel::default());
     let found = Rc::new(RoomSearchModel::default());
     let emoji_picker = Rc::new(EmojiPickerModel::new(
         usize::try_from(window.get_emoji_columns()).unwrap_or(1),
@@ -126,6 +130,7 @@ pub fn start(window: &MainWindow) {
     window.set_search_results(ModelRc::from(Rc::clone(&found)));
     window.set_messages(ModelRc::from(Rc::clone(&messages)));
     window.set_thread_messages(ModelRc::from(Rc::clone(&thread_messages)));
+    window.set_thread_list(ModelRc::from(Rc::clone(&thread_list)));
     window.set_prefill_password(dev_login::prefill().password.into());
     connect_commands(window);
 
@@ -138,6 +143,7 @@ pub fn start(window: &MainWindow) {
             rooms,
             messages,
             thread_messages,
+            thread_list,
             emoji_picker,
             found,
             query: String::new(),
@@ -208,6 +214,10 @@ fn connect_commands(window: &MainWindow) {
     window.on_open_thread(|id| App::with(|app| app.open_thread(&id)));
     window.on_close_thread(|| App::with(|app| app.close_pane()));
     window.on_thread_escape(|| App::with(|app| app.escape_pane()));
+    window.on_toggle_threads(|| App::with(|app| app.toggle_pane()));
+    window.on_thread_back(|| App::with(|app| app.back_pane()));
+    window.on_open_thread_list(|filter| App::with(|app| app.open_thread_list(&filter)));
+    window.on_load_more_threads(|| App::with(|app| app.load_more_threads()));
     window.on_load_older_thread(|| App::with(|app| app.load_older_thread()));
     window.on_send_reply(|text, quoted, also| {
         let mut sent = false;
@@ -369,6 +379,11 @@ impl App {
                 self.show_thread();
             }
             Event::ThreadStatus(_) => self.show_thread(),
+            Event::ThreadList(changes) => {
+                self.thread_list.apply(&changes);
+                self.show_thread_list();
+            }
+            Event::ThreadListStatus(_) => self.show_thread_list(),
             Event::Typing { .. } => self.show_typing(),
             Event::ThreadTyping { .. } => self.show_thread_typing(),
             Event::RoomAction { outcome, .. } => {
@@ -390,6 +405,7 @@ impl App {
                 self.found.set_avatars(&changes);
                 self.messages.set_avatars(&changes);
                 self.thread_messages.set_avatars(&changes);
+                self.thread_list.set_avatars(&changes);
             }
             Event::Images(updates) => {
                 let cache = self.switchboard.accounts().current_cache();
@@ -424,6 +440,8 @@ impl App {
             cache.emoji_images(),
         );
         self.want_emoji_images(names);
+        self.thread_list
+            .show(&cache.thread_list_snapshot(), cache.avatars());
         self.emoji_picker
             .show(&cache.viewer().emoji, cache.emoji_images());
         if self.emoji_picker_open() {

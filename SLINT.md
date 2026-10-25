@@ -34,7 +34,7 @@ The testing backend's click on an element made by an `if` (a conditional child) 
 
 The compiler instantiates a `for` lazily only inside a component named `ListView` (it matches the name, `object_tree.rs`). The standard widgets' `ListView` brings a style with it.
 
-- **Workaround:** `crates/rc_slint/ui/list_view.slint` is a style-free component of that name. Check it on each Slint upgrade.
+- **Workaround:** `crates/rc_slint/ui/list_view.slint` is a style-free component of that name. Check it on each Slint upgrade. It averages the heights of the rows it has made to size the content and place the scroll bar, so rows of mixed heights (the room list, the thread list) make those a guess.
 - **Possible patch:** a documented attribute or property that asks for lazy instantiation.
 
 ## The lazy `ListView` can't keep its place on an insert at the top, or bottom-align a few rows
