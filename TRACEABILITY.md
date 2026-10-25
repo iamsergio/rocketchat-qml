@@ -107,7 +107,7 @@ The `Slint` column is how much of a feature's GUI tests run against `rocketchat_
 | ACT-008 | Directory search and join channel | n/a | todo |
 | ACT-009 | File upload with progress | n/a | todo |
 | ACT-010 | A room's threads, listed in the pane beside it: all or followed, newest reply first | done | unit: `crates/rc_api/src/wire.rs`, `crates/rc_core/src/threads.rs`, `crates/rc_core/src/client/tests/thread_list.rs`, `crates/rc_slint/src/thread_list_model.rs`, `crates/rc_view/src/cache.rs`, `crates/rc_view/src/thread_list_view.rs`; api: `crates/rc_api/tests/rest.rs`; contract: `crates/rc_api/tests/contract.rs`, `crates/rc_core/tests/contract.rs`; GUI: `crates/rc_gui_tests/tests/thread_list.rs` |
-| ACT-011 | Threads with unread replies: the header badge, the emphasis of a row and the Unread filter | todo | unit: `crates/rc_api/src/wire.rs`, `crates/rc_core/src/threads.rs`, `crates/rc_core/src/client/tests/thread_list.rs`, `crates/rc_view/src/thread_list_view.rs`; api: `crates/rc_api/tests/rest.rs`; contract: `crates/rc_api/tests/contract.rs`, `crates/rc_core/tests/contract.rs`; GUI: `crates/rc_gui_tests/tests/thread_list.rs` |
+| ACT-011 | Threads with unread replies: the header badge, the emphasis of a row and the Unread filter | done | unit: `crates/rc_api/src/wire.rs`, `crates/rc_core/src/threads.rs`, `crates/rc_core/src/client/tests/thread_list.rs`, `crates/rc_slint/src/thread_list_model.rs`, `crates/rc_view/src/thread_list_view.rs`; api: `crates/rc_api/tests/rest.rs`; contract: `crates/rc_api/tests/contract.rs`, `crates/rc_core/tests/contract.rs`; GUI: `crates/rc_gui_tests/tests/thread_list.rs` |
 
 ## Persistence and desktop
 

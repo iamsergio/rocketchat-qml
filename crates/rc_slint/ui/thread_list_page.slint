@@ -13,6 +13,10 @@ import { Theme } from "theme.slint";
 component Segment inherits Rectangle {
     in property <string> text;
     in property <bool> checked;
+    // Shown in faint text after the label while above zero.
+    in property <int> count;
+    // The name of the count, for the tests.
+    in property <string> count-id;
     callback clicked();
 
     accessible-role: button;
@@ -23,18 +27,31 @@ component Segment inherits Rectangle {
         root.clicked();
     }
 
-    min-width: label.preferred-width + 2 * Theme.spacing-xxl;
+    min-width: content.preferred-width + 2 * Theme.spacing-xxl;
     height: Theme.thread-filter-height;
     background: root.checked ? Theme.raised-hover : touch.has-hover ? Theme.raised : Theme.transparent;
     border-radius: Theme.radius-control;
 
-    label := Text {
-        color: root.checked ? Theme.text : Theme.text-muted;
-        font-size: Theme.font-size-small;
-        font-weight: root.checked ? Theme.font-weight-semibold : Theme.font-weight-normal;
-        horizontal-alignment: center;
-        vertical-alignment: center;
-        text: root.text;
+    content := HorizontalLayout {
+        alignment: center;
+        padding: Theme.spacing-none;
+        spacing: Theme.spacing-s;
+
+        Text {
+            color: root.checked ? Theme.text : Theme.text-muted;
+            font-size: Theme.font-size-small;
+            font-weight: root.checked ? Theme.font-weight-semibold : Theme.font-weight-normal;
+            vertical-alignment: center;
+            text: root.text;
+        }
+
+        if root.count > 0: Text {
+            accessible-id: root.count-id;
+            color: Theme.text-faint;
+            font-size: Theme.font-size-tiny;
+            vertical-alignment: center;
+            text: root.count;
+        }
     }
 
     touch := TouchArea {
@@ -46,11 +63,12 @@ component Segment inherits Rectangle {
 
 // The threads of the open room, in the pane beside it: which ones (all, or those the user follows)
 // and a row for each, the one with the most recent reply first. The pane keeps it, with its place
-// in the list, while a thread is shown. The "Unread" segment and its count (ACT-011) will be the
-// third of the filter.
+// in the list, while a thread is shown.
 export component ThreadListPage inherits FocusScope {
     in property <[ThreadRow]> threads;
-    // `all` or `following`.
+    // How many threads have replies the user hasn't read.
+    in property <int> unread-count;
+    // `all`, `following` or `unread`.
     in property <string> filter;
     // The list is what the pane shows: it takes the focus, for Escape, when it comes back.
     in property <bool> shown;
@@ -144,6 +162,17 @@ export component ThreadListPage inherits FocusScope {
                         text: @tr("Following");
                         clicked => {
                             root.open-list("following");
+                        }
+                    }
+
+                    Segment {
+                        accessible-id: "threadListFilterUnread";
+                        checked: root.filter == "unread";
+                        count: root.unread-count;
+                        count-id: "threadListFilterUnreadCount";
+                        text: @tr("Unread");
+                        clicked => {
+                            root.open-list("unread");
                         }
                     }
                 }

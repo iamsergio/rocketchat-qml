@@ -10,8 +10,9 @@ import { Theme } from "theme.slint";
 // wrote, clamped to two lines, and how many replies it has. Named by the parent's id, as messages
 // are. Clicking it opens the thread in the pane.
 //
-// A row is as high as its content: one or two lines of text. The marks of a thread with unread
-// replies (ACT-011) go at the end of the last line.
+// A row is as high as its content: one or two lines of text. A thread with unread replies has its
+// text lit and the marks "New" and, if one of them mentions the user, "@" at the end of the last
+// line.
 export component ThreadListRow inherits Rectangle {
     in property <ThreadRow> thread;
     callback clicked();
@@ -83,7 +84,8 @@ export component ThreadListRow inherits Rectangle {
             Text {
                 accessible-id: "threadListText";
                 width: root.width - 2 * Theme.spacing-xxxl - Theme.thread-row-avatar-size - Theme.spacing-xl;
-                color: Theme.text-muted;
+                color: root.thread.unread ? Theme.text : Theme.text-muted;
+                font-weight: root.thread.unread ? Theme.font-weight-medium : Theme.font-weight-normal;
                 max-lines: Theme.thread-row-text-lines;
                 overflow: elide;
                 wrap: word-wrap;
@@ -115,6 +117,58 @@ export component ThreadListRow inherits Rectangle {
                     font-size: Theme.font-size-small;
                     overflow: elide;
                     text: root.thread.summary;
+                }
+
+                // The server says which threads are unread, not how many replies are.
+                if root.thread.unread: VerticalLayout {
+                    alignment: center;
+                    width: max(new-label.preferred-width + Theme.badge-padding-h, Theme.unread-badge-min-width);
+                    padding: Theme.spacing-none;
+                    spacing: Theme.spacing-none;
+
+                    Rectangle {
+                        accessible-id: "threadListNew";
+                        accessible-role: text;
+                        accessible-value: new-label.text;
+                        height: Theme.unread-badge-height;
+                        background: Theme.raised-hover;
+                        border-radius: self.height / 2;
+
+                        new-label := Text {
+                            x: (parent.width - self.width) / 2;
+                            y: (parent.height - self.height) / 2;
+                            color: Theme.text;
+                            font-size: Theme.font-size-tiny;
+                            font-weight: Theme.font-weight-bold;
+                            text: @tr("New");
+                        }
+                    }
+                }
+
+                // A reply that mentions the user.
+                if root.thread.mentioned: VerticalLayout {
+                    alignment: center;
+                    width: Theme.unread-badge-min-width;
+                    padding: Theme.spacing-none;
+                    spacing: Theme.spacing-none;
+
+                    Rectangle {
+                        accessible-id: "threadListMention";
+                        accessible-role: text;
+                        accessible-value: "@";
+                        height: Theme.unread-badge-height;
+                        background: Theme.signal;
+                        border-radius: self.height / 2;
+
+                        Text {
+                            x: (parent.width - self.width) / 2;
+                            y: (parent.height - self.height) / 2;
+                            color: Theme.text-on-signal;
+                            font-size: Theme.font-size-tiny;
+                            font-weight: Theme.font-weight-bold;
+                            text: "@";
+                        }
+                    }
                 }
             }
         }
