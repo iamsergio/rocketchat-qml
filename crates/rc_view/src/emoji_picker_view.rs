@@ -54,6 +54,17 @@ impl Picker {
         self.filter();
     }
 
+    /// The names (without colons) of all the custom emoji, whatever the query: the ones a frontend
+    /// that draws images from files asks the core for. The custom emoji come first in the catalog.
+    #[must_use]
+    pub fn custom_names(&self) -> Vec<String> {
+        self.catalog
+            .iter()
+            .take_while(|emoji| !emoji.image.is_empty())
+            .map(|emoji| emoji.shortcode.trim_matches(':').to_owned())
+            .collect()
+    }
+
     /// How many emoji match.
     #[must_use]
     pub fn len(&self) -> usize {
@@ -131,6 +142,15 @@ mod tests {
         assert!(shortcodes(&picker).contains(&":rocket:"));
         picker.set_query("no_such_emoji_at_all");
         assert_eq!(picker.len(), 0);
+    }
+
+    // ACT-003
+    #[test]
+    fn the_custom_names_are_all_of_them_whatever_the_query() {
+        let mut picker = Picker::with_emoji(custom());
+        picker.set_query("rocket");
+        assert_eq!(picker.custom_names(), ["zz_blob"]);
+        assert!(Picker::default().custom_names().is_empty());
     }
 
     // ACT-003

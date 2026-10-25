@@ -130,6 +130,9 @@ export struct MessageRow {
     // is made. `can-react`: the user can add or take back a reaction by clicking a chip.
     reactions: [ReactionRow],
     can-react: bool,
+    // The body has a link. Its text takes every click then, so that a double-click on it can't
+    // reach the message behind (see `message_delegate.slint`).
+    has-links: bool,
     // The message had a menu when the row was made (the user could quote, edit or delete it):
     // the button shows and a right-click opens. What the menu offers is asked for when it opens,
     // since the time limits of the server's policy run out.
@@ -147,6 +150,18 @@ export struct MessageRow {
 // What the menu of a message offers now, from the `menu-allowed` callback.
 export struct MessageMenu {
     can-quote: bool,
+    can-react: bool,
     can-edit: bool,
     can-delete: bool,
+}
+
+// One emoji of the picker. `name` is the shortcode without its colons, which names the cell for the
+// GUI tests; `emoji` is the shortcode with them, which a reaction is made of. A custom emoji has
+// `has-image` once its file is there, and shows its `name` until then.
+export struct EmojiCell {
+    name: string,
+    emoji: string,
+    glyph: string,
+    has-image: bool,
+    image: image,
 }

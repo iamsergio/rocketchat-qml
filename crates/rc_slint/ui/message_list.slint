@@ -38,6 +38,7 @@ export component MessageList inherits FocusScope {
     callback edit(string);
     callback delete(string);
     callback react(string, string, bool);
+    callback add-reaction(string);
 
     property <int> seen-prepends;
     property <int> seen-resets;
@@ -192,6 +193,9 @@ export component MessageList inherits FocusScope {
                 }
                 react(id, emoji, reacted) => {
                     root.react(id, emoji, reacted);
+                }
+                add-reaction(id) => {
+                    root.add-reaction(id);
                 }
             }
         }

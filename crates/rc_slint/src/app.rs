@@ -19,6 +19,7 @@ use std::rc::Rc;
 use jiff::Timestamp;
 use rc_core::adapters::DiskFileCache;
 use rc_core::domain::{AccountId, MessageId, RoomId};
+use rc_core::policy::can_react;
 use rc_core::policy::{ActionError, MessageAction};
 use rc_core::{AccountHandle, Client, Event};
 use rc_view::accounts::AccountChange;
@@ -34,6 +35,7 @@ use rc_view::switchboard::{Shown, Switchboard};
 use secrecy::SecretString;
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel, Weak};
 
+use crate::emoji_picker_model::EmojiPickerModel;
 use crate::message_model::MessageModel;
 use crate::rich_markdown::{self, Palette};
 use crate::room_model::RoomModel;
@@ -58,6 +60,8 @@ struct App {
     rooms: Rc<RoomModel>,
     /// The messages of the open room, oldest first.
     messages: Rc<MessageModel>,
+    /// The emoji of the picker, in rows, with the current account's custom emoji.
+    emoji_picker: Rc<EmojiPickerModel>,
     /// The rooms that match the query, while one is typed.
     found: Rc<RoomSearchModel>,
     /// What the search field holds, as typed.
@@ -109,6 +113,10 @@ pub fn start(window: &MainWindow) {
     window.set_tiles(ModelRc::from(Rc::clone(&tiles)));
     window.set_rooms(ModelRc::from(Rc::clone(&rooms)));
     let found = Rc::new(RoomSearchModel::default());
+    let emoji_picker = Rc::new(EmojiPickerModel::new(
+        usize::try_from(window.get_emoji_columns()).unwrap_or(1),
+    ));
+    window.set_emoji_rows(ModelRc::from(Rc::clone(&emoji_picker)));
     window.set_search_results(ModelRc::from(Rc::clone(&found)));
     window.set_messages(ModelRc::from(Rc::clone(&messages)));
     window.set_prefill_password(dev_login::prefill().password.into());
@@ -122,6 +130,7 @@ pub fn start(window: &MainWindow) {
             tiles,
             rooms,
             messages,
+            emoji_picker,
             found,
             query: String::new(),
             searches: 0,
@@ -185,6 +194,8 @@ fn connect_commands(window: &MainWindow) {
     window.on_save_edit(|id, text| App::with(|app| app.edit_message(&id, &text)));
     window.on_delete_message(|id| App::with(|app| app.delete_message(&id)));
     window.on_react(|id, emoji, react| App::with(|app| app.react(&id, &emoji, react)));
+    window.on_emoji_picker_opened(|| App::with(|app| app.open_emoji_picker()));
+    window.on_emoji_query(|query| App::with(|app| app.emoji_picker.set_query(&query)));
     window.on_load_older(|| App::with(|app| app.load_older()));
     window.on_open_link(|url| open_link(&url));
     let weak = window.as_weak();
@@ -309,14 +320,20 @@ impl App {
             Event::CustomEmoji(_) => {
                 // The reactions know their custom emoji now; the files of the ones the core
                 // ignored before are asked for again.
-                self.messages
-                    .set_viewer(self.switchboard.accounts().current_cache().viewer());
+                let cache = self.switchboard.accounts().current_cache();
+                let viewer = cache.viewer();
+                self.emoji_picker.show(&viewer.emoji, cache.emoji_images());
+                self.messages.set_viewer(viewer);
                 self.want_emoji_images(self.messages.custom_emoji_names());
+                if self.emoji_picker_open() {
+                    self.want_emoji_images(self.emoji_picker.custom_names());
+                }
             }
             Event::EmojiImages(updates) => {
                 let cache = self.switchboard.accounts().current_cache();
-                self.messages
-                    .set_emoji_images(&cache.emoji_image_changes(&updates));
+                let changes = cache.emoji_image_changes(&updates);
+                self.messages.set_emoji_images(&changes);
+                self.emoji_picker.set_emoji_images(&changes);
             }
             Event::TimelineStatus(_) => self.show_room(),
             Event::Typing { .. } => self.show_typing(),
@@ -362,6 +379,11 @@ impl App {
             cache.emoji_images(),
         );
         self.want_emoji_images(names);
+        self.emoji_picker
+            .show(&cache.viewer().emoji, cache.emoji_images());
+        if self.emoji_picker_open() {
+            self.want_emoji_images(self.emoji_picker.custom_names());
+        }
         self.show_counters();
         self.show_session(&self.switchboard.accounts().session_view());
         self.show_room();
@@ -601,6 +623,7 @@ impl App {
             .held(id)
             .map_or_else(MessageMenu::default, |message| MessageMenu {
                 can_quote: can_quote(message),
+                can_react: can_react(message),
                 can_edit: can_edit(message, &viewer, now),
                 can_delete: can_delete(message, &viewer, now),
             })
@@ -641,6 +664,20 @@ impl App {
                 account.want_emoji_images(names);
             });
         }
+    }
+
+    /// Whether the emoji picker is on screen.
+    fn emoji_picker_open(&self) -> bool {
+        self.window
+            .upgrade()
+            .is_some_and(|window| !window.get_picking_id().is_empty())
+    }
+
+    /// The picker opened: it starts with no query, and the files of all the server's custom emoji
+    /// are asked for, which costs nothing for the ones the core has (it keeps track).
+    fn open_emoji_picker(&self) {
+        self.emoji_picker.set_query("");
+        self.want_emoji_images(self.emoji_picker.custom_names());
     }
 
     /// Adds the user's reaction to a message, or takes it back. The answer is

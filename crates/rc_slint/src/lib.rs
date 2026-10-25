@@ -6,6 +6,7 @@
 //! core.
 
 pub mod app;
+mod emoji_picker_model;
 mod message_model;
 pub mod rich_markdown;
 mod room_model;

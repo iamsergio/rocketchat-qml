@@ -29,6 +29,9 @@ export component MessageDelegate inherits Rectangle {
     callback delete(string);
     // The user clicked a chip: add their reaction with the emoji (the shortcode), or take it back.
     callback react(string, string, bool);
+    // The user wants to pick an emoji to react to the message (by its id) with: from the menu, the
+    // "+" chip or a double-click.
+    callback add-reaction(string);
 
     // The width that wrapped texts have: the row's, less the space around them. Given explicitly,
     // since a wrapped text can't tell its height from the width a layout will give it.
@@ -40,10 +43,13 @@ export component MessageDelegate inherits Rectangle {
     // What the menu offers, as of when it was opened; and where it opens, in the message's own
     // coordinates.
     property <bool> can-quote;
+    property <bool> can-react;
     property <bool> can-edit;
     property <bool> can-delete;
     property <length> menu-x;
     property <length> menu-y;
+    // The pointer is over a chip, which takes it from the row behind: the "+" stays.
+    property <bool> over-chip;
 
     // Opens the menu at `x`, `y` unless it would be empty.
     function open-menu(x: length, y: length) {
@@ -52,9 +58,10 @@ export component MessageDelegate inherits Rectangle {
         }
         let allowed = root.menu-allowed(root.message.id);
         root.can-quote = allowed.can-quote;
+        root.can-react = allowed.can-react;
         root.can-edit = allowed.can-edit;
         root.can-delete = allowed.can-delete;
-        if allowed.can-quote || allowed.can-edit || allowed.can-delete {
+        if allowed.can-quote || allowed.can-react || allowed.can-edit || allowed.can-delete {
             root.menu-x = x;
             root.menu-y = y;
             menu.show();
@@ -117,6 +124,11 @@ export component MessageDelegate inherits Rectangle {
 
             // Behind the message, so that what is on it takes its own clicks.
             row-touch := TouchArea {
+                double-clicked => {
+                    if root.message.can-react {
+                        root.add-reaction(root.message.id);
+                    }
+                }
                 pointer-event(event) => {
                     if event.button == PointerEventButton.right && event.kind == PointerEventKind.up {
                         root.open-menu(self.absolute-position.x + self.mouse-x - root.absolute-position.x, self.absolute-position.y + self.mouse-y - root.absolute-position.y);
@@ -353,6 +365,18 @@ export component MessageDelegate inherits Rectangle {
                                 root.open-link(url);
                             }
                         }
+
+                        // The text takes every click, not only those on its links, so the message
+                        // behind never sees a double-click on it. Without links there is nothing to
+                        // click on, and this takes the double-click instead. (With links, the text
+                        // beside it still works.)
+                        if !root.message.has-links: TouchArea {
+                            double-clicked => {
+                                if root.message.can-react {
+                                    root.add-reaction(root.message.id);
+                                }
+                            }
+                        }
                     }
 
                     // What users reacted with: a chip for each emoji, in the server's order, with
@@ -422,11 +446,43 @@ export component MessageDelegate inherits Rectangle {
                                 }
 
                                 chip-touch := TouchArea {
+                                    changed has-hover => {
+                                        root.over-chip = self.has-hover;
+                                    }
                                     mouse-cursor: root.message.can-react ? MouseCursor.pointer : MouseCursor.default;
                                     clicked => {
                                         if root.message.can-react {
                                             root.react(root.message.id, reaction.emoji, !reaction.mine);
                                         }
+                                    }
+                                }
+                            }
+
+                            // Another emoji of the user's choosing. It keeps its place, clear until
+                            // the pointer is over the message, so the chips don't move.
+                            if root.message.can-react: Rectangle {
+                                accessible-id: "reactionAdd";
+                                accessible-role: button;
+                                accessible-label: @tr("Add reaction");
+                                width: Theme.chip-add-width;
+                                height: Theme.chip-height;
+                                opacity: row-touch.has-hover || root.over-chip || add-touch.has-hover ? Theme.opaque : Theme.clear;
+                                background: Theme.raised;
+                                border-color: add-touch.has-hover ? Theme.raised-hover : Theme.transparent;
+                                border-width: Theme.border-width;
+                                border-radius: self.height / 2;
+
+                                Text {
+                                    color: Theme.text-muted;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                    text: "+";
+                                }
+
+                                add-touch := TouchArea {
+                                    mouse-cursor: MouseCursor.pointer;
+                                    clicked => {
+                                        root.add-reaction(root.message.id);
                                     }
                                 }
                             }
@@ -487,6 +543,17 @@ export component MessageDelegate inherits Rectangle {
                     triggered => {
                         menu.close();
                         root.quote(root.message.id);
+                    }
+                }
+
+                MenuItem {
+                    accessible-id: "msgReactAction";
+                    visible: root.can-react;
+                    height: self.visible ? Theme.menu-item-height : Theme.spacing-none;
+                    text: @tr("Add reaction");
+                    triggered => {
+                        menu.close();
+                        root.add-reaction(root.message.id);
                     }
                 }
 
