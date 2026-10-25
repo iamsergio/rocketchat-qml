@@ -4,115 +4,29 @@
 //! What the models show for an avatar: the URL of the file, and the initials on a colour while
 //! there is none. Plain Rust, so it can be unit-tested without Qt.
 
-use std::collections::{HashMap, HashSet};
-use std::fmt::Write as _;
+use std::collections::HashSet;
 use std::hash::BuildHasher;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use rc_core::AvatarUpdate;
 use rc_core::domain::{AvatarOwner, Message, MessageKind, Room};
 
+use crate::file_urls::{FileUpdate, FileUrls};
+
 /// The avatar files by owner, as the `file://` URLs the GUI loads them from. An owner without a
 /// file has no entry.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct AvatarUrls {
-    urls: HashMap<AvatarOwner, String>,
-    /// Counts how often the owner's file was announced: the GUI keeps images by URL, so a replaced
-    /// file needs a new one.
-    versions: HashMap<AvatarOwner, u64>,
-}
+pub type AvatarUrls = FileUrls<AvatarOwner>;
 
-impl AvatarUrls {
-    /// Takes the updates in. Returns the owners whose URL is not what it was, each with its URL
-    /// (empty when the avatar is gone).
-    pub fn apply(&mut self, updates: &[AvatarUpdate]) -> Vec<(AvatarOwner, String)> {
-        let mut changed = Vec::new();
-        for update in updates {
-            let version = self.versions.entry(update.owner.clone()).or_default();
-            *version += 1;
-            let url = if let Some(path) = &update.path {
-                let url = file_url(path, *version);
-                self.urls.insert(update.owner.clone(), url.clone());
-                url
-            } else {
-                self.urls.remove(&update.owner);
-                String::new()
-            };
-            changed.push((update.owner.clone(), url));
-        }
-        changed
+impl FileUpdate for AvatarUpdate {
+    type Key = AvatarOwner;
+
+    fn key(&self) -> &AvatarOwner {
+        &self.owner
     }
 
-    /// The URL, or nothing if the owner has no avatar file.
-    #[must_use]
-    pub fn url(&self, owner: &AvatarOwner) -> &str {
-        self.urls.get(owner).map_or("", String::as_str)
+    fn file(&self) -> Option<&Path> {
+        self.path.as_deref()
     }
-
-    /// Takes the URLs of `changes` in, as [`apply`](Self::apply) returned them.
-    pub fn set(&mut self, changes: &[(AvatarOwner, String)]) {
-        for (owner, url) in changes {
-            if url.is_empty() {
-                self.urls.remove(owner);
-            } else {
-                self.urls.insert(owner.clone(), url.clone());
-            }
-        }
-    }
-}
-
-/// The `file://` URL of `path`, with `?v=<version>` so that a replaced file is another image to the
-/// GUI. The query is not part of the file: Qt takes the path of a local URL.
-#[must_use]
-pub fn file_url(path: &Path, version: u64) -> String {
-    let text = path.to_string_lossy().replace('\\', "/");
-    let mut url = String::from("file://");
-    if !text.starts_with('/') {
-        // A Windows drive: file:///C:/...
-        url.push('/');
-    }
-    for byte in text.bytes() {
-        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~' | b'/' | b':') {
-            url.push(char::from(byte));
-        } else {
-            let _ = write!(url, "%{byte:02X}");
-        }
-    }
-    let _ = write!(url, "?v={version}");
-    url
-}
-
-/// The file a URL of [`file_url`] names: without its `?v=` query, the percent escapes decoded, and
-/// without the slash before a Windows drive. For a GUI that loads images from paths, where Qt takes
-/// the URL as it is. `None` for anything else than a `file://` URL.
-#[must_use]
-pub fn file_path(url: &str) -> Option<PathBuf> {
-    let path = url.strip_prefix("file://")?;
-    let path = path.split_once('?').map_or(path, |(path, _)| path);
-    let bytes = path.as_bytes();
-    let mut decoded = Vec::with_capacity(bytes.len());
-    let mut at = 0;
-    while let Some(&byte) = bytes.get(at) {
-        let escaped = (byte == b'%')
-            .then(|| path.get(at + 1..at + 3))
-            .flatten()
-            .and_then(|digits| u8::from_str_radix(digits, 16).ok());
-        if let Some(value) = escaped {
-            decoded.push(value);
-            at += 3;
-        } else {
-            decoded.push(byte);
-            at += 1;
-        }
-    }
-    let text = String::from_utf8(decoded).ok()?;
-    let mut chars = text.chars();
-    let drive = chars.next() == Some('/')
-        && chars
-            .next()
-            .is_some_and(|letter| letter.is_ascii_alphabetic())
-        && chars.next() == Some(':');
-    Some(PathBuf::from(if drive { &text[1..] } else { &text[..] }))
 }
 
 /// Whose avatar the author of the message shows; none for a system message.
@@ -206,7 +120,6 @@ pub fn color(seed: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
 
     use rc_core::domain::{Author, Delivery, SystemEvent};
 
@@ -214,85 +127,6 @@ mod tests {
 
     fn user(name: &str) -> AvatarOwner {
         AvatarOwner::User(name.to_owned())
-    }
-
-    fn update(owner: AvatarOwner, path: Option<&str>) -> AvatarUpdate {
-        AvatarUpdate {
-            owner,
-            path: path.map(PathBuf::from),
-        }
-    }
-
-    // RICH-004
-    #[test]
-    fn a_file_url_gives_its_file_back() {
-        for path in [
-            "/home/me/.cache/app/h%3A3000/avatars/user/a b.svg",
-            "/tmp/\u{e9}.png",
-        ] {
-            let url = file_url(Path::new(path), 4);
-            assert_eq!(file_path(&url), Some(PathBuf::from(path)), "{url}");
-        }
-        // A Windows drive loses the slash before it; other URLs aren't files.
-        assert_eq!(
-            file_path("file:///C:/Users/me/a.png?v=1"),
-            Some(PathBuf::from("C:/Users/me/a.png"))
-        );
-        assert_eq!(file_path("https://h/a.png"), None);
-    }
-
-    // RICH-004
-    #[test]
-    fn a_file_url_escapes_the_path_and_names_the_version() {
-        assert_eq!(
-            file_url(
-                Path::new("/home/me/.cache/app/h%3A3000/avatars/user/a b.svg"),
-                3
-            ),
-            "file:///home/me/.cache/app/h%253A3000/avatars/user/a%20b.svg?v=3"
-        );
-        assert_eq!(
-            file_url(Path::new("C:\\Users\\me\\a.png"), 1),
-            "file:///C:/Users/me/a.png?v=1"
-        );
-    }
-
-    // RICH-004
-    #[test]
-    fn a_replaced_file_gets_a_new_url_so_that_qml_loads_it_again() {
-        let mut urls = AvatarUrls::default();
-        let first = urls.apply(&[update(user("alice"), Some("/c/alice.png"))]);
-        let second = urls.apply(&[update(user("alice"), Some("/c/alice.png"))]);
-        assert_eq!(first[0].1, "file:///c/alice.png?v=1");
-        assert_eq!(second[0].1, "file:///c/alice.png?v=2");
-        assert_eq!(urls.url(&user("alice")), "file:///c/alice.png?v=2");
-    }
-
-    // RICH-004
-    #[test]
-    fn a_forgotten_avatar_has_no_url() {
-        let mut urls = AvatarUrls::default();
-        urls.apply(&[update(user("alice"), Some("/c/alice.png"))]);
-        let gone = urls.apply(&[update(user("alice"), None)]);
-        assert_eq!(gone, [(user("alice"), String::new())]);
-        assert_eq!(urls.url(&user("alice")), "");
-        assert_eq!(urls.url(&user("bob")), "");
-    }
-
-    // RICH-004
-    #[test]
-    fn a_model_follows_the_cache_through_the_changes() {
-        let mut cache = AvatarUrls::default();
-        let mut model = AvatarUrls::default();
-        let changes = cache.apply(&[
-            update(user("alice"), Some("/c/alice.png")),
-            update(user("bob"), Some("/c/bob.png")),
-        ]);
-        model.set(&changes);
-        let changes = cache.apply(&[update(user("alice"), None)]);
-        model.set(&changes);
-        assert_eq!(model.url(&user("alice")), "");
-        assert_eq!(model.url(&user("bob")), cache.url(&user("bob")));
     }
 
     fn message(author: &str, system: bool) -> Message {

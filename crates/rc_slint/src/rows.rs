@@ -7,9 +7,8 @@
 use jiff::Timestamp;
 use rc_core::domain::{Message, MessageKind, Room};
 use rc_view::accounts::{AccountView, Status};
-use rc_view::avatar_view::{
-    AvatarUrls, color, file_path, initials, message_owner, room_placeholder,
-};
+use rc_view::avatar_view::{AvatarUrls, color, initials, message_owner, room_placeholder};
+use rc_view::file_urls::file_path;
 use rc_view::message_list::MessageList;
 use rc_view::message_view::{
     author_name, body, can_delete, can_edit, can_quote, day_label, delivery_name, mentions_me,

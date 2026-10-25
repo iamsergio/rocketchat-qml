@@ -3,39 +3,104 @@
 
 //! Downloading avatars and attachment images.
 
+use std::fmt::Debug;
+use std::hash::Hash;
 use std::sync::Arc;
 
-use crate::avatars::Fetched;
+use tokio::sync::mpsc::UnboundedSender;
+use tokio::task::JoinSet;
+
+use crate::avatars::AvatarUpdate;
 use crate::client::Event;
 use crate::domain::{AvatarOwner, Credentials};
-use crate::images::{self};
-use crate::ports::{ApiError, CacheError, CacheKey, Connector, FileCache, ServerApi};
+use crate::downloads::{Change, Downloads, Fetched, Refresh};
+use crate::images::ImageUpdate;
+use crate::ports::{ApiError, CacheError, CacheKey, Connector, FileCache, Image, ServerApi};
 use crate::session::SessionState;
 
-use super::{Actor, AvatarDone, Done, ImageDone};
+use super::{Actor, Done};
 
-/// Downloads an avatar and stores it. Without one of its own, a cached file goes.
-async fn fetch_avatar<A: ServerApi>(
-    api: &A,
-    credentials: &Credentials,
-    owner: &AvatarOwner,
-    key: CacheKey,
+/// A download's answer.
+pub(super) struct DownloadDone<K> {
+    /// The login attempt the download belongs to: the answer is stale if another has begun since.
+    attempt: u64,
+    key: K,
+    outcome: Fetched,
+}
+
+/// One kind of downloaded file: which keys are wanted, queued and shown, and the downloads in
+/// flight.
+pub(super) struct Media<K> {
+    pub(super) downloads: Downloads<K>,
+    tasks: JoinSet<()>,
+}
+
+impl<K: Clone + Eq + Hash + Send + 'static> Media<K> {
+    pub(super) fn new(refresh: Refresh) -> Self {
+        Self {
+            downloads: Downloads::new(refresh),
+            tasks: JoinSet::new(),
+        }
+    }
+
+    pub(super) fn abort(&mut self) {
+        self.tasks.abort_all();
+    }
+
+    /// Starts the queued downloads the limit allows. `fetch` makes the download of a key, and
+    /// `wrap` its answer a message for the actor.
+    fn start<A: Send + 'static, Fut>(
+        &mut self,
+        attempt: u64,
+        done: &UnboundedSender<Done<A>>,
+        wrap: fn(DownloadDone<K>) -> Done<A>,
+        fetch: impl Fn(K) -> Fut,
+    ) where
+        Fut: Future<Output = Fetched> + Send + 'static,
+    {
+        while let Some(key) = self.downloads.next_download() {
+            let fetching = fetch(key.clone());
+            let done = done.clone();
+            self.tasks.spawn(async move {
+                let outcome = fetching.await;
+                // Fails only if the actor is gone.
+                let _ = done.send(wrap(DownloadDone {
+                    attempt,
+                    key,
+                    outcome,
+                }));
+            });
+        }
+    }
+
+    /// Stops the downloads and forgets everything. Returns what the frontend should forget.
+    fn clear(&mut self) -> Vec<Change<K>> {
+        self.abort();
+        self.downloads.reset()
+    }
+}
+
+/// What a download that got no image comes to: the server couldn't be reached, which is worth
+/// another try, or it refused. A refusal isn't the end of the session: the rooms and messages meet
+/// the same one if the token is dead, and the route may refuse for other reasons.
+fn failed(error: &ApiError, subject: &(dyn Debug + Sync), what: &str) -> Fetched {
+    if matches!(error, ApiError::Unreachable(_)) {
+        tracing::debug!(%error, ?subject, "can't download the {what}");
+        Fetched::Unreachable
+    } else {
+        tracing::debug!(%error, ?subject, "no {what}");
+        Fetched::Nothing
+    }
+}
+
+/// Stores a downloaded image in the cache.
+async fn store(
     cache: Arc<dyn FileCache>,
+    key: CacheKey,
+    image: Image,
+    subject: &(dyn Debug + Sync),
+    what: &str,
 ) -> Fetched {
-    let image = match api.avatar(credentials, owner).await {
-        Ok(Some(image)) => image,
-        Ok(None) => return forget_avatar(owner, key, cache).await,
-        Err(error @ ApiError::Unreachable(_)) => {
-            tracing::debug!(%error, ?owner, "can't download the avatar");
-            return Fetched::Unreachable;
-        }
-        // Not the end of the session: the rooms and messages meet the same refusal if the token
-        // is dead, and the avatar route may refuse for other reasons.
-        Err(error) => {
-            tracing::debug!(%error, ?owner, "no avatar");
-            return Fetched::Nothing;
-        }
-    };
     let stored = tokio::task::spawn_blocking(move || {
         cache.put(&key, image.content_type.as_deref(), &image.bytes)
     })
@@ -46,17 +111,32 @@ async fn fetch_avatar<A: ServerApi>(
             changed: stored.changed,
         },
         Ok(Err(error @ CacheError::UnsupportedType(_))) => {
-            tracing::debug!(%error, ?owner, "avatar not kept");
+            tracing::debug!(%error, ?subject, "{what} not kept");
             Fetched::Nothing
         }
         Ok(Err(error)) => {
-            tracing::warn!(%error, ?owner, "can't keep the avatar");
+            tracing::warn!(%error, ?subject, "can't keep the {what}");
             Fetched::Nothing
         }
         Err(error) => {
-            tracing::error!(%error, "storing an avatar panicked");
+            tracing::error!(%error, "storing an {what} panicked");
             Fetched::Nothing
         }
+    }
+}
+
+/// Downloads an avatar and stores it. Without one of its own, a cached file goes.
+async fn fetch_avatar<A: ServerApi>(
+    api: &A,
+    credentials: &Credentials,
+    owner: &AvatarOwner,
+    key: CacheKey,
+    cache: Arc<dyn FileCache>,
+) -> Fetched {
+    match api.avatar(credentials, owner).await {
+        Ok(Some(image)) => store(cache, key, image, owner, "avatar").await,
+        Ok(None) => forget_avatar(owner, key, cache).await,
+        Err(error) => failed(&error, owner, "avatar"),
     }
 }
 
@@ -77,38 +157,10 @@ async fn fetch_image<A: ServerApi>(
     path: &str,
     key: CacheKey,
     cache: Arc<dyn FileCache>,
-) -> images::Fetched {
-    let image = match api.file(credentials, path).await {
-        Ok(image) => image,
-        Err(error @ ApiError::Unreachable(_)) => {
-            tracing::debug!(%error, path, "can't download the image");
-            return images::Fetched::Unreachable;
-        }
-        // Not the end of the session: the rooms and messages meet the same refusal if the token
-        // is dead.
-        Err(error) => {
-            tracing::debug!(%error, path, "no image");
-            return images::Fetched::Nothing;
-        }
-    };
-    let stored = tokio::task::spawn_blocking(move || {
-        cache.put(&key, image.content_type.as_deref(), &image.bytes)
-    })
-    .await;
-    match stored {
-        Ok(Ok(stored)) => images::Fetched::Stored(stored.path),
-        Ok(Err(error @ CacheError::UnsupportedType(_))) => {
-            tracing::debug!(%error, path, "image not kept");
-            images::Fetched::Nothing
-        }
-        Ok(Err(error)) => {
-            tracing::warn!(%error, path, "can't keep the image");
-            images::Fetched::Nothing
-        }
-        Err(error) => {
-            tracing::error!(%error, "storing an image panicked");
-            images::Fetched::Nothing
-        }
+) -> Fetched {
+    match api.file(credentials, path).await {
+        Ok(image) => store(cache, key, image, &path, "image").await,
+        Err(error) => failed(&error, &path, "image"),
     }
 }
 
@@ -121,12 +173,14 @@ impl<C: Connector> Actor<C> {
         };
         let server = account.server.clone();
         let cache = &self.cache;
-        let updates: Vec<_> = owners
+        let updates: Vec<AvatarUpdate> = owners
             .into_iter()
             .filter_map(|owner| {
                 self.avatars
+                    .downloads
                     .want(owner, |owner| cache.get(&CacheKey::avatar(&server, owner)))
             })
+            .map(Into::into)
             .collect();
         if !updates.is_empty() {
             (self.on_event)(Event::Avatars(updates));
@@ -142,12 +196,14 @@ impl<C: Connector> Actor<C> {
         };
         let server = account.server.clone();
         let cache = &self.cache;
-        let updates: Vec<_> = owners
+        let updates: Vec<AvatarUpdate> = owners
             .into_iter()
             .filter_map(|owner| {
                 self.avatars
+                    .downloads
                     .show_cached(owner, |owner| cache.get(&CacheKey::avatar(&server, owner)))
             })
+            .map(Into::into)
             .collect();
         if !updates.is_empty() {
             (self.on_event)(Event::Avatars(updates));
@@ -158,26 +214,17 @@ impl<C: Connector> Actor<C> {
         let Some(session) = &self.session else {
             return;
         };
-        while let Some(owner) = self.avatars.next_download() {
-            let api = session.api.clone();
-            let credentials = session.credentials.clone();
-            let key = CacheKey::avatar(server, &owner);
-            let cache = Arc::clone(&self.cache);
-            let attempt = self.attempt;
-            let done = self.done_tx.clone();
-            self.avatar_tasks.spawn(async move {
-                let outcome = fetch_avatar(&api, &credentials, &owner, key, cache).await;
-                // Fails only if the actor is gone.
-                let _ = done.send(Done::Avatar(AvatarDone {
-                    attempt,
-                    owner,
-                    outcome,
-                }));
+        let (api, credentials) = (session.api.clone(), session.credentials.clone());
+        let (cache, server) = (Arc::clone(&self.cache), server.to_owned());
+        self.avatars
+            .start(self.attempt, &self.done_tx, Done::Avatar, move |owner| {
+                let (api, credentials) = (api.clone(), credentials.clone());
+                let (cache, key) = (Arc::clone(&cache), CacheKey::avatar(&server, &owner));
+                async move { fetch_avatar(&api, &credentials, &owner, key, cache).await }
             });
-        }
     }
 
-    pub(super) fn handle_avatar_done(&mut self, done: AvatarDone) {
+    pub(super) fn handle_avatar_done(&mut self, done: DownloadDone<AvatarOwner>) {
         let SessionState::LoggedIn(account) = &self.state else {
             return;
         };
@@ -186,16 +233,16 @@ impl<C: Connector> Actor<C> {
             return;
         }
         let server = account.server.clone();
-        if let Some(update) = self.avatars.finished(done.owner, done.outcome) {
-            (self.on_event)(Event::Avatars(vec![update]));
+        if let Some(change) = self.avatars.downloads.finished(done.key, done.outcome) {
+            (self.on_event)(Event::Avatars(vec![change.into()]));
         }
         self.start_avatar_downloads(&server);
     }
 
     /// Forgets the avatars and tells the frontend, unless it had none. The cache keeps its files.
     pub(super) fn clear_avatars(&mut self) {
-        self.avatar_tasks.abort_all();
-        let forgotten = self.avatars.reset();
+        let forgotten: Vec<AvatarUpdate> =
+            self.avatars.clear().into_iter().map(Into::into).collect();
         if !forgotten.is_empty() {
             (self.on_event)(Event::Avatars(forgotten));
         }
@@ -209,12 +256,14 @@ impl<C: Connector> Actor<C> {
         };
         let server = account.server.clone();
         let cache = &self.cache;
-        let updates: Vec<_> = paths
+        let updates: Vec<ImageUpdate> = paths
             .into_iter()
             .filter_map(|path| {
                 self.images
+                    .downloads
                     .want(path, |path| cache.get(&CacheKey::attachment(&server, path)))
             })
+            .map(Into::into)
             .collect();
         if !updates.is_empty() {
             (self.on_event)(Event::Images(updates));
@@ -226,26 +275,17 @@ impl<C: Connector> Actor<C> {
         let Some(session) = &self.session else {
             return;
         };
-        while let Some(path) = self.images.next_download() {
-            let api = session.api.clone();
-            let credentials = session.credentials.clone();
-            let key = CacheKey::attachment(server, &path);
-            let cache = Arc::clone(&self.cache);
-            let attempt = self.attempt;
-            let done = self.done_tx.clone();
-            self.image_tasks.spawn(async move {
-                let outcome = fetch_image(&api, &credentials, &path, key, cache).await;
-                // Fails only if the actor is gone.
-                let _ = done.send(Done::Image(ImageDone {
-                    attempt,
-                    path,
-                    outcome,
-                }));
+        let (api, credentials) = (session.api.clone(), session.credentials.clone());
+        let (cache, server) = (Arc::clone(&self.cache), server.to_owned());
+        self.images
+            .start(self.attempt, &self.done_tx, Done::Image, move |path| {
+                let (api, credentials) = (api.clone(), credentials.clone());
+                let (cache, key) = (Arc::clone(&cache), CacheKey::attachment(&server, &path));
+                async move { fetch_image(&api, &credentials, &path, key, cache).await }
             });
-        }
     }
 
-    pub(super) fn handle_image_done(&mut self, done: ImageDone) {
+    pub(super) fn handle_image_done(&mut self, done: DownloadDone<String>) {
         let SessionState::LoggedIn(account) = &self.state else {
             return;
         };
@@ -254,8 +294,8 @@ impl<C: Connector> Actor<C> {
             return;
         }
         let server = account.server.clone();
-        if let Some(update) = self.images.finished(done.path, done.outcome) {
-            (self.on_event)(Event::Images(vec![update]));
+        if let Some(change) = self.images.downloads.finished(done.key, done.outcome) {
+            (self.on_event)(Event::Images(vec![change.into()]));
         }
         self.start_image_downloads(&server);
     }
@@ -263,8 +303,7 @@ impl<C: Connector> Actor<C> {
     /// Forgets the attachment images and tells the frontend, unless it had none. The cache keeps
     /// its files.
     pub(super) fn clear_images(&mut self) {
-        self.image_tasks.abort_all();
-        let forgotten = self.images.reset();
+        let forgotten: Vec<ImageUpdate> = self.images.clear().into_iter().map(Into::into).collect();
         if !forgotten.is_empty() {
             (self.on_event)(Event::Images(forgotten));
         }

@@ -13,7 +13,6 @@ use tokio::task::{JoinHandle, JoinSet};
 use tokio::time::Instant;
 
 use crate::adapters::MemoryMessageStore;
-use crate::avatars::{Avatars, Fetched};
 use crate::backoff::Backoff;
 use crate::client::{Command, Connection, Event};
 use crate::core::Shared;
@@ -21,8 +20,8 @@ use crate::domain::{
     AccountId, AvatarOwner, Credentials, Identity, Message, MessageId, Room, RoomId, RoomKind,
     StoredAccount, User,
 };
+use crate::downloads::Refresh;
 use crate::emoji::CustomEmojis;
-use crate::images::{self, Images};
 use crate::policy::{MessageAction, MessagePolicy};
 use crate::ports::{
     ApiError, Changes, Clock, Connector, FileCache, MessageStore, Page, Pushed, ServerApi,
@@ -46,6 +45,7 @@ mod thread;
 mod thread_list;
 mod typing;
 
+use media::{DownloadDone, Media};
 use thread::{OpenThread, PendingThread};
 use thread_list::OpenThreadList;
 
@@ -116,22 +116,6 @@ struct ChangesDone {
     /// The client's clock when the request was sent.
     started: jiff::Timestamp,
     outcome: Result<Changes, ApiError>,
-}
-
-/// An avatar download's answer.
-struct AvatarDone {
-    /// The login attempt the download belongs to: the answer is stale if another has begun since.
-    attempt: u64,
-    owner: AvatarOwner,
-    outcome: Fetched,
-}
-
-/// An attachment image download's answer.
-struct ImageDone {
-    /// The login attempt the download belongs to: the answer is stale if another has begun since.
-    attempt: u64,
-    path: String,
-    outcome: images::Fetched,
 }
 
 /// A thread fetch's answer.
@@ -224,8 +208,8 @@ enum Done<A> {
     Rooms(RoomsDone),
     Emoji(EmojiDone),
     Policy(PolicyDone),
-    Avatar(AvatarDone),
-    Image(ImageDone),
+    Avatar(DownloadDone<AvatarOwner>),
+    Image(DownloadDone<String>),
     Realtime(RealtimeReport),
     /// The wait after a lost connection is over; the cycle is the one that was lost.
     Reconnect {
@@ -346,14 +330,10 @@ struct Actor<C: Connector> {
     cache: Arc<dyn FileCache>,
     /// The time of day.
     clock: Arc<dyn Clock>,
-    /// Which avatars are wanted, queued and shown.
-    avatars: Avatars,
-    /// The avatar downloads in flight.
-    avatar_tasks: JoinSet<()>,
-    /// Which attachment images are wanted, queued and shown.
-    images: Images,
-    /// The attachment image downloads in flight.
-    image_tasks: JoinSet<()>,
+    /// The avatars: which are wanted, queued and shown, and the downloads in flight.
+    avatars: Media<AvatarOwner>,
+    /// The attachment images, likewise.
+    images: Media<String>,
     /// The messages of the rooms opened so far. Cleared on logout.
     messages: Box<dyn MessageStore>,
     open: Option<OpenRoom>,
@@ -451,10 +431,8 @@ impl<C: Connector> Actor<C> {
             policy_task: None,
             cache: Arc::clone(&shared.cache),
             clock: Arc::clone(&shared.clock),
-            avatars: Avatars::default(),
-            avatar_tasks: JoinSet::new(),
-            images: Images::default(),
-            image_tasks: JoinSet::new(),
+            avatars: Media::new(Refresh::OncePerSession),
+            images: Media::new(Refresh::Never),
             messages: Box::new(MemoryMessageStore::default()),
             open: None,
             open_thread: None,
@@ -594,8 +572,8 @@ impl<C: Connector> Actor<C> {
             task.abort();
         }
         self.abort_realtime_task();
-        self.avatar_tasks.abort_all();
-        self.image_tasks.abort_all();
+        self.avatars.abort();
+        self.images.abort();
         self.abort_history_task();
         if let Some(task) = self.thread_task.take() {
             task.abort();

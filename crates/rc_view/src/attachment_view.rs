@@ -5,60 +5,28 @@
 //! image, the link to the original and the size in words. Plain Rust, so it can be unit-tested
 //! without Qt.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::hash::BuildHasher;
+use std::path::Path;
 
 use rc_core::ImageUpdate;
 use rc_core::domain::{Attachment, Message};
 
-use crate::avatar_view::file_url;
+use crate::file_urls::{FileUpdate, FileUrls};
 
 /// The image files by their path on the server, as the `file://` URLs the GUI loads them from. An
 /// image without a file has no entry.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct ImageUrls {
-    urls: HashMap<String, String>,
-    /// Counts how often the path's file was announced, as for avatars: the files of uploads never
-    /// change, but a forgotten and downloaded again one should not be taken for the old.
-    versions: HashMap<String, u64>,
-}
+pub type ImageUrls = FileUrls<String>;
 
-impl ImageUrls {
-    /// Takes the updates in. Returns the paths whose URL is not what it was, each with its URL
-    /// (empty when the file is gone).
-    pub fn apply(&mut self, updates: &[ImageUpdate]) -> Vec<(String, String)> {
-        let mut changed = Vec::new();
-        for update in updates {
-            let version = self.versions.entry(update.path.clone()).or_default();
-            *version += 1;
-            let url = if let Some(file) = &update.file {
-                let url = file_url(file, *version);
-                self.urls.insert(update.path.clone(), url.clone());
-                url
-            } else {
-                self.urls.remove(&update.path);
-                String::new()
-            };
-            changed.push((update.path.clone(), url));
-        }
-        changed
+impl FileUpdate for ImageUpdate {
+    type Key = String;
+
+    fn key(&self) -> &String {
+        &self.path
     }
 
-    /// The URL, or nothing if the image has no file.
-    #[must_use]
-    pub fn url(&self, path: &str) -> &str {
-        self.urls.get(path).map_or("", String::as_str)
-    }
-
-    /// Takes the URLs of `changes` in, as [`apply`](Self::apply) returned them.
-    pub fn set(&mut self, changes: &[(String, String)]) {
-        for (path, url) in changes {
-            if url.is_empty() {
-                self.urls.remove(path);
-            } else {
-                self.urls.insert(path.clone(), url.clone());
-            }
-        }
+    fn file(&self) -> Option<&Path> {
+        self.file.as_deref()
     }
 }
 
@@ -308,39 +276,6 @@ mod tests {
             &ImageUrls::default(),
         );
         assert_eq!(shown, []);
-    }
-
-    // RICH-005
-    #[test]
-    fn a_forgotten_image_has_no_url() {
-        let mut urls = ImageUrls::default();
-        urls.apply(&[update("/p", Some("/c/p.png"))]);
-        let gone = urls.apply(&[update("/p", None)]);
-        assert_eq!(gone, [("/p".to_owned(), String::new())]);
-        assert_eq!(urls.url("/p"), "");
-        assert_eq!(urls.url("/other"), "");
-    }
-
-    // RICH-005
-    #[test]
-    fn a_model_follows_the_cache_through_the_changes() {
-        let mut cache = ImageUrls::default();
-        let mut model = ImageUrls::default();
-        model.set(&cache.apply(&[
-            update("/a", Some("/c/a.png")),
-            update("/b", Some("/c/b.png")),
-        ]));
-        model.set(&cache.apply(&[update("/a", None)]));
-        assert_eq!(model, {
-            let mut expected = ImageUrls::default();
-            expected
-                .urls
-                .insert("/b".into(), "file:///c/b.png?v=1".into());
-            expected.versions = ImageUrls::default().versions;
-            expected
-        });
-        assert_eq!(model.url("/a"), "");
-        assert_eq!(model.url("/b"), cache.url("/b"));
     }
 
     // RICH-005
