@@ -63,6 +63,7 @@ export global Theme {
     out property <length> font-size-big-emoji: 32px;
     out property <float> avatar-font-scale: 0.4;
     out property <int> font-weight-normal: 400;
+    out property <int> font-weight-medium: 500;
     out property <int> font-weight-semibold: 600;
     out property <int> font-weight-bold: 650;
 
@@ -123,6 +124,15 @@ export global Theme {
     out property <int> thread-row-text-lines: 2;
     out property <length> thread-filter-height: 28px;
     out property <length> thread-back-icon-size: 14px;
+    // The badge on the room's threads button: a pill of at least this height and width, at the
+    // button's top right corner, sticking out of it by the overhangs, with a ring in the header's
+    // colour around it so that it reads as cut out.
+    out property <length> threads-badge-height: 16px;
+    out property <length> threads-badge-min-width: 16px;
+    out property <length> threads-badge-padding-h: 4px;
+    out property <length> threads-badge-ring: 2px;
+    out property <length> threads-badge-overhang-x: 5px;
+    out property <length> threads-badge-overhang-y: 5px;
     out property <length> busy-indicator-large-size: 40px;
     out property <length> busy-indicator-size: 32px;
     out property <length> button-height: 30px;

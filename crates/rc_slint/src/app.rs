@@ -338,6 +338,7 @@ impl App {
             }
             Event::Rooms(changes) => {
                 self.rooms.apply(&changes);
+                self.show_thread_unread();
                 self.refresh_search();
                 // The open room's name may have changed.
                 self.show_room();
@@ -375,6 +376,8 @@ impl App {
                 self.emoji_picker.set_emoji_images(&changes);
             }
             Event::TimelineStatus(_) => {
+                // The open room may be another: its threads are unread, or not.
+                self.show_thread_unread();
                 self.show_room();
                 self.show_thread();
             }
@@ -440,8 +443,11 @@ impl App {
             cache.emoji_images(),
         );
         self.want_emoji_images(names);
-        self.thread_list
-            .show(&cache.thread_list_snapshot(), cache.avatars());
+        self.thread_list.show(
+            &cache.thread_list_snapshot(),
+            cache.avatars(),
+            cache.thread_unread(),
+        );
         self.emoji_picker
             .show(&cache.viewer().emoji, cache.emoji_images());
         if self.emoji_picker_open() {

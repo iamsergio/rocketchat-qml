@@ -427,8 +427,8 @@ export component RoomPage inherits Rectangle {
                             }
 
                             // Shows the room's threads, or closes the pane. It is lit while the
-                            // pane shows the list or a thread. The badge of unread threads
-                            // (ACT-011) goes at its top right.
+                            // pane shows the list or a thread. The badge of unread threads is at
+                            // its top right.
                             VerticalLayout {
                                 alignment: center;
                                 width: Theme.icon-button-size;
@@ -458,6 +458,44 @@ export component RoomPage inherits Rectangle {
                                     threads-touch := TouchArea {
                                         clicked => {
                                             root.toggle-threads();
+                                        }
+                                    }
+
+                                    // How many threads have replies the user hasn't read: grey, or
+                                    // red when one of them mentions the user, with a ring in the
+                                    // header's colour around it.
+                                    if root.thread-pane.unread-count > 0: Rectangle {
+                                        accessible-id: "roomThreadsBadgeRing";
+                                        accessible-role: none;
+                                        x: parent.width - self.width + Theme.threads-badge-overhang-x;
+                                        y: -Theme.threads-badge-overhang-y;
+                                        width: max(badge-count.preferred-width + 2 * Theme.threads-badge-padding-h, Theme.threads-badge-min-width) + 2 * Theme.threads-badge-ring;
+                                        height: Theme.threads-badge-height + 2 * Theme.threads-badge-ring;
+                                        background: Theme.surface;
+                                        border-radius: self.height / 2;
+
+                                        Rectangle {
+                                            // What the tests read: `mention` while it is red, else
+                                            // `unread`.
+                                            accessible-id: "roomThreadsBadge";
+                                            accessible-role: text;
+                                            accessible-value: root.thread-pane.unread-mention ? "mention" : "unread";
+                                            x: Theme.threads-badge-ring;
+                                            y: Theme.threads-badge-ring;
+                                            width: parent.width - 2 * Theme.threads-badge-ring;
+                                            height: parent.height - 2 * Theme.threads-badge-ring;
+                                            background: root.thread-pane.unread-mention ? Theme.signal : Theme.raised-hover;
+                                            border-radius: self.height / 2;
+
+                                            badge-count := Text {
+                                                accessible-id: "roomThreadsBadgeCount";
+                                                x: (parent.width - self.width) / 2;
+                                                y: (parent.height - self.height) / 2;
+                                                color: root.thread-pane.unread-mention ? Theme.text-on-signal : Theme.text;
+                                                font-size: Theme.font-size-tiny;
+                                                font-weight: Theme.font-weight-bold;
+                                                text: root.thread-pane.unread-count;
+                                            }
                                         }
                                     }
                                 }

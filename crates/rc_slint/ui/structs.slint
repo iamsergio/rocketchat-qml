@@ -91,6 +91,9 @@ export struct ThreadRow {
     avatar-url: string,
     has-avatar: bool,
     avatar: image,
+    // The thread has replies the user hasn't read, and one of them mentions the user.
+    unread: bool,
+    mentioned: bool,
 }
 
 // What the pane beside the room shows besides the thread itself: the `rc_view::thread_list_view`
@@ -100,7 +103,7 @@ export struct ThreadPaneState {
     open: bool,
     shows-thread: bool,
     shows-list: bool,
-    // `all` or `following`.
+    // `all`, `following` or `unread`.
     filter: string,
     loading: bool,
     loading-more: bool,
@@ -110,6 +113,10 @@ export struct ThreadPaneState {
     empty: bool,
     empty-title: string,
     empty-hint: string,
+    // How many threads of the room have replies the user hasn't read, and one mentions the user:
+    // the badge of the header button and the count of the "Unread" segment.
+    unread-count: int,
+    unread-mention: bool,
 }
 
 // One message quoted by a message: an `rc_view::quote_view::QuoteView`.

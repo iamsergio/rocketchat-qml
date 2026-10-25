@@ -18,6 +18,13 @@ use super::App;
 use crate::ui::ThreadPaneState;
 
 impl App {
+    /// Tells the list of threads which threads of the open room have unread replies, as the
+    /// current account's cache says. Only the rows that look different are announced.
+    pub(super) fn show_thread_unread(&self) {
+        let unread = self.switchboard.accounts().current_cache().thread_unread();
+        self.thread_list.set_unread(unread);
+    }
+
     /// Shows the open thread: where it is, and how loading its replies goes, as the current
     /// account's cache says. Nothing is open for an empty parent id, and then the pane isn't there.
     pub(super) fn show_thread(&self) {
@@ -57,6 +64,8 @@ impl App {
             empty: state.empty,
             empty_title: state.empty_title.into(),
             empty_hint: state.empty_hint.into(),
+            unread_count: i32::try_from(state.unread_count).unwrap_or(i32::MAX),
+            unread_mention: state.unread_mention,
         });
     }
 

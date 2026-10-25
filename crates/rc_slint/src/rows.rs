@@ -93,6 +93,9 @@ pub fn thread_row(
         avatar_url: url.into(),
         has_avatar: image.is_some(),
         avatar: image.unwrap_or_default(),
+        // The model knows from the room's subscription, not the parent.
+        unread: false,
+        mentioned: false,
     }
 }
 
