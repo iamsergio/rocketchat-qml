@@ -31,6 +31,7 @@ qt_add_qml_module(
   DirectoryLabel.qml
   DirectoryNote.qml
   DirectoryRow.qml
+  DropZone.qml
   EmojiPicker.qml
   FieldLabel.qml
   FlatButton.qml
@@ -47,15 +48,19 @@ qt_add_qml_module(
   RoomView.qml
   ServerRail.qml
   ServerTile.qml
+  StagedFileChip.qml
   StartupPage.qml
   ThreadListPage.qml
   ThreadListRow.qml
   ThreadPane.qml
   Theme.qml
+  Thumbnail.qml
+  UploadRow.qml
   VersionLabel.qml
   RESOURCES
   fonts/InstrumentSans.ttf
   fonts/InstrumentSans-Italic.ttf
+  icons/attach.svg
   icons/channel.svg
   icons/chevron.svg
   icons/check.svg
@@ -69,6 +74,7 @@ qt_add_qml_module(
   icons/search.svg
   icons/settings.svg
   icons/thread.svg
+  icons/upload.svg
   IMPORT_PATH
   ${rc_qt_export_dir}/qml_modules)
 

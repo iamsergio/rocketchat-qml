@@ -9,6 +9,9 @@ import QtQuick.Controls.Basic
 Button {
     id: control
 
+    // The colour of the text until the pointer is over it.
+    property color idleColor: Theme.textMuted
+
     flat: true
     font.pointSize: Theme.fontSizeSmall
     font.weight: Theme.fontWeightSemibold
@@ -21,7 +24,7 @@ Button {
     opacity: enabled ? 1 : Theme.disabledOpacity
 
     contentItem: Text {
-        color: control.hovered ? Theme.text : Theme.textMuted
+        color: control.hovered ? Theme.text : control.idleColor
         elide: Text.ElideRight
         font: control.font
         horizontalAlignment: Text.AlignHCenter

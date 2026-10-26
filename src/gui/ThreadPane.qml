@@ -301,4 +301,14 @@ Rectangle {
             visible: ThreadList.pane === "list"
         }
     }
+
+    // Files dropped on the thread go to its composer.
+    DropZone {
+        anchors.fill: parent
+        anchors.leftMargin: Theme.separatorWidth
+        anchors.topMargin: Theme.roomHeaderHeight
+        title: qsTr("Drop to attach to the thread")
+        visible: ThreadList.pane === "thread"
+        onDropped: urls => composer.attachUrls(urls)
+    }
 }

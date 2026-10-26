@@ -20,6 +20,9 @@ unicode-normalization.workspace = true
 developer-mode = []
 # Set through rc_qt's feature of the same name: RC_SECRET_STORE=file:<path> keeps the token in a plain file.
 test-file-store = ["rc_core/test-file-store"]
+# Set through rc_qt's feature of the same name: RC_TEST_ATTACH_FILES names the files the attach button
+# takes in place of the file dialog. Without it the variable is not read.
+test-attach-files = []
 
 [dev-dependencies]
 rc_api.workspace = true

@@ -1,7 +1,7 @@
 # File upload
 
 The user picks files to send (ACT-009). This is the core and `rc_view` part (`rc_api`, `rc_core`,
-`rc_view`); the Qt and the Slint UIs come after it.
+`rc_view`) and the Qt UI; the Slint UI comes after it.
 
 ## What the server does
 
@@ -127,12 +127,58 @@ gives `room_upload_rows()` (the open room) and `thread_upload_rows()` (the open 
 calls `changes(rows_its_model_holds, cache.room_upload_rows())` after `Event::Uploads`,
 `Event::UploadProgress` and whenever the open room or thread changes.
 
+## What rc_view adds for the UIs
+
+- `UploadRow` has the `status_line` (`1.8 of 4.2 MB`, `Waiting · 4.2 MB`, `Posting…`, or the error)
+  and a `thumbnail` (`staged_view::Thumbnail`: the file URL for png, jpg, jpeg, gif and webp,
+  else the extension in capitals, at most four letters). `rc_core::uploads::Upload` carries the
+  file's `path` for it. A `Refused` error is shown without the code the server ends its words with
+  in brackets.
+- `rc_view::staged_view` is the files attached to a composer and not sent: `Staged` (add in order,
+  without repeats, remove by index), `StagedFile` (name, size in words, thumbnail) and `plan(text,
+  quoting, files)`, which says what Send does: the text goes with the first file, unless the
+  composer quotes a message, when it is a message of its own (with its quote) before the files,
+  which then have no text.
+- `rc_view::startup::test_attachments()` reads `RC_TEST_ATTACH_FILES`, the paths a GUI test wants
+  the attach button to take in place of the file dialog (Spix can't drive one). It is the same for
+  every frontend, so the tests run unchanged against the Slint app, and only builds with the
+  `test-attach-files` feature (Spix builds) read it.
+
+## Qt side
+
+Each composer (the room's, the thread pane's) owns two lists, as singletons because a list model
+that QML creates as an element can't be linted (CXX-QT.md): `RoomStagedFiles` and
+`ThreadStagedFiles` (`staged_files_model.rs`; add, remove, clear, `submit`), and `RoomUploads` and
+`ThreadUploads` (`upload_list_model.rs`; cancel and retry by row). `Composer.qml` picks the pair
+with `forThread` and only wires them.
+
+- **Staging.** The paperclip `composerAttach` (hidden while editing and while previewing a
+  channel) opens a `FileDialog` for several files, or stages `RC_TEST_ATTACH_FILES` when that is
+  set. Files dropped on the room, or on the thread pane (then they go to the thread's composer), do
+  the same: `DropZone.qml` covers the pane below its header with a `DropArea` and, while files are
+  dragged over, an overlay that says where they go. The files show as chips in the bar
+  `composerAttachments`. Staged files belong to a composer: **opening another room, or another
+  thread, drops them** (the composer clears its list when `Room.roomId` or `Thread.parentId`
+  changes), as it drops a quote. The uploads already asked for go on in the core.
+- **Sending.** Send and Enter work with text or with staged files. With files the list's `submit`
+  asks the hub, which sends the message of a quoting text, then calls `upload_file` for each file
+  in order (`parent` set in the thread pane; "also send to the room" doesn't apply to files, which
+  the server never shows in the room). The field and the chips clear.
+- **Uploads.** The hub gives each of the two upload lists its rows from the cache on `Uploads`,
+  `UploadProgress`, and whenever the open room or thread changes; the model computes
+  `upload_view::changes` against what it holds and announces them row by row, so a progress
+  repaints one row. `composerUploads` lists them over the field, below the chips.
+- **Tests.** `crates/rc_gui_tests/tests/uploads.rs`: staging and taking files out; sending two
+  files with text (the order, the text on the first); an SVG the server refuses (the reason in
+  words, Retry, Remove); an upload from the thread pane. Dropping isn't tested: Spix can't drag.
+
 ## Tests
 
 `crates/rc_core/src/client/tests/uploads.rs` (the queue and its order, progress and its throttle, the
 echo coming first or later, a room still loading, threads, too large, disabled, unreadable, refused,
-a confirm-only retry, cancel in each state, logout, `Unauthorized`), `rc_view::upload_view` and
-`rc_view::cache`, the mock-server tests of `crates/rc_api/tests/rest.rs`, and the contract tests of
-`rc_api` and `rc_core` against the real server. The stale-attempt check has no test of its own: an
-aborted task cannot report, so an answer of an older attempt cannot be made to arrive. GUI tests
-come with the UIs.
+a confirm-only retry, cancel in each state, logout, `Unauthorized`), `rc_view::upload_view`,
+`rc_view::staged_view`, `rc_view::startup` and `rc_view::cache`, the mock-server tests of
+`crates/rc_api/tests/rest.rs`, and the contract tests of `rc_api` and `rc_core` against the real
+server. The stale-attempt check has no test of its own: an aborted task cannot report, so an answer
+of an older attempt cannot be made to arrive. The GUI tests are in `uploads.rs` of `rc_gui_tests`
+(Qt; the Slint app comes next).

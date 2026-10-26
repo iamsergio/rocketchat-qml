@@ -28,6 +28,8 @@ tracing.workspace = true
 developer-mode = ["rc_view/developer-mode"]
 # Set by CMake with ROCKETCHATQML_SPIX: RC_SECRET_STORE=file:<path> keeps the token in a plain file.
 test-file-store = ["rc_view/test-file-store"]
+# Set by CMake with ROCKETCHATQML_SPIX: RC_TEST_ATTACH_FILES names the files the paperclip attaches.
+test-attach-files = ["rc_view/test-attach-files"]
 
 [dev-dependencies]
 rc_api.workspace = true

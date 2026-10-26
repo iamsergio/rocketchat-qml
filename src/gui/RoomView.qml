@@ -418,4 +418,13 @@ Rectangle {
             }
         }
     }
+
+    // Files dropped on the room go to its composer.
+    DropZone {
+        anchors.fill: parent
+        anchors.topMargin: Theme.roomHeaderHeight
+        title: qsTr("Drop to attach to #%1").arg(Room.name)
+        visible: Room.roomId !== "" && !Room.preview
+        onDropped: urls => composer.attachUrls(urls)
+    }
 }

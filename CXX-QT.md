@@ -48,7 +48,7 @@ With `-Cinstrument-coverage`, rustc links the LLVM profiler runtime (`profiler_b
 
 An `EmojiPickerModel` declared with `#[qml_element]` and `#[base = QAbstractListModel]`, used as `EmojiPickerModel { }` in QML, makes qmllint warn "QAbstractListModel was not found" and "Type ... is used but it is not resolved". The generated QML module does not carry a type for the base class (Qt doesn't register `QAbstractListModel` for QML either), so the element can't be linted. A singleton has no such problem, because QML only reads its properties.
 
-- **Workaround:** the emoji picker's model is a `#[qml_singleton]` (`EmojiCatalog`), which fits, as there is one picker. A second picker would have to share it. Its `query` property is set from the search box's `onTextChanged`: a `Binding { target: EmojiCatalog }` is rejected by qmllint too ("Cannot assign binding of type EmojiCatalog to QObject").
+- **Workaround:** the emoji picker's model is a `#[qml_singleton]` (`EmojiCatalog`), which fits, as there is one picker. A second picker would have to share it. The composers of the room and of the thread need two lists each (the files that wait and the uploads), so those are four singletons (`RoomStagedFiles`, `ThreadStagedFiles`, `RoomUploads`, `ThreadUploads`) whose code a `macro_rules!` shares. Its `query` property is set from the search box's `onTextChanged`: a `Binding { target: EmojiCatalog }` is rejected by qmllint too ("Cannot assign binding of type EmojiCatalog to QObject").
 - **Possible patch:** let a `#[base = ...]` that cxx-qt-lib knows (`QAbstractListModel`) come with a `.qmltypes` entry, or generate `QML_ANONYMOUS`/`QML_FOREIGN` registrations for the base.
 
 ## A property with a custom setter

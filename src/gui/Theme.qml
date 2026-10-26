@@ -53,6 +53,8 @@ QtObject {
     // Warning at 12%.
     readonly property color warningWash: "#1fe8b44f"
     readonly property color error: "#ff8a66"
+    // The surface at 90%: what covers the messages while files are dragged over them.
+    readonly property color dropOverlay: Qt.alpha(surface, 0.9)
     readonly property color onAvatar: "white"
     readonly property color transparent: "transparent"
     // What dims the window behind a modal popup, at the alpha the style gives it.
@@ -81,6 +83,8 @@ QtObject {
     readonly property real fontScale: 1.25
     readonly property real fontSizeEmoji: 18
     readonly property real fontSizeTiny: fontSizeBase * 0.82
+    // The extension in a thumbnail.
+    readonly property real fontSizeThumbnail: fontSizeBase * 0.7
     readonly property real fontSizeSmall: fontSizeBase * 0.89
     readonly property real fontSizeHeading: fontSizeBase * 1.2
     // The letter of a server's tile.
@@ -121,11 +125,18 @@ QtObject {
     readonly property int radiusPanel: 12
     readonly property int radiusAttachment: 8
     readonly property int radiusCheckBox: 4
+    // A file waiting in the composer, the thumbnail in it, the track of an upload's progress and
+    // the box that shows where dropped files go.
+    readonly property int radiusFileChip: 7
+    readonly property int radiusThumbnail: 5
+    readonly property int radiusTrack: 2
+    readonly property int radiusDrop: 14
 
     // Lines
     readonly property int accentBarWidth: 3
     readonly property int quoteBarWidth: 2
     readonly property int borderWidth: 1
+    readonly property int dropBorderWidth: 2
     readonly property int separatorWidth: 1
 
     // Sizes
@@ -145,6 +156,17 @@ QtObject {
     readonly property int chipAddWidth: 32
     readonly property int chipEmojiSize: 18
     readonly property int chipHeight: 24
+    // The files waiting in the composer, and those being uploaded: the chip, the thumbnail in it
+    // (and in an upload row), the cross that takes one out, and the track of the progress.
+    readonly property int fileChipHeight: 52
+    readonly property int fileChipWidth: 212
+    readonly property int thumbnailSize: 36
+    readonly property int chipRemoveSize: 22
+    readonly property int chipRemoveIconSize: 12
+    readonly property int uploadTrackHeight: 3
+    // The box shown while files are dragged over a pane: its distance from the edges, and its icon.
+    readonly property int dropMargin: 16
+    readonly property int dropIconSize: 36
     readonly property int composerMaxHeight: 120
     readonly property int composerFieldMinHeight: 30
     readonly property int dialogWidth: 360
@@ -279,6 +301,8 @@ QtObject {
     // What shows only while the pointer is over its row: shown, and clear but still clickable.
     readonly property real opaque: 1
     readonly property real clear: 0
+    // The progress of an upload whose message is being posted: the whole bar, dimmed.
+    readonly property real uploadConfirmingOpacity: 0.55
 
     // The factor that makes the main button brighter under the pointer.
     readonly property real hoverLighter: 1.08

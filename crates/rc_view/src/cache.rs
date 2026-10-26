@@ -1788,6 +1788,7 @@ mod tests {
             room: "a".to_owned().into(),
             thread: thread.map(|parent| parent.to_owned().into()),
             name: format!("f{id}"),
+            path: format!("/tmp/f{id}").into(),
             size: 100,
             state,
         };

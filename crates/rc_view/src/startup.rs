@@ -14,6 +14,12 @@ use rc_core::ports::SecretStore;
 /// else, or unset, uses the OS keyring.
 const STORE_ENV: &str = "RC_SECRET_STORE";
 
+/// Environment variable for the GUI tests: paths (separated as `PATH` is) that the attach button
+/// stages instead of opening the system file dialog, which a test can't drive. Only builds with
+/// `test-attach-files` (the Spix ones) read it.
+#[cfg_attr(not(feature = "test-attach-files"), allow(dead_code))]
+const ATTACH_ENV: &str = "RC_TEST_ATTACH_FILES";
+
 /// Where `RC_SECRET_STORE` says the session is kept.
 #[derive(Debug, PartialEq, Eq)]
 enum StoreChoice {
@@ -65,6 +71,27 @@ pub fn secret_store() -> Box<dyn SecretStore> {
     }
 }
 
+/// The paths in `value` (`RC_TEST_ATTACH_FILES`), if set.
+#[cfg_attr(not(feature = "test-attach-files"), allow(dead_code))]
+fn attachments_in(value: Option<&std::ffi::OsStr>) -> Vec<PathBuf> {
+    value.map_or_else(Vec::new, |value| std::env::split_paths(value).collect())
+}
+
+/// The files the GUI tests ask the attach button to take: see [`ATTACH_ENV`]. Always empty without
+/// `test-attach-files`, which doesn't even read the environment.
+#[cfg(feature = "test-attach-files")]
+#[must_use]
+pub fn test_attachments() -> Vec<PathBuf> {
+    attachments_in(std::env::var_os(ATTACH_ENV).as_deref())
+}
+
+/// Without the feature a user's environment means nothing.
+#[cfg(not(feature = "test-attach-files"))]
+#[must_use]
+pub const fn test_attachments() -> Vec<PathBuf> {
+    Vec::new()
+}
+
 /// Where downloads go when the host gives no directory.
 fn fallback_cache_dir() -> PathBuf {
     std::env::temp_dir().join("rocketchat-qml-cache")
@@ -87,6 +114,17 @@ pub fn cache_dir(given: &str) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ACT-009
+    #[test]
+    fn the_test_attachments_are_the_paths_of_the_variable() {
+        assert!(attachments_in(None).is_empty());
+        let value = std::env::join_paths(["/tmp/a.txt", "/tmp/b c.png"]).unwrap();
+        assert_eq!(
+            attachments_in(Some(&value)),
+            [PathBuf::from("/tmp/a.txt"), PathBuf::from("/tmp/b c.png")]
+        );
+    }
 
     // AUTH-004
     #[test]

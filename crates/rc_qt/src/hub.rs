@@ -35,6 +35,7 @@ use rc_core::policy::{ActionError, MessageAction};
 use rc_core::rooms::{RoomActionError, RoomChange};
 use rc_core::threads::{ThreadFilter, ThreadListChange};
 use rc_core::timeline::TimelineChange;
+use rc_core::uploads::UploadId;
 use rc_core::{AccountHandle, Client, Event};
 use secrecy::SecretString;
 
@@ -49,6 +50,7 @@ use crate::thread_list_model::qobject::ThreadListModel;
 use crate::thread_list_vm::qobject::ThreadListVm;
 use crate::thread_message_list_model::qobject::ThreadMessageListModel;
 use crate::thread_vm::qobject::ThreadVm;
+use crate::upload_list_model::qobject::{RoomUploadsModel, ThreadUploadsModel};
 use rc_view::accounts::{AccountView, Accounts};
 use rc_view::attachment_view::ImageUrls;
 use rc_view::avatar_view::AvatarUrls;
@@ -58,6 +60,7 @@ use rc_view::rich_html::topic_html;
 use rc_view::room_search::{search_rooms as search, trimmed};
 use rc_view::room_view::RoomState;
 use rc_view::session_view::SessionView;
+use rc_view::staged_view::{StagedFile, plan};
 use rc_view::startup;
 use rc_view::switchboard::{Shown, Switchboard};
 use rc_view::thread_list_view::{
@@ -65,6 +68,7 @@ use rc_view::thread_list_view::{
     toggle_steps,
 };
 use rc_view::thread_view::ThreadState;
+use rc_view::upload_view::UploadRow;
 use rc_view::viewer::Viewer;
 
 // There is exactly one core per process, so one hub.
@@ -143,6 +147,8 @@ struct Views {
     thread_list: Registered<ThreadListVm>,
     thread_list_rows: Registered<ThreadListModel>,
     picker: Registered<EmojiPickerModel>,
+    room_uploads: Registered<RoomUploadsModel>,
+    thread_uploads: Registered<ThreadUploadsModel>,
 }
 
 /// Locks the hub. A poisoned lock is recovered rather than skipped: every update of the hub is a
@@ -348,6 +354,82 @@ pub fn send_reply(
     current_account("send_reply", |account| {
         account.send_message(room, text, quote, Some(parent), also_to_channel);
     });
+}
+
+/// Sends the text with the staged files to the open room, or to the open thread: see
+/// [`plan`] for what goes first and what goes with which file. Returns whether anything was sent,
+/// i.e. whether a room (a thread) is open.
+pub fn send_with_files(
+    for_thread: bool,
+    text: &str,
+    quoted_id: &str,
+    also_to_channel: bool,
+    files: &[StagedFile],
+) -> bool {
+    let (room, parent) = if for_thread {
+        let state = thread_state();
+        if state.parent_id.is_empty() || state.room_id.is_empty() {
+            return false;
+        }
+        (
+            RoomId::from(state.room_id),
+            Some(MessageId::from(state.parent_id)),
+        )
+    } else {
+        let room_id = lock()
+            .switchboard
+            .accounts()
+            .current_cache()
+            .room_state()
+            .room_id;
+        if room_id.is_empty() {
+            return false;
+        }
+        (RoomId::from(room_id), None)
+    };
+    let plan = plan(text, !quoted_id.is_empty(), files);
+    let quote = (!quoted_id.is_empty()).then(|| MessageId::from(quoted_id.to_owned()));
+    if let Some(message) = plan.message {
+        match parent.clone() {
+            Some(parent) => send_reply(room.clone(), &message, quote, parent, also_to_channel),
+            None => send_message(room.clone(), &message, quote),
+        }
+    }
+    for (path, text) in plan.uploads {
+        current_account("upload_file", |account| {
+            account.upload_file(room.clone(), path, &text, parent.clone());
+        });
+    }
+    true
+}
+
+pub fn cancel_upload(id: UploadId) {
+    current_account("cancel_upload", |account| account.cancel_upload(id));
+}
+
+pub fn retry_upload(id: UploadId) {
+    current_account("retry_upload", |account| account.retry_upload(id));
+}
+
+/// Registers the `RoomUploads` model and returns its rows now. Call on the GUI thread; the changes
+/// that follow are queued to `thread`.
+pub fn register_room_uploads(thread: CxxQtThread<RoomUploadsModel>) -> Vec<UploadRow> {
+    let mut hub = lock();
+    hub.views.room_uploads.register(thread);
+    hub.switchboard
+        .accounts()
+        .current_cache()
+        .room_upload_rows()
+}
+
+/// Registers the `ThreadUploads` model, as [`register_room_uploads`] does.
+pub fn register_thread_uploads(thread: CxxQtThread<ThreadUploadsModel>) -> Vec<UploadRow> {
+    let mut hub = lock();
+    hub.views.thread_uploads.register(thread);
+    hub.switchboard
+        .accounts()
+        .current_cache()
+        .thread_upload_rows()
 }
 
 pub fn open_thread(message_id: String) {
@@ -667,8 +749,10 @@ impl Views {
                 self.show_thread(cache);
                 self.show_thread_list(cache);
             }
+            Event::Uploads(_) | Event::UploadProgress { .. } => self.show_uploads(cache),
             Event::Timeline(changes) => self.messages.queue(move |model| model.apply(&changes)),
             Event::TimelineStatus(_) => {
+                self.show_uploads(cache);
                 // The open room may be another: its threads are unread, or not.
                 self.show_thread_unread(cache);
                 self.show_room(cache);
@@ -679,6 +763,7 @@ impl Views {
                 .thread_messages
                 .queue(move |model| model.apply(&changes)),
             Event::ThreadStatus(_) => {
+                self.show_uploads(cache);
                 self.show_thread(cache);
                 // A thread hides the list, and the pane follows.
                 self.show_thread_list(cache);
@@ -737,6 +822,7 @@ impl Views {
             .queue(move |model| model.show(threads, avatars, unread));
         self.show_thread(cache);
         self.show_thread_list(cache);
+        self.show_uploads(cache);
         self.show_session_view(accounts);
     }
 
@@ -752,6 +838,8 @@ impl Views {
             thread_list: Registered::new("ThreadList"),
             thread_list_rows: Registered::new("ThreadListModel"),
             picker: Registered::new("EmojiCatalog"),
+            room_uploads: Registered::new("RoomUploads"),
+            thread_uploads: Registered::new("ThreadUploads"),
         }
     }
 
@@ -860,6 +948,14 @@ impl Views {
     fn show_thread_list(&mut self, cache: &Cache) {
         let state = cache.thread_list_state();
         self.thread_list.queue(move |vm| vm.show(&state));
+    }
+
+    /// Tells the upload lists of the room and of the thread the rows `cache` has for them now.
+    fn show_uploads(&mut self, cache: &Cache) {
+        let rows = cache.room_upload_rows();
+        self.room_uploads.queue(move |model| model.show(&rows));
+        let rows = cache.thread_upload_rows();
+        self.thread_uploads.queue(move |model| model.show(&rows));
     }
 
     /// Sends the `Thread` view model what `cache` says it shows now.

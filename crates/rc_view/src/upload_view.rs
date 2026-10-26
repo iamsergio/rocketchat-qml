@@ -11,6 +11,7 @@ use rc_core::list_change::ListChange;
 use rc_core::uploads::{Upload, UploadError, UploadId, UploadState};
 
 use crate::attachment_view::human_size;
+use crate::staged_view::Thumbnail;
 
 /// Where the uploads shown are posted.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -53,6 +54,11 @@ pub struct UploadRow {
     pub name: String,
     /// In words: `1.5 MB`.
     pub size: String,
+    /// What the row says under the name: `1.8 of 4.2 MB`, `Waiting · 4.2 MB`, `Posting…`, or why
+    /// it failed.
+    pub status_line: String,
+    /// What the thumbnail shows.
+    pub thumbnail: Thumbnail,
     /// How much has gone, from 0 to 1. Nothing for a queued or a failed upload (0), all of it
     /// while the message is posted (1).
     pub progress: f64,
@@ -81,26 +87,60 @@ pub fn rows(uploads: &[Upload], place: Place<'_>) -> Vec<UploadRow> {
 /// The row of one upload.
 #[must_use]
 pub fn row(upload: &Upload) -> UploadRow {
-    let (status, progress, error) = match &upload.state {
-        UploadState::Queued => (UploadStatus::Queued, 0.0, String::new()),
+    let size = human_size(upload.size);
+    let (status, progress, error, status_line) = match &upload.state {
+        UploadState::Queued => (
+            UploadStatus::Queued,
+            0.0,
+            String::new(),
+            format!("Waiting \u{b7} {size}"),
+        ),
         UploadState::Uploading { sent } => (
             UploadStatus::Uploading,
             fraction(*sent, upload.size),
             String::new(),
+            sent_of(*sent, upload.size),
         ),
-        UploadState::Confirming => (UploadStatus::Confirming, 1.0, String::new()),
-        UploadState::Failed(error) => (UploadStatus::Failed, 0.0, error_in_words(error)),
+        UploadState::Confirming => (
+            UploadStatus::Confirming,
+            1.0,
+            String::new(),
+            "Posting\u{2026}".to_owned(),
+        ),
+        UploadState::Failed(error) => {
+            let words = error_in_words(error);
+            (UploadStatus::Failed, 0.0, words.clone(), words)
+        }
     };
     UploadRow {
         id: upload.id,
         name: upload.name.clone(),
-        size: human_size(upload.size),
+        size,
+        status_line,
+        thumbnail: Thumbnail::of(&upload.name, &upload.path),
         progress,
         status,
         error,
         can_retry: status == UploadStatus::Failed,
         can_cancel: status != UploadStatus::Confirming,
     }
+}
+
+/// How much of a file has gone, in the unit of the whole: `1.8 of 4.2 MB`.
+#[must_use]
+#[allow(clippy::cast_precision_loss)]
+pub fn sent_of(sent: u64, size: u64) -> String {
+    let whole = human_size(size);
+    let sent = sent.min(size);
+    let Some((_, unit)) = whole.split_once(' ').filter(|(_, unit)| *unit != "B") else {
+        return format!("{sent} of {whole}");
+    };
+    let power = ["KB", "MB", "GB", "TB"]
+        .iter()
+        .position(|name| *name == unit)
+        .map_or(0, |index| index + 1);
+    let scaled = sent as f64 / 1024_f64.powi(i32::try_from(power).unwrap_or(0));
+    format!("{scaled:.1} of {whole}")
 }
 
 /// `sent` of `size`, from 0 to 1.
@@ -124,8 +164,20 @@ pub fn error_in_words(error: &UploadError) -> String {
         ),
         UploadError::Disabled => "The server doesn't take file uploads".to_owned(),
         UploadError::Unreadable(why) => format!("Can't read the file: {why}"),
-        UploadError::Refused(why) => format!("The server refused the file: {why}"),
+        UploadError::Refused(why) => {
+            format!("The server refused the file: {}", without_code(why))
+        }
         UploadError::Connection => "Can't reach the server".to_owned(),
+    }
+}
+
+/// The server's words without the code it ends them with in brackets: `File type is not accepted.
+/// [error-invalid-file-type]` is for the logs, not for the user.
+fn without_code(why: &str) -> &str {
+    let why = why.trim();
+    match why.strip_suffix(']').and_then(|rest| rest.rsplit_once('[')) {
+        Some((words, _)) if !words.trim().is_empty() => words.trim_end(),
+        _ => why,
     }
 }
 
@@ -178,6 +230,7 @@ mod tests {
             room: "r".to_owned().into(),
             thread: None,
             name: format!("file{id}.txt"),
+            path: format!("/tmp/file{id}.txt").into(),
             size: 2_048,
             state,
         }
@@ -200,6 +253,12 @@ mod tests {
                 id: UploadId::for_test(0),
                 name: "file0.txt".into(),
                 size: "2.0 KB".into(),
+                status_line: "Waiting \u{b7} 2.0 KB".into(),
+                thumbnail: Thumbnail {
+                    is_image: false,
+                    url: String::new(),
+                    label: "TXT".into()
+                },
                 progress: 0.0,
                 status: UploadStatus::Queued,
                 error: String::new(),
@@ -218,6 +277,36 @@ mod tests {
         assert_eq!(failed.status, UploadStatus::Failed);
         assert_eq!(failed.error, "Can't reach the server");
         assert!(failed.can_retry && failed.can_cancel);
+    }
+
+    // ACT-009
+    #[test]
+    fn the_status_line_says_what_the_row_waits_for() {
+        assert_eq!(sent_of(1_887_437, 4_404_019), "1.8 of 4.2 MB");
+        assert_eq!(sent_of(0, 900), "0 of 900 B");
+        assert_eq!(sent_of(9_000_000, 4_404_019), "4.2 of 4.2 MB");
+        assert_eq!(sent_of(512, 2_048), "0.5 of 2.0 KB");
+        let line = |state| row(&upload(0, state)).status_line;
+        assert_eq!(
+            line(UploadState::Uploading { sent: 1_024 }),
+            "1.0 of 2.0 KB"
+        );
+        assert_eq!(line(UploadState::Confirming), "Posting\u{2026}");
+        assert_eq!(
+            line(UploadState::Failed(UploadError::Disabled)),
+            "The server doesn't take file uploads"
+        );
+    }
+
+    // ACT-009
+    #[test]
+    fn the_thumbnail_is_the_picture_for_an_image_and_the_extension_for_a_file() {
+        let mut picture = upload(0, UploadState::Queued);
+        picture.name = "cat.png".into();
+        picture.path = "/tmp/cat.png".into();
+        let thumbnail = row(&picture).thumbnail;
+        assert!(thumbnail.is_image);
+        assert_eq!(thumbnail.url, "file:///tmp/cat.png?v=0");
     }
 
     // ACT-009
@@ -253,6 +342,16 @@ mod tests {
         assert_eq!(
             error_in_words(&UploadError::Refused("File type is not accepted".into())),
             "The server refused the file: File type is not accepted"
+        );
+        assert_eq!(
+            error_in_words(&UploadError::Refused(
+                "File type is not accepted. [error-invalid-file-type]".into()
+            )),
+            "The server refused the file: File type is not accepted."
+        );
+        assert_eq!(
+            error_in_words(&UploadError::Refused("[No file uploaded]".into())),
+            "The server refused the file: [No file uploaded]"
         );
     }
 
