@@ -117,10 +117,11 @@ Done when: a script runs micro performance scenarios (first: scrolling the main 
 
 - [x] Spix `mouseWheel(path, angleDeltaX, angleDeltaY, steps, intervalMs)` in the fork, both servers (C++ Spix and `spix_slint`)
 - [x] `Gui::mouse_wheel` in `rc_gui_tests`, and a wheel variant of the MSG-002 test against both apps
-- [ ] The harness can start the app under a wrapper command (`perf stat ...`); `App::launch_with` already overrides the platform variables
+- [x] The harness can start the app under a wrapper command (`perf stat ...`) and pick the binary explicitly: `LaunchOptions` and `App::launch_with_options`, see [GUI testing](docs/design/gui-testing.md)
 - [ ] The list's scroll position readable in both apps, and frame counts (`QQuickWindow::frameSwapped`, Slint's rendering notifier)
-- [ ] `rc_gui_perf`: a binary on `rc_gui_tests` and `rc_test_server` with the `perf` control FIFO, the scroll scenario, JSON per run; a RelWithDebInfo preset with Spix for both apps
-- [ ] `scripts/perf.sh` and the HTML report (Qt and Slint side by side, ratio, change against a saved baseline); later `perf record` flame graphs per scenario
+- [ ] `rc_gui_perf`: a binary on `rc_gui_tests` and `rc_test_server` with the `perf` control FIFO, the scroll scenario, JSON per run; a RelWithDebInfo preset with Spix for both apps. It runs only its own scenarios, never the GUI test suite
+- [ ] `scripts/run_perf_test.sh`: `--list` prints every scenario once per app (`qt.scroll_main_channel`, `slint.scroll_main_channel`); a prefixed name runs that one, a bare name runs it in both apps, no name runs them all; `--platform wayland|xcb`, Wayland by default
+- [ ] The HTML report (Qt and Slint side by side, ratio, change against a saved baseline); later `perf record` flame graphs per scenario
 
 ## Phase 8: personal nice to haves
 - [ ] Move logout icon. Logout is seldom used. right lcick on the server rail on a server tile can have the logout option.
