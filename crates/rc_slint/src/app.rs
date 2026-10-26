@@ -20,11 +20,13 @@ use std::path::PathBuf;
 use std::rc::Rc;
 
 use rc_core::adapters::DiskFileCache;
+use rc_core::directory::{ActionState, DirectoryAction};
 use rc_core::domain::{AccountId, RoomId};
 use rc_core::{AccountHandle, Client, Event};
 use rc_view::accounts::AccountChange;
 use rc_view::avatar_view::AvatarUrls;
 use rc_view::dev_login;
+use rc_view::directory::{SearchRow, search_rows};
 use rc_view::rich_html;
 use rc_view::room_search::{search_rooms, trimmed};
 use rc_view::session_view::{LoginMode, SessionView, Status};
@@ -173,6 +175,15 @@ fn connect_commands(window: &MainWindow) {
     window.on_remove_account(|id| App::with(|app| app.remove_account(&id)));
     window.on_open_room(|id| App::with(|app| app.open_room(&id)));
     window.on_search(|query| App::with(|app| app.search(&query)));
+    window.on_search_cursor_up(|| App::with(|app| app.move_search_cursor(true)));
+    window.on_search_cursor_down(|| App::with(|app| app.move_search_cursor(false)));
+    window.on_open_search_row(|index| {
+        let mut acted = false;
+        App::with(|app| acted = app.open_search_row(index));
+        acted
+    });
+    window.on_retry_search(|| App::with(|app| app.search_directory()));
+    window.on_join_room(|| App::with(|app| app.join_room()));
     window.on_send(|text, quoted| {
         let mut sent = false;
         App::with(|app| sent = app.send(&text, &quoted));
@@ -339,12 +350,24 @@ impl App {
             Event::Rooms(changes) => {
                 self.rooms.apply(&changes);
                 self.show_thread_unread();
-                self.refresh_search();
+                self.refresh_search(true);
                 // The open room's name may have changed.
                 self.show_room();
                 self.show_thread();
             }
-            Event::QuietRooms(_) => self.refresh_search(),
+            Event::QuietRooms(_) | Event::Directory(_) => self.refresh_search(true),
+            // The previewed channel is the open room's header, and the composer's Join.
+            Event::Preview(_) => self.show_room(),
+            Event::DirectoryAction { action, state } => {
+                self.found.set_busy(working(&action, &state));
+                // A failure is shown until dismissed or the next action, which clears it.
+                let text = match state {
+                    ActionState::Failed(error) => error.to_string(),
+                    ActionState::Working | ActionState::Done => String::new(),
+                };
+                self.show_room_list_error(&text);
+                self.show_room();
+            }
             Event::Timeline(changes) => {
                 let names = self.messages.apply(&changes);
                 self.want_emoji_images(names);
@@ -457,7 +480,9 @@ impl App {
         self.show_session(&self.switchboard.accounts().session_view());
         self.show_room();
         self.show_thread();
-        self.refresh_search();
+        // The new account has not searched its directory for the text.
+        self.search_directory();
+        self.refresh_search(true);
     }
 
     /// Shows the messages to someone else, in the room and in the thread.
@@ -468,9 +493,10 @@ impl App {
 
     // The search
 
-    /// Searches the current account's rooms again, if a search is active: the rooms or the account
-    /// changed under it. The model is replaced as a whole, as for a new query.
-    fn refresh_search(&mut self) {
+    /// Searches the current account's rooms again, if a search is active: the rooms or the
+    /// directory changed under it, or the account. The model is replaced as a whole, as for a new
+    /// query; the cursor stays on its row if `keep_cursor` and the row is still there.
+    fn refresh_search(&mut self, keep_cursor: bool) {
         let Some(window) = self.window.upgrade() else {
             return;
         };
@@ -481,21 +507,80 @@ impl App {
             // Nothing is shown while the field is at rest; drop what a search left, and leave
             // the model alone otherwise: this runs on every change of the rooms.
             if self.found.row_count() > 0 {
-                self.found.show(Vec::new(), AvatarUrls::default());
+                self.found
+                    .show(Vec::new(), AvatarUrls::default(), None, false);
+                window.set_search_cursor(self.found.cursor());
             }
             return;
         }
         let cache = self.switchboard.accounts().current_cache();
-        let found = search_rooms(cache.rooms(), cache.quiet_rooms(), query);
-        self.found.show(found, cache.avatars());
+        let rooms = search_rooms(cache.rooms(), cache.quiet_rooms(), query);
+        let rows = search_rows(query, &rooms, cache.directory(), &cache.directory_view());
+        let busy = cache
+            .directory_action()
+            .and_then(|(action, state)| working(action, state));
+        self.found.show(rows, cache.avatars(), busy, keep_cursor);
+        window.set_search_cursor(self.found.cursor());
         self.searches = self.searches.wrapping_add(1);
         window.set_search_generation(self.searches);
     }
 
     /// The search field holds `query` now.
     fn search(&mut self, query: &str) {
+        let same_search = trimmed(&self.query) == trimmed(query);
         query.clone_into(&mut self.query);
-        self.refresh_search();
+        self.search_directory();
+        self.refresh_search(same_search);
+    }
+
+    /// Asks the core to search the directory for the field's text, which is also how Retry asks
+    /// again: the core searches the same text again only after it failed.
+    fn search_directory(&self) {
+        let query = trimmed(&self.query);
+        self.current_account("search_directory", |account| {
+            account.search_directory(query);
+        });
+    }
+
+    /// Moves the cursor to the next row that can be acted on, up the screen or back down.
+    fn move_search_cursor(&self, up: bool) {
+        self.found.move_cursor(up);
+        if let Some(window) = self.window.upgrade() {
+            window.set_search_cursor(self.found.cursor());
+        }
+    }
+
+    /// Acts on the row of the results at `index` (top to bottom): a room opens, a person is
+    /// messaged, a channel is previewed. Says whether it did, so that the field clears itself. The
+    /// core ignores a directory action while another is under way, so the field stays then.
+    fn open_search_row(&self, index: i32) -> bool {
+        let Some(found) = usize::try_from(index)
+            .ok()
+            .and_then(|at| self.found.found_at(at))
+        else {
+            return false;
+        };
+        match found {
+            SearchRow::Room(room) => self.open_room(room.id.as_str()),
+            SearchRow::Person(_) | SearchRow::Channel(_) if self.found.is_busy() => return false,
+            SearchRow::Person(person) => self.current_account("open_direct", |account| {
+                account.open_direct(&person.username);
+            }),
+            SearchRow::Channel(channel) => self.current_account("preview_channel", |account| {
+                account.preview_channel(channel.id);
+            }),
+            _ => return false,
+        }
+        true
+    }
+
+    /// Joins the previewed channel, which is the open room. It stays the open room.
+    fn join_room(&self) {
+        let Some(window) = self.window.upgrade() else {
+            return;
+        };
+        let id = RoomId::from(window.get_room_id().to_string());
+        self.current_account("join_channel", |account| account.join_channel(id));
     }
 
     // The messages
@@ -557,6 +642,8 @@ impl App {
         }
         window.set_room_id(state.room_id.into());
         window.set_room_name(state.name.into());
+        window.set_room_preview(state.preview);
+        window.set_room_joining(state.joining);
         window.set_room_kind(state.kind.into());
         // The topic is markdown. The GUI tests read it as the HTML the Qt app shows.
         let viewer = self.switchboard.accounts().current_cache().viewer();
@@ -695,4 +782,9 @@ impl App {
             account.open_room(RoomId::from(id.to_owned()));
         });
     }
+}
+
+/// The action, if the state says it is under way.
+fn working(action: &DirectoryAction, state: &ActionState) -> Option<DirectoryAction> {
+    (*state == ActionState::Working).then(|| action.clone())
 }

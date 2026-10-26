@@ -1,50 +1,84 @@
 // SPDX-FileCopyrightText: 2026 Sergio Martins
 // SPDX-License-Identifier: MIT
 
+import { DirectoryLabel, DirectoryNote, DirectoryRow } from "directory_row.slint";
 import { RoomDelegate } from "room_delegate.slint";
-import { RoomRow } from "structs.slint";
+import { SearchKind, SearchRow } from "structs.slint";
 import { Theme } from "theme.slint";
 
-// The rooms that match the search, piled up from the bottom: the best match is the last row, right
-// above the field (Rust gives them worst first), and the empty space is above the rows.
+// One row of the results: its kind says which look it has, and the height.
+component ResultRow inherits Rectangle {
+    in property <SearchRow> found;
+    in property <bool> highlighted;
+    in property <bool> cursor;
+    callback clicked();
+    callback retry();
+    // The cursor came to the row: where it is in the layout, for the list to scroll to it.
+    callback revealed(length, length);
+
+    height: root.found.kind == SearchKind.label ? Theme.directory-label-height : root.found.kind == SearchKind.more ? Theme.directory-more-height : Theme.room-row-height;
+
+    changed cursor => {
+        if self.cursor {
+            root.revealed(root.y, root.height);
+        }
+    }
+
+    if root.found.kind == SearchKind.room: RoomDelegate {
+        room: root.found.room;
+        id-prefix: "searchResult_";
+        menu-enabled: false;
+        highlighted: root.highlighted;
+        cursor: root.cursor;
+        clicked => {
+            root.clicked();
+        }
+    }
+
+    if root.found.kind == SearchKind.person || root.found.kind == SearchKind.channel: DirectoryRow {
+        found: root.found;
+        cursor: root.cursor;
+        clicked => {
+            root.clicked();
+        }
+    }
+
+    if root.found.kind == SearchKind.label: DirectoryLabel {
+        group: root.found.group;
+    }
+
+    if root.found.kind == SearchKind.searching || root.found.kind == SearchKind.failed || root.found.kind == SearchKind.more: DirectoryNote {
+        found: root.found;
+        retry => {
+            root.retry();
+        }
+    }
+}
+
+// What the room search found, piled up from the bottom: the rooms, and the people and channels of
+// the server's directory in groups, top to bottom as on screen. The best match of each group is
+// its last row, nearest the field (Rust gives them in that order), and the empty space is above
+// the rows.
 //
-// Not the lazy `ListView`, which can't bottom-align a few rows (SLINT.md): every result is a row of
-// one layout in a flickable, so the rows are all made at once. The keyboard cursor is a row of
-// its own, moved with `move-up` (away from the field) and `move-down`, and it starts on the best
-// match with each new result set (`generation`). The field keeps the focus: the list has none.
+// Not the lazy `ListView`, which can't bottom-align a few rows (SLINT.md): every row is a child of
+// one layout in a flickable, so the rows are all made at once. The keyboard cursor is Rust's
+// (`cursor`, an index of `results`, or -1); it moves with the field's Up and Down. A new result
+// set (`generation`) shows the bottom. The field keeps the focus: the list has none.
 export component RoomSearchResults inherits Rectangle {
-    in property <[RoomRow]> results;
+    in property <[SearchRow]> results;
     // A number that goes up with each new result set.
     in property <int> generation;
     // The open room, which is highlighted.
     in property <string> open-id;
-    // The row of the cursor: an index of `results`, the last one until it is moved.
-    property <int> cursor: root.results.length - 1;
-    callback clicked(string);
+    // The row the cursor is on, or -1.
+    in property <int> cursor;
+    // The index of a row that was clicked.
+    callback clicked(int);
+    callback retry();
 
-    // The id of the room under the cursor, empty if there are no results.
-    public function cursor-id() -> string {
-        root.results[root.cursor].id
-    }
-
-    // Away from the field: to the next result up, if there is one.
-    public function move-up() {
-        root.cursor = max(root.cursor - 1, 0);
-        root.reveal();
-    }
-
-    // Back towards the field.
-    public function move-down() {
-        root.cursor = min(root.cursor + 1, root.results.length - 1);
-        root.reveal();
-    }
-
-    // Scrolls the cursor's row into view. The rows are all the same height, and the layout is as
-    // high as the content, so where a row is follows from its index.
-    function reveal() {
-        let below = (root.results.length - root.cursor) * Theme.room-row-height;
-        let top = flick.content-height - below;
-        let bottom = top + Theme.room-row-height;
+    // Scrolls a row into view, given where it is in the layout.
+    function reveal(top: length, height: length) {
+        let bottom = top + height;
         if top < -flick.content-y {
             flick.content-y = -top;
         } else if bottom > -flick.content-y + flick.height {
@@ -52,9 +86,8 @@ export component RoomSearchResults inherits Rectangle {
         }
     }
 
-    // A new result set: the cursor on the best match, which is at the bottom, in view.
+    // A new result set: the bottom, where the best match is, in view.
     changed generation => {
-        root.cursor = root.results.length - 1;
         flick.content-y = min(Theme.scroll-top, flick.height - flick.content-height);
     }
 
@@ -65,23 +98,27 @@ export component RoomSearchResults inherits Rectangle {
         width: parent.width;
         height: parent.height;
         content-width: self.width;
-        content-height: max(self.height, root.results.length * Theme.room-row-height);
+        content-height: max(self.height, layout.preferred-height);
 
-        VerticalLayout {
+        layout := VerticalLayout {
             alignment: end;
             width: flick.width;
             height: flick.content-height;
             padding: Theme.spacing-none;
             spacing: Theme.spacing-none;
 
-            for room[index] in root.results: RoomDelegate {
-                room: room;
-                id-prefix: "searchResult_";
-                menu-enabled: false;
-                highlighted: room.id == root.open-id;
+            for row[index] in root.results: ResultRow {
+                found: row;
+                highlighted: row.kind == SearchKind.room && row.room.id == root.open-id;
                 cursor: index == root.cursor;
                 clicked => {
-                    root.clicked(room.id);
+                    root.clicked(index);
+                }
+                retry => {
+                    root.retry();
+                }
+                revealed(top, height) => {
+                    root.reveal(top, height);
                 }
             }
         }

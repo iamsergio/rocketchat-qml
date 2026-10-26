@@ -103,3 +103,10 @@ In `i-slint-core` `items/text.rs` its `input_event` answers `EventAccepted` for 
 
 - **Workaround:** `MessageRow.has-links` (the rendered HTML has an `<a href=`) tells `message_delegate.slint` to put a `TouchArea` over a body without links, which takes the double-click. A body with links reacts to a double-click beside the text only.
 - **Possible patch:** `StyledText` ignoring events that aren't on a link.
+
+## `Text` has no text transform and no font features
+
+Qt's `font.capitalization: Font.AllUppercase` and `font.features: tnum` (tabular figures) have no Slint counterpart.
+
+- **Workaround:** the labels over the search results' groups make the capitals with `to-uppercase()` and keep the words in `accessible-label`, which the GUI tests read. The member count of a channel is in proportional figures.
+- **Possible patch:** a `text-transform` and a `font-features` property on `Text`.

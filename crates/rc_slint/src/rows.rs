@@ -6,11 +6,13 @@
 
 use jiff::Timestamp;
 use jiff::tz::TimeZone;
-use rc_core::domain::{Message, MessageKind, Room};
+use rc_core::directory::DirectoryAction;
+use rc_core::domain::{AvatarOwner, Message, MessageKind, Room};
 use rc_core::policy::can_react;
 use rc_view::accounts::{AccountView, Status};
 use rc_view::attachment_view::attachments;
 use rc_view::avatar_view::{AvatarUrls, color, initials, message_owner, room_placeholder};
+use rc_view::directory::SearchRow as Found;
 use rc_view::file_urls::file_path;
 use rc_view::message_list::MessageList;
 use rc_view::message_view::{
@@ -24,11 +26,12 @@ use rc_view::rich_html::{message_html, render};
 use rc_view::room_view::kind_name;
 use rc_view::thread_list_view::{row_summary, row_text};
 use rc_view::viewer::{Clock, Viewer};
-use slint::{Color, Image, ModelRc, StyledText, VecModel};
+use slint::{Color, Image, ModelRc, SharedString, StyledText, VecModel};
 
 use crate::rich_markdown::{self, Palette};
 use crate::ui::{
-    AccountTile, AttachmentRow, MessageRow, QuoteRow, ReactionRow, RoomRow, RoomSection, ThreadRow,
+    AccountTile, AttachmentRow, MessageRow, QuoteRow, ReactionRow, RoomRow, RoomSection,
+    SearchKind, SearchRow, ThreadRow,
 };
 
 /// Counts are `u32`, Slint's are `int`: saturate.
@@ -72,6 +75,89 @@ pub fn room_row(room: &Room, avatars: &AvatarUrls) -> RoomRow {
         has_avatar: image.is_some(),
         avatar: image.unwrap_or_default(),
     }
+}
+
+/// The row of a person or a channel the directory found, as far as the avatar and the name go:
+/// `id` is the username or the room id, and `owner` says whose avatar it shows.
+fn directory_room_row(
+    id: &str,
+    name: &str,
+    seed: &str,
+    owner: &AvatarOwner,
+    avatars: &AvatarUrls,
+) -> RoomRow {
+    let url = avatars.url(owner);
+    let image = load_image(url);
+    RoomRow {
+        id: id.into(),
+        name: name.into(),
+        initials: initials(name).into(),
+        initials_color: parse_color(&color(seed)),
+        avatar_url: url.into(),
+        has_avatar: image.is_some(),
+        avatar: image.unwrap_or_default(),
+        ..RoomRow::default()
+    }
+}
+
+/// The row of the room search's results, with the avatar file it has now. `busy` is the directory
+/// action under way, if any: the row it is about says so.
+pub fn search_row(
+    found: &Found,
+    avatars: &AvatarUrls,
+    busy: Option<&DirectoryAction>,
+) -> SearchRow {
+    let mut row = SearchRow {
+        kind: SearchKind::Label,
+        room: RoomRow::default(),
+        username: SharedString::default(),
+        members: 0,
+        busy: busy.is_some_and(|action| found.is_busy_with(action)),
+        group: SharedString::default(),
+        count: 0,
+        text: SharedString::default(),
+    };
+    match found {
+        Found::Room(room) => {
+            row.kind = SearchKind::Room;
+            row.room = room_row(room, avatars);
+        }
+        Found::Label(group) => row.group = group.name().into(),
+        Found::Searching => row.kind = SearchKind::Searching,
+        Found::Failed(why) => {
+            row.kind = SearchKind::Failed;
+            row.text = why.as_str().into();
+        }
+        Found::Person(person) => {
+            let name = person.name.as_deref().unwrap_or(&person.username);
+            row.kind = SearchKind::Person;
+            row.room = directory_room_row(
+                &person.username,
+                name,
+                &person.username,
+                &AvatarOwner::User(person.username.clone()),
+                avatars,
+            );
+            row.username = person.username.as_str().into();
+        }
+        Found::Channel(channel) => {
+            row.kind = SearchKind::Channel;
+            row.room = directory_room_row(
+                channel.id.as_str(),
+                &channel.name,
+                &channel.name,
+                &AvatarOwner::Room(channel.id.clone()),
+                avatars,
+            );
+            row.members = count(channel.members);
+        }
+        Found::More(group, more) => {
+            row.kind = SearchKind::More;
+            row.group = group.name().into();
+            row.count = count(*more);
+        }
+    }
+    row
 }
 
 /// The row of a thread of the list, from its parent, with the avatar file the author has now. The

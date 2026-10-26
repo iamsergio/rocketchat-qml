@@ -10,7 +10,7 @@ import { RoomDelegate } from "room_delegate.slint";
 import { RoomSearchField } from "room_search_field.slint";
 import { RoomSearchResults } from "room_search_results.slint";
 import { ThreadPane } from "thread_pane.slint";
-import { MessageMenu, MessageRow, RoomRow, ThreadPaneState, ThreadRow } from "structs.slint";
+import { MessageMenu, MessageRow, RoomRow, SearchKind, SearchRow, ThreadPaneState, ThreadRow } from "structs.slint";
 import { Theme } from "theme.slint";
 import { TypingLine } from "typing_line.slint";
 
@@ -44,13 +44,26 @@ export component RoomPage inherits Rectangle {
     // Why the last command on a room failed; empty for none.
     in property <string> room-list-error;
     // The search: whether the query isn't empty, and then the query without the space around it
-    // and the rooms that match, worst first (see `room_search_results.slint`), with a number that
-    // goes up with each new result set.
+    // and the rows found, worst first (see `room_search_results.slint`), with a number that goes
+    // up with each new result set and the row the cursor is on (or -1).
     in property <bool> search-active;
     in property <string> search-trimmed;
-    in property <[RoomRow]> search-results;
+    in property <[SearchRow]> search-results;
     in property <int> search-generation;
+    in property <int> search-cursor;
     callback search(string);
+    // The cursor moves away from the field (up) or back to it; a row is acted on, which says
+    // whether it was (a room opens, a person is messaged, a channel previewed); the directory is
+    // searched again after it failed.
+    callback search-cursor-up();
+    callback search-cursor-down();
+    callback open-search-row(int) -> bool;
+    callback retry-search();
+    // The open room is a channel the user looks at without being in it, and joining it is under
+    // way; the composer offers to join.
+    in property <bool> room-preview;
+    in property <bool> room-joining;
+    callback join-room();
     callback open-room(string);
     // The room's menu: a favorite is set or taken back, the room is marked read or unread, or
     // leaving is asked for (the id and the name, for the dialog that asks).
@@ -129,6 +142,17 @@ export component RoomPage inherits Rectangle {
 
     // The search is over: the field is emptied and gives up the focus, which goes to the composer
     // of the open room, or of the one being opened (`opened`, with its id), or to nothing.
+    // Acts on the row `index` of the results; the search ends if that did something.
+    function open-result(index: int) {
+        if index < 0 || index >= root.search-results.length {
+            return;
+        }
+        let row = root.search-results[index];
+        if root.open-search-row(index) {
+            root.leave-search(true, row.kind == SearchKind.room ? row.room.id : "");
+        }
+    }
+
     function leave-search(opened: bool, id: string) {
         search-field.clear-text();
         search-field.give-up-focus();
@@ -251,10 +275,13 @@ export component RoomPage inherits Rectangle {
                             visible: root.search-active;
                             results: root.search-results;
                             generation: root.search-generation;
+                            cursor: root.search-cursor;
                             open-id: root.room-id;
-                            clicked(id) => {
-                                root.open-room(id);
-                                root.leave-search(true, id);
+                            clicked(index) => {
+                                root.open-result(index);
+                            }
+                            retry => {
+                                root.retry-search();
                             }
                         }
                     }
@@ -310,7 +337,7 @@ export component RoomPage inherits Rectangle {
                             color: Theme.text-faint;
                             font-size: Theme.font-size-small;
                             overflow: elide;
-                            text: @tr("No rooms match “{}”", root.search-trimmed);
+                            text: @tr("No rooms, people or channels match “{}”", root.search-trimmed);
                         }
                     }
 
@@ -335,17 +362,15 @@ export component RoomPage inherits Rectangle {
                                 }
                             }
                             up => {
-                                results.move-up();
+                                root.search-cursor-up();
                             }
                             down => {
-                                results.move-down();
+                                root.search-cursor-down();
                             }
                             enter => {
                                 // Nothing under the cursor opens nothing, and the search stays.
-                                if root.search-active && root.search-results.length > 0 {
-                                    let id = results.cursor-id();
-                                    root.open-room(id);
-                                    root.leave-search(true, id);
+                                if root.search-active {
+                                    root.open-result(root.search-cursor);
                                 }
                             }
                             escape => {
@@ -622,6 +647,11 @@ export component RoomPage inherits Rectangle {
                                 edit-answers: root.edit-answers;
                                 edit-answer-id: root.edit-answer-id;
                                 edit-answer-ok: root.edit-answer-ok;
+                                preview: root.room-preview;
+                                joining: root.room-joining;
+                                join => {
+                                    root.join-room();
+                                }
                                 focus-wanted: root.composer-wanted;
                                 focus-requests: root.composer-requests;
                                 conversation-id: root.room-id;

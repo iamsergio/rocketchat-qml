@@ -24,6 +24,11 @@ export component Composer inherits Rectangle {
     // off for each reply, that also sends the reply to the room (`room-name`, for its label), and
     // Escape with nothing to cancel is for the caller (`escape`).
     in property <bool> for-thread;
+    // The room is a channel previewed without being in it: the box offers to join in Send's place,
+    // and what is typed waits in the field. `joining` while the join is under way.
+    in property <bool> preview;
+    in property <bool> joining;
+    callback join();
     in property <string> room-name;
     out property <bool> also-to-channel;
     callback escape();
@@ -83,6 +88,9 @@ export component Composer inherits Rectangle {
         Theme.composer-max-height);
 
     function submit() {
+        if root.preview {
+            return;
+        }
         if root.editing {
             root.save();
         } else if root.send(input.text, root.quoting-id) {
@@ -403,12 +411,16 @@ export component Composer inherits Rectangle {
                 width: send-button.min-width;
 
                 send-button := PrimaryButton {
-                    accessible-id: "composerSend";
+                    accessible-id: root.preview ? "composerJoin" : "composerSend";
                     y: parent.height - self.height;
-                    text: root.editing ? @tr("Save") : @tr("Send");
-                    enabled: !input.text.is-empty && !root.saving;
+                    text: root.preview ? (root.joining ? @tr("Joining…") : @tr("Join")) : root.editing ? @tr("Save") : @tr("Send");
+                    enabled: root.preview ? !root.joining : !input.text.is-empty && !root.saving;
                     clicked => {
-                        root.submit();
+                        if root.preview {
+                            root.join();
+                        } else {
+                            root.submit();
+                        }
                     }
                 }
             }
