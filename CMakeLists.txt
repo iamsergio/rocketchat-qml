@@ -95,6 +95,8 @@ if(ROCKETCHATQML_SLINT)
     ${rc_slint_features})
   # Next to the Qt app, whatever CMAKE_RUNTIME_OUTPUT_DIRECTORY did at import time.
   set_target_properties(rocketchat_slint PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
+  # An imported target, which install(TARGETS) refuses.
+  install(PROGRAMS $<TARGET_FILE:rocketchat_slint> DESTINATION bin)
 endif()
 
 if(ROCKETCHATQML_QT)
