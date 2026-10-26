@@ -38,7 +38,6 @@ impl Default for Rules {
 /// An upload with what the actor needs to run it.
 struct Entry {
     upload: Upload,
-    path: PathBuf,
     text: String,
     /// The server's id of the file, once it has it: a retry then only posts the message.
     file_id: Option<String>,
@@ -134,10 +133,10 @@ impl<C: Connector> Actor<C> {
                 room,
                 thread,
                 name,
+                path,
                 size,
                 state,
             },
-            path,
             text: text.trim().to_owned(),
             file_id: None,
         });
@@ -182,7 +181,7 @@ impl<C: Connector> Actor<C> {
         if entry.file_id.is_some() {
             self.uploads.entries[index].upload.state = UploadState::Queued;
         } else {
-            let (size, state) = self.assess(&entry.path);
+            let (size, state) = self.assess(&entry.upload.path);
             let upload = &mut self.uploads.entries[index].upload;
             upload.size = size;
             upload.state = state;
@@ -260,7 +259,7 @@ impl<C: Connector> Actor<C> {
             })
         } else {
             entry.upload.state = UploadState::Uploading { sent: 0 };
-            let path = entry.path.clone();
+            let path = entry.upload.path.clone();
             let name = entry.upload.name.clone();
             let size = entry.upload.size;
             let progress_to = done.clone();

@@ -6,9 +6,17 @@
 use super::threads::reply;
 use super::*;
 
+thread_local! {
+    /// The files `file` made in this test by name, for the `Upload`s the tests expect to carry
+    /// their path.
+    static FILES: std::cell::RefCell<HashMap<String, PathBuf>> = std::cell::RefCell::default();
+}
+
 /// A file of `size` bytes with this name.
 fn file(name: &str, size: usize) -> PathBuf {
-    rc_test_server::temp_file(name, &vec![b'x'; size])
+    let path = rc_test_server::temp_file(name, &vec![b'x'; size]);
+    FILES.with(|files| files.borrow_mut().insert(name.to_owned(), path.clone()));
+    path
 }
 
 fn id(number: u64) -> UploadId {
@@ -22,6 +30,7 @@ fn upload(number: u64, name: &str, size: u64, state: UploadState) -> Upload {
         room: "1".to_owned().into(),
         thread: None,
         name: name.to_owned(),
+        path: FILES.with(|files| files.borrow().get(name).cloned().unwrap_or_default()),
         size,
         state,
     }
@@ -467,6 +476,11 @@ fn a_file_that_cannot_be_read_fails_at_once_and_a_retry_looks_again() {
     let harness = logged_in_harness(&fake);
     let dir = file("anchor", 1);
     let path = dir.with_file_name("late.txt");
+    FILES.with(|files| {
+        files
+            .borrow_mut()
+            .insert("late.txt".to_owned(), path.clone())
+    });
 
     upload_to_room(&harness, &path, "");
 

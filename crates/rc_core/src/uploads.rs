@@ -5,6 +5,7 @@
 //! two requests each upload takes, are the account actor's: see `account/uploads.rs`.
 
 use std::fmt;
+use std::path::PathBuf;
 
 use crate::domain::{MessageId, RoomId};
 
@@ -75,6 +76,8 @@ pub struct Upload {
     pub thread: Option<MessageId>,
     /// The file's name, which is the name it has in the message.
     pub name: String,
+    /// Where the file is on disk, for a frontend to show a thumbnail of it.
+    pub path: PathBuf,
     /// The file's size in bytes, as it was when the upload was asked for.
     pub size: u64,
     pub state: UploadState,
