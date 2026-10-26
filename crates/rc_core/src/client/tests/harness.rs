@@ -363,8 +363,8 @@ impl Harness {
         }
     }
 
-    /// The next event, connection changes, identities and unread totals aside: the tests that
-    /// don't look at them don't wait for them either. See
+    /// The next event, connection changes, identities, unread totals and held news aside: the
+    /// tests that don't look at them don't wait for them either. See
     /// [`next_connection`](Self::next_connection), [`events_until`](Self::events_until) (identities)
     /// and [`next_unread_of`](Self::next_unread_of).
     pub(super) fn next_event(&self) -> Event {
@@ -375,7 +375,10 @@ impl Harness {
     pub(super) fn next_event_of(&self, id: &AccountId) -> Event {
         loop {
             match self.recv_of(id, TIMEOUT).expect("no event") {
-                Event::Connection(_) | Event::Identity(_) | Event::Unread(_) => {}
+                Event::Connection(_)
+                | Event::Identity(_)
+                | Event::Unread(_)
+                | Event::HoldingNews(_) => {}
                 event => return event,
             }
         }

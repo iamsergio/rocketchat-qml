@@ -43,6 +43,8 @@ pub struct Cache {
     /// while it logs in again, so that the login page doesn't change under the user.
     expired: bool,
     unread: Unread,
+    /// The room list holds channel news back (ROOM-012).
+    holding_news: bool,
     rooms: Vec<Room>,
     /// The rooms the room list holds back, in the order the core sent them.
     quiet_rooms: Vec<Room>,
@@ -108,6 +110,7 @@ impl Cache {
                 rooms: 0,
                 mentions: 0,
             },
+            holding_news: false,
             rooms: Vec::new(),
             quiet_rooms: Vec::new(),
             directory: Directory::cleared(),
@@ -153,6 +156,12 @@ impl Cache {
         }
     }
 
+    /// Whether the core said the account holds channel news back, for F5 to show (ROOM-012).
+    #[must_use]
+    pub const fn holds_news(&self) -> bool {
+        self.holding_news
+    }
+
     /// Takes the event in, as the core emits them: in order.
     pub fn apply(&mut self, event: &Event) {
         match event {
@@ -183,6 +192,7 @@ impl Cache {
             Event::Connection(connection) => self.connection = *connection,
             Event::Identity(identity) => self.identity = Some(identity.clone()),
             Event::Unread(unread) => self.unread = *unread,
+            Event::HoldingNews(holding) => self.holding_news = *holding,
             Event::CustomEmoji(emoji) => self.emoji = Some(emoji.clone()),
             Event::MessagePolicy(policy) => self.policy = Some(*policy),
             Event::Avatars(updates) => {

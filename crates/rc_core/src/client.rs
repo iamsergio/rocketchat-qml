@@ -61,6 +61,13 @@ pub enum Event {
     /// of their mention badges. Comes after the `Rooms` event that changes it, and after a
     /// logout empties the list; not while it stays the same, nor while it is zero from the start.
     Unread(Unread),
+    /// Whether the room list holds channel news back (ROOM-011), for
+    /// [`AccountHandle::release_channels`] to show (ROOM-012). Comes after the `Rooms` event that
+    /// starts or ends the holding, only when the answer flips: `true` with the first held change,
+    /// `false` after a release, after the last held room is read or opened, and after a reset or a
+    /// logout forgets the news; not while it stays the same, nor while it is `false` from the
+    /// start.
+    HoldingNews(bool),
     /// The direct messages the room list holds back because they went quiet (ROOM-008), all of
     /// them, the most recently active first, then by id: a frontend that searches the rooms looks
     /// among these too, and never sorts. The `Rooms` changes never mention them. Comes after the
@@ -208,6 +215,7 @@ pub(crate) enum Command {
         room: RoomId,
         action: RoomAction,
     },
+    ReleaseChannels,
     /// Without colons.
     WantEmojiImages(Vec<String>),
     SearchDirectory(String),
@@ -568,6 +576,14 @@ impl AccountHandle<'_> {
             room,
             action: RoomAction::Leave,
         });
+    }
+
+    /// Shows the news the room list holds back for channels (ROOM-011) now, whatever the deadline:
+    /// the rows turn bold and move into place as at the deadline. That ends the batch, so the next
+    /// interval counts from the next held change. Nothing happens if nothing is held. Ignored
+    /// unless logged in.
+    pub fn release_channels(&self) {
+        self.send(Command::ReleaseChannels);
     }
 
     /// Asks for the image files of the custom emoji `names` (without colons; names or aliases of

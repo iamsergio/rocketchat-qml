@@ -248,6 +248,12 @@ impl RoomList {
             .collect()
     }
 
+    /// Whether news is held back, waiting for [`release`](Self::release).
+    #[must_use]
+    pub fn holds_news(&self) -> bool {
+        self.held_since.is_some()
+    }
+
     /// When the current batch is to be released. `None` if no news is held.
     #[must_use]
     pub fn next_release(&self) -> Option<jiff::Timestamp> {
@@ -1744,6 +1750,21 @@ mod tests {
         assert_eq!(list.next_release(), None);
         list.upsert(with_news(active("a", "a", 30), 2, 60), at(2_000));
         assert_eq!(list.next_release(), Some(at(2_000 + BATCH)));
+    }
+
+    // ROOM-012
+    #[test]
+    fn a_release_before_the_deadline_restarts_the_batch_at_the_next_held_change() {
+        let mut list = batch_list(vec![active("a", "a", 30), active("b", "b", 20)]);
+        assert!(!list.holds_news());
+        list.upsert(with_news(active("a", "a", 30), 1, 40), at(1_000));
+        assert!(list.holds_news());
+        // By command, long before the deadline at 1_000 + BATCH.
+        assert_eq!(list.release(at(1_010)).len(), 1);
+        assert!(!list.holds_news());
+        assert_eq!(list.next_release(), None);
+        list.upsert(with_news(active("b", "b", 20), 1, 41), at(1_040));
+        assert_eq!(list.next_release(), Some(at(1_040 + BATCH)));
     }
 
     // ROOM-011

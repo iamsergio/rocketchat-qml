@@ -185,9 +185,19 @@ impl<C: Connector> Actor<C> {
             self.unread = unread;
             (self.on_event)(Event::Unread(unread));
         }
+        self.emit_holding_news();
         self.emit_quiet_rooms();
         self.end_preview_if_listed();
         self.want_avatars(avatars);
+    }
+
+    /// Tells the frontend whether channel news is held, if that is not what it was told last.
+    fn emit_holding_news(&mut self) {
+        let holding = self.rooms.holds_news();
+        if holding != self.holding_news {
+            self.holding_news = holding;
+            (self.on_event)(Event::HoldingNews(holding));
+        }
     }
 
     /// Tells the frontend the held-back rooms if they are not what it was told last. The list says
@@ -221,11 +231,20 @@ impl<C: Connector> Actor<C> {
 
     /// Shows the news of the channels held back, if the batch is due, and tells the frontend.
     pub(super) fn release_channels(&mut self) {
-        let now = self.clock.now();
-        if self.rooms.next_release().is_some_and(|at| at <= now) {
-            let changes = self.rooms.release(now);
-            self.emit_rooms(changes);
+        if self
+            .rooms
+            .next_release()
+            .is_some_and(|at| at <= self.clock.now())
+        {
+            self.release_held_channels();
         }
+    }
+
+    /// Shows the news of the channels held back, due or not, and tells the frontend. The batch
+    /// ends, so the next one starts with the next held change.
+    pub(super) fn release_held_channels(&mut self) {
+        let changes = self.rooms.release(self.clock.now());
+        self.emit_rooms(changes);
     }
 
     /// Records the room the user has open, `None` for none, in the room list: the open room is
