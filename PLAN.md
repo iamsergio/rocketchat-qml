@@ -107,6 +107,7 @@ The Slint app grows one feature at a time, and CI stays green throughout: a seco
 - [ ] Move logout icon. Logout is seldom used. right lcick on the server rail on a server tile can have the logout option.
 - [ ] Channels are not showing description
 - [x] Batched channels (ROOM-011): the news of channels shows in batches at most every 25 minutes, see [Batched channels](docs/design/room-list.md#batched-channels)
+- [x] F5 shows the held channel news (ROOM-012): on every account, with a "No new notifications" toast when nothing is held, see [Batched channels](docs/design/room-list.md#batched-channels)
 
 ## Later
 

@@ -62,6 +62,18 @@ pub mod qobject {
         #[qinvokable]
         fn leave(self: Pin<&mut RoomListModel>, room_id: &QString);
 
+        /// F5: shows the channel news the batch holds back, of every account (ROOM-012). Emits
+        /// `nothingHeld` if no account holds any. This is the room list's, as it is the rows that
+        /// change.
+        #[qinvokable]
+        #[cxx_name = "releaseNews"]
+        fn release_news(self: Pin<&mut RoomListModel>);
+
+        /// F5 found nothing held anywhere: the page says so.
+        #[qsignal]
+        #[cxx_name = "nothingHeld"]
+        fn nothing_held(self: Pin<&mut RoomListModel>);
+
         /// Clears `roomActionError`.
         #[qinvokable]
         #[cxx_name = "dismissRoomActionError"]
@@ -322,6 +334,12 @@ impl RoomListModel {
     fn leave(mut self: Pin<&mut Self>, room_id: &QString) {
         self.as_mut().set_action_error_text("");
         hub::leave_room(room_id.to_string());
+    }
+
+    fn release_news(self: Pin<&mut Self>) {
+        if !hub::release_news() {
+            self.nothing_held();
+        }
     }
 
     fn dismiss_room_action_error(self: Pin<&mut Self>) {

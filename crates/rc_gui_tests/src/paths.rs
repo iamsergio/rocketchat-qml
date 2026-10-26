@@ -58,6 +58,9 @@ pub mod main_window {
     pub const ROOM_SEARCH_CLEAR: &str = "mainWindow/roomSearchClear";
     /// The shortcut ("Ctrl K"). Visible only while the field is empty and hasn't the focus.
     pub const ROOM_SEARCH_HINT: &str = "mainWindow/roomSearchHint";
+    /// The toast over the search field, "No new notifications", as its `text`: visible for a
+    /// moment after F5 found no held news anywhere.
+    pub const NO_NEWS_TOAST: &str = "mainWindow/noNewsToast";
     /// `No rooms match “<query>”`, as its `text`, with the query trimmed. Visible only while
     /// searching, when nothing matches.
     pub const ROOM_SEARCH_EMPTY: &str = "mainWindow/roomSearchEmpty";

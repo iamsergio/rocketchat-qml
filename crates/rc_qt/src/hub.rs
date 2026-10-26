@@ -447,6 +447,18 @@ pub fn set_favorite(room_id: String, favorite: bool) {
     });
 }
 
+/// F5: shows the held channel news of every account (ROOM-012). Returns whether any account held
+/// some, going by the caches: if not, the caller says there is nothing new.
+pub fn release_news() -> bool {
+    let hub = lock();
+    let Some(client) = &hub.client else {
+        tracing::warn!("release_news ignored: the core isn't running");
+        return true;
+    };
+    hub.switchboard
+        .release_news(|id| client.account(id).release_channels())
+}
+
 pub fn mark_room_read(room_id: String) {
     current_account("mark_read", |account| {
         account.mark_read(RoomId::from(room_id));
