@@ -16,10 +16,15 @@ use super::App;
 use crate::ui::MessageMenu;
 
 impl App {
-    /// Sends `text` to the open room, quoting the message `quoted` (empty for none). False if there
-    /// is nothing to send (no room is open or the text is blank), so that the composer keeps its
-    /// text.
+    /// Sends `text` to the open room, quoting the message `quoted` (empty for none), along with the
+    /// files that wait in the composer, if there are any (then the text may be blank). False if
+    /// there is nothing to send (no room is open or the text is blank), so that the composer keeps
+    /// its text.
     pub(super) fn send(&self, text: &str, quoted: &str) -> bool {
+        let files = self.room_staged.files();
+        if !files.is_empty() {
+            return self.send_with_files(false, text, quoted, false, &files);
+        }
         let room_id = self
             .switchboard
             .accounts()

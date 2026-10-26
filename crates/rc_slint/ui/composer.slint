@@ -4,7 +4,10 @@
 import { FlatButton } from "flat_button.slint";
 import { Icon } from "icon.slint";
 import { PrimaryButton } from "primary_button.slint";
+import { StagedFileRow, UploadFileRow } from "structs.slint";
+import { StagedBar } from "staged_bar.slint";
 import { Theme } from "theme.slint";
+import { UploadsBar } from "uploads_bar.slint";
 
 // The box under the messages of the open room. Enter sends, Shift+Enter starts a new line. The
 // field grows with its text up to a height, then scrolls.
@@ -16,6 +19,11 @@ import { Theme } from "theme.slint";
 // And it quotes a message: `begin-quote` shows a bar above the field with the author and a line of
 // the text, and sending passes the message's id. Sending, Escape, the bar's button and another room
 // drop the quote. Quoting and editing exclude each other.
+//
+// It sends files too (ACT-009): the paperclip asks for them (`attach`), they wait in a bar above the
+// field (`staged`) where each can be taken out, Send uploads them with the text on the first, and the
+// uploads under way are listed in another bar (`uploads`) until their messages are posted. Which
+// files wait and how the uploads go is Rust's; `send` sends them along with the text.
 //
 // The composer of the thread pane is the same box (`for-thread`), with its own field, bars and
 // callbacks: the caller wires them to the thread.
@@ -58,6 +66,16 @@ export component Composer inherits Rectangle {
     in property <int> edit-answers;
     in property <string> edit-answer-id;
     in property <bool> edit-answer-ok;
+
+    // The files that wait for Send, and the files being uploaded to the room or the thread.
+    in property <[StagedFileRow]> staged;
+    in property <[UploadFileRow]> uploads;
+    // The paperclip: choose files to attach. The cross of a staged file, and the buttons of an
+    // upload, by row.
+    callback attach();
+    callback remove-staged(int);
+    callback cancel-upload(int);
+    callback retry-upload(int);
 
     // The message being edited, or empty when the box writes a new message.
     property <string> editing-id;
@@ -193,7 +211,7 @@ export component Composer inherits Rectangle {
 
     // Its height follows the text, and it never takes more: the extra goes to the messages above.
     min-height: root.preferred-height;
-    preferred-height: root.field-height + 2 * Theme.spacing-l + 2 * Theme.border-width + (root.editing ? root.bar-height : Theme.spacing-none) + (root.quoting ? root.quote-bar-height : Theme.spacing-none) + (root.for-thread ? root.also-height : Theme.spacing-none);
+    preferred-height: root.field-height + 2 * Theme.spacing-l + 2 * Theme.border-width + (root.editing ? root.bar-height : Theme.spacing-none) + (root.quoting ? root.quote-bar-height : Theme.spacing-none) + (root.for-thread ? root.also-height : Theme.spacing-none) + staged-bar.preferred-height + uploads-bar.preferred-height;
     vertical-stretch: 0;
     background: Theme.raised;
     border-width: Theme.border-width;
@@ -321,12 +339,66 @@ export component Composer inherits Rectangle {
             }
         }
 
+        // The files that wait for Send, and the files on their way, each over a hairline.
+        staged-bar := StagedBar {
+            files: root.staged;
+            remove(row) => {
+                root.remove-staged(row);
+            }
+        }
+
+        uploads-bar := UploadsBar {
+            uploads: root.uploads;
+            cancel(row) => {
+                root.cancel-upload(row);
+            }
+            retry(row) => {
+                root.retry-upload(row);
+            }
+        }
+
         HorizontalLayout {
             padding-left: Theme.composer-padding-h;
             padding-right: Theme.spacing-l;
             padding-top: Theme.spacing-l;
             padding-bottom: Theme.spacing-l;
             spacing: Theme.spacing-m;
+
+            // The paperclip, aligned to the bottom like Send. Not while a message is edited, nor
+            // while the channel is only previewed.
+            if !root.editing && !root.preview: Rectangle {
+                width: Theme.icon-button-size;
+
+                Rectangle {
+                    accessible-id: "composerAttach";
+                    accessible-role: button;
+                    accessible-label: @tr("Attach files");
+                    accessible-action-default => {
+                        root.attach();
+                    }
+                    y: parent.height - self.height;
+                    width: Theme.icon-button-size;
+                    height: Theme.icon-button-size;
+                    background: attach-touch.has-hover ? Theme.raised-hover : Theme.transparent;
+                    border-radius: Theme.radius-control;
+
+                    Icon {
+                        x: (parent.width - self.width) / 2;
+                        y: (parent.height - self.height) / 2;
+                        width: Theme.icon-button-icon-size;
+                        height: Theme.icon-button-icon-size;
+                        source: @image-url("../../../src/gui/icons/attach.svg");
+                        tint: Theme.text-muted;
+                    }
+
+                    attach-touch := TouchArea {
+                        mouse-cursor: MouseCursor.pointer;
+                        clicked => {
+                            root.attach();
+                        }
+                    }
+                }
+            }
 
             // Enter is taken before the text input, which would start a line with it.
             FocusScope {
@@ -414,7 +486,7 @@ export component Composer inherits Rectangle {
                     accessible-id: root.preview ? "composerJoin" : "composerSend";
                     y: parent.height - self.height;
                     text: root.preview ? (root.joining ? @tr("Joining…") : @tr("Join")) : root.editing ? @tr("Save") : @tr("Send");
-                    enabled: root.preview ? !root.joining : !input.text.is-empty && !root.saving;
+                    enabled: root.preview ? !root.joining : (!input.text.is-empty || (root.staged.length > 0 && !root.editing)) && !root.saving;
                     clicked => {
                         if root.preview {
                             root.join();

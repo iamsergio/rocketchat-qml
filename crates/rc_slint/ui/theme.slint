@@ -46,6 +46,8 @@ export global Theme {
     out property <color> error: #ff8a66;
     // Black at 50%: what a modal dialog dims the window with.
     out property <color> modal-dim: #00000080;
+    // The surface at 90%: what covers the messages while files are dragged over them.
+    out property <color> drop-overlay: #1b1f26e6;
     out property <color> on-avatar: Colors.white;
     out property <color> transparent: Colors.transparent;
 
@@ -264,6 +266,27 @@ export global Theme {
     out property <angle> rail-ring-turn: 360deg;
     out property <length> path-unit: 1px;
 
+    // The files waiting in the composer and those being uploaded: the chip, the thumbnail in it (and
+    // in an upload row), the cross that takes one out, the track of the progress, and the box that
+    // shows where dropped files go.
+    out property <length> file-chip-height: 52px;
+    out property <length> file-chip-width: 212px;
+    out property <length> thumbnail-size: 36px;
+    out property <length> font-size-thumbnail: font-size-base * 0.7;
+    out property <length> chip-remove-size: 22px;
+    out property <length> chip-remove-icon-size: 12px;
+    out property <length> upload-track-height: 3px;
+    out property <length> radius-file-chip: 7px;
+    out property <length> radius-thumbnail: 5px;
+    out property <length> radius-track: 2px;
+    out property <length> radius-drop: 14px;
+    out property <length> drop-border-width: 2px;
+    out property <length> drop-margin: 16px;
+    out property <length> drop-icon-size: 36px;
+
+    // Slint has no infinite length: a limit large enough to be none, for what must not be narrowed.
+    out property <length> unbounded: 1000000px;
+
     // Scrolling: where a flickable's content is at its top, and how far from its bottom it still
     // counts as being there.
     out property <length> scroll-top: 0px;
@@ -272,6 +295,8 @@ export global Theme {
     // Opacity
     out property <float> disabled-opacity: 0.6;
     out property <float> opaque: 1;
+    // The progress of an upload whose message is being posted: the whole bar, dimmed.
+    out property <float> upload-confirming-opacity: 0.55;
     // What shows only while the pointer is over its row: clear but still clickable.
     out property <float> clear: 0;
 

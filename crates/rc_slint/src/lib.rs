@@ -12,7 +12,9 @@ pub mod rich_markdown;
 mod room_model;
 mod room_search_model;
 mod rows;
+mod staged_model;
 mod thread_list_model;
+mod upload_model;
 
 // The code Slint generates doesn't follow the workspace's lints (it unwraps).
 #[allow(
@@ -46,6 +48,8 @@ pub fn new_main_window() -> Result<MainWindow, slint::PlatformError> {
 mod tests {
     use i_slint_backend_testing::ElementQuery;
 
+    use slint::ComponentHandle;
+
     use super::new_main_window;
 
     // APP-001
@@ -60,5 +64,29 @@ mod tests {
             .expect("an element with the accessible-id versionLabel");
         let text = label.accessible_label().unwrap();
         assert!(text.contains(rc_core::VERSION), "the label says {text:?}");
+    }
+
+    // ACT-009
+    #[test]
+    fn the_composer_fills_its_column_with_no_file_waiting() {
+        i_slint_backend_testing::init_no_event_loop();
+        let window = new_main_window().unwrap();
+        window
+            .window()
+            .set_size(slint::LogicalSize::new(964.0, 600.0));
+        window.set_status(crate::ui::SessionStatus::LoggedIn);
+        window.set_room_id("room".into());
+
+        let composer = ElementQuery::from_root(&window)
+            .match_predicate(|element| element.accessible_id().as_deref() == Some("roomComposer"))
+            .find_first()
+            .expect("an element with the accessible-id roomComposer");
+        // The bars of the files, which are empty, must not narrow the box to its fields: it fills
+        // the room's column, which is most of the window.
+        assert!(
+            composer.size().width > 500.0,
+            "the composer is {} wide",
+            composer.size().width
+        );
     }
 }

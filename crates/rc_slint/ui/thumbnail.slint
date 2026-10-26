@@ -1,0 +1,39 @@
+// SPDX-FileCopyrightText: 2026 Sergio Martins
+// SPDX-License-Identifier: MIT
+
+import { Theme } from "theme.slint";
+
+// The small square before the name of a file waiting in the composer or being uploaded: the picture
+// itself, cropped to fill, for an image, else the file's extension in capitals. Which one is decided
+// in Rust.
+export component Thumbnail inherits Rectangle {
+    in property <bool> is-image;
+    in property <string> label;
+    in property <image> source;
+
+    width: Theme.thumbnail-size;
+    height: Theme.thumbnail-size;
+    clip: true;
+    background: Theme.raised-hover;
+    border-radius: Theme.radius-thumbnail;
+
+    if root.is-image: Image {
+        accessible-id: "thumbnailImage";
+        width: parent.width;
+        height: parent.height;
+        source: root.source;
+        image-fit: cover;
+    }
+
+    if !root.is-image: Text {
+        accessible-id: "thumbnailLabel";
+        width: parent.width;
+        height: parent.height;
+        color: Theme.text-muted;
+        font-size: Theme.font-size-thumbnail;
+        font-weight: Theme.font-weight-bold;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        text: root.label;
+    }
+}

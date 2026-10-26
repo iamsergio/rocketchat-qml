@@ -5,7 +5,7 @@ import { BusyIndicator } from "busy_indicator.slint";
 import { Composer } from "composer.slint";
 import { Icon } from "icon.slint";
 import { MessageList } from "message_list.slint";
-import { MessageMenu, MessageRow, ThreadPaneState, ThreadRow } from "structs.slint";
+import { MessageMenu, MessageRow, StagedFileRow, ThreadPaneState, ThreadRow, UploadFileRow } from "structs.slint";
 import { Theme } from "theme.slint";
 import { ThreadListPage } from "thread_list_page.slint";
 import { TypingLine } from "typing_line.slint";
@@ -40,6 +40,14 @@ export component ThreadPane inherits Rectangle {
     in property <int> edit-answers;
     in property <string> edit-answer-id;
     in property <bool> edit-answer-ok;
+    // The files that wait in the box for Send and those being uploaded to the thread, with the
+    // buttons that act on them by row (see `composer.slint`).
+    in property <[StagedFileRow]> staged;
+    in property <[UploadFileRow]> uploads;
+    callback attach();
+    callback remove-staged(int);
+    callback cancel-upload(int);
+    callback retry-upload(int);
     // The close button, the back button of a thread, and the choice of a filter of the list.
     callback close();
     callback back();
@@ -333,6 +341,20 @@ export component ThreadPane inherits Rectangle {
                         edit-answers: root.edit-answers;
                         edit-answer-id: root.edit-answer-id;
                         edit-answer-ok: root.edit-answer-ok;
+                        staged: root.staged;
+                        uploads: root.uploads;
+                        attach => {
+                            root.attach();
+                        }
+                        remove-staged(row) => {
+                            root.remove-staged(row);
+                        }
+                        cancel-upload(row) => {
+                            root.cancel-upload(row);
+                        }
+                        retry-upload(row) => {
+                            root.retry-upload(row);
+                        }
                         send(text, quoted) => {
                             return root.send(text, quoted, self.also-to-channel);
                         }

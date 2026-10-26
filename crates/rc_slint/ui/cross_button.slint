@@ -1,0 +1,39 @@
+// SPDX-FileCopyrightText: 2026 Sergio Martins
+// SPDX-License-Identifier: MIT
+
+import { Icon } from "icon.slint";
+import { Theme } from "theme.slint";
+
+// A small square button with a cross, that takes a file out of the composer or gives an upload up.
+// Its `accessible-id` is set by the user of the component; `label` is what a screen reader says.
+export component CrossButton inherits Rectangle {
+    in property <string> label;
+    callback clicked();
+
+    accessible-role: button;
+    accessible-label: root.label;
+    accessible-action-default => {
+        root.clicked();
+    }
+
+    width: Theme.chip-remove-size;
+    height: Theme.chip-remove-size;
+    background: touch.has-hover ? Theme.raised-hover : Theme.transparent;
+    border-radius: Theme.radius-control;
+
+    Icon {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: Theme.chip-remove-icon-size;
+        height: Theme.chip-remove-icon-size;
+        source: @image-url("../../../src/gui/icons/close.svg");
+        tint: touch.has-hover ? Theme.text : Theme.text-muted;
+    }
+
+    touch := TouchArea {
+        mouse-cursor: MouseCursor.pointer;
+        clicked => {
+            root.clicked();
+        }
+    }
+}

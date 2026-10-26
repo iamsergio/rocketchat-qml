@@ -49,6 +49,9 @@ rc_slint = { path = "crates/rc_slint" }
 rc_test_server = { path = "crates/rc_test_server" }
 rc_view = { path = "crates/rc_view" }
 reqwest = { version = "0.13.5", default-features = false, features = ["json", "multipart", "rustls", "stream", "system-proxy"] }
+# The Slint app's file dialog (Slint has none). On Linux only the xdg-portal backend, which talks to
+# the desktop's portal through libdbus loaded at run time: no GTK, no zbus, no Wayland crates.
+rfd = { version = "0.17.2", default-features = false, features = ["xdg-portal"] }
 roxmltree = "0.21.1"
 # The crypto provider reqwest's rustls uses, so there is only one.
 rustls = { version = "0.23.46", default-features = false, features = ["aws-lc-rs", "std"] }
@@ -59,8 +62,10 @@ serde = { version = "1.0.229", features = ["derive"] }
 # the order the server lists them in.
 serde_json = { version = "1.0.151", features = ["preserve_order"] }
 # A pure Rust build: no `backend-qt` (it builds a Qt backend when qmake is found). No
-# `accessibility` yet: see "rc_slint has no screen-reader support" in PLAN.md.
-slint = { version = "1.18.1", default-features = false, features = ["backend-winit", "compat-1-2", "renderer-femtovg", "renderer-software", "std"] }
+# `accessibility` yet: see "rc_slint has no screen-reader support" in PLAN.md. `unstable-winit-030`
+# hands the app winit's events, for the files dropped on the window (it adds no crate: winit is
+# Slint's own).
+slint = { version = "1.18.1", default-features = false, features = ["backend-winit", "compat-1-2", "renderer-femtovg", "renderer-software", "std", "unstable-winit-030"] }
 slint-build = "1.18.1"
 thiserror = "2.0.21"
 tokio = "1.53.2"

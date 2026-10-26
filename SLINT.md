@@ -110,3 +110,28 @@ Qt's `font.capitalization: Font.AllUppercase` and `font.features: tnum` (tabular
 
 - **Workaround:** the labels over the search results' groups make the capitals with `to-uppercase()` and keep the words in `accessible-label`, which the GUI tests read. The member count of a channel is in proportional figures.
 - **Possible patch:** a `text-transform` and a `font-features` property on `Text`.
+
+## No file dialog
+
+Slint has no `FileDialog`, and the winit backend opens no native dialog.
+
+- **Workaround:** the `rfd` crate with only its xdg-portal backend (`rc_slint/src/app/uploads.rs`): on Linux it calls the desktop's file chooser portal through libdbus loaded at run time, so no GTK or zbus joins the build; `AsyncFileDialog` runs from `slint::spawn_local`, and rfd's own thread wakes the event loop with the answer. It is given no parent window (that needs Slint's `raw-window-handle-06` and, on Wayland, rfd's `wayland` feature), so the dialog is not modal to the window, and without a running portal nothing opens.
+- **Possible patch:** a `FileDialog` in `std-widgets` or a platform call of the backend, with the window as parent.
+
+## Files dragged from the desktop reach the app only through winit's events
+
+Slint's `DragArea` and `DropArea` move data inside the app; no Slint element gets `DroppedFile`. The only way to the files is the winit event hook of `WinitWindowAccessor::on_winit_window_event`, behind the cargo feature `unstable-winit-030` (the module "may be removed or changed in future minor releases", and it needs winit 0.30 exactly, which Slint 1.18 uses). The hook gives `HoveredFile`, `HoveredFileCancelled` and `DroppedFile`, but:
+
+- winit 0.30 has no drag and drop on Wayland, so nothing arrives there (X11, macOS and Windows have it);
+- the events carry no position, and the pointer doesn't move during an X11 drag, so the app can't tell which element the files were dropped on. The room's composer takes them all, and the thread pane is no target, where the Qt app's `DropArea` has one for each;
+- the testing backend has no winit window, so the hook does nothing under test: the overlay and the drop are not tested (the Qt side isn't either, since Spix can't drag).
+- **Workaround:** `app/uploads.rs::accept_drops` sets `dropping` on `HoveredFile` and clears it on the other two; a dropped file is staged in the room's composer.
+- **Possible patch:** Slint's `DropArea` accepting `text/uri-list` from outside the window, with the position; Slint moving to winit 0.31, whose beta has `DragEntered` and `DragDropped` events with positions and a Wayland implementation.
+
+## A `FlexboxLayout` with no item has no room to give
+
+A `FlexboxLayout` whose `for` produces no item reports a maximum width of about nothing, which its ancestors take over: the composer, whose bar of staged files was an empty flexbox, shrank to the width its text field needs at least instead of filling its column.
+
+- **Workaround:** the bar sets `max-width: Theme.unbounded` (a width too large to ever limit), and `rc_slint`'s `the_composer_fills_its_column_with_no_file_waiting` guards it. A bar that is not a flexbox (the uploads, a `VerticalLayout`) is not affected.
+- **Possible patch:** an empty flexbox reporting no maximum.
+

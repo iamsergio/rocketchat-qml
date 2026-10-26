@@ -11,7 +11,7 @@ import { LoginPage } from "login_page.slint";
 import { RoomPage } from "room_page.slint";
 import { ServerRail } from "server_rail.slint";
 import { StartupPage } from "startup_page.slint";
-import { AccountTile, EmojiCell, LoginMode, MessageMenu, MessageRow, RoomRow, RoomSection, SearchKind, SearchRow, SessionStatus, ThreadPaneState, ThreadRow } from "structs.slint";
+import { AccountTile, EmojiCell, LoginMode, MessageMenu, MessageRow, RoomRow, RoomSection, SearchKind, SearchRow, SessionStatus, StagedFileRow, ThreadPaneState, ThreadRow, UploadFileRow } from "structs.slint";
 import { Theme } from "theme.slint";
 
 // The theme, for Rust: the colours it writes into rich text.
@@ -122,6 +122,18 @@ export component MainWindow inherits Window {
     in property <int> edit-answers;
     in property <string> edit-answer-id;
     in property <bool> edit-answer-ok;
+    // The files that wait in the room's box for Send and those being uploaded to the room, and
+    // the same for the thread's; the buttons act on them by row, and `true` is for the thread's.
+    in property <[StagedFileRow]> staged;
+    in property <[UploadFileRow]> uploads;
+    in property <[StagedFileRow]> thread-staged;
+    in property <[UploadFileRow]> thread-uploads;
+    callback attach(bool);
+    callback remove-staged(bool, int);
+    callback cancel-upload(bool, int);
+    callback retry-upload(bool, int);
+    // Files are dragged over the window: the room says where they would go.
+    in property <bool> dropping;
     // The list of messages is at its top: older ones are wanted.
     callback load-older();
     // Opens the address of a link of a text in the browser.
@@ -225,6 +237,23 @@ export component MainWindow inherits Window {
             edit-answers: root.edit-answers;
             edit-answer-id: root.edit-answer-id;
             edit-answer-ok: root.edit-answer-ok;
+            staged: root.staged;
+            uploads: root.uploads;
+            thread-staged: root.thread-staged;
+            thread-uploads: root.thread-uploads;
+            dropping: root.dropping;
+            attach(thread) => {
+                root.attach(thread);
+            }
+            remove-staged(thread, row) => {
+                root.remove-staged(thread, row);
+            }
+            cancel-upload(thread, row) => {
+                root.cancel-upload(thread, row);
+            }
+            retry-upload(thread, row) => {
+                root.retry-upload(thread, row);
+            }
             search-active: root.search-active;
             search-trimmed: root.search-trimmed;
             search-results: root.search-results;

@@ -32,6 +32,10 @@ impl App {
             return;
         };
         let state = self.switchboard.accounts().current_cache().thread_state();
+        // Another thread is another conversation: the files that wait were for the last one.
+        if window.get_thread_id().as_str() != state.parent_id {
+            self.thread_staged.clear();
+        }
         window.set_thread_id(state.parent_id.into());
         window.set_thread_room_name(state.room_name.into());
         window.set_thread_loading(state.loading);
@@ -144,10 +148,15 @@ impl App {
     }
 
     /// Sends `text` as a reply in the open thread, quoting the message `quoted` (empty for none),
-    /// and also to the room if `also_to_channel`. False if there is nothing to send (no thread is
-    /// open or the text is blank), so that the box keeps its text.
+    /// and also to the room if `also_to_channel`, along with the files that wait in the box (then
+    /// the text may be blank, and the room does not get the files). False if there is nothing to
+    /// send (no thread is open or the text is blank), so that the box keeps its text.
     pub(super) fn send_reply(&self, text: &str, quoted: &str, also_to_channel: bool) -> bool {
         let state = self.switchboard.accounts().current_cache().thread_state();
+        let files = self.thread_staged.files();
+        if !files.is_empty() {
+            return self.send_with_files(true, text, quoted, also_to_channel, &files);
+        }
         let Some((room, text, quote, parent)) = outgoing_reply(&state, text, quoted) else {
             return false;
         };
