@@ -289,6 +289,8 @@ struct Actor<C: Connector> {
     unread: Unread,
     /// What the frontend was last told the held-back rooms are.
     quiet: Vec<Room>,
+    /// Whether the frontend was last told the room list holds channel news back.
+    holding_news: bool,
     /// Identifies the current attempt, so that the answer of a cancelled one is dropped.
     attempt: u64,
     login_task: Option<JoinHandle<()>>,
@@ -426,6 +428,7 @@ impl<C: Connector> Actor<C> {
             users: Arc::clone(&shared.users),
             unread: Unread::default(),
             quiet: Vec::new(),
+            holding_news: false,
             attempt: 0,
             login_task: None,
             rooms_task: None,
@@ -649,6 +652,7 @@ impl<C: Connector> Actor<C> {
             Command::DeleteMessage(id) => self.delete_own_message(id),
             Command::React { id, emoji, react } => self.react_to_message(id, emoji, react),
             Command::RoomAction { room, action } => self.act_on_room(room, action),
+            Command::ReleaseChannels => self.release_held_channels(),
             Command::WantEmojiImages(names) => self.want_emoji_images(names),
             Command::SearchDirectory(text) => self.search_directory(&text),
             Command::OpenDirect(username) => self.open_direct(username),

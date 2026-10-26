@@ -45,10 +45,31 @@ fn logged_in_batching(fake: &Fake) -> Harness {
 
 /// Checks that no room change or unread total comes for a little while.
 fn assert_quiet(harness: &Harness) {
-    assert_eq!(
-        harness.recv_timeout(Duration::from_millis(300)),
-        Err(RecvTimeoutError::Timeout)
-    );
+    loop {
+        match harness.recv_timeout(Duration::from_millis(300)) {
+            Err(RecvTimeoutError::Timeout) => return,
+            // Whether news is held is not what these tests are about.
+            Ok(Event::HoldingNews(_)) => {}
+            other => panic!("{other:?}"),
+        }
+    }
+}
+
+/// Holds news back in the channel `alpha`: one more unread, at the same time.
+fn hold_news(fake: &Fake, unread: u32) {
+    let mut sub = channel_subscription("1", "alpha", 10);
+    sub.unread = unread;
+    sub.last_message = None;
+    assert!(fake.push(0, Pushed::Subscription(sub)));
+}
+
+/// The next event of the account, the others aside, if it is about held news.
+fn next_holding(harness: &Harness) -> bool {
+    loop {
+        if let Event::HoldingNews(holding) = harness.recv_timeout(Duration::from_secs(5)).unwrap() {
+            return holding;
+        }
+    }
 }
 
 // ROOM-011
@@ -177,4 +198,68 @@ fn marking_a_channel_unread_from_the_menu_shows_at_once() {
             item: unread
         })
     );
+}
+
+// ROOM-012
+#[test]
+fn releasing_by_command_shows_the_news_before_the_deadline() {
+    let fake = Fake::new();
+    let harness = logged_in_batching(&fake);
+    hold_news(&fake, 2);
+    assert_quiet(&harness);
+
+    harness.account().release_channels();
+
+    let mut shown = channel("1", "alpha", 10);
+    shown.unread = 2;
+    assert_eq!(
+        harness.next_event(),
+        rooms_change(RoomChange::Updated {
+            index: 2,
+            item: shown,
+        })
+    );
+    assert_eq!(
+        harness.next_unread(),
+        Unread {
+            rooms: 1,
+            mentions: 0,
+        }
+    );
+    // The batch is over: the old deadline brings nothing, and nothing is held.
+    harness
+        .clock
+        .advance(Duration::from_secs(BATCH.unsigned_abs()));
+    assert_quiet(&harness);
+    // Nothing held: the command is a no-op.
+    harness.account().release_channels();
+    assert_quiet(&harness);
+}
+
+// ROOM-012
+#[test]
+fn the_holding_news_event_comes_only_when_it_flips() {
+    let fake = Fake::new();
+    let harness = logged_in_batching(&fake);
+    // Nothing came from the start, while nothing was held.
+    hold_news(&fake, 1);
+    assert!(next_holding(&harness));
+    // More held news changes nothing.
+    hold_news(&fake, 2);
+    assert_quiet(&harness);
+
+    harness.account().release_channels();
+    assert!(!next_holding(&harness));
+
+    // Reading the held room (on another device, here by the menu) ends the holding too.
+    hold_news(&fake, 3);
+    assert!(next_holding(&harness));
+    harness.account().mark_read("1".to_owned().into());
+    assert!(!next_holding(&harness));
+
+    // So does a logout, which forgets the news.
+    hold_news(&fake, 4);
+    assert!(next_holding(&harness));
+    harness.logout();
+    assert!(!next_holding(&harness));
 }

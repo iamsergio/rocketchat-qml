@@ -59,6 +59,20 @@ impl Switchboard {
         &self.accounts
     }
 
+    /// F5 (ROOM-012): calls `release` for every account whose cache says it holds channel news
+    /// back, and returns whether it called it at all. The frontend shows its "No new notifications"
+    /// toast when it did not. The cache decides at once, with no round trip to the core. The
+    /// race is benign: news held in the core whose `HoldingNews` is not in the cache yet gives a
+    /// toast, and the next batch shows the news.
+    pub fn release_news(&self, mut release: impl FnMut(&AccountId)) -> bool {
+        let mut sent = false;
+        for id in self.accounts.holding_news() {
+            release(id);
+            sent = true;
+        }
+        sent
+    }
+
     /// Takes in an event of the core, and says what to show. Nothing for the event of an account
     /// that isn't known, other than `Added`.
     pub fn dispatch(&mut self, account: &AccountId, event: Event) -> Vec<Shown> {
@@ -231,6 +245,26 @@ mod tests {
 
     fn is_updated(shown: &Shown, row: usize) -> bool {
         matches!(shown, Shown::AccountRow(AccountChange::Updated { index, .. }) if *index == row)
+    }
+
+    // ROOM-012
+    #[test]
+    fn f5_releases_only_the_accounts_that_hold_news() {
+        let mut board = three();
+        let mut sent = Vec::new();
+        assert!(!board.release_news(|id| sent.push(id.clone())));
+        assert!(sent.is_empty());
+
+        // `b` holds, in the background; `a` is current and does not.
+        board.dispatch(&id("b"), Event::HoldingNews(true));
+        assert!(board.release_news(|id| sent.push(id.clone())));
+        assert_eq!(sent, [id("b")]);
+
+        // The core says it released: nothing is held again.
+        board.dispatch(&id("b"), Event::HoldingNews(false));
+        sent.clear();
+        assert!(!board.release_news(|id| sent.push(id.clone())));
+        assert!(sent.is_empty());
     }
 
     // ACCT-001

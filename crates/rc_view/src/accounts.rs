@@ -202,6 +202,14 @@ impl Accounts {
         })
     }
 
+    /// The accounts whose cache says they hold channel news back, in the order of the list.
+    pub fn holding_news(&self) -> impl Iterator<Item = &AccountId> {
+        self.entries
+            .iter()
+            .filter(|entry| entry.cache.holds_news())
+            .map(|entry| &entry.id)
+    }
+
     /// Makes the account current. Returns whether that changed anything: not if it is current
     /// already or isn't known.
     pub fn select(&mut self, id: &AccountId) -> bool {
