@@ -34,7 +34,7 @@ Done when: day-to-day use works. Edit, delete, react, threads, DMs, search and u
 - [x] Unread threads (ACT-011): the header button's badge (grey, red for a mention), a row's emphasis, "New" and "@", and the "Unread" filter, from the subscription's `tunread`; opening a thread reads it (`readThreads`): see [Threads](docs/design/threads.md#unread-threads)
 - [x] An author's name that fits is shown whole (MSG-006): the layout rounds the label's width down, so it takes the ceiling of its text width
 - [x] Start a DM, search the directory, join a channel, the core (ACT-007, ACT-008): the directory search with its pause, `open_direct`, `preview_channel` and `join_channel`, and what `rc_view` keeps and filters for the frontends; no UI yet: see [Directory](docs/design/directory.md)
-- [ ] Start a DM, search the directory, join a channel, the Qt UI: the directory's groups in the room search results, a channel preview with a Join button where Send is, the error strip
+- [x] Start a DM, search the directory, join a channel, the Qt UI (ACT-007, ACT-008): the room search shows channels, people and the user's rooms in groups, a person opens a direct message, a channel a preview whose composer has Join where Send is, failures go to the error strip; one `RoomSearch` model with a row kind, the rows and the cursor from `rc_view::directory`: see [Directory](docs/design/directory.md#qt-side)
 - [ ] Start a DM, search the directory, join a channel, the Slint UI
 - [ ] File upload with progress
 - [ ] Features ACT-001…ACT-009 tested

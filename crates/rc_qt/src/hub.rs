@@ -28,7 +28,8 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 use cxx_qt::CxxQtThread;
 use cxx_qt::Threading;
 use rc_core::adapters::DiskFileCache;
-use rc_core::domain::{AccountId, AvatarOwner, MessageId, Room, RoomId};
+use rc_core::directory::{ActionState, DirectoryAction};
+use rc_core::domain::{AccountId, AvatarOwner, MessageId, RoomId};
 use rc_core::emoji::CustomEmojis;
 use rc_core::policy::{ActionError, MessageAction};
 use rc_core::rooms::{RoomActionError, RoomChange};
@@ -52,8 +53,9 @@ use rc_view::accounts::{AccountView, Accounts};
 use rc_view::attachment_view::ImageUrls;
 use rc_view::avatar_view::AvatarUrls;
 use rc_view::cache::Cache;
+use rc_view::directory::{SearchRow, search_rows};
 use rc_view::rich_html::topic_html;
-use rc_view::room_search::search_rooms as search;
+use rc_view::room_search::{search_rooms as search, trimmed};
 use rc_view::room_view::RoomState;
 use rc_view::session_view::SessionView;
 use rc_view::startup;
@@ -265,15 +267,58 @@ pub fn register_room_search(thread: CxxQtThread<RoomSearchModel>) {
     lock().views.room_search.register(thread);
 }
 
-/// The rooms of the current account that match `query`, the held-back ones too, and the avatars to
-/// show them with.
-pub fn search_rooms(query: &str) -> (Vec<Room>, AvatarUrls) {
+/// What the room search shows for a query.
+pub struct SearchResults {
+    /// Top to bottom, as `rc_view::directory::search_rows` says.
+    pub rows: Vec<SearchRow>,
+    pub avatars: AvatarUrls,
+    /// The directory action under way, if any.
+    pub busy: Option<DirectoryAction>,
+}
+
+/// What the current account has for `query`: its rooms that match, the held-back ones too, and
+/// what the directory found, with the avatars to show them with.
+pub fn search_results(query: &str) -> SearchResults {
     let hub = lock();
     let cache = hub.switchboard.accounts().current_cache();
-    (
-        search(cache.rooms(), cache.quiet_rooms(), query),
-        cache.avatars(),
-    )
+    let query = trimmed(query);
+    let rows = if query.is_empty() {
+        Vec::new()
+    } else {
+        let rooms = search(cache.rooms(), cache.quiet_rooms(), query);
+        search_rows(query, &rooms, cache.directory(), &cache.directory_view())
+    };
+    SearchResults {
+        rows,
+        avatars: cache.avatars(),
+        busy: cache.directory_action().and_then(working),
+    }
+}
+
+/// The action, if the state says it is under way.
+fn working((action, state): &(DirectoryAction, ActionState)) -> Option<DirectoryAction> {
+    (*state == ActionState::Working).then(|| action.clone())
+}
+
+/// Searches the server's directory for the text of the search field.
+pub fn search_directory(text: &str) {
+    current_account("search_directory", |account| account.search_directory(text));
+}
+
+pub fn open_direct(username: &str) {
+    current_account("open_direct", |account| account.open_direct(username));
+}
+
+pub fn preview_channel(room_id: String) {
+    current_account("preview_channel", |account| {
+        account.preview_channel(RoomId::from(room_id));
+    });
+}
+
+pub fn join_channel(room_id: String) {
+    current_account("join_channel", |account| {
+        account.join_channel(RoomId::from(room_id));
+    });
 }
 
 pub fn open_room(room_id: String) {
@@ -594,7 +639,13 @@ impl Views {
             }
             Event::Session(_) | Event::Connection(_) => self.show_session(accounts),
             Event::Identity(_) => self.show_session_view(accounts),
-            Event::QuietRooms(_) => self.room_search.queue(RoomSearchModel::refresh),
+            Event::DirectoryAction { action, state } => {
+                self.answer_directory_action(&action, &state);
+                self.show_room(cache);
+            }
+            Event::Directory(_) | Event::QuietRooms(_) => {
+                self.room_search.queue(RoomSearchModel::refresh);
+            }
             Event::Rooms(changes) => {
                 self.room_search.queue(RoomSearchModel::refresh);
                 self.rooms.queue(move |model| model.apply(&changes));
@@ -625,7 +676,8 @@ impl Views {
                 .thread_list_rows
                 .queue(move |model| model.apply(&changes)),
             Event::ThreadListStatus(_) => self.show_thread_list(cache),
-            Event::Typing { .. } => self.show_room(cache),
+            // The previewed channel is the open room's header, and the composer's Join.
+            Event::Typing { .. } | Event::Preview(_) => self.show_room(cache),
             Event::Avatars(updates) => self.show_avatars(&cache.avatar_changes(&updates)),
             Event::Images(updates) => self.show_images(&cache.image_changes(&updates)),
             // `EmojiImages` is ignored too: the Qt app never asks for them, QML loads the custom
@@ -639,7 +691,7 @@ impl Views {
     fn show_all(&mut self, accounts: &Accounts) {
         let cache = accounts.current_cache();
         let (rooms, avatars) = (cache.rooms_snapshot(), cache.avatars());
-        self.room_search.queue(RoomSearchModel::refresh);
+        self.room_search.queue(RoomSearchModel::switched);
         self.rooms.queue(move |model| model.show(rooms, avatars));
         let (messages, viewer, avatars, images) = (
             cache.timeline_snapshot(),
@@ -727,6 +779,18 @@ impl Views {
 
     /// Tells the `RoomList` model how a command on a room ended.
     fn answer_room_action(&mut self, outcome: Result<(), RoomActionError>) {
+        self.rooms.queue(move |model| model.finish_action(&outcome));
+    }
+
+    /// Tells the search which row is busy, and the `RoomList` model, whose error strip shows why
+    /// the action failed.
+    fn answer_directory_action(&mut self, action: &DirectoryAction, state: &ActionState) {
+        let busy = working(&(action.clone(), state.clone()));
+        self.room_search.queue(move |model| model.set_busy(busy));
+        let outcome = match state {
+            ActionState::Failed(error) => Err(error.clone()),
+            ActionState::Working | ActionState::Done => Ok(()),
+        };
         self.rooms.queue(move |model| model.finish_action(&outcome));
     }
 

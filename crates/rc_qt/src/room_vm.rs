@@ -31,6 +31,10 @@ pub mod qobject {
         // `typing`: who is typing in the open room, as a line for the room view ("alice is
         // typing…"), empty for nobody.
         #[qproperty(QString, typing, READ, NOTIFY)]
+        // `preview`: the open room is a public channel the user looks at without being in it. The
+        // composer offers `join` in place of sending. `joining`: the join is under way.
+        #[qproperty(bool, preview, READ, NOTIFY)]
+        #[qproperty(bool, joining, READ, NOTIFY)]
         type RoomVm = super::RoomVmRust;
 
         /// Shows the room's messages; the outcome shows in the properties and in `MessageList`.
@@ -48,6 +52,11 @@ pub mod qobject {
         /// so that the composer knows to clear itself.
         #[qinvokable]
         fn send(self: Pin<&mut RoomVm>, text: &QString, quoted_id: &QString) -> bool;
+
+        /// Joins the previewed channel. It stays the open room; the answer shows in `preview`
+        /// and `joining`, a failure in `RoomList.roomActionError`.
+        #[qinvokable]
+        fn join(self: Pin<&mut RoomVm>);
 
         /// Sends a message of the open room that failed again.
         #[qinvokable]
@@ -119,6 +128,7 @@ use crate::hub;
 use rc_view::room_view::{RoomState, action_name, outgoing};
 
 /// Backing data of [`qobject::RoomVm`].
+#[allow(clippy::struct_excessive_bools)] // A property each.
 pub struct RoomVmRust {
     room_id: QString,
     name: QString,
@@ -130,6 +140,8 @@ pub struct RoomVmRust {
     error_text: QString,
     action_error: QString,
     typing: QString,
+    preview: bool,
+    joining: bool,
 }
 
 impl Default for RoomVmRust {
@@ -152,6 +164,8 @@ impl RoomVmRust {
             error_text: QString::from(&state.error_text),
             action_error: QString::default(),
             typing: QString::from(&state.typing),
+            preview: state.preview,
+            joining: state.joining,
         }
     }
 }
@@ -178,6 +192,8 @@ impl qobject::RoomVm {
         let reached_start = self.reached_start != new.reached_start;
         let error_text = self.error_text != new.error_text;
         let typing = self.typing != new.typing;
+        let preview = self.preview != new.preview;
+        let joining = self.joining != new.joining;
         // What failed in one room means nothing in another. The state doesn't know of it.
         if !room_id {
             new.action_error.clone_from(&self.action_error);
@@ -213,6 +229,12 @@ impl qobject::RoomVm {
         }
         if typing {
             self.as_mut().typing_changed();
+        }
+        if preview {
+            self.as_mut().preview_changed();
+        }
+        if joining {
+            self.as_mut().joining_changed();
         }
     }
 
@@ -257,6 +279,10 @@ impl qobject::RoomVm {
     }
 
     fn send(self: Pin<&mut Self>, text: &QString, quoted_id: &QString) -> bool {
+        // The user is not in the channel: the text waits in the composer until they join.
+        if self.preview {
+            return false;
+        }
         let Some((room, text, quoted)) = outgoing(
             &self.room_id.to_string(),
             &text.to_string(),
@@ -266,6 +292,12 @@ impl qobject::RoomVm {
         };
         hub::send_message(room, &text, quoted);
         true
+    }
+
+    fn join(self: Pin<&mut Self>) {
+        if self.preview {
+            hub::join_channel(self.room_id.to_string());
+        }
     }
 
     #[allow(clippy::unused_self)]

@@ -52,6 +52,9 @@ fn the_rooms_that_match_replace_the_list_while_typing() {
     // The kind is shown as in the list.
     gui.wait_until_visible(&search_result(&channel_id, room_row::KIND_CHANNEL), TIMEOUT)
         .unwrap();
+    // The directory has nothing to add to the user's own room, and says so by not being there.
+    gui.wait_until_hidden(main_window::DIRECTORY_SEARCHING, TIMEOUT)
+        .unwrap();
     assert_eq!(gui.count(main_window::ROOM_SEARCH_RESULTS).unwrap(), 1);
     // The list is gone, not just covered, and nothing says that there is no match.
     gui.wait_until_hidden(main_window::ROOM_LIST, TIMEOUT)
@@ -316,12 +319,19 @@ fn a_query_that_matches_nothing_says_so() {
     // The line repeats the query without the whitespace around it.
     search_for(gui, "  no-such-room-anywhere ");
 
-    gui.wait_until_text(
-        main_window::ROOM_SEARCH_EMPTY,
-        "No rooms match \u{201c}no-such-room-anywhere\u{201d}",
+    gui.wait_until(
+        "the line that says nothing matches the query",
         TIMEOUT,
+        || {
+            Ok(gui
+                .text(main_window::ROOM_SEARCH_EMPTY)?
+                .ends_with(" match \u{201c}no-such-room-anywhere\u{201d}"))
+        },
     )
     .unwrap();
+    // Shown once the directory has answered too, which counts rows of its own meanwhile.
+    gui.wait_until_visible(main_window::ROOM_SEARCH_EMPTY, TIMEOUT)
+        .unwrap();
     assert_eq!(gui.count(main_window::ROOM_SEARCH_RESULTS).unwrap(), 0);
     gui.wait_until_hidden(main_window::ROOM_LIST, TIMEOUT)
         .unwrap();

@@ -23,7 +23,7 @@ use crate::avatar_view::AvatarUrls;
 use crate::directory::{DirectoryView, directory_view};
 use crate::emoji_image_view::EmojiImageUrls;
 use crate::message_view::{author_name, body, can_edit};
-use crate::room_view::{RoomState, room_state, typing_line};
+use crate::room_view::{RoomState, room_state, typing_line, with_preview};
 use crate::session_view::{LoginMode, SessionView, host, session_view};
 use crate::thread_list_view::{ThreadListState, ThreadUnread, thread_list_state};
 use crate::thread_view::{ThreadState, thread_state};
@@ -525,7 +525,15 @@ impl Cache {
     /// What the `Room` view model shows now.
     #[must_use]
     pub fn room_state(&self) -> RoomState {
-        let mut state = room_state(&self.rooms, &self.status);
+        let joining = match (&self.directory_action, &self.preview) {
+            (Some((DirectoryAction::Join(id), ActionState::Working)), Some(room)) => *id == room.id,
+            _ => false,
+        };
+        let mut state = with_preview(
+            room_state(&self.rooms, &self.status),
+            self.preview.as_ref(),
+            joining,
+        );
         // Only for the room the view model shows: a late event of another one means nothing.
         if let (Some((room, names)), Some(open)) = (&self.typing, &self.status.room)
             && room == open

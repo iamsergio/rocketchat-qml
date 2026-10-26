@@ -189,6 +189,18 @@ QtObject {
     readonly property int searchClearIconSize: 12
     readonly property int searchHintPaddingH: 6
     readonly property int searchHintPaddingV: 1
+    // The groups of the search results (channels, people, your rooms): the label over each is this
+    // tall with its text at the bottom, this far from the bottom edge, in widely spaced capitals.
+    readonly property int directoryLabelHeight: 26
+    readonly property int directoryLabelPaddingBottom: spacingS
+    readonly property real directoryLabelLetterSpacing: 0.6
+    // The "N more, keep typing" line under a group, and the rows that say the directory is being
+    // searched or could not be.
+    readonly property int directoryMoreHeight: 22
+    // The space between the name of a person and their username.
+    readonly property int directoryNameGap: spacingM
+    // The spinner in the row that says the directory is being searched.
+    readonly property int directoryBusyIndicatorSize: 20
     // The space each side of the server's name at the top of the sidebar.
     readonly property int sidebarHeaderPaddingH: 16
     readonly property int sidebarWidth: 264
