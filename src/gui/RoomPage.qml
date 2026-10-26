@@ -6,6 +6,7 @@ pragma ComponentBehavior: Bound
 import QtQuick
 import QtQuick.Controls.Basic
 import QtQuick.Layouts
+import QtQml.Models
 import RocketChat.Bridge
 
 ColumnLayout {
@@ -72,7 +73,9 @@ ColumnLayout {
                 }
             }
 
-            // The rooms that match, in place of the list below.
+            // What matches, in place of the list below: the channels and the people the server's
+            // directory found, then the user's rooms, each group under its label. Row 0 is the one
+            // right above the field, and the rest pile up from there.
             ListView {
                 id: searchResults
 
@@ -85,26 +88,87 @@ ColumnLayout {
                 verticalLayoutDirection: ListView.BottomToTop
                 visible: RoomSearch.active
 
-                delegate: RoomDelegate {
-                    id: result
+                delegate: DelegateChooser {
+                    role: "rowType"
 
-                    // The one Enter would open.
-                    cursor: result.index === searchResults.currentIndex
-                    menuEnabled: false
-                    namePrefix: "searchResult_"
+                    DelegateChoice {
+                        roleValue: "room"
 
-                    // The normal list is back, with the room open.
-                    onClicked: searchField.leave(true)
+                        RoomDelegate {
+                            id: result
+
+                            // The one Enter would open.
+                            cursor: result.index === RoomSearch.cursor
+                            menuEnabled: false
+                            namePrefix: "searchResult_"
+
+                            // The normal list is back, with the room open.
+                            onClicked: searchField.leave(true)
+                        }
+                    }
+
+                    DelegateChoice {
+                        roleValue: "person"
+
+                        DirectoryRow {
+                            id: personRow
+
+                            cursor: personRow.index === RoomSearch.cursor
+
+                            onClicked: {
+                                if (RoomSearch.open(personRow.index))
+                                    searchField.leave(true);
+                            }
+                        }
+                    }
+
+                    DelegateChoice {
+                        roleValue: "channel"
+
+                        DirectoryRow {
+                            id: channelRow
+
+                            cursor: channelRow.index === RoomSearch.cursor
+
+                            onClicked: {
+                                if (RoomSearch.open(channelRow.index))
+                                    searchField.leave(true);
+                            }
+                        }
+                    }
+
+                    DelegateChoice {
+                        roleValue: "label"
+
+                        DirectoryLabel {}
+                    }
+
+                    DelegateChoice {
+                        roleValue: "searching"
+
+                        DirectoryNote {}
+                    }
+
+                    DelegateChoice {
+                        roleValue: "failed"
+
+                        DirectoryNote {}
+                    }
+
+                    DelegateChoice {
+                        roleValue: "more"
+
+                        DirectoryNote {}
+                    }
                 }
 
                 ScrollBar.vertical: ScrollBar {}
 
-                onCurrentIndexChanged: positionViewAtIndex(currentIndex, ListView.Contain)
-
-                // A reset leaves nothing current; Enter opens the first result unless Up moved.
+                // The cursor is the model's, which skips what can't be acted on.
                 Connections {
-                    function onModelReset() {
-                        searchResults.currentIndex = 0;
+                    function onCursorChanged() {
+                        if (RoomSearch.cursor >= 0)
+                            searchResults.positionViewAtIndex(RoomSearch.cursor, ListView.Contain);
                     }
 
                     target: searchResults.model
@@ -192,7 +256,7 @@ ColumnLayout {
                 color: Theme.textFaint
                 elide: Text.ElideRight
                 font.pointSize: Theme.fontSizeSmall
-                text: qsTr("No rooms match “%1”").arg(RoomSearch.trimmedQuery)
+                text: qsTr("No rooms, people or channels match “%1”").arg(RoomSearch.trimmedQuery)
                 textFormat: Text.PlainText
                 visible: RoomSearch.active && searchResults.count === 0
             }
@@ -218,7 +282,7 @@ ColumnLayout {
                 // Under neither the cross nor the hint.
                 rightPadding: Theme.fieldPaddingH + Math.max(hint.width, clearButton.width)
 
-                Keys.onDownPressed: searchResults.decrementCurrentIndex()
+                Keys.onDownPressed: RoomSearch.cursorDown()
                 // Clears the field and gives up the focus: to the composer of the open room, or of the
                 // one being opened. With no room, nobody has it.
                 function leave(opened) {
@@ -230,9 +294,9 @@ ColumnLayout {
                 }
 
                 Keys.onEscapePressed: leave(false)
-                Keys.onUpPressed: searchResults.incrementCurrentIndex()
+                Keys.onUpPressed: RoomSearch.cursorUp()
                 onAccepted: {
-                    if (RoomSearch.open(searchResults.currentIndex))
+                    if (RoomSearch.openCursor())
                         leave(true);
                 }
                 onTextChanged: RoomSearch.setQuery(text)

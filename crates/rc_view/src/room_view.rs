@@ -67,6 +67,7 @@ pub fn typing_line(names: &[String]) -> String {
 
 /// The values of the `Room` properties: the open room, and how loading its messages is going.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[allow(clippy::struct_excessive_bools)] // A property each.
 pub struct RoomState {
     /// Empty when no room is open.
     pub room_id: String,
@@ -82,6 +83,11 @@ pub struct RoomState {
     pub error_text: String,
     /// Who is typing in the room, as [`typing_line`] says it. Empty for nobody.
     pub typing: String,
+    /// The room is a public channel the user looks at without being in it: the composer offers to
+    /// join in place of sending.
+    pub preview: bool,
+    /// Joining the previewed channel is under way.
+    pub joining: bool,
 }
 
 /// The state for the room `status` is about, with its name, kind and topic taken from `rooms`.
@@ -106,7 +112,27 @@ pub fn room_state(rooms: &[Room], status: &TimelineStatus) -> RoomState {
             .as_ref()
             .map_or_else(String::new, ToString::to_string),
         typing: String::new(),
+        preview: false,
+        joining: false,
     }
+}
+
+/// `state` of the open room, which shows the previewed channel `preview` if that is the open room
+/// and the room list lacks it: its name, kind and topic come from the preview, and the room is
+/// one to join, `joining` while the core is at it.
+#[must_use]
+pub fn with_preview(mut state: RoomState, preview: Option<&Room>, joining: bool) -> RoomState {
+    if let Some(room) = preview
+        && room.id.as_str() == state.room_id
+        && state.name.is_empty()
+    {
+        state.name.clone_from(&room.name);
+        kind_name(room.kind).clone_into(&mut state.kind);
+        state.topic.clone_from(&room.topic);
+        state.preview = true;
+        state.joining = joining;
+    }
+    state
 }
 
 #[cfg(test)]
@@ -351,5 +377,32 @@ mod tests {
         assert_eq!(state.name, "");
         assert!(state.loading_older && state.reached_start && !state.loading);
         assert_eq!(state.error_text, "Can't reach the server");
+    }
+
+    // ACT-008
+    #[test]
+    fn a_previewed_channel_the_list_lacks_is_the_open_room_to_join() {
+        let status = TimelineStatus {
+            room: Some("c".to_owned().into()),
+            ..TimelineStatus::default()
+        };
+        let mut channel = room("c", "chat", RoomKind::Channel);
+        channel.topic = "about chat".to_owned();
+
+        let state = with_preview(room_state(&[], &status), Some(&channel), true);
+        assert_eq!(
+            (state.name.as_str(), state.kind.as_str()),
+            ("chat", "channel")
+        );
+        assert_eq!(state.topic, "about chat");
+        assert!(state.preview && state.joining);
+
+        // Once the list has it, it is an ordinary room; another room's preview means nothing.
+        let listed = [room("c", "chat", RoomKind::Channel)];
+        let state = with_preview(room_state(&listed, &status), Some(&channel), true);
+        assert!(!state.preview && !state.joining);
+        let other = room("x", "other", RoomKind::Channel);
+        let state = with_preview(room_state(&[], &status), Some(&other), false);
+        assert!(!state.preview && state.name.is_empty());
     }
 }

@@ -61,6 +61,22 @@ pub mod main_window {
     /// `No rooms match “<query>”`, as its `text`, with the query trimmed. Visible only while
     /// searching, when nothing matches.
     pub const ROOM_SEARCH_EMPTY: &str = "mainWindow/roomSearchEmpty";
+    /// The labels over the groups of the search results: "Channels", "People" and "Your rooms", as
+    /// their `text`. A group has its label only while it has rows; the rooms' only while the
+    /// directory has something above them or is not done.
+    pub const DIRECTORY_GROUP_CHANNELS: &str = "mainWindow/directoryGroup_channels";
+    pub const DIRECTORY_GROUP_PEOPLE: &str = "mainWindow/directoryGroup_people";
+    pub const DIRECTORY_GROUP_ROOMS: &str = "mainWindow/directoryGroup_rooms";
+    /// "N more, keep typing", under the last row of the group when the directory has more than it
+    /// shows. Visible only then.
+    pub const DIRECTORY_MORE_PEOPLE: &str = "mainWindow/directoryMore_people";
+    pub const DIRECTORY_MORE_CHANNELS: &str = "mainWindow/directoryMore_channels";
+    /// "Searching the directory…". Visible from the typing until the server's answer.
+    pub const DIRECTORY_SEARCHING: &str = "mainWindow/directorySearching";
+    /// Why the directory could not be searched, as its `text`. Visible only then.
+    pub const DIRECTORY_ERROR: &str = "mainWindow/directoryError";
+    /// Next to it: searches the directory again.
+    pub const DIRECTORY_RETRY: &str = "mainWindow/directoryRetry";
     /// Why the last command on a room (a favorite, mark as read or unread, leaving) failed.
     /// Visible only then, under the room list.
     pub const ROOM_LIST_ERROR: &str = "mainWindow/roomListError";
@@ -132,6 +148,9 @@ pub mod main_window {
     pub const COMPOSER: &str = "mainWindow/roomComposer";
     /// Where the text to send is typed. Enter sends it, Shift+Enter starts a new line.
     pub const COMPOSER_FIELD: &str = "mainWindow/roomComposer/composerField";
+    /// In place of Send while the open room is a channel previewed without being in it: joins it.
+    /// Its `text` is "Join", and "Joining…" (disabled) while the server is at it.
+    pub const COMPOSER_JOIN: &str = "mainWindow/roomComposer/composerJoin";
     /// Sends the text of the composer, or saves it while a message is edited (the button then
     /// says "Save"). Disabled while it is empty, and while a save is awaited.
     pub const COMPOSER_SEND: &str = "mainWindow/roomComposer/composerSend";
@@ -326,6 +345,35 @@ pub fn room(id: &str, part: &str) -> String {
 #[must_use]
 pub fn search_result(id: &str, part: &str) -> String {
     format!("{}/searchResult_{id}/{part}", main_window::WINDOW)
+}
+
+/// The parts of the row of a person or a channel the directory found, for [`directory_person`]
+/// and [`directory_channel`].
+pub mod directory_row {
+    /// The display name, or the username of a person with no other name.
+    pub const NAME: &str = "directoryName";
+    /// The username after the name, faint. Visible only for a person whose name is another.
+    pub const USERNAME: &str = "directoryUsername";
+    /// What a click does ("Message" for a person, "View" for a channel). Visible only while the
+    /// pointer or the keyboard cursor is on the row and nothing is under way for it.
+    pub const HINT: &str = "directoryHint";
+    /// "N members" of a channel, in the place of the hint when it is not shown.
+    pub const MEMBERS: &str = "directoryMembers";
+    /// "Opening…", visible while the server is at it, in place of the hint.
+    pub const BUSY: &str = "directoryBusy";
+}
+
+/// A part of the row of the person with this username in the search results (see
+/// [`directory_row`]).
+#[must_use]
+pub fn directory_person(username: &str, part: &str) -> String {
+    format!("{}/directoryPerson_{username}/{part}", main_window::WINDOW)
+}
+
+/// A part of the row of the channel with this id in the search results (see [`directory_row`]).
+#[must_use]
+pub fn directory_channel(id: &str, part: &str) -> String {
+    format!("{}/directoryChannel_{id}/{part}", main_window::WINDOW)
 }
 
 /// The parts of a message row, for [`message`].
@@ -532,6 +580,19 @@ mod tests {
         assert_eq!(
             search_result("abc123", room_row::NAME),
             "mainWindow/searchResult_abc123/roomName"
+        );
+    }
+
+    // INFRA-002
+    #[test]
+    fn a_directory_row_part_is_addressed_by_the_username_or_the_room_id() {
+        assert_eq!(
+            directory_person("bob", directory_row::HINT),
+            "mainWindow/directoryPerson_bob/directoryHint"
+        );
+        assert_eq!(
+            directory_channel("c1", directory_row::MEMBERS),
+            "mainWindow/directoryChannel_c1/directoryMembers"
         );
     }
 

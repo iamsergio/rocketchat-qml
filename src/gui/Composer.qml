@@ -42,6 +42,8 @@ Rectangle {
     property string quotedAuthor: ""
     property string quotedText: ""
     readonly property bool quoting: quotingId !== ""
+    // The room is a channel previewed without being in it: the box offers to join, not to send.
+    readonly property bool previewing: !forThread && Room.preview
 
     border.color: field.activeFocus ? Theme.ownBorder : Theme.raisedHover
     border.width: Theme.borderWidth
@@ -328,7 +330,19 @@ Rectangle {
                 Layout.alignment: Qt.AlignBottom
                 text: root.editing ? qsTr("Save") : qsTr("Send")
                 enabled: field.length > 0 && !root.saving
+                visible: !root.previewing
                 onClicked: root.editing ? root.save() : root.send()
+            }
+
+            // In place of Send while the room is a channel the user isn't in: what is typed waits
+            // in the field.
+            PrimaryButton {
+                objectName: "composerJoin"
+                Layout.alignment: Qt.AlignBottom
+                enabled: !Room.joining
+                text: Room.joining ? qsTr("Joining…") : qsTr("Join")
+                visible: root.previewing
+                onClicked: Room.join()
             }
         }
 

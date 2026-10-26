@@ -28,6 +28,9 @@ qt_add_qml_module(
   Avatar.qml
   Main.qml
   Composer.qml
+  DirectoryLabel.qml
+  DirectoryNote.qml
+  DirectoryRow.qml
   EmojiPicker.qml
   FieldLabel.qml
   FlatButton.qml
