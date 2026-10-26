@@ -272,6 +272,45 @@ impl Gui {
         }
     }
 
+    /// The number of frames the window at `window_path` (for example `mainWindow`) has drawn since
+    /// the first time this was asked, which returns 0. Counting starts at that first read, so
+    /// callers work with the difference between two reads. `None` when the app can't count: the
+    /// Slint app on its testing backend, whose renderer draws nothing.
+    pub fn frame_count(&self, window_path: &str) -> Result<Option<u64>> {
+        let count = self.property(window_path, "frameCount")?;
+        if count.is_empty() {
+            return Ok(None);
+        }
+        count
+            .parse()
+            .map(Some)
+            .map_err(|_| unexpected("getStringProperty", Value::String(count)))
+    }
+
+    /// How far the message list at `list` is scrolled away from its newest message, in logical
+    /// pixels: 0 at the bottom, positive towards older messages. Loading older messages above the
+    /// view doesn't change it, so it only moves when the view does.
+    ///
+    /// `offset_element` is the path of the invisible element of the Slint app that says it in its
+    /// `text`, as its testing API can't read the flickable's position. The Qt app has none: its
+    /// `ListView` says where it is itself (`contentY`).
+    pub fn scroll_offset(&self, list: &str, offset_element: &str) -> Result<f64> {
+        let content_y = self.property(list, "contentY")?;
+        if content_y.is_empty() {
+            let offset = self.text(offset_element)?;
+            return offset
+                .parse()
+                .map_err(|_| unexpected("getStringProperty", Value::String(offset)));
+        }
+        // Qt: the newest message is at content y 0 and older ones at negative y (the list grows
+        // upwards), so the view that shows the newest has its top one view height above 0.
+        let position: f64 = content_y
+            .parse()
+            .map_err(|_| unexpected("getStringProperty", Value::String(content_y)))?;
+        let height = self.bounding_box(list)?.height;
+        Ok(-position - height)
+    }
+
     /// A PNG of the element at `path`, cropped from the window, written to `file` by the app and
     /// returned. Both servers write it before they answer. An old `file` is removed first, so one
     /// the app didn't write can't pass for the screenshot.

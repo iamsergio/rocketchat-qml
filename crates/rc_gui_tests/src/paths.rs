@@ -141,6 +141,9 @@ pub mod main_window {
     /// The messages of the open room, oldest first. Its `count` is how many are loaded, not how
     /// many are in view.
     pub const MESSAGE_LIST: &str = "mainWindow/messageList";
+    /// An invisible element of the Slint app whose `text` is how far the message list is scrolled
+    /// up from the newest message, in logical pixels. The Qt app has none: its `ListView` says.
+    pub const MESSAGE_LIST_OFFSET: &str = "mainWindow/messageListOffset";
     /// Above the first message once nothing older exists.
     pub const HISTORY_START: &str = "mainWindow/historyStart";
     /// Above the first message while older ones load.
@@ -264,6 +267,8 @@ pub mod main_window {
     /// The messages of the open thread, oldest first: the parent, then the replies. Its `count`
     /// is how many are loaded.
     pub const THREAD_MESSAGE_LIST: &str = "mainWindow/threadMessageList";
+    /// The thread pane's counterpart of `MESSAGE_LIST_OFFSET`.
+    pub const THREAD_MESSAGE_LIST_OFFSET: &str = "mainWindow/threadMessageListOffset";
     /// Under the parent, once it is there and the thread has replies: "N replies" (or "1 reply"),
     /// as its `text`.
     pub const THREAD_REPLIES: &str = "mainWindow/threadReplies";

@@ -291,6 +291,10 @@ export global Theme {
     // counts as being there.
     out property <length> scroll-top: 0px;
     out property <length> scroll-tolerance: 1px;
+    // The element by which the GUI tests read a list's scroll position: as thin as an element can
+    // be, and at the list's left edge.
+    out property <length> scroll-probe-size: 1px;
+    out property <length> scroll-probe-x: 0px;
 
     // Opacity
     out property <float> disabled-opacity: 0.6;
