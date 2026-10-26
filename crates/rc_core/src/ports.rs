@@ -12,6 +12,7 @@ use rc_api::ServerVersion;
 use secrecy::SecretString;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 
+use crate::directory::{DirectoryChannel, Found, Person};
 use crate::domain::{
     AccountId, AvatarOwner, Credentials, Message, MessageId, RoomId, RoomKind, StoredAccount, User,
 };
@@ -309,6 +310,84 @@ pub trait ServerApi: Clone + Send + Sync + 'static {
         room: &RoomId,
         kind: RoomKind,
     ) -> impl Future<Output = Result<(), ApiError>> + Send;
+
+    /// The users of the directory whose name or username match `text`, at most `count` of them.
+    ///
+    /// # Errors
+    ///
+    /// [`ApiError::Unauthorized`] if the credentials have expired or were revoked.
+    fn directory_users(
+        &self,
+        credentials: &Credentials,
+        text: &str,
+        count: usize,
+    ) -> impl Future<Output = Result<Found<Person>, ApiError>> + Send;
+
+    /// The public channels of the directory whose name matches `text`, the ones with the most
+    /// members first, at most `count` of them. The user may be in any of them.
+    ///
+    /// # Errors
+    ///
+    /// [`ApiError::Unauthorized`] if the credentials have expired or were revoked.
+    fn directory_channels(
+        &self,
+        credentials: &Credentials,
+        text: &str,
+        count: usize,
+    ) -> impl Future<Output = Result<Found<DirectoryChannel>, ApiError>> + Send;
+
+    /// Opens the direct message with the user `username`, which the server creates if there is
+    /// none and shows again if the user had closed it, and returns its id. The server doesn't
+    /// check that the user exists: it makes an empty room for a name nobody has, so only ask for
+    /// usernames the directory gave.
+    ///
+    /// # Errors
+    ///
+    /// [`ApiError::Unauthorized`] if the credentials have expired or were revoked,
+    /// [`ApiError::Server`] if the server refuses.
+    fn create_direct(
+        &self,
+        credentials: &Credentials,
+        username: &str,
+    ) -> impl Future<Output = Result<RoomId, ApiError>> + Send;
+
+    /// Joins a public channel. Joining one the user is in already succeeds. The server pushes the
+    /// new subscription.
+    ///
+    /// # Errors
+    ///
+    /// [`ApiError::Unauthorized`] if the credentials have expired or were revoked,
+    /// [`ApiError::Server`] if the room doesn't exist or can't be joined.
+    fn join_channel(
+        &self,
+        credentials: &Credentials,
+        room: &RoomId,
+    ) -> impl Future<Output = Result<(), ApiError>> + Send;
+
+    /// A room the user can see, in or not: any public channel.
+    ///
+    /// # Errors
+    ///
+    /// [`ApiError::Unauthorized`] if the credentials have expired or were revoked,
+    /// [`ApiError::Server`] if the room doesn't exist or isn't visible to the user.
+    fn room_info(
+        &self,
+        credentials: &Credentials,
+        room: &RoomId,
+    ) -> impl Future<Output = Result<rc_api::RoomInfo, ApiError>> + Send;
+
+    /// The user's subscription to one room, as [`subscriptions`](Self::subscriptions) lists it;
+    /// `None` if the user is not in the room.
+    ///
+    /// # Errors
+    ///
+    /// [`ApiError::Unauthorized`] if the credentials have expired or were revoked,
+    /// [`ApiError::Server`] if the room doesn't exist.
+    fn subscription(
+        &self,
+        credentials: &Credentials,
+        room: &RoomId,
+    ) -> impl Future<Output = Result<Option<rc_api::Subscription>, ApiError>> + Send;
 
     /// What happened to the room's messages since `since`: the ones sent or changed (whole) and the
     /// ids of the ones deleted. It may list more than changed, so the caller applies it to what

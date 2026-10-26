@@ -295,12 +295,25 @@ impl Admin {
     /// If the server refuses.
     #[must_use]
     pub fn create_channel(&self, members: &[&str]) -> (String, String) {
-        let name = format!("ct-chan-{}", unique());
+        self.create_channel_named(&format!("ct-chan-{}", unique()), members)
+    }
+
+    /// [`create_channel`](Self::create_channel) under a name of the caller's, which must be
+    /// unique: tests that search the directory give their channels a name they can look for.
+    ///
+    /// # Panics
+    ///
+    /// If the server refuses.
+    #[must_use]
+    pub fn create_channel_named(&self, name: &str, members: &[&str]) -> (String, String) {
         let json = self.post(
             "channels.create",
             &json!({ "name": name, "members": members }),
         );
-        (json["channel"]["_id"].as_str().unwrap().to_owned(), name)
+        (
+            json["channel"]["_id"].as_str().unwrap().to_owned(),
+            name.to_owned(),
+        )
     }
 
     /// A new private group with `members`. Returns its id and name. Its creator, the user this
@@ -328,6 +341,16 @@ impl Admin {
     pub fn create_dm(&self, username: &str) -> String {
         let json = self.post("im.create", &json!({ "username": username }));
         json["room"]["_id"].as_str().unwrap().to_owned()
+    }
+
+    /// Closes the direct message for the user this `Admin` is logged in as: it leaves their room
+    /// list (the subscription stays, not open) until a message arrives or they open it again.
+    ///
+    /// # Panics
+    ///
+    /// If the server refuses.
+    pub fn close_dm(&self, room_id: &str) {
+        self.post("im.close", &json!({ "roomId": room_id }));
     }
 
     /// Posts `text` to the room as admin and returns the message as the server stored it.

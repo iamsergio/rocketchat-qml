@@ -14,6 +14,7 @@ use tokio::sync::mpsc::{self, UnboundedSender};
 use crate::adapters::{RestConnector, SystemClock};
 use crate::avatars::AvatarUpdate;
 use crate::core::{self, ActorSenders, CoreCommand};
+use crate::directory::{ActionState, Directory, DirectoryAction};
 use crate::domain::{AccountId, Identity, MessageId, Room, RoomId};
 use crate::emoji::{self, CustomEmojis};
 use crate::emoji_images::EmojiImageUpdate;
@@ -135,6 +136,25 @@ pub enum Event {
         action: RoomAction,
         outcome: Result<(), RoomActionError>,
     },
+    /// What the search of the server's directory (see [`AccountHandle::search_directory`]) holds,
+    /// whenever it changes: a new query comes at once as `Searching` with no results, then the
+    /// answer or the failure. The empty query clears it. A logout clears it, if it held any.
+    Directory(Directory),
+    /// How something the user asked of a person or channel of the directory (see
+    /// [`AccountHandle::open_direct`], [`preview_channel`](AccountHandle::preview_channel) and
+    /// [`join_channel`](AccountHandle::join_channel)) goes: `Working` when it starts, then `Done`
+    /// or `Failed`. Only one runs at a time. Nothing comes if the session ends first.
+    DirectoryAction {
+        action: DirectoryAction,
+        state: ActionState,
+    },
+    /// The channel the user looks at without being in it, or `None` when that ends. It is the open
+    /// room, but it is not in the room list, does not count as unread, is not marked read on the
+    /// server, and can't be written to until the user joins. Comes before the timeline events of
+    /// the room it opens, and ends (after the `Rooms` event that lists the channel, if it
+    /// does) when another room is opened, the room is closed, the channel is joined, or the
+    /// session ends.
+    Preview(Option<Room>),
 }
 
 /// Whether the session is live. The held rooms and messages stay on show while it is not.
@@ -190,6 +210,10 @@ pub(crate) enum Command {
     },
     /// Without colons.
     WantEmojiImages(Vec<String>),
+    SearchDirectory(String),
+    OpenDirect(String),
+    PreviewChannel(RoomId),
+    JoinChannel(RoomId),
 }
 
 /// The core, as seen from a frontend: commands go in, events come out through the callback given
@@ -553,6 +577,46 @@ impl AccountHandle<'_> {
     /// when [`Event::CustomEmoji`] comes.
     pub fn want_emoji_images(&self, names: Vec<String>) {
         self.send(Command::WantEmojiImages(names));
+    }
+
+    /// Searches the server's directory for people and public channels matching `text`, for the
+    /// room list's search field to add to the user's own rooms. Call it on every change of the
+    /// field's text. The text is trimmed; the answer comes as [`Event::Directory`].
+    ///
+    /// A new text replaces the search that was under way, and its answer is dropped. The server is
+    /// asked once the text has not changed for a while (300 ms; `RC_DIRECTORY_DEBOUNCE_MS` sets
+    /// it for tests), and the event with the query and `Searching` comes at once. The same text
+    /// again does nothing, unless the last search for it failed: then it asks again without
+    /// waiting, which is how a frontend retries. An empty text cancels the search and clears the
+    /// results. Ignored unless logged in.
+    pub fn search_directory(&self, text: &str) {
+        self.send(Command::SearchDirectory(text.to_owned()));
+    }
+
+    /// Opens the direct message with the user `username`, which the server creates the first time:
+    /// it joins the room list, if it was not in it, and is opened like any room. Give it a
+    /// username the directory found: the server makes an empty room for a name nobody has. The
+    /// progress comes as [`Event::DirectoryAction`]. Ignored unless logged in, or while another
+    /// directory action is under way.
+    pub fn open_direct(&self, username: &str) {
+        self.send(Command::OpenDirect(username.to_owned()));
+    }
+
+    /// Shows a public channel the user is not in as the open room, as a preview (see
+    /// [`Event::Preview`]). A channel that is in the room list is just opened. The progress comes
+    /// as [`Event::DirectoryAction`]. Ignored unless logged in, while another directory action is
+    /// under way, or if the channel is the preview already (then it is opened again, which
+    /// retries a load that failed).
+    pub fn preview_channel(&self, room: RoomId) {
+        self.send(Command::PreviewChannel(room));
+    }
+
+    /// Joins a public channel. The channel joins the room list; if it is the preview, it stays
+    /// the open room with its messages as they are, and the preview ends. The progress comes as
+    /// [`Event::DirectoryAction`]. Ignored unless logged in, while another directory action is
+    /// under way, or if the channel is in the room list already.
+    pub fn join_channel(&self, room: RoomId) {
+        self.send(Command::JoinChannel(room));
     }
 
     fn send(&self, command: Command) {

@@ -277,6 +277,39 @@ impl Room {
     }
 }
 
+/// The room a public channel's `rooms.info` stands for, as the room list would show it, or `None`
+/// if it is not a public channel: only those can be looked at without being in them.
+#[must_use]
+pub(crate) fn room_from_info(info: rc_api::RoomInfo) -> Option<Room> {
+    if info.room_type != rc_api::RoomType::Channel {
+        return None;
+    }
+    let name = info
+        .display_name
+        .filter(|name| !name.is_empty())
+        .or_else(|| Some(info.name).filter(|name| !name.is_empty()))
+        .unwrap_or_else(|| info.room_id.clone());
+    Some(Room {
+        id: info.room_id.into(),
+        kind: RoomKind::Channel,
+        name,
+        peer: None,
+        avatar_etag: info.avatar_etag,
+        topic: info.topic,
+        unread: 0,
+        user_mentions: 0,
+        group_mentions: 0,
+        alert: false,
+        favorite: false,
+        unread_threads: Vec::new(),
+        mentioned_threads: Vec::new(),
+        last_activity: info
+            .last_message
+            .or(info.created)
+            .unwrap_or(jiff::Timestamp::UNIX_EPOCH),
+    })
+}
+
 /// The room a subscription stands for, or `None` if the room list doesn't show it: rooms the user
 /// hid (Rocket.Chat's own sidebar hides them too), and kinds an end-user client has no use for
 /// (livechat, voip...).

@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use crate::avatars::authors_of;
 use crate::client::Event;
-use crate::domain::{Message, MessageId, RoomId};
+use crate::domain::{Message, MessageId, Room, RoomId};
 use crate::images::images_of;
 use crate::ports::{ApiError, Connector, ServerApi};
 use crate::session::SessionState;
@@ -165,6 +165,13 @@ impl<C: Connector> Actor<C> {
         self.change_timeline(&room, |timeline| timeline.merge_live(message));
     }
 
+    /// The room the user may open: one of the room list, or the channel being previewed.
+    fn openable(&self, id: &RoomId) -> Option<&Room> {
+        self.rooms
+            .get(id)
+            .or_else(|| self.preview.as_ref().filter(|preview| &preview.id == id))
+    }
+
     /// Shows the room, from what is held of it, and fetches its newest messages.
     pub(super) fn open_room(&mut self, id: RoomId) {
         if !matches!(self.state, SessionState::LoggedIn(_)) {
@@ -178,10 +185,18 @@ impl<C: Connector> Actor<C> {
         {
             return;
         }
-        let Some(kind) = self.rooms.get(&id).map(|room| room.kind) else {
+        let Some(kind) = self.openable(&id).map(|room| room.kind) else {
             tracing::debug!(room = %id, "open_room ignored: not in the room list");
             return;
         };
+        if self
+            .preview
+            .as_ref()
+            .is_some_and(|preview| preview.id != id)
+        {
+            self.end_preview();
+        }
+        self.cancel_preview_request();
         self.close_thread();
         self.close_thread_list();
         self.abort_history_task();
@@ -216,10 +231,14 @@ impl<C: Connector> Actor<C> {
             return;
         };
         let id = open.timeline.room().clone();
-        self.mark_read(id.clone());
-        let Some(room) = self.rooms.get(&id).filter(|room| room.has_unread()) else {
+        // A previewed channel has no subscription to mark read.
+        let Some(room) = self.rooms.get(&id) else {
             return;
         };
+        self.mark_read(id.clone());
+        if !room.has_unread() {
+            return;
+        }
         if let Some(change) = self.rooms.upsert(room.clone().read(), self.clock.now()) {
             self.emit_rooms(vec![change]);
         }
@@ -525,6 +544,7 @@ impl<C: Connector> Actor<C> {
         self.close_thread_list();
         self.abort_history_task();
         self.end_typing();
+        self.end_preview();
         if self.open.take().is_some() {
             self.watch_room(None);
             (self.on_event)(Event::Timeline(vec![TimelineChange::Reset {

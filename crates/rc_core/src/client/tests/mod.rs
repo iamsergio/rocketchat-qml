@@ -21,6 +21,10 @@ use crate::adapters::MemoryStore;
 use crate::avatars::AvatarUpdate;
 use crate::backoff::Backoff;
 use crate::client::{AccountHandle, Client, Connection, Event};
+use crate::directory::{
+    ActionState, Directory, DirectoryAction, DirectoryChannel, DirectoryError, DirectoryState,
+    Found, Person,
+};
 use crate::domain::{
     Account, AccountId, Attachment, Author, AvatarOwner, Credentials, Delivery, Identity,
     ImageAttachment, Message, MessageId, MessageKind, Quote, Reaction, Room, RoomId, RoomKind,
@@ -46,6 +50,7 @@ mod activity;
 mod avatars;
 mod batch;
 mod changes;
+mod directory;
 mod emoji;
 mod emoji_images;
 mod fake;

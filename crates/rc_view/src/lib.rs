@@ -12,6 +12,7 @@ pub mod attachment_view;
 pub mod avatar_view;
 pub mod cache;
 pub mod dev_login;
+pub mod directory;
 pub mod emoji_image_view;
 pub mod emoji_picker_view;
 pub mod file_urls;

@@ -411,7 +411,7 @@ impl<C: Connector> Actor<C> {
             return;
         };
         let id = open.timeline.room().clone();
-        if self.rooms.get(&id).is_some() {
+        if self.rooms.get(&id).is_some() || self.preview.as_ref().is_some_and(|p| p.id == id) {
             self.abort_history_task();
             self.fetch_history(false);
             if self.open_thread.is_some() {

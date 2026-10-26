@@ -11,6 +11,7 @@ mod avatars;
 mod backoff;
 mod client;
 mod core;
+pub mod directory;
 pub mod domain;
 mod downloads;
 pub mod emoji;

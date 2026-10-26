@@ -186,6 +186,7 @@ impl<C: Connector> Actor<C> {
             (self.on_event)(Event::Unread(unread));
         }
         self.emit_quiet_rooms();
+        self.end_preview_if_listed();
         self.want_avatars(avatars);
     }
 

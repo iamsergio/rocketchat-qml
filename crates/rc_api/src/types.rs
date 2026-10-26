@@ -70,6 +70,55 @@ pub enum RoomType {
     Other(String),
 }
 
+/// A user of the server's directory.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DirectoryUser {
+    pub id: String,
+    pub username: String,
+    /// The display name, when the user has one.
+    pub name: Option<String>,
+}
+
+/// A public channel of the server's directory. The directory doesn't say whether the user is in it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DirectoryChannel {
+    pub id: String,
+    /// The channel's name, as it is addressed.
+    pub name: String,
+    /// The human-readable name, when the channel has one that differs.
+    pub display_name: Option<String>,
+    pub users_count: u32,
+    /// What the channel is about; empty for a channel without one.
+    pub topic: String,
+}
+
+/// A page of the directory.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DirectoryPage<T> {
+    pub items: Vec<T>,
+    /// How many entries match, on all the pages.
+    pub total: u32,
+}
+
+/// A room as `rooms.info` gives it, which any user may ask of a public channel.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RoomInfo {
+    pub room_id: String,
+    pub room_type: RoomType,
+    /// Empty if the server didn't send one.
+    pub name: String,
+    /// The human-readable name, when the server has one.
+    pub display_name: Option<String>,
+    /// What the room is about; empty for a room without a topic.
+    pub topic: String,
+    /// Identifies the room's own avatar, if it has one.
+    pub avatar_etag: Option<String>,
+    /// The time of the room's last message; none in a room without messages.
+    pub last_message: Option<jiff::Timestamp>,
+    /// When the room was created.
+    pub created: Option<jiff::Timestamp>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Subscription {
     pub room_id: String,

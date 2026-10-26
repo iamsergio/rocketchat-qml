@@ -2004,3 +2004,165 @@ async fn a_forbidden_file_is_a_server_error() {
         "{result:?}"
     );
 }
+
+// ACT-008
+#[tokio::test]
+async fn the_directory_is_asked_with_the_text_and_the_type_as_parameters_of_their_own() {
+    let server = MockServer::start().await;
+    // Rocket.Chat 8 ignores a `query` object: the text and the type are what filters.
+    Mock::given(method("GET"))
+        .and(path("/api/v1/directory"))
+        .and(query_param("text", "bob & co"))
+        .and(query_param("type", "users"))
+        .and(query_param("workspace", "local"))
+        .and(query_param("count", "10"))
+        .and(query_param("offset", "0"))
+        .and(header("X-User-Id", USER_ID))
+        .and(header("X-Auth-Token", TOKEN))
+        .respond_with(json_response(
+            200,
+            r#"{"result":[{"_id":"u1","username":"bob"}],"count":1,"offset":0,"total":1}"#,
+        ))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/directory"))
+        .and(query_param("type", "channels"))
+        .and(query_param("text", "bob & co"))
+        .and(query_param("sort", r#"{"usersCount":-1}"#))
+        .respond_with(json_response(
+            200,
+            r#"{"result":[],"count":0,"offset":0,"total":0}"#,
+        ))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let client = RestClient::new(&server.uri()).unwrap();
+
+    let users = session(&client)
+        .directory_users("bob & co", 10)
+        .await
+        .unwrap();
+    let channels = session(&client)
+        .directory_channels("bob & co", 10)
+        .await
+        .unwrap();
+
+    assert_eq!(users.items[0].username, "bob");
+    assert!(channels.items.is_empty());
+}
+
+// ACT-007
+#[tokio::test]
+async fn a_direct_message_is_created_by_username_and_a_channel_joined_by_id() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/api/v1/im.create"))
+        .and(body_json(json!({ "username": "bob" })))
+        .and(header("X-User-Id", USER_ID))
+        .respond_with(json_response(
+            200,
+            r#"{"room":{"t":"d","rid":"r1","usernames":["a","bob"],"_id":"r1"},"success":true}"#,
+        ))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/api/v1/channels.join"))
+        .and(body_json(json!({ "roomId": "c1" })))
+        .respond_with(json_response(
+            200,
+            r#"{"channel":{"_id":"c1"},"success":true}"#,
+        ))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let client = RestClient::new(&server.uri()).unwrap();
+
+    let room = session(&client).create_direct("bob").await.unwrap();
+    session(&client).join_channel("c1").await.unwrap();
+
+    assert_eq!(room, "r1");
+}
+
+// ACT-008
+#[tokio::test]
+async fn a_subscription_has_what_the_room_adds_to_it() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/subscriptions.getOne"))
+        .and(query_param("roomId", "c1"))
+        .respond_with(json_response(
+            200,
+            r#"{"subscription":{"_id":"s","rid":"c1","t":"c","name":"chat","open":true},"success":true}"#,
+        ))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/rooms.info"))
+        .and(query_param("roomId", "c1"))
+        .respond_with(json_response(
+            200,
+            r#"{"room":{"_id":"c1","t":"c","name":"chat","topic":"About","avatarETag":"e",
+                "lm":"2026-10-23T17:18:53.642Z"},"success":true}"#,
+        ))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/subscriptions.getOne"))
+        .and(query_param("roomId", "other"))
+        .respond_with(json_response(
+            200,
+            r#"{"subscription":null,"success":true}"#,
+        ))
+        .mount(&server)
+        .await;
+    let client = RestClient::new(&server.uri()).unwrap();
+
+    let found = session(&client).subscription("c1").await.unwrap().unwrap();
+    let none = session(&client).subscription("other").await.unwrap();
+
+    assert_eq!(found.topic, "About");
+    assert_eq!(found.avatar_etag.as_deref(), Some("e"));
+    assert!(found.last_message.is_some());
+    assert_eq!(none, None);
+}
+
+// ACT-008
+#[tokio::test]
+async fn the_calls_of_the_directory_with_an_expired_token_are_unauthorized() {
+    let server = MockServer::start().await;
+    for (verb, route) in [
+        ("GET", "/api/v1/directory"),
+        ("POST", "/api/v1/im.create"),
+        ("POST", "/api/v1/channels.join"),
+        ("GET", "/api/v1/rooms.info"),
+        ("GET", "/api/v1/subscriptions.getOne"),
+    ] {
+        mount(&server, verb, route, json_response(401, NOT_LOGGED_IN)).await;
+    }
+    let client = RestClient::new(&server.uri()).unwrap();
+    let session = session(&client);
+
+    assert!(matches!(
+        session.directory_users("a", 5).await,
+        Err(Error::Unauthorized)
+    ));
+    assert!(matches!(
+        session.create_direct("a").await,
+        Err(Error::Unauthorized)
+    ));
+    assert!(matches!(
+        session.join_channel("a").await,
+        Err(Error::Unauthorized)
+    ));
+    assert!(matches!(
+        session.room_info("a").await,
+        Err(Error::Unauthorized)
+    ));
+    assert!(matches!(
+        session.subscription("a").await,
+        Err(Error::Unauthorized)
+    ));
+}

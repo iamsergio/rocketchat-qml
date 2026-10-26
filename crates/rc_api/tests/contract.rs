@@ -2708,3 +2708,313 @@ async fn a_deleted_parent_is_pushed_as_a_removed_message_and_not_as_a_deletion()
         .unwrap();
     assert_eq!(page.messages.len(), 1);
 }
+
+/// A name for a channel that a directory search for it finds only it by: the text is in no other
+/// channel's name.
+fn findable(label: &str) -> String {
+    format!("ct-{label}-{}", unique())
+}
+
+// ACT-008
+#[tokio::test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+async fn the_directory_filters_users_by_the_text_param() {
+    let fixture = Fixture::new();
+    let other = fixture.admin.create_user();
+    let session = fixture.client.session(fixture.login().await.credentials);
+
+    let found = session.directory_users(&other.username, 10).await.unwrap();
+
+    // The text is a parameter of its own: the old `query` object is ignored on Rocket.Chat 8, which
+    // then lists every user, and the total says so.
+    assert_eq!(found.total, 1);
+    assert_eq!(found.items.len(), 1);
+    assert_eq!(found.items[0].id, other.id);
+    assert_eq!(found.items[0].username, other.username);
+    assert_eq!(found.items[0].name.as_deref(), Some(other.name.as_str()));
+    let nobody = session
+        .directory_users(&format!("nobody-{}", unique()), 10)
+        .await
+        .unwrap();
+    assert_eq!((nobody.total, nobody.items.len()), (0, 0));
+}
+
+// ACT-008
+#[tokio::test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+async fn the_directory_pages_by_count() {
+    let fixture = Fixture::new();
+    let session = fixture.client.session(fixture.login().await.credentials);
+
+    // Every test user's username begins with this, so there are always several.
+    let found = session.directory_users("ct-user-", 2).await.unwrap();
+
+    assert_eq!(found.items.len(), 2);
+    assert!(found.total > 2);
+}
+
+// ACT-008
+#[tokio::test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+async fn the_directory_lists_public_channels_and_never_private_groups() {
+    let fixture = Fixture::new();
+    let name = findable("dir");
+    let (room_id, _) = fixture.admin.create_channel_named(&name, &[]);
+    let (_, group_name) = fixture.admin.create_group(&[]);
+    let session = fixture.client.session(fixture.login().await.credentials);
+
+    let found = session.directory_channels(&name, 10).await.unwrap();
+    let private = session.directory_channels(&group_name, 10).await.unwrap();
+
+    assert_eq!(found.total, 1);
+    let channel = &found.items[0];
+    assert_eq!(channel.id, room_id);
+    assert_eq!(channel.name, name);
+    // The creator is the only member. The user is not in it, and the directory does not say.
+    assert_eq!(channel.users_count, 1);
+    assert_eq!(channel.topic, "");
+    assert_eq!((private.total, private.items.len()), (0, 0));
+}
+
+// ACT-008
+#[tokio::test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+async fn the_directory_lists_the_channels_with_the_most_members_first() {
+    let fixture = Fixture::new();
+    let stem = findable("dirsort");
+    let (small, _) = fixture
+        .admin
+        .create_channel_named(&format!("{stem}-small"), &[]);
+    let (large, _) = fixture
+        .admin
+        .create_channel_named(&format!("{stem}-large"), &[&fixture.user.username]);
+    fixture.admin.set_topic(&large, "A topic");
+    let session = fixture.client.session(fixture.login().await.credentials);
+
+    let found = session.directory_channels(&stem, 10).await.unwrap();
+
+    let ids: Vec<_> = found.items.iter().map(|c| c.id.as_str()).collect();
+    assert_eq!(ids, [large.as_str(), small.as_str()]);
+    assert_eq!(found.items[0].users_count, 2);
+    assert_eq!(found.items[0].topic, "A topic");
+    let one = session.directory_channels(&stem, 1).await.unwrap();
+    assert_eq!((one.total, one.items.len()), (2, 1));
+}
+
+// ACT-008
+#[tokio::test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+async fn the_directory_with_a_revoked_token_is_unauthorized() {
+    let fixture = Fixture::new();
+    let session = fixture.client.session(fixture.login().await.credentials);
+    session.logout().await.unwrap();
+
+    let result = session.directory_users("anyone", 5).await;
+
+    assert!(matches!(result, Err(Error::Unauthorized)), "{result:?}");
+}
+
+// ACT-007
+#[tokio::test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+async fn a_direct_message_is_created_once_and_found_after_that() {
+    let fixture = Fixture::new();
+    let other = fixture.admin.create_user();
+    let session = fixture.client.session(fixture.login().await.credentials);
+
+    let first = session.create_direct(&other.username).await.unwrap();
+    let second = session.create_direct(&other.username).await.unwrap();
+
+    assert_eq!(first, second);
+    let subscription = session.subscription(&first).await.unwrap().unwrap();
+    assert_eq!(subscription.room_type, RoomType::Direct);
+    assert_eq!(subscription.name, other.username);
+    assert!(subscription.open);
+    // The other user has the room too, without having done anything.
+    let theirs = fixture
+        .client
+        .login(&other.username, &SecretString::from(other.password.clone()))
+        .await
+        .unwrap();
+    let rooms = fixture
+        .client
+        .session(theirs.credentials)
+        .subscriptions()
+        .await
+        .unwrap();
+    assert_eq!(find(&rooms, &first).name, fixture.user.username);
+}
+
+// ACT-007
+#[tokio::test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+async fn creating_a_direct_message_opens_one_the_user_had_closed() {
+    let fixture = Fixture::new();
+    let other = fixture.admin.create_user();
+    let login = fixture.login().await;
+    let session = fixture.client.session(login.credentials);
+    let room_id = session.create_direct(&other.username).await.unwrap();
+    let user = Admin::login_as(&fixture.user.username, &fixture.user.password);
+    user.close_dm(&room_id);
+    let closed = session.subscription(&room_id).await.unwrap().unwrap();
+    assert!(!closed.open);
+
+    let again = session.create_direct(&other.username).await.unwrap();
+
+    assert_eq!(again, room_id);
+    assert!(session.subscription(&room_id).await.unwrap().unwrap().open);
+}
+
+// ACT-007
+#[tokio::test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+async fn a_subscription_has_the_last_message_of_its_room_and_none_for_a_room_not_joined() {
+    let fixture = Fixture::new();
+    let (member_of, _) = fixture.create_channel();
+    let (other_room, _) = fixture.admin.create_channel(&[]);
+    let posted = fixture.admin.post_message(&member_of, "the last one");
+    let session = fixture.client.session(fixture.login().await.credentials);
+
+    let joined = session.subscription(&member_of).await.unwrap().unwrap();
+    let not_joined = session.subscription(&other_room).await.unwrap();
+
+    assert_eq!(joined.room_id, member_of);
+    assert_eq!(joined.last_message, Some(posted.ts.parse().unwrap()));
+    assert_eq!(not_joined, None);
+}
+
+// ACT-008
+#[tokio::test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+async fn joining_a_public_channel_adds_the_subscription_and_joining_again_succeeds() {
+    let fixture = Fixture::new();
+    let (room_id, _) = fixture.admin.create_channel(&[]);
+    let session = fixture.client.session(fixture.login().await.credentials);
+    assert_eq!(session.subscription(&room_id).await.unwrap(), None);
+
+    session.join_channel(&room_id).await.unwrap();
+    session.join_channel(&room_id).await.unwrap();
+
+    let subscription = session.subscription(&room_id).await.unwrap().unwrap();
+    assert_eq!(subscription.room_type, RoomType::Channel);
+    assert!(subscription.open);
+}
+
+// ACT-008
+#[tokio::test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+async fn joining_a_private_group_or_a_room_that_does_not_exist_is_a_server_error() {
+    let fixture = Fixture::new();
+    let (group_id, _) = fixture.admin.create_group(&[]);
+    let session = fixture.client.session(fixture.login().await.credentials);
+
+    for room in [group_id.as_str(), "no-such-room"] {
+        let result = session.join_channel(room).await;
+        assert!(
+            matches!(result, Err(Error::Server { .. })),
+            "{room}: {result:?}"
+        );
+    }
+}
+
+// ACT-008
+#[tokio::test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+async fn a_user_who_is_not_in_a_public_channel_can_read_it() {
+    let fixture = Fixture::new();
+    let name = findable("preview");
+    let (room_id, _) = fixture.admin.create_channel_named(&name, &[]);
+    fixture.admin.set_topic(&room_id, "Open to all");
+    let posted = fixture.admin.post_message(&room_id, "read me first");
+    let session = fixture.client.session(fixture.login().await.credentials);
+
+    let info = session.room_info(&room_id).await.unwrap();
+    let page = session
+        .history(&room_id, &RoomType::Channel, None, 50)
+        .await
+        .unwrap();
+    let changes = session
+        .sync_messages(&room_id, jiff::Timestamp::UNIX_EPOCH)
+        .await
+        .unwrap();
+
+    assert_eq!(info.room_id, room_id);
+    assert_eq!(info.room_type, RoomType::Channel);
+    assert_eq!(info.name, name);
+    assert_eq!(info.topic, "Open to all");
+    assert!(info.last_message.is_some());
+    assert!(info.created.is_some());
+    assert!(ordinary(&page.messages).iter().any(|m| m.id == posted.id));
+    assert!(changes.updated.iter().any(|m| m.id == posted.id));
+}
+
+// ACT-008
+#[tokio::test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+async fn a_user_who_is_not_in_a_private_group_cannot_read_it() {
+    let fixture = Fixture::new();
+    let (group_id, _) = fixture.admin.create_group(&[]);
+    let session = fixture.client.session(fixture.login().await.credentials);
+
+    let info = session.room_info(&group_id).await;
+    let history = session
+        .history(&group_id, &RoomType::Private, None, 5)
+        .await;
+
+    assert!(matches!(info, Err(Error::Server { .. })), "{info:?}");
+    assert!(matches!(history, Err(Error::Server { .. })), "{history:?}");
+}
+
+// ACT-008
+#[tokio::test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+async fn the_live_messages_and_deletions_of_a_public_channel_reach_a_user_who_is_not_in_it() {
+    let fixture = Fixture::new();
+    let (room_id, _) = fixture.admin.create_channel(&[]);
+    let login = fixture.login().await;
+    let (client, mut events) = connect_and_login(&login.credentials).await;
+    // The stream of the user's messages, with no subscription to the room: the server sends the
+    // messages of every public channel on it, which is what a preview lives on.
+    client.subscribe_my_messages().await.unwrap();
+    client.subscribe_room_deletions(&room_id).await.unwrap();
+    let posted = fixture.admin.post_message(&room_id, "live for a visitor");
+
+    let event = event_where(
+        &mut events,
+        |e| matches!(e, DdpEvent::Message(m) if m.id == posted.id),
+    )
+    .await;
+    let DdpEvent::Message(message) = event else {
+        panic!("not the event that was waited for")
+    };
+    assert_eq!(message.text, "live for a visitor");
+    fixture.admin.delete_message(&room_id, &posted.id);
+    let expected = DdpEvent::MessageDeleted {
+        room_id: room_id.clone(),
+        message_id: posted.id.clone(),
+    };
+    assert_eq!(event_where(&mut events, |e| *e == expected).await, expected);
+}
+
+// ACT-008
+#[tokio::test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+async fn typing_in_a_public_channel_reaches_a_user_who_is_not_in_it() {
+    let fixture = Fixture::new();
+    let typist_user = fixture.admin.create_user();
+    let (room_id, _) = fixture.admin.create_channel(&[&typist_user.username]);
+    let login = fixture.login().await;
+    let (client, mut events) = connect_and_login(&login.credentials).await;
+    client.subscribe_user_activity(&room_id).await.unwrap();
+    let mut typist = Typist::connect(&typist_user);
+
+    typist.start(&room_id);
+
+    let expected = DdpEvent::UserActivity {
+        room_id: room_id.clone(),
+        username: typist_user.username.clone(),
+        typing: true,
+        thread_id: None,
+    };
+    assert_eq!(event_where(&mut events, |e| *e == expected).await, expected);
+}

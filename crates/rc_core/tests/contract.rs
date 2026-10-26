@@ -18,6 +18,7 @@ use std::sync::mpsc::{self, Receiver};
 use std::time::{Duration, Instant};
 
 use rc_core::adapters::{DiskFileCache, MemoryStore, RestConnector};
+use rc_core::directory::{ActionState, DirectoryAction, DirectoryState};
 use rc_core::domain::AccountId;
 use rc_core::domain::{
     AvatarOwner, Delivery, Message, MessageId, MessageKind, Room, RoomId, RoomKind,
@@ -3031,5 +3032,144 @@ fn opening_an_unread_thread_reads_it_and_it_leaves_the_unread_list() {
     std::thread::sleep(Duration::from_millis(500));
     follow_queued(&open.events, &mut mirrors, |m| {
         room_of(m, &open).is_some_and(|room| room.unread_threads.is_empty())
+    });
+}
+
+// ACT-008
+#[test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+fn the_directory_search_finds_a_person_and_a_channel_the_user_is_not_in() {
+    let admin = Admin::login();
+    let user = admin.create_user();
+    let other = admin.create_user();
+    let name = format!("ct-dir-{}", unique());
+    let (channel, _) = admin.create_channel_named(&name, &[]);
+    let (session, events) = logged_in(&user);
+
+    session.account().search_directory(&other.username);
+    let people = wait_for(&events, |event| match event {
+        Event::Directory(found) if found.state == DirectoryState::Ready => Some(found.clone()),
+        _ => None,
+    });
+    session.account().search_directory(&name);
+    let channels = wait_for(&events, |event| match event {
+        Event::Directory(found) if found.state == DirectoryState::Ready => Some(found.clone()),
+        _ => None,
+    });
+
+    assert_eq!(people.query, other.username);
+    assert_eq!(people.people_total, 1);
+    assert_eq!(people.people[0].username, other.username);
+    assert_eq!(channels.query, name);
+    assert_eq!(channels.channels_total, 1);
+    assert_eq!(channels.channels[0].id.as_str(), channel);
+    assert_eq!(channels.channels[0].members, 1);
+}
+
+// ACT-007
+#[test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+fn a_direct_message_with_a_person_is_listed_and_opened() {
+    let admin = Admin::login();
+    let user = admin.create_user();
+    let other = admin.create_user();
+    let (session, events) = logged_in(&user);
+
+    session.account().open_direct(&other.username);
+
+    let action = DirectoryAction::OpenDirect(other.username.clone());
+    let mut room = None;
+    let mut opened = false;
+    wait_for(&events, |event| {
+        if let Some(found) =
+            room_changed(event, |room| room.peer.as_deref() == Some(&other.username))
+        {
+            room = Some(found);
+        }
+        opened |= matches!(event, Event::TimelineStatus(status)
+            if room.as_ref().is_some_and(|room| status.room.as_ref() == Some(&room.id)));
+        match event {
+            Event::DirectoryAction { state, .. } if *state != ActionState::Working => {
+                assert_eq!(*state, ActionState::Done);
+                Some(())
+            }
+            _ => None,
+        }
+    });
+    let room = room.expect("the direct message was not listed");
+    assert_eq!(room.kind, RoomKind::Direct);
+    assert!(opened, "the direct message was not opened");
+    // A second time finds the same room.
+    session.account().open_direct(&other.username);
+    wait_for(&events, |event| match event {
+        Event::DirectoryAction { action: a, state }
+            if *a == action && *state == ActionState::Done =>
+        {
+            Some(())
+        }
+        Event::Rooms(_) => panic!("{event:?}"),
+        _ => None,
+    });
+}
+
+// ACT-008
+#[test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+fn a_channel_is_previewed_with_its_live_messages_and_then_joined() {
+    let admin = Admin::login();
+    let user = admin.create_user();
+    let (channel, name) = admin.create_channel(&[]);
+    admin.set_topic(&channel, "Look around");
+    admin.post_message(&channel, "before the visit");
+    let (session, events) = logged_in(&user);
+
+    session.account().preview_channel(channel.clone().into());
+    let mut mirror = Vec::new();
+    let previewed = wait_for(&events, |event| match event {
+        Event::Preview(Some(room)) => Some(room.clone()),
+        Event::Rooms(_) => panic!("{event:?}"),
+        _ => None,
+    });
+    settle(&events, &mut mirror);
+    assert_eq!(previewed.id.as_str(), channel);
+    assert_eq!(previewed.name, name);
+    assert_eq!(previewed.topic, "Look around");
+    assert!(texts(&mirror).contains(&"before the visit"));
+
+    // Live messages reach a user who is not in the channel.
+    let live = admin.post_message(&channel, "during the visit");
+    wait_for(&events, |event| {
+        if let Event::Timeline(changes) = event {
+            for change in changes {
+                change.apply(&mut mirror);
+            }
+        }
+        mirror
+            .iter()
+            .any(|m| m.id.as_str() == live.id)
+            .then_some(())
+    });
+
+    session.account().join_channel(channel.clone().into());
+    let mut listed = false;
+    wait_for(&events, |event| {
+        match event {
+            Event::Rooms(_) => {
+                listed |= room_changed(event, |room| room.id.as_str() == channel).is_some();
+            }
+            // The timeline of the open room is not reset by the join.
+            Event::Timeline(changes) => assert!(
+                !changes
+                    .iter()
+                    .any(|change| matches!(change, TimelineChange::Reset { .. })),
+                "{changes:?}"
+            ),
+            Event::Preview(None) => {
+                assert!(listed, "the preview ended before the channel was listed");
+                return Some(());
+            }
+            _ => {}
+        }
+        None
     });
 }
