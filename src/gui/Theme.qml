@@ -189,6 +189,11 @@ QtObject {
     readonly property int searchClearIconSize: 12
     readonly property int searchHintPaddingH: 6
     readonly property int searchHintPaddingV: 1
+    // The "No new notifications" toast over the search field: its fade, how long it stays, and
+    // its distance above the field.
+    readonly property int toastFadeDuration: 150
+    readonly property int toastDuration: 2500
+    readonly property int toastGap: spacingXXL
     // The groups of the search results (channels, people, your rooms): the label over each is this
     // tall with its text at the bottom, this far from the bottom edge, in widely spaced capitals.
     readonly property int directoryLabelHeight: 26

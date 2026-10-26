@@ -9,8 +9,8 @@ mod common;
 
 use std::time::Duration;
 
-use rc_gui_tests::App;
 use rc_gui_tests::paths::{main_window, message, message_row, room, room_row};
+use rc_gui_tests::{App, Key, Modifiers};
 use rc_test_server::{Admin, Proxy, unique};
 
 use common::{
@@ -187,6 +187,51 @@ fn the_news_of_a_channel_waits_for_the_batch_unless_it_mentions_the_user_or_is_a
     })
     .unwrap();
     assert!(shows_unread(gui, &a_id));
+}
+
+// ROOM-012
+#[test]
+#[ignore = "needs the app and a Rocket.Chat server: run through ctest"]
+fn f5_shows_the_held_news_and_says_so_when_there_is_none() {
+    let admin = Admin::login();
+    let user = admin.create_user();
+    let (a_id, _) = admin.create_channel(&[&user.username]);
+    let (idle_id, _) = admin.create_channel(&[&user.username]);
+    // The batch is far off: only F5 shows the news.
+    let app = App::launch_with(&[("TZ", "UTC"), ("RC_CHANNEL_BATCH_SECS", "600")]).unwrap();
+    let gui = app.gui();
+    log_in_and_wait_for_room(gui, &user, &a_id);
+    open_room(gui, &idle_id);
+    gui.wait_until_visible(main_window::COMPOSER_FIELD, TIMEOUT)
+        .unwrap();
+    assert!(!shows_unread(gui, &a_id));
+    assert!(!gui.exists_and_visible(main_window::NO_NEWS_TOAST).unwrap());
+
+    admin.post_message(&a_id, "news for F5");
+    // F5 may come before the core heard of the news: that only shows the toast, and it is
+    // pressed again.
+    gui.wait_until("the held news shown by F5", TIMEOUT, || {
+        // The menu of `shows_unread` leaves the focus nowhere in the Slint app.
+        gui.mouse_click(main_window::COMPOSER_FIELD)?;
+        gui.enter_key(main_window::COMPOSER_FIELD, Key::F5, Modifiers::NONE)?;
+        Ok(shows_unread(gui, &a_id))
+    })
+    .unwrap();
+
+    // Nothing is held now, unless the second push of the message (the subscription and the room
+    // come apart) came after that F5 and is held in turn: F5 shows it, and is pressed again.
+    gui.wait_until("the toast after F5", TIMEOUT, || {
+        gui.mouse_click(main_window::COMPOSER_FIELD)?;
+        gui.enter_key(main_window::COMPOSER_FIELD, Key::F5, Modifiers::NONE)?;
+        gui.exists_and_visible(main_window::NO_NEWS_TOAST)
+    })
+    .unwrap();
+    assert_eq!(
+        gui.text(main_window::NO_NEWS_TOAST).unwrap(),
+        "No new notifications"
+    );
+    gui.wait_until_hidden(main_window::NO_NEWS_TOAST, TIMEOUT)
+        .unwrap();
 }
 
 // RT-003, RT-002

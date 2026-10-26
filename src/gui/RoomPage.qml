@@ -378,6 +378,63 @@ ColumnLayout {
                     sequence: "Ctrl+K"
                     onActivated: searchField.forceActiveFocus()
                 }
+
+                // F5 shows the news the batch holds back. The room list says when there is none.
+                Shortcut {
+                    sequence: "F5"
+                    onActivated: RoomList.releaseNews()
+                }
+
+                Connections {
+                    function onNothingHeld() {
+                        toast.shown = true;
+                        toastTimer.restart();
+                    }
+
+                    target: RoomList as QtObject
+                }
+
+                // Above the field, centred in the sidebar (the field's margins are equal). It takes
+                // no mouse events and no focus.
+                Label {
+                    id: toast
+
+                    property bool shown: false
+
+                    objectName: "noNewsToast"
+                    anchors.bottom: parent.top
+                    anchors.bottomMargin: Theme.toastGap
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    bottomPadding: Theme.spacingM
+                    color: Theme.text
+                    font.pointSize: Theme.fontSizeSmall
+                    leftPadding: Theme.spacingXL
+                    opacity: shown ? Theme.opaque : Theme.clear
+                    rightPadding: Theme.spacingXL
+                    text: qsTr("No new notifications")
+                    textFormat: Text.PlainText
+                    topPadding: Theme.spacingM
+                    visible: opacity > Theme.clear
+                    z: Theme.zAbove
+
+                    background: Rectangle {
+                        color: Theme.raisedHover
+                        radius: Theme.radiusControl
+                    }
+
+                    Behavior on opacity {
+                        NumberAnimation {
+                            duration: Theme.toastFadeDuration
+                        }
+                    }
+
+                    Timer {
+                        id: toastTimer
+
+                        interval: Theme.toastDuration
+                        onTriggered: toast.shown = false
+                    }
+                }
             }
         }
 
