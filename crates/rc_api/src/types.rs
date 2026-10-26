@@ -278,8 +278,9 @@ pub struct CustomEmoji {
 
 /// What the server lets users do with their own messages: its public settings
 /// `Message_AllowEditing`, `Message_AllowDeleting` and the two `...BlockEditInMinutes` /
-/// `...BlockDeleteInMinutes` ones. A setting the server doesn't send, or sends in a form that
-/// isn't understood, has its default: allowed, no time limit.
+/// `...BlockDeleteInMinutes` ones; and whether it takes file uploads (`FileUpload_Enabled`,
+/// `FileUpload_MaxFileSize`), which are read in the same request. A setting the server doesn't
+/// send, or sends in a form that isn't understood, has its default: allowed, no time limit.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct MessageSettings {
     pub editing_allowed: bool,
@@ -288,6 +289,10 @@ pub struct MessageSettings {
     pub deleting_allowed: bool,
     /// How long after sending a message can be deleted. 0 is no limit.
     pub delete_minutes: u32,
+    /// Whether uploading files is on.
+    pub uploads_enabled: bool,
+    /// The biggest file the server takes, in bytes. `None` for no limit (the server says -1).
+    pub upload_max_bytes: Option<u64>,
 }
 
 impl Default for MessageSettings {
@@ -297,6 +302,8 @@ impl Default for MessageSettings {
             edit_minutes: 0,
             deleting_allowed: true,
             delete_minutes: 0,
+            uploads_enabled: true,
+            upload_max_bytes: None,
         }
     }
 }

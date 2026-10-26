@@ -159,6 +159,7 @@ fn the_servers_settings_decide_what_can_be_changed() {
         edit_minutes: 0,
         deleting_allowed: true,
         delete_minutes: 5,
+        ..rc_api::MessageSettings::default()
     }));
     let harness = logged_in_harness(&fake);
     let policy = MessagePolicy::from(fake.state().settings.clone().unwrap().unwrap());

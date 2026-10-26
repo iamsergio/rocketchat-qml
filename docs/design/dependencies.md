@@ -7,7 +7,7 @@
 | 3rdparty/corrosion | Builds the Rust crates from CMake: links them into the Qt executable, and builds the `rocketchat_slint` binary |
 | 3rdparty/cxx-qt-cmake | CMake functions that import cxx-qt crates and their QML modules (uses Corrosion) |
 | tokio | Async runtime for networking and the session actor |
-| reqwest (rustls) | REST client |
+| reqwest (rustls) | REST client; its `multipart` and `stream` features send an uploaded file from disk without holding it |
 | tokio-tungstenite | WebSocket transport for DDP |
 | rustls-platform-verifier | The OS trust store for the WebSocket's TLS, as for reqwest |
 | serde / serde_json | Wire-format (de)serialization |

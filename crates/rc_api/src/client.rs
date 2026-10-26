@@ -1,12 +1,14 @@
 // SPDX-FileCopyrightText: 2026 Sergio Martins
 // SPDX-License-Identifier: MIT
 
+use std::path::Path;
 use std::time::Duration;
 
 use reqwest::header::{HeaderName, HeaderValue};
 use reqwest::{Method, StatusCode, Url};
 use secrecy::{ExposeSecret, SecretString};
 use serde_json::json;
+use tokio::io::AsyncReadExt as _;
 
 use crate::error::Error;
 use crate::types::{
@@ -23,6 +25,11 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 /// server is closing fails with an incomplete message.
 const POOL_IDLE_TIMEOUT: Duration = Duration::from_secs(4);
 const MAX_REDIRECTS: usize = 10;
+/// How long an upload may take as a whole. The client's request timeout would end a big file on a
+/// slow line; a stalled one still ends, by the connection's own failure.
+const UPLOAD_TIMEOUT: Duration = Duration::from_hours(1);
+/// How much of a file is read and sent at a time.
+const UPLOAD_CHUNK: usize = 64 * 1024;
 
 const USER_ID_HEADER: HeaderName = HeaderName::from_static("x-user-id");
 const AUTH_TOKEN_HEADER: HeaderName = HeaderName::from_static("x-auth-token");
@@ -243,9 +250,9 @@ impl RestSession {
         wire::parse_custom_emoji(&body).map_err(Error::Decode)
     }
 
-    /// What the server allows users to do with their own messages (`GET /api/v1/settings.public`
-    /// for the four message settings). The settings are public, but the call carries the login
-    /// headers like the others.
+    /// What the server allows users to do with their own messages, and whether it takes uploads
+    /// (`GET /api/v1/settings.public` for the four message settings and the two upload ones). The
+    /// settings are public, but the call carries the login headers like the others.
     ///
     /// # Errors
     ///
@@ -253,7 +260,7 @@ impl RestSession {
     pub async fn message_settings(&self) -> Result<MessageSettings, Error> {
         let path = "api/v1/settings.public?_id=Message_AllowEditing,\
             Message_AllowEditing_BlockEditInMinutes,Message_AllowDeleting,\
-            Message_AllowDeleting_BlockDeleteInMinutes";
+            Message_AllowDeleting_BlockDeleteInMinutes,FileUpload_Enabled,FileUpload_MaxFileSize";
         let body = self.call(Method::GET, path).await?;
         wire::parse_message_settings(&body).map_err(Error::Decode)
     }
@@ -502,6 +509,107 @@ impl RestSession {
             },
             other => other,
         }
+    }
+
+    /// Uploads the file at `path` to the room, named `file_name` (`POST /api/v1/rooms.media/<rid>`).
+    /// The file is not a message yet: [`confirm_upload`](Self::confirm_upload) posts it, and
+    /// returns the message. The file is streamed from disk, never held in memory, and sent as
+    /// `application/octet-stream`: the server finds out the type itself. `progress` is called
+    /// with the number of bytes handed to the connection so far, as it grows, and reaches the
+    /// file's length when the last chunk is. Returns the id of the uploaded file.
+    ///
+    /// The server refuses a type it blacklists (400, `File type is not accepted`), a room the
+    /// user isn't in (`unauthorized`) and an empty request.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::File`] if the file can't be opened or read, [`Error::Unauthorized`] if the token is
+    /// expired or revoked, [`Error::Server`] if the server refuses the file, or any of the other
+    /// errors.
+    pub async fn upload_file(
+        &self,
+        room_id: &str,
+        path: &Path,
+        file_name: &str,
+        progress: impl Fn(u64) + Send + Sync + 'static,
+    ) -> Result<String, Error> {
+        let file = tokio::fs::File::open(path).await.map_err(Error::File)?;
+        let length = file.metadata().await.map_err(Error::File)?.len();
+        let chunks = futures_util::stream::unfold(
+            (file, 0_u64, progress),
+            |(mut file, sent, progress)| async move {
+                let mut chunk = vec![0; UPLOAD_CHUNK];
+                match file.read(&mut chunk).await {
+                    Ok(0) => None,
+                    Ok(read) => {
+                        chunk.truncate(read);
+                        let sent = sent + read as u64;
+                        progress(sent);
+                        Some((Ok(chunk), (file, sent, progress)))
+                    }
+                    Err(error) => Some((Err(error), (file, sent, progress))),
+                }
+            },
+        );
+        let part = reqwest::multipart::Part::stream_with_length(
+            reqwest::Body::wrap_stream(chunks),
+            length,
+        )
+        .file_name(file_name.to_owned())
+        .mime_str("application/octet-stream")
+        .map_err(Error::Unreachable)?;
+        let form = reqwest::multipart::Form::new().part("file", part);
+        let url = self
+            .client
+            .base
+            .join(&format!("api/v1/rooms.media/{}", segment(room_id)?))
+            .map_err(|e| Error::InvalidUrl(e.to_string()))?;
+        let request = self
+            .client
+            .http
+            .post(url)
+            .timeout(UPLOAD_TIMEOUT)
+            .header(USER_ID_HEADER, sensitive(&self.credentials.user_id)?)
+            .header(
+                AUTH_TOKEN_HEADER,
+                sensitive(self.credentials.token.expose_secret())?,
+            )
+            .multipart(form);
+        let response = request.send().await.map_err(Error::Unreachable)?;
+        let status = response.status();
+        let body = response.bytes().await.map_err(Error::Unreachable)?;
+        check(status, &body, || Error::Unauthorized)?;
+        wire::parse_uploaded(&body).map_err(Error::Decode)
+    }
+
+    /// Posts an uploaded file as a message (`POST /api/v1/rooms.mediaConfirm/<rid>/<fileId>`), with
+    /// `text` as its text (may be empty) and, with `thread_id`, as a reply in that thread (never
+    /// also shown in the channel: the server refuses `tshow` here). The server picks the message's
+    /// id. Confirming a file again answers with the message it made the first time, so a confirm
+    /// may be repeated when its answer was lost.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Unauthorized`] if the token is expired or revoked, [`Error::Server`] if the server
+    /// refuses (`invalid-file` for an id it doesn't know), or any of the other errors.
+    pub async fn confirm_upload(
+        &self,
+        room_id: &str,
+        file_id: &str,
+        text: &str,
+        thread_id: Option<&str>,
+    ) -> Result<Message, Error> {
+        let mut payload = json!({ "msg": text });
+        if let Some(thread_id) = thread_id {
+            payload["tmid"] = json!(thread_id);
+        }
+        let path = format!(
+            "api/v1/rooms.mediaConfirm/{}/{}",
+            segment(room_id)?,
+            segment(file_id)?
+        );
+        let body = self.call_json(Method::POST, &path, &payload).await?;
+        wire::parse_message(&body).map_err(Error::Decode)
     }
 
     /// A page of the replies of a thread, newest first (`GET /api/v1/chat.getThreadMessages`),
@@ -877,6 +985,15 @@ impl RestSession {
         check(status, &body, || Error::Unauthorized)?;
         Ok(body)
     }
+}
+
+/// An id as one path segment, escaped.
+fn segment(id: &str) -> Result<String, Error> {
+    let mut url = Url::parse("http://x/").map_err(|e| Error::InvalidUrl(e.to_string()))?;
+    url.path_segments_mut()
+        .map_err(|()| Error::InvalidUrl(id.to_owned()))?
+        .push(id);
+    Ok(url.path().trim_start_matches('/').to_owned())
 }
 
 /// `name=value` as a query string, escaped.

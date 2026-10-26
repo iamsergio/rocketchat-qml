@@ -45,11 +45,13 @@ mod sync;
 mod thread;
 mod thread_list;
 mod typing;
+mod uploads;
 
 use directory::{DirectoryActionDone, DirectoryDone, DirectorySearch, RunningAction};
 use media::{DownloadDone, Media};
 use thread::{OpenThread, PendingThread};
 use thread_list::OpenThreadList;
+use uploads::{UploadConfirmedDone, UploadProgressDone, UploadStoredDone, Uploads};
 
 /// How long, once the actor is told to end, it and the store worker may take to finish what the
 /// user asked already: the token revocations and the queued store writes. One bound for both: the
@@ -230,6 +232,9 @@ enum Done<A> {
     RoomAction(RoomActionDone),
     Directory(DirectoryDone),
     DirectoryAction(DirectoryActionDone),
+    UploadProgress(UploadProgressDone),
+    UploadStored(UploadStoredDone),
+    UploadConfirmed(UploadConfirmedDone),
 }
 
 /// A history fetch in flight.
@@ -349,6 +354,8 @@ struct Actor<C: Connector> {
     /// The public channel the user looks at without being in it: the open room, though the room
     /// list lacks it. It ends when the channel is listed or another room opens.
     preview: Option<Room>,
+    /// The files being uploaded.
+    uploads: Uploads,
     /// The search of the server's directory.
     directory: DirectorySearch,
     /// The directory action under way: only one runs at a time.
@@ -456,6 +463,7 @@ impl<C: Connector> Actor<C> {
             messages: Box::new(MemoryMessageStore::default()),
             open: None,
             preview: None,
+            uploads: Uploads::new(),
             directory: DirectorySearch::new(tuning.directory_debounce),
             directory_action: None,
             directory_actions: 0,
@@ -520,6 +528,9 @@ impl<C: Connector> Actor<C> {
                     Done::RoomAction(done) => self.handle_room_action_done(done),
                     Done::Directory(done) => self.handle_directory_done(done),
                     Done::DirectoryAction(done) => self.handle_directory_action_done(done),
+                    Done::UploadProgress(done) => self.handle_upload_progress(&done),
+                    Done::UploadStored(done) => self.handle_upload_stored(done),
+                    Done::UploadConfirmed(done) => self.handle_upload_confirmed(done),
                 },
                 () = async {
                     match &mut deadline {
@@ -606,6 +617,7 @@ impl<C: Connector> Actor<C> {
         self.emoji_images.abort();
         self.abort_history_task();
         self.abort_directory();
+        self.abort_uploads();
         if let Some(task) = self.thread_task.take() {
             task.abort();
         }
@@ -658,6 +670,14 @@ impl<C: Connector> Actor<C> {
             Command::OpenDirect(username) => self.open_direct(username),
             Command::PreviewChannel(room) => self.preview_channel(room),
             Command::JoinChannel(room) => self.join_channel(room),
+            Command::UploadFile {
+                room,
+                path,
+                text,
+                thread,
+            } => self.upload_file(room, path, &text, thread),
+            Command::CancelUpload(id) => self.cancel_upload(id),
+            Command::RetryUpload(id) => self.retry_upload(id),
         }
     }
 
@@ -795,6 +815,7 @@ impl<C: Connector> Actor<C> {
             self.abort_realtime_task();
             self.set_state(SessionState::LoggedOut { failure: None });
             self.clear_directory();
+            self.clear_uploads();
             self.clear_rooms();
             self.clear_emoji();
             self.clear_policy();
@@ -819,6 +840,7 @@ impl<C: Connector> Actor<C> {
             failure: Some(LoginFailure::SessionExpired),
         });
         self.clear_directory();
+        self.clear_uploads();
         self.clear_rooms();
         self.clear_emoji();
         self.clear_policy();

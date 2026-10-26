@@ -32,6 +32,7 @@ pub mod threads;
 pub mod timeline;
 mod tuning;
 mod typing;
+pub mod uploads;
 mod users;
 
 pub use avatars::AvatarUpdate;

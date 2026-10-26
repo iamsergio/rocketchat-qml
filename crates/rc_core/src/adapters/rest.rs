@@ -3,6 +3,8 @@
 
 //! The server port over the Rocket.Chat REST API.
 
+use std::path::Path;
+
 use rc_api::{DdpClient, DdpEvent, DdpEvents, RestClient, ServerVersion, SubscriptionId};
 use secrecy::SecretString;
 use tokio::sync::mpsc;
@@ -188,6 +190,35 @@ impl ServerApi for RestApi {
                     .await?
             }
         };
+        Ok(message_from(stored))
+    }
+
+    async fn upload_file(
+        &self,
+        credentials: &Credentials,
+        room: &RoomId,
+        path: &Path,
+        name: &str,
+        progress: impl Fn(u64) + Send + Sync + 'static,
+    ) -> Result<String, ApiError> {
+        let session = self.client.session(api_credentials(credentials));
+        Ok(session
+            .upload_file(room.as_str(), path, name, progress)
+            .await?)
+    }
+
+    async fn confirm_upload(
+        &self,
+        credentials: &Credentials,
+        room: &RoomId,
+        file: &str,
+        text: &str,
+        thread: Option<&MessageId>,
+    ) -> Result<Message, ApiError> {
+        let session = self.client.session(api_credentials(credentials));
+        let stored = session
+            .confirm_upload(room.as_str(), file, text, thread.map(MessageId::as_str))
+            .await?;
         Ok(message_from(stored))
     }
 
@@ -567,6 +598,7 @@ impl From<rc_api::Error> for ApiError {
                 Self::Unexpected(format!("rooms of type {code:?} are not supported here"))
             }
             rc_api::Error::Decode(source) => Self::Unexpected(chain(&source)),
+            rc_api::Error::File(source) => Self::File(source.to_string()),
             rc_api::Error::WebSocket(source) => Self::Unreachable(chain(&source)),
             error @ rc_api::Error::ConnectionClosed => Self::Unreachable(error.to_string()),
             error @ rc_api::Error::Refused { .. } => Self::Unexpected(error.to_string()),

@@ -54,6 +54,7 @@ There is no fake Rocket.Chat. Contract and GUI tests use the real local test ser
 - [Reacting](docs/design/reacting.md): adding and taking back reactions, applying them at once, the emoji picker, Qt side
 - [Room list](docs/design/room-list.md): order and favorites section, the room menu and its rules, the server calls, applying them at once, Qt side
 - [Attachments](docs/design/attachments.md): authenticated downloads, image cache, Qt side
+- [File upload](docs/design/uploads.md): the server's two steps, the queue, states, cancel and retry, how the message enters the timeline, the rows of `rc_view`
 - [Editing and deleting your own messages](docs/design/editing-own-messages.md): server policy, rules, answers, composer edit mode
 - [Quoting](docs/design/quoting.md): permalinks, `Site_Url`, hiding quote links, sending
 - [Threads](docs/design/threads.md): what the server does, opening a thread, replying, the thread pane, Qt side, the list of a room's threads

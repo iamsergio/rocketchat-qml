@@ -30,4 +30,5 @@ pub mod startup;
 pub mod switchboard;
 pub mod thread_list_view;
 pub mod thread_view;
+pub mod upload_view;
 pub mod viewer;

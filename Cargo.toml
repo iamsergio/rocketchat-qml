@@ -48,7 +48,7 @@ rc_core = { path = "crates/rc_core" }
 rc_slint = { path = "crates/rc_slint" }
 rc_test_server = { path = "crates/rc_test_server" }
 rc_view = { path = "crates/rc_view" }
-reqwest = { version = "0.13.5", default-features = false, features = ["json", "rustls", "system-proxy"] }
+reqwest = { version = "0.13.5", default-features = false, features = ["json", "multipart", "rustls", "stream", "system-proxy"] }
 roxmltree = "0.21.1"
 # The crypto provider reqwest's rustls uses, so there is only one.
 rustls = { version = "0.23.46", default-features = false, features = ["aws-lc-rs", "std"] }

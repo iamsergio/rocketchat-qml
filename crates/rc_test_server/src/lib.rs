@@ -76,6 +76,21 @@ pub fn unique() -> String {
     )
 }
 
+/// A file named `name` with `bytes` in a folder of its own under the system's temporary one, for
+/// the tests that upload. The folder is not removed: the system's cleaning does that.
+///
+/// # Panics
+///
+/// If the file can't be written.
+#[must_use]
+pub fn temp_file(name: &str, bytes: &[u8]) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("rc_test_{}", unique()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join(name);
+    std::fs::write(&file, bytes).unwrap();
+    file
+}
+
 /// The image of the custom emoji [`Admin::create_emoji`] makes, the avatar [`Admin::set_avatar`]
 /// sets and the file the tests upload with [`Admin::upload_file`]: one pixel. Too small for the
 /// server to make a thumbnail of it.

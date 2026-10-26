@@ -368,6 +368,7 @@ impl<C: Connector> Actor<C> {
         self.policy_task = None;
         match done.outcome {
             Ok(settings) => {
+                self.set_upload_rules(&settings);
                 let policy = MessagePolicy::from(settings);
                 if policy != self.policy {
                     self.policy = policy;

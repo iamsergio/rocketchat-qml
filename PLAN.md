@@ -36,7 +36,9 @@ Done when: day-to-day use works. Edit, delete, react, threads, DMs, search and u
 - [x] Start a DM, search the directory, join a channel, the core (ACT-007, ACT-008): the directory search with its pause, `open_direct`, `preview_channel` and `join_channel`, and what `rc_view` keeps and filters for the frontends; no UI yet: see [Directory](docs/design/directory.md)
 - [x] Start a DM, search the directory, join a channel, the Qt UI (ACT-007, ACT-008): the room search shows channels, people and the user's rooms in groups, a person opens a direct message, a channel a preview whose composer has Join where Send is, failures go to the error strip; one `RoomSearch` model with a row kind, the rows and the cursor from `rc_view::directory`: see [Directory](docs/design/directory.md#qt-side)
 - [x] Start a DM, search the directory, join a channel, the Slint UI (ACT-007, ACT-008 done in the Slint column): see [Directory](docs/design/directory.md#slint-side)
-- [ ] File upload with progress
+- [x] File upload with progress, the core (ACT-009; step 1 of 3, no UI): `AccountHandle::upload_file`, `cancel_upload` and `retry_upload`; the account's uploads form a FIFO queue (one runs at a time), each in two server steps (`rooms.media`, streamed from disk with progress, then `rooms.mediaConfirm`), listed as `Event::Uploads` with `Event::UploadProgress` once per percent; the message enters the timelines like a pushed one, in the turn the upload leaves the list. `rc_view::upload_view` makes the rows and their fine-grained changes for the room and the open thread. See [File upload](docs/design/uploads.md)
+- [ ] File upload with progress, the Qt UI (ACT-009)
+- [ ] File upload with progress, the Slint UI (ACT-009)
 - [ ] Features ACT-001…ACT-009 tested
 
 ## Typing indicators

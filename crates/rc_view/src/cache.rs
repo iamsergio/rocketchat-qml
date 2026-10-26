@@ -14,6 +14,7 @@ use rc_core::rooms::{RoomChange, Unread};
 use rc_core::session::{LoginFailure, SessionState};
 use rc_core::threads::{ThreadFilter, ThreadListChange, ThreadListStatus};
 use rc_core::timeline::{ThreadStatus, TimelineChange, TimelineStatus};
+use rc_core::uploads::{Upload, UploadState};
 use rc_core::{AvatarUpdate, EmojiImageUpdate, ImageUpdate};
 use rc_core::{Connection, Event};
 
@@ -27,6 +28,7 @@ use crate::room_view::{RoomState, room_state, typing_line, with_preview};
 use crate::session_view::{LoginMode, SessionView, host, session_view};
 use crate::thread_list_view::{ThreadListState, ThreadUnread, thread_list_state};
 use crate::thread_view::{ThreadState, thread_state};
+use crate::upload_view::{Place, UploadRow, rows};
 use crate::viewer::Viewer;
 
 /// One account's: its identity and unread totals, the latest session state, a mirror of the room list and mirrors of the open room's messages and
@@ -74,6 +76,8 @@ pub struct Cache {
     /// names once nobody does.
     typing: Option<(RoomId, Vec<String>)>,
     thread_typing: Option<(MessageId, Vec<String>)>,
+    /// The account's uploads, as the core last listed them, with the progress made.
+    uploads: Vec<Upload>,
     /// The logged-in user, if any.
     username: Option<String>,
     user_id: Option<UserId>,
@@ -145,6 +149,7 @@ impl Cache {
             thread_list_filters: None,
             typing: None,
             thread_typing: None,
+            uploads: Vec::new(),
             username: None,
             user_id: None,
             server: None,
@@ -241,6 +246,16 @@ impl Cache {
                         .insert(room.clone(), status.filter);
                 }
                 self.thread_list_status = status.clone();
+            }
+            Event::Uploads(uploads) => self.uploads.clone_from(uploads),
+            Event::UploadProgress { id, sent: now } => {
+                if let Some(Upload {
+                    state: UploadState::Uploading { sent },
+                    ..
+                }) = self.uploads.iter_mut().find(|upload| upload.id == *id)
+                {
+                    *sent = *now;
+                }
             }
             Event::Typing { room, names } => self.typing = Some((room.clone(), names.clone())),
             Event::ThreadTyping { thread, names } => {
@@ -394,6 +409,34 @@ impl Cache {
     #[must_use]
     pub fn preview(&self) -> Option<&Room> {
         self.preview.as_ref()
+    }
+
+    /// The account's uploads, whole.
+    #[must_use]
+    pub fn uploads(&self) -> &[Upload] {
+        &self.uploads
+    }
+
+    /// The rows of the uploads into the open room, outside its threads. Give them, with the rows
+    /// a model holds, to [`changes`](crate::upload_view::changes) whenever the uploads or the open
+    /// room change.
+    #[must_use]
+    pub fn room_upload_rows(&self) -> Vec<UploadRow> {
+        self.room
+            .as_ref()
+            .map(|room| rows(&self.uploads, Place::Room(room)))
+            .unwrap_or_default()
+    }
+
+    /// The rows of the uploads into the open thread, as for
+    /// [`room_upload_rows`](Self::room_upload_rows).
+    #[must_use]
+    pub fn thread_upload_rows(&self) -> Vec<UploadRow> {
+        self.thread_status
+            .parent
+            .as_ref()
+            .map(|parent| rows(&self.uploads, Place::Thread(parent)))
+            .unwrap_or_default()
     }
 
     /// The change that brings an empty model to the current room list.
@@ -1732,5 +1775,61 @@ mod tests {
         assert_eq!(cache.thread_list_filter(), ThreadFilter::All);
         open_room(&mut cache, "a");
         assert_eq!(cache.thread_list_filter(), ThreadFilter::Following);
+    }
+
+    // ACT-009
+    #[test]
+    fn the_uploads_are_the_last_list_with_the_progress_and_split_by_room_and_thread() {
+        use rc_core::uploads::UploadId;
+
+        let mut cache = Cache::new();
+        let upload = |id, thread: Option<&str>, state| Upload {
+            id: UploadId::for_test(id),
+            room: "a".to_owned().into(),
+            thread: thread.map(|parent| parent.to_owned().into()),
+            name: format!("f{id}"),
+            size: 100,
+            state,
+        };
+        assert!(cache.room_upload_rows().is_empty());
+        cache.apply(&Event::Timeline(vec![TimelineChange::Reset {
+            room: Some("a".to_owned().into()),
+            messages: Vec::new(),
+        }]));
+        cache.apply(&Event::ThreadStatus(ThreadStatus {
+            parent: Some("p".to_owned().into()),
+            ..ThreadStatus::default()
+        }));
+
+        cache.apply(&Event::Uploads(vec![
+            upload(0, None, UploadState::Uploading { sent: 0 }),
+            upload(1, Some("p"), UploadState::Queued),
+        ]));
+        cache.apply(&Event::UploadProgress {
+            id: UploadId::for_test(0),
+            sent: 50,
+        });
+        // A progress of an upload that is gone, or isn't uploading, changes nothing.
+        cache.apply(&Event::UploadProgress {
+            id: UploadId::for_test(9),
+            sent: 50,
+        });
+        cache.apply(&Event::UploadProgress {
+            id: UploadId::for_test(1),
+            sent: 50,
+        });
+
+        let room_rows = cache.room_upload_rows();
+        assert_eq!(room_rows.len(), 1);
+        assert!((room_rows[0].progress - 0.5).abs() < f64::EPSILON);
+        let thread_rows = cache.thread_upload_rows();
+        assert_eq!(thread_rows.len(), 1);
+        assert_eq!(thread_rows[0].name, "f1");
+        assert!(thread_rows[0].progress.abs() < f64::EPSILON);
+
+        cache.apply(&Event::Uploads(Vec::new()));
+        assert!(cache.uploads().is_empty());
+        assert!(cache.room_upload_rows().is_empty());
+        assert!(cache.thread_upload_rows().is_empty());
     }
 }

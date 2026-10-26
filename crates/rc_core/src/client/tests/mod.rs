@@ -6,7 +6,7 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::future::Future;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::mpsc::{self, Receiver};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -44,6 +44,7 @@ use crate::session::{LoginFailure, SessionState};
 use crate::threads::{ThreadFilter, ThreadListStatus};
 use crate::timeline::{ThreadStatus, TimelineChange, TimelineError, TimelineStatus};
 use crate::tuning::Tuning;
+use crate::uploads::{Upload, UploadError, UploadId, UploadState};
 
 mod accounts;
 mod activity;
@@ -69,6 +70,7 @@ mod thread_list;
 mod threads;
 mod timeline;
 mod typing;
+mod uploads;
 
 use fake::*;
 use harness::*;
