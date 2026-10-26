@@ -191,6 +191,12 @@ fn connect_commands(window: &MainWindow) {
     });
     window.on_retry(|id| App::with(|app| app.retry(&id)));
     window.on_set_favorite(|id, favorite| App::with(|app| app.set_favorite(&id, favorite)));
+    window.on_release_news(|| {
+        // No app, nothing to say.
+        let mut released = true;
+        App::with(|app| released = app.release_news());
+        released
+    });
     window.on_mark_read(|id| App::with(|app| app.mark_read(&id)));
     window.on_mark_unread(|id| App::with(|app| app.mark_unread(&id)));
     window.on_leave_room(|id| App::with(|app| app.leave_room(&id)));
@@ -753,6 +759,13 @@ impl App {
         self.current_account("set_favorite", |account| {
             account.set_favorite(RoomId::from(id.to_owned()), favorite);
         });
+    }
+
+    /// F5: shows the held channel news of every account (ROOM-012). Returns whether any account
+    /// held some, going by the caches: if not, the page says there is nothing new.
+    fn release_news(&self) -> bool {
+        self.switchboard
+            .release_news(|id| self.client.account(id).release_channels())
     }
 
     fn mark_read(&self, id: &str) {

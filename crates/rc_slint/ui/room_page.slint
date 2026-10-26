@@ -68,6 +68,8 @@ export component RoomPage inherits Rectangle {
     // The room's menu: a favorite is set or taken back, the room is marked read or unread, or
     // leaving is asked for (the id and the name, for the dialog that asks).
     callback set-favorite(string, bool);
+    // F5 (ROOM-012): shows the held channel news of every account. False if none held any.
+    callback release-news() -> bool;
     callback mark-read(string);
     callback mark-unread(string);
     callback leave(string, string);
@@ -139,6 +141,8 @@ export component RoomPage inherits Rectangle {
     // many times it was asked to take it now.
     property <bool> composer-wanted;
     property <int> composer-requests;
+    // The "No new notifications" toast: shown for a while, F5 again restarts the time.
+    property <bool> toast-shown;
 
     // The search is over: the field is emptied and gives up the focus, which goes to the composer
     // of the open room, or of the one being opened (`opened`, with its id), or to nothing.
@@ -164,12 +168,27 @@ export component RoomPage inherits Rectangle {
         }
     }
 
-    // Ctrl+K anywhere in the page focuses the search field. The key is a control character on some
-    // platforms.
-    FocusScope {
+    toast-timer := Timer {
+        interval: Theme.toast-duration;
+        running: root.toast-shown;
+        triggered => {
+            root.toast-shown = false;
+        }
+    }
+
+    // Ctrl+K anywhere in the page focuses the search field, and F5 shows the held news. Ctrl+K is a
+    // control character on some platforms.
+    page-scope := FocusScope {
         width: parent.width;
         height: parent.height;
         capture-key-pressed(event) => {
+            if event.text == Key.F5 {
+                if !root.release-news() {
+                    root.toast-shown = true;
+                    toast-timer.restart();
+                }
+                return accept;
+            }
             if event.modifiers.control && (event.text == "k" || event.text == "\u{b}") {
                 search-field.focus-field();
                 return accept;
@@ -758,6 +777,34 @@ export component RoomPage inherits Rectangle {
                         return root.send-reply(text, quoted, also);
                     }
                 }
+            }
+        }
+
+        // Above the search field, centred in the sidebar. It takes no mouse events and no focus.
+        Rectangle {
+            x: (Theme.sidebar-width - self.width) / 2;
+            y: search-field.absolute-position.y - page-scope.absolute-position.y - self.height
+                - Theme.toast-gap;
+            width: toast-text.preferred-width + 2 * Theme.spacing-xl;
+            height: toast-text.preferred-height + 2 * Theme.spacing-m;
+            background: Theme.raised-hover;
+            border-radius: Theme.radius-control;
+            opacity: root.toast-shown ? Theme.opaque : Theme.clear;
+            visible: self.opacity > Theme.clear;
+
+            animate opacity {
+                duration: Theme.toast-fade-duration;
+            }
+
+            toast-text := Text {
+                accessible-id: "noNewsToast";
+                accessible-role: text;
+                accessible-value: self.text;
+                x: Theme.spacing-xl;
+                y: Theme.spacing-m;
+                color: Theme.text;
+                font-size: Theme.font-size-small;
+                text: @tr("No new notifications");
             }
         }
     }

@@ -202,6 +202,11 @@ export global Theme {
     out property <length> search-clear-icon-size: 12px;
     out property <length> search-hint-padding-h: 6px;
     out property <length> search-hint-padding-v: 1px;
+    // The "No new notifications" toast over the search field: its fade, how long it stays, and
+    // its distance above the field.
+    out property <duration> toast-fade-duration: 150ms;
+    out property <duration> toast-duration: 2500ms;
+    out property <length> toast-gap: spacing-xxl;
     // The groups of the search results (channels, people, your rooms): the label over each is this
     // tall with its text at the bottom, this far from the bottom edge, in widely spaced capitals.
     out property <length> directory-label-height: 26px;

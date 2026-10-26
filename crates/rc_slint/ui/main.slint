@@ -93,6 +93,7 @@ export component MainWindow inherits Window {
     // The room's menu: a favorite is set or taken back, the room is marked read or unread, the
     // user confirmed leaving it, or dismissed the error.
     callback set-favorite(string, bool);
+    callback release-news() -> bool;
     callback mark-read(string);
     callback mark-unread(string);
     callback leave-room(string);
@@ -259,6 +260,9 @@ export component MainWindow inherits Window {
             }
             set-favorite(id, favorite) => {
                 root.set-favorite(id, favorite);
+            }
+            release-news => {
+                return root.release-news();
             }
             mark-read(id) => {
                 root.mark-read(id);
