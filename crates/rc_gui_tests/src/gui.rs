@@ -169,6 +169,34 @@ impl Gui {
         .map(drop)
     }
 
+    /// Turns the mouse wheel over the centre of the item `steps` times, `interval` apart.
+    ///
+    /// The deltas are Qt's `angleDelta`: 120 is one notch, and a positive `delta_y` scrolls
+    /// towards the start (up). The Slint app treats one notch as 60 logical pixels. The call may
+    /// return before the app has handled every step (the Qt app only queues them), and the view
+    /// glides on after the last one, so callers wait for what they expect to see instead of
+    /// reading a position at once.
+    pub fn mouse_wheel(
+        &self,
+        path: &str,
+        delta_x: i32,
+        delta_y: i32,
+        steps: u32,
+        interval: Duration,
+    ) -> Result<()> {
+        self.command(
+            "mouseWheel",
+            &[
+                path.into(),
+                Value::Int(delta_x),
+                Value::Int(delta_y),
+                Value::Int(i32::try_from(steps).unwrap_or(i32::MAX)),
+                Value::Int(i32::try_from(interval.as_millis()).unwrap_or(i32::MAX)),
+            ],
+        )
+        .map(drop)
+    }
+
     /// Types `text` into the window of the element at `path`, which goes to the focused element.
     pub fn input_text(&self, path: &str, text: &str) -> Result<()> {
         self.command("inputText", &[path.into(), text.into()])
