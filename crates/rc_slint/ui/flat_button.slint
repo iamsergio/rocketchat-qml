@@ -9,6 +9,8 @@ export component FlatButton inherits Rectangle {
     in property <string> text;
     in property <bool> enabled: true;
     in property <length> button-height: Theme.button-height;
+    // The colour of the text while the pointer is elsewhere.
+    in property <brush> idle-color: Theme.text-muted;
     callback clicked();
 
     accessible-role: button;
@@ -27,7 +29,7 @@ export component FlatButton inherits Rectangle {
     opacity: root.enabled ? Theme.opaque : Theme.disabled-opacity;
 
     label := Text {
-        color: touch.has-hover ? Theme.text : Theme.text-muted;
+        color: touch.has-hover ? Theme.text : root.idle-color;
         font-size: Theme.font-size-small;
         font-weight: Theme.font-weight-semibold;
         horizontal-alignment: center;

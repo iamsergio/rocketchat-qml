@@ -22,6 +22,7 @@ jiff.workspace = true
 open.workspace = true
 rc_core.workspace = true
 rc_view.workspace = true
+rfd.workspace = true
 secrecy.workspace = true
 slint.workspace = true
 # Optional, behind `spix`: the Spix test server that speaks to the GUI test suite.

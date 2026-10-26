@@ -1,0 +1,101 @@
+// SPDX-FileCopyrightText: 2026 Sergio Martins
+// SPDX-License-Identifier: MIT
+
+import { CrossButton } from "cross_button.slint";
+import { StagedFileRow } from "structs.slint";
+import { Theme } from "theme.slint";
+import { Thumbnail } from "thumbnail.slint";
+
+// The files that wait in a composer for Send: a wrapping row of chips, each with its thumbnail, its
+// name over its size and a cross that takes it out (`composerAttachment<i>` with
+// `composerAttachmentName`, `composerAttachmentSize` and `composerAttachmentRemove<i>`), over a
+// hairline. It takes no height, and is not there for the tests, while no file waits.
+export component StagedBar inherits Rectangle {
+    in property <[StagedFileRow]> files;
+    // The cross of the file in this row was clicked.
+    callback remove(int);
+
+    accessible-id: "composerAttachments";
+    accessible-role: groupbox;
+    // A flexbox with no chip has no room to give, and the composer would be no wider than its
+    // fields: the bar takes what it is given.
+    max-width: Theme.unbounded;
+    visible: root.files.length > 0;
+    min-height: root.preferred-height;
+    max-height: root.preferred-height;
+    preferred-height: root.files.length > 0 ? chips.preferred-height + Theme.separator-width : Theme.spacing-none;
+
+    chips := FlexboxLayout {
+        padding-left: Theme.composer-padding-h;
+        padding-right: Theme.composer-padding-h;
+        padding-top: Theme.spacing-l;
+        padding-bottom: Theme.spacing-l + Theme.separator-width;
+        spacing: Theme.spacing-l;
+
+        for file[index] in root.files: Rectangle {
+            accessible-id: "composerAttachment" + index;
+            accessible-role: groupbox;
+            width: Theme.file-chip-width;
+            height: Theme.file-chip-height;
+            background: Theme.surface;
+            border-color: Theme.line;
+            border-width: Theme.border-width;
+            border-radius: Theme.radius-file-chip;
+
+            HorizontalLayout {
+                padding: Theme.spacing-m;
+                spacing: Theme.spacing-l;
+
+                VerticalLayout {
+                    alignment: center;
+
+                    Thumbnail {
+                        is-image: file.is-image;
+                        label: file.label;
+                        source: file.thumbnail;
+                    }
+                }
+
+                VerticalLayout {
+                    horizontal-stretch: 1;
+                    alignment: center;
+                    spacing: Theme.spacing-xxs;
+
+                    Text {
+                        accessible-id: "composerAttachmentName";
+                        color: Theme.text;
+                        font-size: Theme.font-size-small;
+                        font-weight: Theme.font-weight-medium;
+                        overflow: elide;
+                        text: file.name;
+                    }
+
+                    Text {
+                        accessible-id: "composerAttachmentSize";
+                        color: Theme.text-faint;
+                        font-size: Theme.font-size-tiny;
+                        text: file.size;
+                    }
+                }
+
+                VerticalLayout {
+                    alignment: center;
+
+                    CrossButton {
+                        accessible-id: "composerAttachmentRemove" + index;
+                        label: @tr("Remove {}", file.name);
+                        clicked => {
+                            root.remove(index);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Rectangle {
+        y: parent.height - self.height;
+        height: Theme.separator-width;
+        background: Theme.raised-hover;
+    }
+}

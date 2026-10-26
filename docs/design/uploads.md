@@ -1,7 +1,7 @@
 # File upload
 
 The user picks files to send (ACT-009). This is the core and `rc_view` part (`rc_api`, `rc_core`,
-`rc_view`) and the Qt UI; the Slint UI comes after it.
+`rc_view`), the [Qt UI](#qt-side) and the [Slint UI](#slint-side).
 
 ## What the server does
 
@@ -172,6 +172,17 @@ with `forThread` and only wires them.
   files with text (the order, the text on the first); an SVG the server refuses (the reason in
   words, Retry, Remove); an upload from the thread pane. Dropping isn't tested: Spix can't drag.
 
+## Slint side
+
+The same behaviour, look and element names as the Qt side, from the same `rc_view` rows and the same `Theme` values (`file-chip-*`, `thumbnail-size`, `upload-*`, `drop-*`, in `theme.slint`); all four tests of `uploads.rs` run against `rocketchat_slint` unchanged.
+
+- **Models.** `StagedModel` (`staged_model.rs`) is `rc_view::staged_view::Staged` as rows: adding or taking out a file announces that row alone, and a picture's thumbnail is read once, when the file is added. `UploadModel` (`upload_model.rs`) holds the `UploadRow`s and `show`s a new list with `upload_view::changes`, announced through `row_ops` as in the thread list, so a progress is `row_changed` of one row. `App` has one of each for the room and one for the thread, set on the window as `staged`, `uploads`, `thread-staged` and `thread-uploads`. The Slint structs are `StagedFileRow` and `UploadFileRow`; the status is its `name()` (`queued`, `uploading`, `confirming`, `failed`), which the view reads and decides nothing else from.
+- **Views.** `Composer` has the paperclip (`composerAttach`, left of the field, not while editing or previewing), then `StagedBar` and `UploadsBar` over their hairlines and always made, with no height while they are empty (`visible` is what the tests see); the composer's height adds theirs. A chip is a fixed-size `Rectangle`, laid out by a `FlexboxLayout` so that they wrap. `Thumbnail`, `CrossButton` (the cross of a chip, and of an upload that can be cancelled; a failed one has the `FlatButton` "Remove") and `DropOverlay` are components of their own. Send is enabled with text or with files.
+- **Commands.** `attach(for-thread)`, `remove-staged`, `cancel-upload` and `retry-upload` (by row) reach `App` through the page, which tells the room's composer from the thread's by a `bool`. `send` and `send-reply` send the files with the text when files wait (`App::send_with_files`, the same as `hub::send_with_files` of the Qt side: `plan`, a quoting text first, `upload_file` per file, the files cleared). The files wait per conversation: `show_room` and `show_thread` clear them when the room or the thread changes. `show_uploads` runs on `Event::Uploads`, `Event::UploadProgress`, `TimelineStatus`, `ThreadStatus` and `show_all`.
+- **The file dialog.** The paperclip opens `rfd::AsyncFileDialog` (the desktop's file chooser portal on Linux) from `slint::spawn_local`; rfd runs the portal call on a thread of its own and wakes the event loop with the answer, so the GUI never blocks. A second click while it is open does nothing. It has no parent window. With `RC_TEST_ATTACH_FILES` set (builds with `test-attach-files`) the files are taken in place of the dialog, as in Qt.
+- **Dropping.** `app/uploads.rs::accept_drops` hooks winit's window events through Slint's `unstable-winit-030` feature: `HoveredFile` shows `dropOverlay` ("Drop to attach to #room", `dropTitle`) over the room under its header, `HoveredFileCancelled` and `DroppedFile` hide it, and a dropped file goes to the room's composer. Limits: winit 0.30 reports no drag on Wayland at all (X11, macOS and Windows do), and no position for one, so the thread pane is no drop target (the Qt app has one); under the tests' backend there is no winit window, so the hook does nothing and the overlay is not tested. See SLINT.md.
+- **Left out.** The tooltips of the paperclip and of the crosses (the Slint gaps item of PLAN.md), and the middle elision of a long file name (Slint elides at the end only).
+
 ## Tests
 
 `crates/rc_core/src/client/tests/uploads.rs` (the queue and its order, progress and its throttle, the
@@ -181,4 +192,4 @@ a confirm-only retry, cancel in each state, logout, `Unauthorized`), `rc_view::u
 `crates/rc_api/tests/rest.rs`, and the contract tests of `rc_api` and `rc_core` against the real
 server. The stale-attempt check has no test of its own: an aborted task cannot report, so an answer
 of an older attempt cannot be made to arrive. The GUI tests are in `uploads.rs` of `rc_gui_tests`
-(Qt; the Slint app comes next).
+(both apps), and `rc_slint` has unit tests of `StagedModel`, `UploadModel` and of the composer's width.

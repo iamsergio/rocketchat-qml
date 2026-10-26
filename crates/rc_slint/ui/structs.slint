@@ -276,3 +276,30 @@ export struct EmojiCell {
     has-image: bool,
     image: image,
 }
+
+// A file that waits in a composer for Send: a `rc_view::staged_view::StagedFile`, as drawn.
+export struct StagedFileRow {
+    name: string,
+    // In words, for example `1.5 KB`.
+    size: string,
+    // The thumbnail is the picture itself (`thumbnail`), or else the extension in capitals (`label`).
+    is-image: bool,
+    label: string,
+    thumbnail: image,
+}
+
+// A file being uploaded: a `rc_view::upload_view::UploadRow`, as drawn.
+export struct UploadFileRow {
+    name: string,
+    // How much has gone, that it waits, that its message is posted, or why it failed.
+    status-line: string,
+    // `queued`, `uploading`, `confirming` or `failed`.
+    status: string,
+    // 0 to 1.
+    progress: float,
+    can-retry: bool,
+    can-cancel: bool,
+    is-image: bool,
+    label: string,
+    thumbnail: image,
+}

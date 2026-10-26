@@ -1,0 +1,59 @@
+// SPDX-FileCopyrightText: 2026 Sergio Martins
+// SPDX-License-Identifier: MIT
+
+import { Icon } from "icon.slint";
+import { Theme } from "theme.slint";
+
+// Covers the open room while files are dragged over the window, and says where they would go. It
+// takes no input: dropping is the window's event, not this element's.
+export component DropOverlay inherits Rectangle {
+    // Where the files would go: "Drop to attach to #general".
+    in property <string> title;
+
+    accessible-id: "dropOverlay";
+    accessible-role: groupbox;
+    background: Theme.drop-overlay;
+
+    Rectangle {
+        x: Theme.drop-margin;
+        y: Theme.drop-margin;
+        width: parent.width - 2 * Theme.drop-margin;
+        height: parent.height - 2 * Theme.drop-margin;
+        border-color: Theme.own-border;
+        border-width: Theme.drop-border-width;
+        border-radius: Theme.radius-drop;
+
+        VerticalLayout {
+            alignment: center;
+            spacing: Theme.spacing-l;
+
+            HorizontalLayout {
+                alignment: center;
+
+                Icon {
+                    width: Theme.drop-icon-size;
+                    height: Theme.drop-icon-size;
+                    source: @image-url("../../../src/gui/icons/upload.svg");
+                    tint: Theme.own;
+                }
+            }
+
+            Text {
+                accessible-id: "dropTitle";
+                color: Theme.text;
+                font-size: Theme.font-size-heading;
+                font-weight: Theme.font-weight-semibold;
+                horizontal-alignment: center;
+                overflow: elide;
+                text: root.title;
+            }
+
+            Text {
+                color: Theme.text-muted;
+                font-size: Theme.font-size-small;
+                horizontal-alignment: center;
+                text: @tr("They wait in the composer until you send them");
+            }
+        }
+    }
+}

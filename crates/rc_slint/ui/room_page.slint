@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import { Composer } from "composer.slint";
+import { DropOverlay } from "drop_overlay.slint";
 import { Icon, KindIcon } from "icon.slint";
 import { FlatButton } from "flat_button.slint";
 import { ListView } from "list_view.slint";
@@ -10,7 +11,7 @@ import { RoomDelegate } from "room_delegate.slint";
 import { RoomSearchField } from "room_search_field.slint";
 import { RoomSearchResults } from "room_search_results.slint";
 import { ThreadPane } from "thread_pane.slint";
-import { MessageMenu, MessageRow, RoomRow, SearchKind, SearchRow, ThreadPaneState, ThreadRow } from "structs.slint";
+import { MessageMenu, MessageRow, RoomRow, SearchKind, SearchRow, StagedFileRow, ThreadPaneState, ThreadRow, UploadFileRow } from "structs.slint";
 import { Theme } from "theme.slint";
 import { TypingLine } from "typing_line.slint";
 
@@ -94,6 +95,18 @@ export component RoomPage inherits Rectangle {
     in property <int> edit-answers;
     in property <string> edit-answer-id;
     in property <bool> edit-answer-ok;
+    // The files that wait in the room's box for Send and those being uploaded to the room, and
+    // the same for the thread's; the buttons act on them by row, and `true` is for the thread's.
+    in property <[StagedFileRow]> staged;
+    in property <[UploadFileRow]> uploads;
+    in property <[StagedFileRow]> thread-staged;
+    in property <[UploadFileRow]> thread-uploads;
+    callback attach(bool);
+    callback remove-staged(bool, int);
+    callback cancel-upload(bool, int);
+    callback retry-upload(bool, int);
+    // Files are dragged over the window: the room says where they would go.
+    in property <bool> dropping;
     // The list of messages is at its top: older ones are wanted.
     callback load-older();
     // A link of the topic or of a message was clicked.
@@ -671,6 +684,20 @@ export component RoomPage inherits Rectangle {
                                 join => {
                                     root.join-room();
                                 }
+                                staged: root.staged;
+                                uploads: root.uploads;
+                                attach => {
+                                    root.attach(false);
+                                }
+                                remove-staged(row) => {
+                                    root.remove-staged(false, row);
+                                }
+                                cancel-upload(row) => {
+                                    root.cancel-upload(false, row);
+                                }
+                                retry-upload(row) => {
+                                    root.retry-upload(false, row);
+                                }
                                 focus-wanted: root.composer-wanted;
                                 focus-requests: root.composer-requests;
                                 conversation-id: root.room-id;
@@ -694,6 +721,14 @@ export component RoomPage inherits Rectangle {
                                 }
                             }
                         }
+                    }
+
+                    // Files dropped on the window go to the room's box.
+                    if root.dropping && !root.room-id.is-empty && !root.room-preview: DropOverlay {
+                        y: Theme.room-header-height;
+                        width: parent.width;
+                        height: parent.height - Theme.room-header-height;
+                        title: @tr("Drop to attach to #{}", root.room-name);
                     }
 
                     if root.room-id.is-empty: Text {
@@ -734,6 +769,20 @@ export component RoomPage inherits Rectangle {
                     edit-answers: root.edit-answers;
                     edit-answer-id: root.edit-answer-id;
                     edit-answer-ok: root.edit-answer-ok;
+                    staged: root.thread-staged;
+                    uploads: root.thread-uploads;
+                    attach => {
+                        root.attach(true);
+                    }
+                    remove-staged(row) => {
+                        root.remove-staged(true, row);
+                    }
+                    cancel-upload(row) => {
+                        root.cancel-upload(true, row);
+                    }
+                    retry-upload(row) => {
+                        root.retry-upload(true, row);
+                    }
                     close => {
                         root.close-thread();
                     }

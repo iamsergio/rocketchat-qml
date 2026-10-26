@@ -1,0 +1,160 @@
+// SPDX-FileCopyrightText: 2026 Sergio Martins
+// SPDX-License-Identifier: MIT
+
+import { CrossButton } from "cross_button.slint";
+import { FlatButton } from "flat_button.slint";
+import { UploadFileRow } from "structs.slint";
+import { Theme } from "theme.slint";
+import { Thumbnail } from "thumbnail.slint";
+
+// One file being sent: its thumbnail, its name over what it is doing (how much has gone, that it
+// waits, that its message is being posted, or why it failed) and a bar of the progress, and what can
+// be done with it: give it up (`uploadCancel<i>`, a cross, or "Remove" for a failed one) or, for a
+// failed one, try again (`uploadRetry<i>`). Every word comes from Rust. Its `accessible-id`
+// (`upload<i>`) is set by the user of the component.
+component UploadItem inherits Rectangle {
+    in property <UploadFileRow> upload;
+    in property <int> index;
+    callback cancel();
+    callback retry();
+
+    accessible-role: groupbox;
+    min-height: content.preferred-height;
+    preferred-height: content.preferred-height;
+
+    content := HorizontalLayout {
+        padding: Theme.spacing-none;
+        spacing: Theme.spacing-xl;
+
+        VerticalLayout {
+            alignment: start;
+
+            Thumbnail {
+                is-image: root.upload.is-image;
+                label: root.upload.label;
+                source: root.upload.thumbnail;
+            }
+        }
+
+        VerticalLayout {
+            horizontal-stretch: 1;
+            alignment: start;
+            spacing: Theme.spacing-xxs;
+
+            Text {
+                accessible-id: "uploadName";
+                color: Theme.text;
+                font-size: Theme.font-size-small;
+                font-weight: Theme.font-weight-medium;
+                overflow: elide;
+                text: root.upload.name;
+            }
+
+            Text {
+                accessible-id: "uploadStatus";
+                color: root.upload.status == "failed" ? Theme.error : Theme.text-muted;
+                font-size: Theme.font-size-tiny;
+                wrap: word-wrap;
+                text: root.upload.status-line;
+            }
+
+            // The track, with the space above it.
+            if root.upload.status != "failed": Rectangle {
+                accessible-id: "uploadProgress";
+                accessible-role: progress-indicator;
+                accessible-value: root.upload.progress;
+                height: Theme.spacing-s + Theme.upload-track-height;
+
+                Rectangle {
+                    y: Theme.spacing-s;
+                    height: Theme.upload-track-height;
+                    background: Theme.raised-hover;
+                    border-radius: Theme.radius-track;
+
+                    Rectangle {
+                        x: Theme.spacing-none;
+                        width: parent.width * root.upload.progress;
+                        height: parent.height;
+                        background: Theme.own;
+                        border-radius: Theme.radius-track;
+                        opacity: root.upload.status == "confirming" ? Theme.upload-confirming-opacity : Theme.opaque;
+                    }
+                }
+            }
+        }
+
+        VerticalLayout {
+            alignment: start;
+
+            HorizontalLayout {
+                spacing: Theme.spacing-s;
+
+                if root.upload.can-retry: FlatButton {
+                    accessible-id: "uploadRetry" + root.index;
+                    idle-color: Theme.own;
+                    text: @tr("Retry");
+                    clicked => {
+                        root.retry();
+                    }
+                }
+
+                if root.upload.can-cancel && root.upload.can-retry: FlatButton {
+                    accessible-id: "uploadCancel" + root.index;
+                    text: @tr("Remove");
+                    clicked => {
+                        root.cancel();
+                    }
+                }
+
+                if root.upload.can-cancel && !root.upload.can-retry: CrossButton {
+                    accessible-id: "uploadCancel" + root.index;
+                    label: @tr("Cancel");
+                    clicked => {
+                        root.cancel();
+                    }
+                }
+            }
+        }
+    }
+}
+
+// The files on their way, over a hairline: `upload<i>` rows, in the order they were asked for. It
+// takes no height, and is not there for the tests, while there are none.
+export component UploadsBar inherits Rectangle {
+    in property <[UploadFileRow]> uploads;
+    callback cancel(int);
+    callback retry(int);
+
+    accessible-id: "composerUploads";
+    accessible-role: groupbox;
+    visible: root.uploads.length > 0;
+    min-height: root.preferred-height;
+    max-height: root.preferred-height;
+    preferred-height: root.uploads.length > 0 ? rows.preferred-height + Theme.separator-width : Theme.spacing-none;
+
+    rows := VerticalLayout {
+        padding-left: Theme.composer-padding-h;
+        padding-right: Theme.composer-padding-h;
+        padding-top: Theme.spacing-l;
+        padding-bottom: Theme.spacing-l + Theme.separator-width;
+        spacing: Theme.spacing-xl;
+
+        for upload[index] in root.uploads: UploadItem {
+            accessible-id: "upload" + index;
+            upload: upload;
+            index: index;
+            cancel => {
+                root.cancel(index);
+            }
+            retry => {
+                root.retry(index);
+            }
+        }
+    }
+
+    Rectangle {
+        y: parent.height - self.height;
+        height: Theme.separator-width;
+        background: Theme.raised-hover;
+    }
+}

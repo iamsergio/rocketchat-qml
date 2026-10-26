@@ -14,6 +14,7 @@
 
 mod message_actions;
 mod thread_pane;
+mod uploads;
 
 use std::cell::RefCell;
 use std::path::PathBuf;
@@ -42,8 +43,10 @@ use crate::rich_markdown::{self, Palette};
 use crate::room_model::RoomModel;
 use crate::room_search_model::RoomSearchModel;
 use crate::rows::tile;
+use crate::staged_model::StagedModel;
 use crate::thread_list_model::ThreadListModel;
 use crate::ui::{self, AccountTile, MainWindow, MessageMenu, Theme};
+use crate::upload_model::UploadModel;
 
 thread_local! {
     // The one app of the GUI thread: set by `start`, taken by `stop`.
@@ -66,6 +69,14 @@ struct App {
     thread_messages: Rc<MessageModel>,
     /// The threads of the open room, the one with the most recent reply first.
     thread_list: Rc<ThreadListModel>,
+    /// The files that wait in the room's composer and in the thread's, and those being uploaded
+    /// into the open room and the open thread.
+    room_staged: Rc<StagedModel>,
+    thread_staged: Rc<StagedModel>,
+    room_uploads: Rc<UploadModel>,
+    thread_uploads: Rc<UploadModel>,
+    /// The file dialog is open: another one is not opened over it.
+    choosing_files: bool,
     /// The emoji of the picker, in rows, with the current account's custom emoji.
     emoji_picker: Rc<EmojiPickerModel>,
     /// The rooms that match the query, while one is typed.
@@ -128,6 +139,14 @@ pub fn start(window: &MainWindow) {
     let emoji_picker = Rc::new(EmojiPickerModel::new(
         usize::try_from(window.get_emoji_columns()).unwrap_or(1),
     ));
+    let room_staged = Rc::new(StagedModel::default());
+    let thread_staged = Rc::new(StagedModel::default());
+    let room_uploads = Rc::new(UploadModel::default());
+    let thread_uploads = Rc::new(UploadModel::default());
+    window.set_staged(ModelRc::from(Rc::clone(&room_staged)));
+    window.set_thread_staged(ModelRc::from(Rc::clone(&thread_staged)));
+    window.set_uploads(ModelRc::from(Rc::clone(&room_uploads)));
+    window.set_thread_uploads(ModelRc::from(Rc::clone(&thread_uploads)));
     window.set_emoji_rows(ModelRc::from(Rc::clone(&emoji_picker)));
     window.set_search_results(ModelRc::from(Rc::clone(&found)));
     window.set_messages(ModelRc::from(Rc::clone(&messages)));
@@ -135,6 +154,7 @@ pub fn start(window: &MainWindow) {
     window.set_thread_list(ModelRc::from(Rc::clone(&thread_list)));
     window.set_prefill_password(dev_login::prefill().password.into());
     connect_commands(window);
+    uploads::accept_drops(window);
 
     APP.with(|app| {
         *app.borrow_mut() = Some(App {
@@ -146,6 +166,11 @@ pub fn start(window: &MainWindow) {
             messages,
             thread_messages,
             thread_list,
+            room_staged,
+            thread_staged,
+            room_uploads,
+            thread_uploads,
+            choosing_files: false,
             emoji_picker,
             found,
             query: String::new(),
@@ -246,6 +271,10 @@ fn connect_commands(window: &MainWindow) {
         App::with(|app| id = app.thread_last_editable());
         id.into()
     });
+    window.on_attach(|thread| App::with(|app| app.attach(thread)));
+    window.on_remove_staged(|thread, row| App::with(|app| app.remove_staged(thread, row)));
+    window.on_cancel_upload(|thread, row| App::with(|app| app.cancel_upload(thread, row)));
+    window.on_retry_upload(|thread, row| App::with(|app| app.retry_upload(thread, row)));
     window.on_open_link(|url| open_link(&url));
     let weak = window.as_weak();
     window.on_dump_info(move || {
@@ -384,19 +413,7 @@ impl App {
                 self.want_emoji_images(names);
                 self.show_counters();
             }
-            Event::CustomEmoji(_) => {
-                // The reactions know their custom emoji now; the files of the ones the core
-                // ignored before are asked for again.
-                let cache = self.switchboard.accounts().current_cache();
-                let viewer = cache.viewer();
-                self.emoji_picker.show(&viewer.emoji, cache.emoji_images());
-                self.set_viewer(viewer);
-                self.want_emoji_images(self.messages.custom_emoji_names());
-                self.want_emoji_images(self.thread_messages.custom_emoji_names());
-                if self.emoji_picker_open() {
-                    self.want_emoji_images(self.emoji_picker.custom_names());
-                }
-            }
+            Event::CustomEmoji(_) => self.show_custom_emoji(),
             Event::EmojiImages(updates) => {
                 let cache = self.switchboard.accounts().current_cache();
                 let changes = cache.emoji_image_changes(&updates);
@@ -404,13 +421,18 @@ impl App {
                 self.thread_messages.set_emoji_images(&changes);
                 self.emoji_picker.set_emoji_images(&changes);
             }
+            Event::Uploads(_) | Event::UploadProgress { .. } => self.show_uploads(),
             Event::TimelineStatus(_) => {
+                self.show_uploads();
                 // The open room may be another: its threads are unread, or not.
                 self.show_thread_unread();
                 self.show_room();
                 self.show_thread();
             }
-            Event::ThreadStatus(_) => self.show_thread(),
+            Event::ThreadStatus(_) => {
+                self.show_uploads();
+                self.show_thread();
+            }
             Event::ThreadList(changes) => {
                 self.thread_list.apply(&changes);
                 self.show_thread_list();
@@ -446,6 +468,20 @@ impl App {
                 self.thread_messages.set_images(&changes);
             }
             _ => {}
+        }
+    }
+
+    /// The reactions know their custom emoji now; the files of the ones the core ignored before are
+    /// asked for again.
+    fn show_custom_emoji(&mut self) {
+        let cache = self.switchboard.accounts().current_cache();
+        let viewer = cache.viewer();
+        self.emoji_picker.show(&viewer.emoji, cache.emoji_images());
+        self.set_viewer(viewer);
+        self.want_emoji_images(self.messages.custom_emoji_names());
+        self.want_emoji_images(self.thread_messages.custom_emoji_names());
+        if self.emoji_picker_open() {
+            self.want_emoji_images(self.emoji_picker.custom_names());
         }
     }
 
@@ -486,6 +522,7 @@ impl App {
         self.show_session(&self.switchboard.accounts().session_view());
         self.show_room();
         self.show_thread();
+        self.show_uploads();
         // The new account has not searched its directory for the text.
         self.search_directory();
         self.refresh_search(true);
@@ -645,6 +682,8 @@ impl App {
         // What failed in one room means nothing in another.
         if window.get_room_id().as_str() != state.room_id {
             window.set_room_action_error(SharedString::default());
+            // As a quote, the files that wait belong to the room they were attached in.
+            self.room_staged.clear();
         }
         window.set_room_id(state.room_id.into());
         window.set_room_name(state.name.into());
