@@ -7,6 +7,8 @@
 
 mod common;
 
+use std::time::Duration;
+
 use rc_gui_tests::GuiError;
 use rc_gui_tests::paths::{main_window, message, message_row, room, room_row};
 
@@ -148,6 +150,52 @@ fn scrolling_to_the_top_loads_older_messages() {
             && gui.exists_and_visible(main_window::HISTORY_START)?)
     })
     .unwrap();
+    assert_eq!(
+        gui.text(&message(oldest, message_row::BODY)).unwrap(),
+        "message 000"
+    );
+}
+
+// MSG-002
+#[test]
+#[ignore = "needs the app and a Rocket.Chat server: run through ctest"]
+fn scrolling_up_with_the_wheel_loads_older_messages() {
+    // Notches per batch and the batches allowed: the wheel runs until the condition holds, so the
+    // window size does not matter, but a broken wheel must not spin forever.
+    const NOTCH: i32 = 120;
+    const STEPS: u32 = 10;
+    const STEP_INTERVAL: Duration = Duration::from_millis(20);
+    const MAX_BATCHES: usize = 60;
+
+    let admin = Admin::login();
+    let user = admin.create_user();
+    let total = TOTAL;
+    let texts: Vec<String> = (0..total).map(|n| format!("message {n:03}")).collect();
+    let (channel_id, posted) = channel_with_messages(&admin, &user, &texts);
+    let (oldest, newest) = (&posted[0].id, &posted[total - 1].id);
+    let app = launch();
+    let gui = app.gui();
+    log_in_and_wait_for_room(gui, &user, &channel_id);
+
+    open_room(gui, &channel_id);
+
+    gui.wait_until_visible(&message(newest, message_row::BODY), TIMEOUT)
+        .unwrap();
+    assert!(gui.count(main_window::MESSAGE_LIST).unwrap() < total);
+    assert!(!gui.exists_and_visible(main_window::HISTORY_START).unwrap());
+
+    let at_the_start = || -> Result<bool, GuiError> {
+        Ok(gui.count(main_window::MESSAGE_LIST)? == total
+            && gui.exists_and_visible(&message(oldest, message_row::BODY))?
+            && gui.exists_and_visible(main_window::HISTORY_START)?)
+    };
+    let mut batches = 0;
+    while !at_the_start().unwrap() {
+        assert!(batches < MAX_BATCHES, "the wheel did not reach the start");
+        gui.mouse_wheel(main_window::MESSAGE_LIST, 0, NOTCH, STEPS, STEP_INTERVAL)
+            .unwrap();
+        batches += 1;
+    }
     assert_eq!(
         gui.text(&message(oldest, message_row::BODY)).unwrap(),
         "message 000"
