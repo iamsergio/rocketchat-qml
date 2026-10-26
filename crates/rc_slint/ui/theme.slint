@@ -202,6 +202,17 @@ export global Theme {
     out property <length> search-clear-icon-size: 12px;
     out property <length> search-hint-padding-h: 6px;
     out property <length> search-hint-padding-v: 1px;
+    // The groups of the search results (channels, people, your rooms): the label over each is this
+    // tall with its text at the bottom, this far from the bottom edge, in widely spaced capitals.
+    out property <length> directory-label-height: 26px;
+    out property <length> directory-label-padding-bottom: spacing-s;
+    out property <length> directory-label-letter-spacing: 0.6px;
+    // The "N more, keep typing" line under a group.
+    out property <length> directory-more-height: 22px;
+    // The space between the name of a person and their username.
+    out property <length> directory-name-gap: spacing-m;
+    // The spinner in the row that says the directory is being searched.
+    out property <length> directory-busy-indicator-size: 20px;
     // A heading of the room list: its text and the space around it.
     out property <length> room-section-height: 29px;
     // The space each side of the server's name at the top of the sidebar.

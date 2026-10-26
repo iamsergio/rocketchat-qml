@@ -11,11 +11,11 @@ import { LoginPage } from "login_page.slint";
 import { RoomPage } from "room_page.slint";
 import { ServerRail } from "server_rail.slint";
 import { StartupPage } from "startup_page.slint";
-import { AccountTile, EmojiCell, LoginMode, MessageMenu, MessageRow, RoomRow, RoomSection, SessionStatus, ThreadPaneState, ThreadRow } from "structs.slint";
+import { AccountTile, EmojiCell, LoginMode, MessageMenu, MessageRow, RoomRow, RoomSection, SearchKind, SearchRow, SessionStatus, ThreadPaneState, ThreadRow } from "structs.slint";
 import { Theme } from "theme.slint";
 
 // The theme, for Rust: the colours it writes into rich text.
-export { AccountTile, EmojiCell, LoginMode, MessageRow, RoomRow, RoomSection, SessionStatus, Theme, ThreadPaneState, ThreadRow }
+export { AccountTile, EmojiCell, LoginMode, MessageRow, RoomRow, RoomSection, SearchKind, SearchRow, SessionStatus, Theme, ThreadPaneState, ThreadRow }
 
 export component MainWindow inherits Window {
     // The version of the app, set from Rust (`rc_core::VERSION`).
@@ -73,8 +73,20 @@ export component MainWindow inherits Window {
     // set.
     in property <bool> search-active;
     in property <string> search-trimmed;
-    in property <[RoomRow]> search-results;
+    in property <[SearchRow]> search-results;
     in property <int> search-generation;
+    in property <int> search-cursor;
+    // The directory's rows: the cursor moves, a row is acted on (says whether it was), the
+    // directory is searched again.
+    callback search-cursor-up();
+    callback search-cursor-down();
+    callback open-search-row(int) -> bool;
+    callback retry-search();
+    // The open room is a channel previewed without being in it, joining is under way, and the user
+    // asked to join.
+    in property <bool> room-preview;
+    in property <bool> room-joining;
+    callback join-room();
     // The text of the search field changed.
     callback search(string);
     callback open-room(string);
@@ -216,6 +228,9 @@ export component MainWindow inherits Window {
             search-trimmed: root.search-trimmed;
             search-results: root.search-results;
             search-generation: root.search-generation;
+            search-cursor: root.search-cursor;
+            room-preview: root.room-preview;
+            room-joining: root.room-joining;
             messages: root.messages;
             reached-start: root.reached-start;
             loading-older: root.loading-older;
@@ -226,6 +241,21 @@ export component MainWindow inherits Window {
             }
             open-room(id) => {
                 root.open-room(id);
+            }
+            search-cursor-up => {
+                root.search-cursor-up();
+            }
+            search-cursor-down => {
+                root.search-cursor-down();
+            }
+            open-search-row(index) => {
+                return root.open-search-row(index);
+            }
+            retry-search => {
+                root.retry-search();
+            }
+            join-room => {
+                root.join-room();
             }
             set-favorite(id, favorite) => {
                 root.set-favorite(id, favorite);

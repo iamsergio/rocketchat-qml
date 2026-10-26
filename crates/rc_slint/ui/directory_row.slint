@@ -1,0 +1,241 @@
+// SPDX-FileCopyrightText: 2026 Sergio Martins
+// SPDX-License-Identifier: MIT
+
+import { Avatar } from "avatar.slint";
+import { BusyIndicator } from "busy_indicator.slint";
+import { SearchKind, SearchRow } from "structs.slint";
+import { Theme } from "theme.slint";
+
+// A person or a channel the server's directory found, in the room search. It looks like a room's
+// row, and says at its right what a click does while the pointer or the keyboard cursor is on it.
+// Named by username for a person and by room id for a channel: names aren't unique.
+export component DirectoryRow inherits Rectangle {
+    in property <SearchRow> found;
+    // Whether the keyboard cursor is on the row: it looks like the pointer over it.
+    in property <bool> cursor;
+    callback clicked();
+
+    property <bool> person: root.found.kind == SearchKind.person;
+    // The pointer or the cursor is on the row, and nothing is under way to hide it.
+    property <bool> pointed: (touch.has-hover || root.cursor) && !root.found.busy;
+
+    accessible-id: root.person ? "directoryPerson_" + root.found.username : "directoryChannel_" + root.found.room.id;
+    accessible-role: button;
+    accessible-label: root.found.room.name;
+    accessible-action-default => {
+        root.clicked();
+    }
+
+    height: Theme.room-row-height;
+
+    // The row is as wide as the list; the background floats inside.
+    Rectangle {
+        x: Theme.room-row-inset;
+        width: parent.width - 2 * Theme.room-row-inset;
+        background: touch.has-hover || root.cursor ? Theme.surface : Theme.transparent;
+        border-radius: Theme.radius-control;
+    }
+
+    HorizontalLayout {
+        padding-left: Theme.room-row-inset + Theme.row-padding-h;
+        padding-right: Theme.room-row-inset + Theme.row-padding-h;
+        padding-top: Theme.spacing-none;
+        padding-bottom: Theme.spacing-none;
+        spacing: Theme.room-row-spacing;
+
+        VerticalLayout {
+            alignment: center;
+            width: Theme.room-avatar-size;
+            padding: Theme.spacing-none;
+            spacing: Theme.spacing-none;
+
+            Avatar {
+                width: Theme.room-avatar-size;
+                height: Theme.room-avatar-size;
+                source: root.found.room.avatar;
+                has-image: root.found.room.has-avatar;
+                url: root.found.room.avatar-url;
+                initials: root.found.room.initials;
+                fill-color: root.found.room.initials-color;
+                image-name: "roomAvatar";
+                placeholder-name: "roomAvatarPlaceholder";
+                initials-name: "roomAvatarInitials";
+            }
+        }
+
+        // The name and, faint after it, the username of a person whose name is another; elided
+        // together.
+        HorizontalLayout {
+            horizontal-stretch: 1;
+            padding: Theme.spacing-none;
+            spacing: Theme.directory-name-gap;
+
+            Text {
+                accessible-id: "directoryName";
+                color: Theme.text-muted;
+                overflow: elide;
+                vertical-alignment: center;
+                text: root.found.room.name;
+            }
+
+            if root.person && root.found.username != root.found.room.name: Text {
+                accessible-id: "directoryUsername";
+                horizontal-stretch: 1;
+                color: Theme.text-faint;
+                font-size: Theme.font-size-tiny;
+                overflow: elide;
+                vertical-alignment: center;
+                text: root.found.username;
+            }
+        }
+
+        // What a click does.
+        if root.pointed: Text {
+            accessible-id: "directoryHint";
+            color: Theme.own;
+            font-size: Theme.font-size-tiny;
+            font-weight: Theme.font-weight-semibold;
+            vertical-alignment: center;
+            text: root.person ? @tr("Message") : @tr("View");
+        }
+
+        if !root.person && !root.pointed && !root.found.busy: Text {
+            accessible-id: "directoryMembers";
+            color: Theme.text-faint;
+            font-size: Theme.font-size-tiny;
+            vertical-alignment: center;
+            text: root.found.members == 1 ? @tr("1 member") : @tr("{} members", root.found.members);
+        }
+
+        // Until the server has answered; the row can't be acted on again meanwhile.
+        if root.found.busy: Text {
+            accessible-id: "directoryBusy";
+            color: Theme.text-muted;
+            font-size: Theme.font-size-tiny;
+            vertical-alignment: center;
+            text: @tr("Opening…");
+        }
+    }
+
+    touch := TouchArea {
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+
+// The label over a group of the search results: "Channels", "People" or "Your rooms". Slint has no
+// text transform, so the capitals are made here, and the accessible label keeps the words.
+export component DirectoryLabel inherits Rectangle {
+    // `channels`, `people` or `rooms`.
+    in property <string> group;
+
+    property <string> words: root.group == "channels" ? @tr("Channels") : root.group == "people" ? @tr("People") : @tr("Your rooms");
+
+    height: Theme.directory-label-height;
+
+    Text {
+        accessible-id: "directoryGroup_" + root.group;
+        accessible-label: root.words;
+        x: Theme.room-row-inset + Theme.row-padding-h;
+        y: parent.height - self.height - Theme.directory-label-padding-bottom;
+        color: Theme.text-faint;
+        font-size: Theme.font-size-tiny;
+        font-weight: Theme.font-weight-semibold;
+        letter-spacing: Theme.directory-label-letter-spacing;
+        text: root.words.to-uppercase();
+    }
+}
+
+// A row of the search results that is not a room, a person or a channel: that the directory is
+// being searched, that it could not be, or that a group has more than it shows.
+export component DirectoryNote inherits Rectangle {
+    in property <SearchRow> found;
+    // Searches the directory again, after it failed.
+    callback retry();
+
+    height: root.found.kind == SearchKind.more ? Theme.directory-more-height : Theme.room-row-height;
+
+    if root.found.kind == SearchKind.searching: HorizontalLayout {
+        padding-left: Theme.room-row-inset + Theme.row-padding-h;
+        padding-right: Theme.room-row-inset + Theme.row-padding-h;
+        padding-top: Theme.spacing-none;
+        padding-bottom: Theme.spacing-none;
+        spacing: Theme.room-row-spacing;
+
+        VerticalLayout {
+            alignment: center;
+            width: Theme.directory-busy-indicator-size;
+            padding: Theme.spacing-none;
+            spacing: Theme.spacing-none;
+
+            BusyIndicator {
+                width: Theme.directory-busy-indicator-size;
+                height: Theme.directory-busy-indicator-size;
+            }
+        }
+
+        Text {
+            accessible-id: "directorySearching";
+            horizontal-stretch: 1;
+            color: Theme.text-faint;
+            font-size: Theme.font-size-small;
+            overflow: elide;
+            vertical-alignment: center;
+            text: @tr("Searching the directory…");
+        }
+    }
+
+    if root.found.kind == SearchKind.failed: HorizontalLayout {
+        padding-left: Theme.room-row-inset + Theme.row-padding-h;
+        padding-right: Theme.room-row-inset + Theme.row-padding-h;
+        padding-top: Theme.spacing-none;
+        padding-bottom: Theme.spacing-none;
+        spacing: Theme.room-row-spacing;
+
+        Text {
+            accessible-id: "directoryError";
+            horizontal-stretch: 1;
+            color: Theme.error;
+            font-size: Theme.font-size-small;
+            overflow: elide;
+            vertical-alignment: center;
+            text: root.found.text;
+        }
+
+        Rectangle {
+            accessible-id: "directoryRetry";
+            accessible-role: button;
+            accessible-label: retry-label.text;
+            accessible-action-default => {
+                root.retry();
+            }
+            width: retry-label.preferred-width;
+
+            retry-label := Text {
+                color: retry-touch.has-hover ? Theme.own.brighter(Theme.hover-brighter) : Theme.own;
+                font-size: Theme.font-size-small;
+                font-weight: Theme.font-weight-semibold;
+                vertical-alignment: center;
+                text: @tr("Retry");
+            }
+
+            retry-touch := TouchArea {
+                clicked => {
+                    root.retry();
+                }
+            }
+        }
+    }
+
+    if root.found.kind == SearchKind.more: Text {
+        accessible-id: "directoryMore_" + root.found.group;
+        x: Theme.room-row-inset + Theme.room-name-inset;
+        width: parent.width - self.x - Theme.room-row-inset - Theme.row-padding-h;
+        y: (parent.height - self.height) / 2;
+        color: Theme.text-faint;
+        font-size: Theme.font-size-tiny;
+        overflow: elide;
+        text: @tr("{} more, keep typing", root.found.count);
+    }
+}
