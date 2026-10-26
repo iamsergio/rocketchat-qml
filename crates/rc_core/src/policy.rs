@@ -289,6 +289,7 @@ mod tests {
             edit_minutes: 10,
             deleting_allowed: false,
             delete_minutes: 0,
+            ..rc_api::MessageSettings::default()
         };
         assert_eq!(
             MessagePolicy::from(settings),

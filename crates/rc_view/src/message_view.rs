@@ -356,6 +356,7 @@ mod tests {
             edit_minutes: 5,
             deleting_allowed: false,
             delete_minutes: 0,
+            ..rc_api::MessageSettings::default()
         });
         let viewer = editor(policy);
         assert!(can_edit(&own, &viewer, at("2026-10-20T10:05:00Z")));

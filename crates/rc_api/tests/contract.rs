@@ -17,7 +17,7 @@ use rc_api::{
     ServerVersion, Subscription, ThreadsKind, User,
 };
 use rc_test_server::{
-    Admin, PIXEL_PNG, Posted, TestUser, Typist, server_url, status_without_login, unique,
+    Admin, PIXEL_PNG, Posted, TestUser, Typist, server_url, status_without_login, temp_file, unique,
 };
 use secrecy::{ExposeSecret, SecretString};
 
@@ -1861,8 +1861,15 @@ async fn message_settings_are_the_servers_with_editing_and_deleting_allowed_with
 
     let settings = session.message_settings().await.unwrap();
 
-    // The test server keeps the defaults for these settings.
-    assert_eq!(settings, rc_api::MessageSettings::default());
+    // The test server keeps the defaults for the message settings, and takes uploads of up to 100
+    // MiB.
+    assert_eq!(
+        settings,
+        rc_api::MessageSettings {
+            upload_max_bytes: Some(104_857_600),
+            ..rc_api::MessageSettings::default()
+        }
+    );
 }
 
 // ACT-005
@@ -3017,4 +3024,142 @@ async fn typing_in_a_public_channel_reaches_a_user_who_is_not_in_it() {
         thread_id: None,
     };
     assert_eq!(event_where(&mut events, |e| *e == expected).await, expected);
+}
+
+// ACT-009
+#[tokio::test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+async fn a_text_file_and_a_png_go_through_both_steps_and_come_back_as_attachments() {
+    let fixture = Fixture::new();
+    let (room_id, _) = fixture.create_channel();
+    let session = fixture.client.session(fixture.login().await.credentials);
+    let notes = temp_file("local-name.txt", b"hello\n");
+    let pixel = temp_file("pixel.png", &PIXEL_PNG);
+
+    let notes_id = session
+        .upload_file(&room_id, &notes, "notes.txt", |_| {})
+        .await
+        .unwrap();
+    let pixel_id = session
+        .upload_file(&room_id, &pixel, "pixel.png", |_| {})
+        .await
+        .unwrap();
+    let text = session
+        .confirm_upload(&room_id, &notes_id, "my notes", None)
+        .await
+        .unwrap();
+    let image = session
+        .confirm_upload(&room_id, &pixel_id, "", None)
+        .await
+        .unwrap();
+
+    assert_eq!(text.text, "my notes");
+    assert_eq!(text.author.id, fixture.user.id);
+    assert_eq!(text.attachments.len(), 1);
+    let attachment = &text.attachments[0];
+    assert_eq!(attachment.title, "notes.txt");
+    assert!(
+        attachment.link.starts_with("/file-upload/"),
+        "{attachment:?}"
+    );
+    assert_eq!(attachment.size, Some(6));
+    assert_eq!(attachment.image, None);
+    assert_eq!(
+        session.file(&attachment.link).await.unwrap().bytes,
+        b"hello\n"
+    );
+    // Sent as application/octet-stream, the PNG is still found to be one.
+    let attachment = &image.attachments[0];
+    assert_eq!(attachment.title, "pixel.png");
+    let picture = attachment.image.as_ref().unwrap();
+    assert_eq!(picture.content_type.as_deref(), Some("image/png"));
+    assert_eq!(picture.dimensions, Some((1, 1)));
+    let history = channel_history(&session, &room_id).await;
+    assert!(history.iter().any(|m| m.id == text.id));
+    assert!(history.iter().any(|m| m.id == image.id));
+}
+
+// ACT-009
+#[tokio::test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+async fn the_progress_of_an_upload_reaches_the_length_of_the_file() {
+    let fixture = Fixture::new();
+    let (room_id, _) = fixture.create_channel();
+    let session = fixture.client.session(fixture.login().await.credentials);
+    let bytes = vec![b'x'; 300_000];
+    let big = temp_file("big.txt", &bytes);
+    let sent = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let seen = std::sync::Arc::clone(&sent);
+
+    session
+        .upload_file(&room_id, &big, "big.txt", move |n| {
+            seen.lock().unwrap().push(n);
+        })
+        .await
+        .unwrap();
+
+    let sent = sent.lock().unwrap();
+    assert_eq!(sent.last(), Some(&300_000));
+    assert!(sent.len() > 1);
+}
+
+// ACT-009
+#[tokio::test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+async fn an_upload_confirmed_in_a_thread_is_a_reply_and_a_second_confirm_gives_the_same_message() {
+    let fixture = Fixture::new();
+    let (room_id, _) = fixture.create_channel();
+    let session = fixture.client.session(fixture.login().await.credentials);
+    let parent = fixture.admin.post_message(&room_id, "parent");
+    let file = temp_file("t.txt", b"in a thread");
+    let file_id = session
+        .upload_file(&room_id, &file, "t.txt", |_| {})
+        .await
+        .unwrap();
+
+    let first = session
+        .confirm_upload(&room_id, &file_id, "", Some(&parent.id))
+        .await
+        .unwrap();
+    let again = session
+        .confirm_upload(&room_id, &file_id, "", Some(&parent.id))
+        .await
+        .unwrap();
+
+    assert_eq!(first.thread_id.as_deref(), Some(parent.id.as_str()));
+    assert!(!first.thread_shown);
+    assert_eq!(first.attachments[0].title, "t.txt");
+    assert_eq!(again.id, first.id);
+}
+
+// ACT-009
+#[tokio::test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+async fn the_server_refuses_a_blacklisted_type_an_unknown_file_and_a_room_the_user_is_not_in() {
+    let fixture = Fixture::new();
+    let (room_id, _) = fixture.create_channel();
+    let other = fixture.admin.create_group(&[]).0;
+    let session = fixture.client.session(fixture.login().await.credentials);
+    let svg = temp_file("a.svg", b"<svg xmlns=\"http://www.w3.org/2000/svg\"/>");
+    let text = temp_file("a.txt", b"a");
+
+    let blacklisted = session.upload_file(&room_id, &svg, "a.svg", |_| {}).await;
+    let unknown = session
+        .confirm_upload(&room_id, "nosuchfile", "", None)
+        .await;
+    let outsider = session.upload_file(&other, &text, "a.txt", |_| {}).await;
+
+    assert!(
+        matches!(&blacklisted, Err(Error::Server { status: 400, message })
+            if message.contains("File type is not accepted")),
+        "{blacklisted:?}"
+    );
+    assert!(
+        matches!(&unknown, Err(Error::Server { message, .. }) if message.contains("invalid-file")),
+        "{unknown:?}"
+    );
+    assert!(
+        matches!(&outsider, Err(Error::Server { message, .. }) if message == "unauthorized"),
+        "{outsider:?}"
+    );
 }

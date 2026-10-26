@@ -90,7 +90,7 @@ fn open_thread_with(fake: &Fake, harness: &Harness, replies: Vec<Message>, reach
 
 /// Room 1 is open and so is the thread of `b`, whose replies are `r1` and `r2`; its events are
 /// taken.
-fn open_thread_of_b(fake: &Fake, harness: &Harness) {
+pub(super) fn open_thread_of_b(fake: &Fake, harness: &Harness) {
     open_first_room(fake, harness, false);
     open_thread_with(
         fake,

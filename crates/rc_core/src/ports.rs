@@ -5,7 +5,7 @@
 //! implement them for real I/O and tests implement them with fakes.
 
 use std::future::Future;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::pin::Pin;
 
 use rc_api::ServerVersion;
@@ -35,6 +35,9 @@ pub enum ApiError {
     Server { status: u16, message: String },
     #[error("unexpected answer from the server: {0}")]
     Unexpected(String),
+    /// A file to upload can't be read.
+    #[error("can't read the file: {0}")]
+    File(String),
 }
 
 /// Opens a [`ServerApi`] for a URL. Sync: it only validates and builds, no I/O.
@@ -167,6 +170,42 @@ pub trait ServerApi: Clone + Send + Sync + 'static {
         id: &MessageId,
         text: &str,
         thread: Option<&ThreadTarget>,
+    ) -> impl Future<Output = Result<Message, ApiError>> + Send;
+
+    /// Hands the file at `path` to the server as `name`, for `room`; it is not a message until
+    /// [`confirm_upload`](Self::confirm_upload) posts it. Returns the server's id of the file.
+    /// `progress` is told how many bytes have gone, as it grows, from the task that uploads.
+    ///
+    /// # Errors
+    ///
+    /// [`ApiError::Unauthorized`] if the credentials have expired or were revoked,
+    /// [`ApiError::File`] if the file can't be read, [`ApiError::Server`] if the server refuses
+    /// the file.
+    fn upload_file(
+        &self,
+        credentials: &Credentials,
+        room: &RoomId,
+        path: &Path,
+        name: &str,
+        progress: impl Fn(u64) + Send + Sync + 'static,
+    ) -> impl Future<Output = Result<String, ApiError>> + Send;
+
+    /// Posts an uploaded file as a message with `text` (may be empty), in the thread of `thread`
+    /// if there is one, never also in the room. The server picks the message's id. The file
+    /// confirmed again answers with the same message, so a caller that doesn't know whether the
+    /// first attempt arrived may confirm again.
+    ///
+    /// # Errors
+    ///
+    /// [`ApiError::Unauthorized`] if the credentials have expired or were revoked,
+    /// [`ApiError::Server`] if the server refuses (it doesn't know the file...).
+    fn confirm_upload(
+        &self,
+        credentials: &Credentials,
+        room: &RoomId,
+        file: &str,
+        text: &str,
+        thread: Option<&MessageId>,
     ) -> impl Future<Output = Result<Message, ApiError>> + Send;
 
     /// A page of the replies of a thread: the newest ones after skipping the `offset` newest, at

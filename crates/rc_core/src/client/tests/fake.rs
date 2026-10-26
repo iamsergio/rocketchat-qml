@@ -62,6 +62,15 @@ pub(super) struct SendScript {
     pub(super) result: Result<i64, ApiError>,
 }
 
+pub(super) struct UploadScript {
+    /// Holds the upload until the test notifies it, after the progress was reported.
+    pub(super) gate: Option<Arc<Notify>>,
+    /// What the upload reports as sent, in order, before it ends.
+    pub(super) progress: Vec<u64>,
+    /// The server's id of the file, or why it refused.
+    pub(super) result: Result<String, ApiError>,
+}
+
 pub(super) struct DeleteScript {
     /// Holds the deletion until the test notifies it.
     pub(super) gate: Option<Arc<Notify>>,
@@ -103,6 +112,44 @@ pub(super) struct SendCall {
     pub(super) id: String,
     pub(super) text: String,
     pub(super) thread: Option<ThreadTarget>,
+}
+
+/// The message the server makes of the file `file` confirmed with `text`, stored at `secs`.
+pub(super) fn uploaded_message(
+    room: &str,
+    file: &str,
+    text: &str,
+    secs: i64,
+    thread: Option<&MessageId>,
+) -> Message {
+    Message {
+        thread_id: thread.cloned(),
+        attachments: vec![Attachment {
+            title: file.to_owned(),
+            link: format!("/file-upload/{file}/{file}"),
+            description: None,
+            size: Some(1),
+            image: None,
+        }],
+        ..server_copy(room, &format!("msg-{file}"), text, secs)
+    }
+}
+
+/// What `upload_file` was asked.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct UploadCall {
+    pub(super) room: String,
+    pub(super) path: PathBuf,
+    pub(super) name: String,
+}
+
+/// What `confirm_upload` was asked.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct ConfirmCall {
+    pub(super) room: String,
+    pub(super) file: String,
+    pub(super) text: String,
+    pub(super) thread: Option<String>,
 }
 
 /// What `edit_message` was asked.
@@ -226,6 +273,17 @@ pub(super) struct FakeState {
     pub(super) send_calls: Vec<SendCall>,
     /// Sends that got past their gate.
     pub(super) sends_returned: usize,
+    /// One per upload of a file; a file named `file<n>` once they run out.
+    pub(super) uploads: VecDeque<UploadScript>,
+    pub(super) upload_calls: Vec<UploadCall>,
+    /// Uploads that got past their gate.
+    pub(super) uploads_returned: usize,
+    /// One per confirmation, with the server's time of the stored message as for the sends; stored
+    /// at second 1000 once they run out. The message is `msg-<file>`, with an attachment.
+    pub(super) confirms: VecDeque<SendScript>,
+    pub(super) confirm_calls: Vec<ConfirmCall>,
+    /// Confirmations that got past their gate.
+    pub(super) confirms_returned: usize,
     /// What `site_url` answers: the server has none if unset.
     pub(super) site_url: Option<Result<Option<String>, ApiError>>,
     /// What `message_settings` answers: the defaults if unset.
@@ -511,6 +569,43 @@ impl Fake {
 
     pub(super) fn script_send(&self, gate: Option<Arc<Notify>>, result: Result<i64, ApiError>) {
         self.state().sends.push_back(SendScript { gate, result });
+    }
+
+    pub(super) fn script_upload(
+        &self,
+        gate: Option<Arc<Notify>>,
+        progress: Vec<u64>,
+        result: Result<&str, ApiError>,
+    ) {
+        self.state().uploads.push_back(UploadScript {
+            gate,
+            progress,
+            result: result.map(str::to_owned),
+        });
+    }
+
+    pub(super) fn script_confirm(&self, gate: Option<Arc<Notify>>, result: Result<i64, ApiError>) {
+        self.state().confirms.push_back(SendScript { gate, result });
+    }
+
+    /// The upload tasks have started and are inside `upload_file`.
+    pub(super) fn wait_for_upload_calls(&self, count: usize) -> Vec<UploadCall> {
+        wait_until(|| {
+            let calls = self.state().upload_calls.clone();
+            (calls.len() >= count).then_some(calls)
+        })
+    }
+
+    pub(super) fn wait_for_confirm_calls(&self, count: usize) -> Vec<ConfirmCall> {
+        wait_until(|| {
+            let calls = self.state().confirm_calls.clone();
+            (calls.len() >= count).then_some(calls)
+        })
+    }
+
+    pub(super) fn wait_for_confirms_returned(&self, count: usize) {
+        wait_until(|| (self.state().confirms_returned >= count).then_some(()));
+        std::thread::sleep(Duration::from_millis(20));
     }
 
     pub(super) fn script_edit(&self, gate: Option<Arc<Notify>>, result: Result<i64, ApiError>) {
@@ -1118,6 +1213,64 @@ impl ServerApi for Fake {
             thread_shown: thread.is_some_and(|target| target.also_to_channel),
             ..stored
         })
+    }
+
+    async fn upload_file(
+        &self,
+        _credentials: &Credentials,
+        room: &RoomId,
+        path: &Path,
+        name: &str,
+        progress: impl Fn(u64) + Send + Sync + 'static,
+    ) -> Result<String, ApiError> {
+        let script = {
+            let mut state = self.state();
+            state.upload_calls.push(UploadCall {
+                room: room.to_string(),
+                path: path.to_path_buf(),
+                name: name.to_owned(),
+            });
+            let number = state.upload_calls.len();
+            state.uploads.pop_front().unwrap_or(UploadScript {
+                gate: None,
+                progress: Vec::new(),
+                result: Ok(format!("file{number}")),
+            })
+        };
+        for sent in script.progress {
+            progress(sent);
+        }
+        if let Some(gate) = script.gate {
+            gate.notified().await;
+        }
+        self.state().uploads_returned += 1;
+        script.result
+    }
+
+    async fn confirm_upload(
+        &self,
+        _credentials: &Credentials,
+        room: &RoomId,
+        file: &str,
+        text: &str,
+        thread: Option<&MessageId>,
+    ) -> Result<Message, ApiError> {
+        let script = {
+            let mut state = self.state();
+            state.confirm_calls.push(ConfirmCall {
+                room: room.to_string(),
+                file: file.to_owned(),
+                text: text.to_owned(),
+                thread: thread.map(ToString::to_string),
+            });
+            state.confirms.pop_front()
+        };
+        let (gate, result) = script.map_or((None, Ok(1_000)), |s| (s.gate, s.result));
+        if let Some(gate) = gate {
+            gate.notified().await;
+        }
+        self.state().confirms_returned += 1;
+        Ok(uploaded_message(room.as_str(), file, text, result?, thread))
     }
 
     async fn edit_message(

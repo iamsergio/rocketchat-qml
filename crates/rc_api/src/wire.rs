@@ -663,8 +663,8 @@ pub(crate) fn parse_custom_emoji(bytes: &[u8]) -> Result<Vec<CustomEmoji>, serde
         .collect())
 }
 
-/// The answer of `settings.public` for the message settings. What is missing or not a boolean
-/// (a number of minutes) keeps its default.
+/// The answer of `settings.public` for the message and upload settings. What is missing or not a
+/// boolean (a number of minutes) keeps its default.
 pub(crate) fn parse_message_settings(bytes: &[u8]) -> Result<MessageSettings, serde_json::Error> {
     let body: SettingsBody = serde_json::from_slice(bytes)?;
     let mut settings = MessageSettings::default();
@@ -683,6 +683,11 @@ pub(crate) fn parse_message_settings(bytes: &[u8]) -> Result<MessageSettings, se
             "Message_AllowDeleting_BlockDeleteInMinutes" => {
                 settings.delete_minutes = minutes().unwrap_or(0);
             }
+            "FileUpload_Enabled" => {
+                settings.uploads_enabled = entry.value.as_bool().unwrap_or(true);
+            }
+            // A negative number (-1) is no limit, and so is one that isn't a number.
+            "FileUpload_MaxFileSize" => settings.upload_max_bytes = entry.value.as_u64(),
             _ => {}
         }
     }
@@ -840,6 +845,22 @@ pub(crate) fn parse_changes(bytes: &[u8]) -> Result<MessageChanges, serde_json::
 /// The answer of `chat.sendMessage` and `chat.getMessage`: the message as the server stored it.
 pub(crate) fn parse_message(bytes: &[u8]) -> Result<Message, serde_json::Error> {
     Ok(serde_json::from_slice::<SentBody>(bytes)?.message.into())
+}
+
+#[derive(Deserialize)]
+struct UploadedBody {
+    file: UploadedFile,
+}
+
+#[derive(Deserialize)]
+struct UploadedFile {
+    #[serde(rename = "_id")]
+    id: String,
+}
+
+/// The answer of `rooms.media`: the id of the file the server holds, for `rooms.mediaConfirm`.
+pub(crate) fn parse_uploaded(bytes: &[u8]) -> Result<String, serde_json::Error> {
+    Ok(serde_json::from_slice::<UploadedBody>(bytes)?.file.id)
 }
 
 /// The event in the `fields` of a `changed` frame of `collection`. `None` for the streams and
@@ -1187,6 +1208,13 @@ mod tests {
         assert!(parse_custom_emoji(body).unwrap().is_empty());
     }
 
+    // ACT-009
+    #[test]
+    fn the_id_of_an_uploaded_file_is_read() {
+        let body = br#"{"file":{"_id":"6adf","url":"/file-upload/6adf/a.txt"},"success":true}"#;
+        assert_eq!(parse_uploaded(body).unwrap(), "6adf");
+    }
+
     // ACT-001, ACT-002
     #[test]
     fn reads_the_message_settings_of_the_server() {
@@ -1195,6 +1223,8 @@ mod tests {
             {"_id":"Message_AllowDeleting_BlockDeleteInMinutes","value":15},
             {"_id":"Message_AllowEditing","value":true},
             {"_id":"Message_AllowEditing_BlockEditInMinutes","value":5},
+            {"_id":"FileUpload_Enabled","value":false},
+            {"_id":"FileUpload_MaxFileSize","value":104857600},
             {"_id":"Something_Else","value":7}],"success":true}"#;
         assert_eq!(
             parse_message_settings(body).unwrap(),
@@ -1203,8 +1233,17 @@ mod tests {
                 edit_minutes: 5,
                 deleting_allowed: false,
                 delete_minutes: 15,
+                uploads_enabled: false,
+                upload_max_bytes: Some(104_857_600),
             }
         );
+    }
+
+    // ACT-009
+    #[test]
+    fn a_negative_upload_limit_is_no_limit() {
+        let body = br#"{"settings":[{"_id":"FileUpload_MaxFileSize","value":-1}],"success":true}"#;
+        assert_eq!(parse_message_settings(body).unwrap().upload_max_bytes, None);
     }
 
     // ACT-001, ACT-002

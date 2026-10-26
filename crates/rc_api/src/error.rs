@@ -24,6 +24,9 @@ pub enum Error {
     /// A kind of room that has no history call, e.g. livechat.
     #[error("rooms of type {0:?} have no history")]
     UnsupportedRoomType(String),
+    /// A file to upload can't be opened or read.
+    #[error("can't read the file")]
+    File(#[source] std::io::Error),
     #[error("unexpected answer from the server")]
     Decode(#[source] serde_json::Error),
     /// The realtime connection couldn't be opened, or broke. Not answering in time is an

@@ -3173,3 +3173,66 @@ fn a_channel_is_previewed_with_its_live_messages_and_then_joined() {
         None
     });
 }
+
+// ACT-009
+#[test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+fn a_file_uploaded_into_a_room_ends_as_one_message_with_that_attachment() {
+    let admin = Admin::login();
+    let user = admin.create_user();
+    let (room, _) = admin.create_channel(&[&user.username]);
+    let (client, events) = logged_in(&user);
+    client.account().open_room(room.clone().into());
+    let mut mirror = Vec::new();
+    settle(&events, &mut mirror);
+    let path = rc_test_server::temp_file("notes.txt", b"hello\n");
+
+    client
+        .account()
+        .upload_file(room.clone().into(), path, "my notes", None);
+
+    // The upload is listed, then goes with its message in the same turn.
+    let mut listed = false;
+    let mut gone = false;
+    wait_for(&events, |event| {
+        match event {
+            Event::Timeline(changes) => {
+                for change in changes {
+                    change.apply(&mut mirror);
+                }
+            }
+            Event::Uploads(uploads) if uploads.is_empty() => gone = true,
+            Event::Uploads(uploads) => {
+                assert_eq!(uploads[0].name, "notes.txt");
+                assert_eq!(uploads[0].size, 6);
+                listed = true;
+            }
+            _ => {}
+        }
+        gone.then_some(())
+    });
+    assert!(listed);
+    // The realtime echo has the time to come, and must not add a second one.
+    let until = Instant::now() + Duration::from_secs(2);
+    while let Some(left) = until.checked_duration_since(Instant::now()) {
+        if let Ok(Event::Timeline(changes)) = events.recv_timeout(left) {
+            for change in &changes {
+                change.apply(&mut mirror);
+            }
+        }
+    }
+    let uploaded: Vec<_> = mirror
+        .iter()
+        .filter(|m| !m.attachments.is_empty())
+        .collect();
+    let [message] = uploaded.as_slice() else {
+        panic!("not one message with an attachment: {mirror:?}");
+    };
+    assert_eq!(message.attachments[0].title, "notes.txt");
+    assert_eq!(message.attachments[0].size, Some(6));
+    assert_eq!(message.delivery, Delivery::Sent);
+    assert_eq!(message.author.username, user.username);
+    assert_eq!(texts(&mirror).last(), Some(&"my notes"));
+    assert_eq!(admin.last_message(&room).id, message.id.as_str());
+    drop(client);
+}

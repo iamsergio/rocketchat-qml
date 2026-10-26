@@ -3,6 +3,7 @@
 
 //! The handle frontends drive the core through.
 
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::mpsc as std_mpsc;
 use std::time::Duration;
@@ -27,6 +28,7 @@ use crate::session::SessionState;
 use crate::threads::{ThreadFilter, ThreadListChange, ThreadListStatus};
 use crate::timeline::{ThreadStatus, TimelineChange, TimelineStatus};
 use crate::tuning::Tuning;
+use crate::uploads::{Upload, UploadId};
 
 #[cfg(test)]
 mod tests;
@@ -162,6 +164,19 @@ pub enum Event {
     /// does) when another room is opened, the room is closed, the channel is joined, or the
     /// session ends.
     Preview(Option<Room>),
+    /// The account's uploads (see [`AccountHandle::upload_file`]), all of them, in the order they
+    /// were asked for. Comes whenever one is added, changes state or goes: with its message in
+    /// the room's or thread's messages, cancelled, or at a logout or an expired session, which
+    /// end them all (an empty list, if there were any). The progress of the one under way does
+    /// not come this way: see `UploadProgress`.
+    Uploads(Vec<Upload>),
+    /// How much of the upload under way has gone, in bytes. Comes at most once for every whole
+    /// percent of the file, and only while the upload is `Uploading`. An id the frontend doesn't
+    /// know (yet) is to be ignored.
+    UploadProgress {
+        id: UploadId,
+        sent: u64,
+    },
 }
 
 /// Whether the session is live. The held rooms and messages stay on show while it is not.
@@ -222,6 +237,14 @@ pub(crate) enum Command {
     OpenDirect(String),
     PreviewChannel(RoomId),
     JoinChannel(RoomId),
+    UploadFile {
+        room: RoomId,
+        path: PathBuf,
+        text: String,
+        thread: Option<MessageId>,
+    },
+    CancelUpload(UploadId),
+    RetryUpload(UploadId),
 }
 
 /// The core, as seen from a frontend: commands go in, events come out through the callback given
@@ -496,6 +519,41 @@ impl AccountHandle<'_> {
     /// failed message of the open room or thread.
     pub fn retry_message(&self, id: MessageId) {
         self.send(Command::RetryMessage(id));
+    }
+
+    /// Uploads the file at `path` to the room, as a message with the file attached and `text`
+    /// (trimmed, may be empty). The upload is listed at once (see [`Event::Uploads`]). The
+    /// account's uploads run one at a time, in the order they were asked for, so the messages come
+    /// in that order; the file is streamed from disk. A file that is too large for the server, a
+    /// server that takes no uploads, and a file that can't be read fail at once, without the
+    /// network; a failed upload stays listed until it is retried or cancelled, and doesn't hold
+    /// up the others. The message appears in the messages like one that arrives from the server,
+    /// and the upload leaves the list with it.
+    ///
+    /// With `thread`, the message is a reply in that thread, which must be the open one (else
+    /// nothing happens); it is not also shown in the room. Ignored unless logged in, and if the
+    /// room isn't in the room list.
+    pub fn upload_file(&self, room: RoomId, path: PathBuf, text: &str, thread: Option<MessageId>) {
+        self.send(Command::UploadFile {
+            room,
+            path,
+            text: text.to_owned(),
+            thread,
+        });
+    }
+
+    /// Takes an upload out of the list: one that is queued or failed goes at once, one that is
+    /// uploading is stopped. Ignored while the upload is being confirmed, since the message may
+    /// be posted already, and for an id that isn't listed.
+    pub fn cancel_upload(&self, id: UploadId) {
+        self.send(Command::CancelUpload(id));
+    }
+
+    /// Puts a failed upload back in the queue, in its place among the others. If the server has
+    /// the file already (the failure was the posting of the message), only the posting is tried
+    /// again. Ignored unless the upload failed.
+    pub fn retry_upload(&self, id: UploadId) {
+        self.send(Command::RetryUpload(id));
     }
 
     /// Replaces the text of a message of the user's in the open room. The answer comes as

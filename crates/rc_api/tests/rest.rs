@@ -1274,7 +1274,7 @@ async fn send_message_with_an_expired_token_is_unauthorized() {
 }
 
 const EDITED: &str = r#"{"message":{"_id":"m1","rid":"rid","msg":"hello again","ts":"2026-10-20T17:00:57.427Z","u":{"_id":"u8paxsGQXMH9vSnSc","username":"fx9300","name":"Fixture User"},"_updatedAt":"2026-10-20T17:05:00.000Z","editedAt":"2026-10-20T17:05:00.000Z","editedBy":{"_id":"u8paxsGQXMH9vSnSc","username":"fx9300"},"urls":[],"mentions":[],"channels":[]},"success":true}"#;
-const SETTINGS: &str = r#"{"settings":[{"_id":"Message_AllowDeleting","value":true},{"_id":"Message_AllowDeleting_BlockDeleteInMinutes","value":30},{"_id":"Message_AllowEditing","value":false},{"_id":"Message_AllowEditing_BlockEditInMinutes","value":0}],"success":true}"#;
+const SETTINGS: &str = r#"{"settings":[{"_id":"Message_AllowDeleting","value":true},{"_id":"Message_AllowDeleting_BlockDeleteInMinutes","value":30},{"_id":"Message_AllowEditing","value":false},{"_id":"Message_AllowEditing_BlockEditInMinutes","value":0},{"_id":"FileUpload_Enabled","value":true},{"_id":"FileUpload_MaxFileSize","value":2048}],"success":true}"#;
 
 // ACT-001
 #[tokio::test]
@@ -1475,7 +1475,7 @@ async fn message_settings_asks_for_the_four_settings() {
         .and(query_param(
             "_id",
             "Message_AllowEditing,Message_AllowEditing_BlockEditInMinutes,Message_AllowDeleting,\
-             Message_AllowDeleting_BlockDeleteInMinutes",
+             Message_AllowDeleting_BlockDeleteInMinutes,FileUpload_Enabled,FileUpload_MaxFileSize",
         ))
         .respond_with(json_response(200, SETTINGS))
         .expect(1)
@@ -1490,6 +1490,8 @@ async fn message_settings_asks_for_the_four_settings() {
     assert!(!settings.editing_allowed);
     assert!(settings.deleting_allowed);
     assert_eq!((settings.edit_minutes, settings.delete_minutes), (0, 30));
+    assert!(settings.uploads_enabled);
+    assert_eq!(settings.upload_max_bytes, Some(2048));
 }
 
 // ACT-005
@@ -2165,4 +2167,149 @@ async fn the_calls_of_the_directory_with_an_expired_token_are_unauthorized() {
         session.subscription("a").await,
         Err(Error::Unauthorized)
     ));
+}
+
+// ACT-009
+#[tokio::test]
+async fn upload_file_posts_the_file_as_the_multipart_part_file_and_reports_the_bytes() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/api/v1/rooms.media/rid"))
+        .and(header("X-User-Id", USER_ID))
+        .and(header("X-Auth-Token", TOKEN))
+        .respond_with(json_response(
+            200,
+            r#"{"file":{"_id":"f1","url":"/file-upload/f1/big.bin"},"success":true}"#,
+        ))
+        .expect(1)
+        .mount(&server)
+        .await;
+    // More than one chunk.
+    let bytes = vec![7_u8; 200_000];
+    let file = rc_test_server::temp_file("big.bin", &bytes);
+    let sent = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let seen = std::sync::Arc::clone(&sent);
+
+    let id = session(&RestClient::new(&server.uri()).unwrap())
+        .upload_file("rid", &file, "renamed.bin", move |n| {
+            seen.lock().unwrap().push(n);
+        })
+        .await
+        .unwrap();
+
+    assert_eq!(id, "f1");
+    let sent = sent.lock().unwrap().clone();
+    assert_eq!(sent.last(), Some(&200_000));
+    assert!(sent.len() > 1 && sent.windows(2).all(|pair| pair[0] < pair[1]));
+    let requests = server.received_requests().await.unwrap();
+    let request = &requests[0];
+    let content_type = request
+        .headers
+        .get("content-type")
+        .unwrap()
+        .to_str()
+        .unwrap();
+    assert!(
+        content_type.starts_with("multipart/form-data"),
+        "{content_type}"
+    );
+    let body = String::from_utf8_lossy(&request.body);
+    assert!(
+        body.contains(r#"name="file"; filename="renamed.bin""#),
+        "{}",
+        &body[..200]
+    );
+    assert!(request.body.len() > 200_000);
+}
+
+// ACT-009
+#[tokio::test]
+async fn upload_file_of_a_missing_file_is_a_file_error_without_a_request() {
+    let server = MockServer::start().await;
+    let result = session(&RestClient::new(&server.uri()).unwrap())
+        .upload_file("rid", std::path::Path::new("/no/such/file"), "x", |_| {})
+        .await;
+    assert!(matches!(result, Err(Error::File(_))), "{result:?}");
+    assert!(server.received_requests().await.unwrap().is_empty());
+}
+
+// ACT-009
+#[tokio::test]
+async fn upload_file_refused_by_the_server_carries_its_text() {
+    let server = MockServer::start().await;
+    mount(
+        &server,
+        "POST",
+        "/api/v1/rooms.media/rid",
+        json_response(
+            400,
+            r#"{"success":false,"error":"File type is not accepted. [error-invalid-file-type]"}"#,
+        ),
+    )
+    .await;
+    let file = rc_test_server::temp_file("a.txt", b"a");
+    let result = session(&RestClient::new(&server.uri()).unwrap())
+        .upload_file("rid", &file, "a.txt", |_| {})
+        .await;
+    assert!(
+        matches!(&result, Err(Error::Server { status: 400, message }) if message.contains("not accepted")),
+        "{result:?}"
+    );
+}
+
+// ACT-009
+#[tokio::test]
+async fn upload_file_with_a_revoked_token_is_unauthorized() {
+    let server = MockServer::start().await;
+    mount(
+        &server,
+        "POST",
+        "/api/v1/rooms.media/rid",
+        json_response(401, NOT_LOGGED_IN),
+    )
+    .await;
+    let file = rc_test_server::temp_file("b.txt", b"b");
+    let result = session(&RestClient::new(&server.uri()).unwrap())
+        .upload_file("rid", &file, "b.txt", |_| {})
+        .await;
+    assert!(matches!(result, Err(Error::Unauthorized)), "{result:?}");
+}
+
+// ACT-009
+#[tokio::test]
+async fn confirm_upload_posts_the_text_and_the_thread_and_returns_the_message() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/api/v1/rooms.mediaConfirm/rid/f1"))
+        .and(header("X-User-Id", USER_ID))
+        .and(header("X-Auth-Token", TOKEN))
+        .and(body_json(json!({ "msg": "look", "tmid": "parent" })))
+        .respond_with(json_response(200, SENT))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let message = session(&RestClient::new(&server.uri()).unwrap())
+        .confirm_upload("rid", "f1", "look", Some("parent"))
+        .await
+        .unwrap();
+
+    assert_eq!(message.id, "m1");
+}
+
+// ACT-009
+#[tokio::test]
+async fn confirm_upload_without_a_thread_sends_only_the_text() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/api/v1/rooms.mediaConfirm/rid/f1"))
+        .and(body_json(json!({ "msg": "" })))
+        .respond_with(json_response(200, SENT))
+        .expect(1)
+        .mount(&server)
+        .await;
+    session(&RestClient::new(&server.uri()).unwrap())
+        .confirm_upload("rid", "f1", "", None)
+        .await
+        .unwrap();
 }
