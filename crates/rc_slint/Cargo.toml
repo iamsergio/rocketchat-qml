@@ -33,11 +33,13 @@ tracing.workspace = true
 developer-mode = ["rc_view/developer-mode"]
 # `--spix-port` starts the Spix test server, on Slint's testing backend: headless, so the GUI tests
 # need no display. `test-file-store` keeps the session token in a plain file, for the GUI tests that
-# restart the app, as rc_qt's feature of the same name does.
+# restart the app, and `test-attach-files` lets them choose the files to attach, as rc_qt's features of
+# the same names do.
 spix = [
     "dep:spix_slint",
     "dep:i-slint-backend-testing",
     "rc_view/test-file-store",
+    "rc_view/test-attach-files",
 ]
 
 [dev-dependencies]

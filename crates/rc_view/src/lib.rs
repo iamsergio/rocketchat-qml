@@ -26,6 +26,7 @@ pub mod room_search;
 pub mod room_view;
 pub mod row_ops;
 pub mod session_view;
+pub mod staged_view;
 pub mod startup;
 pub mod switchboard;
 pub mod thread_list_view;

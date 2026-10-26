@@ -1,8 +1,11 @@
 // SPDX-FileCopyrightText: 2026 Sergio Martins
 // SPDX-License-Identifier: MIT
 
+pragma ComponentBehavior: Bound
+
 import QtQuick
 import QtQuick.Controls.Basic
+import QtQuick.Dialogs
 import QtQuick.Layouts
 import RocketChat.Bridge
 
@@ -18,6 +21,12 @@ import RocketChat.Bridge
 // the message, and Enter sends the text as a reply to it. Escape or the bar's button drops the
 // quote, and so does opening another room. Quoting and editing exclude each other.
 //
+// It sends files too (ACT-009): the paperclip, or files dropped on the pane (RoomView and
+// ThreadPane call attachUrls), put them in a bar above the field, where each can be taken out. Send
+// uploads them in order with the text as the message of the first one, and the uploads under way
+// are listed in another bar until their messages are posted. Opening another room drops the files
+// that wait; the uploads go on in the core.
+//
 // For a thread it replies in the open thread, with a check box to send the reply to the room too,
 // and Escape with nothing to cancel goes back to the list of threads. The edits, deletions and reactions go
 // through Room in both cases.
@@ -28,6 +37,9 @@ Rectangle {
     property bool forThread: false
     // Where the messages it reads are: the thread's view model, or the room's.
     readonly property var target: forThread ? Thread : Room
+    // The files that wait for Send, and the files being uploaded to the room or the thread.
+    readonly property var staged: forThread ? ThreadStagedFiles : RoomStagedFiles
+    readonly property var uploads: forThread ? ThreadUploads : RoomUploads
 
     // The message being edited, or empty when the box writes a new message.
     property string editingId: ""
@@ -52,11 +64,18 @@ Rectangle {
     radius: Theme.radiusPanel
 
     function send() {
-        if (forThread ? Thread.send(field.text, quotingId, alsoToChannel.checked) : Room.send(field.text, quotingId)) {
+        const sent = root.staged.count > 0 ? root.staged.submit(field.text, quotingId, alsoToChannel.checked) : forThread ? Thread.send(field.text, quotingId, alsoToChannel.checked) : Room.send(field.text, quotingId);
+        if (sent) {
             field.clear();
             dropQuote();
             alsoToChannel.checked = false;
         }
+    }
+
+    // Puts the files the URLs name in the bar of the files that wait.
+    function attachUrls(urls) {
+        for (const url of urls)
+            root.staged.add(url);
     }
 
     // Gives the field the focus.
@@ -145,6 +164,7 @@ Rectangle {
             if (root.editing)
                 root.endEdit();
             root.dropQuote();
+            root.staged.clear();
         }
     }
 
@@ -155,10 +175,19 @@ Rectangle {
                 root.endEdit();
             root.dropQuote();
             alsoToChannel.checked = false;
+            root.staged.clear();
         }
 
         enabled: root.forThread
         target: Thread
+    }
+
+    FileDialog {
+        id: fileDialog
+
+        fileMode: FileDialog.OpenFiles
+        title: qsTr("Attach files")
+        onAccepted: root.attachUrls(selectedFiles)
     }
 
     // Inside the border.
@@ -274,6 +303,70 @@ Rectangle {
             }
         }
 
+        // The files that wait for Send, over a hairline.
+        ColumnLayout {
+            objectName: "composerAttachments"
+            Layout.fillWidth: true
+            spacing: Theme.spacingNone
+            visible: root.staged.count > 0
+
+            Flow {
+                Layout.fillWidth: true
+                Layout.bottomMargin: Theme.spacingL
+                Layout.leftMargin: Theme.composerPaddingH
+                Layout.rightMargin: Theme.composerPaddingH
+                Layout.topMargin: Theme.spacingL
+                spacing: Theme.spacingL
+
+                Repeater {
+                    model: root.staged
+
+                    StagedFileChip {
+                        onRemoveRequested: root.staged.remove(index)
+                    }
+                }
+            }
+
+            Rectangle {
+                Layout.fillWidth: true
+                color: Theme.raisedHover
+                implicitHeight: Theme.separatorWidth
+            }
+        }
+
+        // The files on their way, over a hairline.
+        ColumnLayout {
+            objectName: "composerUploads"
+            Layout.fillWidth: true
+            spacing: Theme.spacingNone
+            visible: root.uploads.count > 0
+
+            ColumnLayout {
+                Layout.fillWidth: true
+                Layout.bottomMargin: Theme.spacingL
+                Layout.leftMargin: Theme.composerPaddingH
+                Layout.rightMargin: Theme.composerPaddingH
+                Layout.topMargin: Theme.spacingL
+                spacing: Theme.spacingXL
+
+                Repeater {
+                    model: root.uploads
+
+                    UploadRow {
+                        Layout.fillWidth: true
+                        onCancelRequested: root.uploads.cancel(index)
+                        onRetryRequested: root.uploads.retry(index)
+                    }
+                }
+            }
+
+            Rectangle {
+                Layout.fillWidth: true
+                color: Theme.raisedHover
+                implicitHeight: Theme.separatorWidth
+            }
+        }
+
         RowLayout {
             Layout.fillWidth: true
             Layout.bottomMargin: Theme.spacingL
@@ -281,6 +374,44 @@ Rectangle {
             Layout.rightMargin: Theme.spacingL
             Layout.topMargin: Theme.spacingL
             spacing: Theme.spacingM
+
+            // The paperclip: opens the system dialog to pick files (or takes the ones a test
+            // names, see StagedFilesModel).
+            ToolButton {
+                id: attach
+
+                objectName: "composerAttach"
+                Layout.alignment: Qt.AlignBottom
+                display: AbstractButton.IconOnly
+                implicitHeight: Theme.iconButtonSize
+                implicitWidth: Theme.iconButtonSize
+                padding: Theme.spacingNone
+                text: qsTr("Attach files")
+                visible: !root.editing && !root.previewing
+                onClicked: {
+                    if (!root.staged.addTestFiles())
+                        fileDialog.open();
+                }
+
+                ToolTip.delay: Theme.toolTipDelay
+                ToolTip.text: text
+                ToolTip.visible: hovered
+
+                background: Rectangle {
+                    color: attach.hovered ? Theme.raisedHover : Theme.transparent
+                    radius: Theme.radiusControl
+                }
+
+                contentItem: Item {
+                    Icon {
+                        anchors.centerIn: parent
+                        height: Theme.iconButtonIconSize
+                        source: "icons/attach.svg"
+                        tint: Theme.textMuted
+                        width: Theme.iconButtonIconSize
+                    }
+                }
+            }
 
             ScrollView {
                 Layout.fillWidth: true
@@ -329,7 +460,7 @@ Rectangle {
                 objectName: "composerSend"
                 Layout.alignment: Qt.AlignBottom
                 text: root.editing ? qsTr("Save") : qsTr("Send")
-                enabled: field.length > 0 && !root.saving
+                enabled: (field.length > 0 || (root.staged.count > 0 && !root.editing)) && !root.saving
                 visible: !root.previewing
                 onClicked: root.editing ? root.save() : root.send()
             }

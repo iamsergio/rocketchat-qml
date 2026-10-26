@@ -72,7 +72,7 @@ endif()
 if(ROCKETCHATQML_SLINT)
   # Only the binary: nothing links against rc_slint's lib. `spix` turns on the Rust Spix server
   # behind `--spix-port`, which the GUI tests drive the app with (test-file-store keeps the session
-  # between two of its runs).
+  # between two of its runs, test-attach-files lets them choose the files to attach).
   set(rc_slint_feature_list)
   if(ROCKETCHATQML_DEVELOPER_MODE)
     list(APPEND rc_slint_feature_list developer-mode)
@@ -101,13 +101,14 @@ endif()
 
 if(ROCKETCHATQML_QT)
   # test-file-store keeps the session token in a plain file (RC_SECRET_STORE=file:<path>), for the GUI
-  # tests that restart the app. Never in a build without Spix.
+  # tests that restart the app, and test-attach-files makes the paperclip take the files of
+  # RC_TEST_ATTACH_FILES instead of opening a file dialog. Never in a build without Spix.
   set(rc_qt_feature_list)
   if(ROCKETCHATQML_DEVELOPER_MODE)
     list(APPEND rc_qt_feature_list developer-mode)
   endif()
   if(ROCKETCHATQML_SPIX)
-    list(APPEND rc_qt_feature_list test-file-store)
+    list(APPEND rc_qt_feature_list test-file-store test-attach-files)
   endif()
   set(rc_qt_features)
   if(rc_qt_feature_list)

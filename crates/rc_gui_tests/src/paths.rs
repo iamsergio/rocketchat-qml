@@ -157,6 +157,15 @@ pub mod main_window {
     /// Sends the text of the composer, or saves it while a message is edited (the button then
     /// says "Save"). Disabled while it is empty, and while a save is awaited.
     pub const COMPOSER_SEND: &str = "mainWindow/roomComposer/composerSend";
+    /// The paperclip at the left of the field: attaches files. Hidden while a message is edited.
+    /// The apps take the files named by `RC_TEST_ATTACH_FILES` instead of opening a file dialog.
+    pub const COMPOSER_ATTACH: &str = "mainWindow/roomComposer/composerAttach";
+    /// Above the field while files wait for Send; the files in it are addressed with
+    /// [`staged_file`](super::staged_file).
+    pub const COMPOSER_ATTACHMENTS: &str = "mainWindow/roomComposer/composerAttachments";
+    /// Above the field while files are being uploaded to the room; the rows in it are addressed
+    /// with [`upload`](super::upload).
+    pub const COMPOSER_UPLOADS: &str = "mainWindow/roomComposer/composerUploads";
     /// Above the composer while a message is edited.
     pub const COMPOSER_EDIT_BAR: &str = "mainWindow/roomComposer/composerEditBar";
     /// In the bar: stops editing and gives the composer back its draft.
@@ -272,6 +281,12 @@ pub mod main_window {
     pub const THREAD_COMPOSER_FIELD: &str = "mainWindow/threadComposer/composerField";
     /// Sends the reply, or saves it while a message is edited.
     pub const THREAD_COMPOSER_SEND: &str = "mainWindow/threadComposer/composerSend";
+    /// The thread composer's paperclip, as [`COMPOSER_ATTACH`].
+    pub const THREAD_COMPOSER_ATTACH: &str = "mainWindow/threadComposer/composerAttach";
+    /// The thread composer's bar of files that wait, as [`COMPOSER_ATTACHMENTS`].
+    pub const THREAD_COMPOSER_ATTACHMENTS: &str = "mainWindow/threadComposer/composerAttachments";
+    /// The thread composer's bar of uploads, as [`COMPOSER_UPLOADS`].
+    pub const THREAD_COMPOSER_UPLOADS: &str = "mainWindow/threadComposer/composerUploads";
     /// The check box under the text: also shows the reply in the room. Its `checked` is whether it
     /// will; it is off for each reply.
     pub const THREAD_ALSO_TO_CHANNEL: &str = "mainWindow/threadComposer/composerAlsoToChannel";
@@ -535,6 +550,70 @@ pub fn quote(message_id: &str, index: usize, part: &str) -> String {
     }
 }
 
+/// The parts of a file that waits in a composer, for [`staged_file`].
+pub mod staged_file_part {
+    /// The file's name: its `text`.
+    pub const NAME: &str = "composerAttachmentName";
+    /// The file's size in words (`1.5 KB`): its `text`.
+    pub const SIZE: &str = "composerAttachmentSize";
+}
+
+/// The file with this index (0 is the first, in the order attached) that waits in the composer
+/// `composer` (`main_window::COMPOSER` or `main_window::THREAD_COMPOSER`), or a part of it (see
+/// [`staged_file_part`]; an empty `part` is the chip itself).
+#[must_use]
+pub fn staged_file(composer: &str, index: usize, part: &str) -> String {
+    let chip = format!("{composer}/composerAttachment{index}");
+    if part.is_empty() {
+        chip
+    } else {
+        format!("{chip}/{part}")
+    }
+}
+
+/// The cross of the file with this index in the composer `composer`: takes it out.
+#[must_use]
+pub fn staged_file_remove(composer: &str, index: usize) -> String {
+    format!("{composer}/composerAttachmentRemove{index}")
+}
+
+/// The parts of an upload under way in a composer, for [`upload`].
+pub mod upload_part {
+    /// The file's name: its `text`.
+    pub const NAME: &str = "uploadName";
+    /// What it is doing, as its `text`: `1.8 of 4.2 MB`, `Waiting · 4.2 MB`, `Posting…`, or why it
+    /// failed.
+    pub const STATUS: &str = "uploadStatus";
+    /// The track of the progress: visible except for a failed upload.
+    pub const PROGRESS: &str = "uploadProgress";
+}
+
+/// The upload with this index (0 is the first, in the order asked) in the bar of the composer
+/// `composer`, or a part of it (see [`upload_part`]; an empty `part` is the row itself). Rows
+/// exist while the upload is listed.
+#[must_use]
+pub fn upload(composer: &str, index: usize, part: &str) -> String {
+    let row = format!("{composer}/upload{index}");
+    if part.is_empty() {
+        row
+    } else {
+        format!("{row}/{part}")
+    }
+}
+
+/// The button of the upload with this index in the composer `composer` that gives it up: a cross
+/// while it waits or is on its way, "Remove" once it failed. Not there while its message is posted.
+#[must_use]
+pub fn upload_cancel(composer: &str, index: usize) -> String {
+    format!("{composer}/uploadCancel{index}")
+}
+
+/// The "Retry" button of the failed upload with this index in the composer `composer`.
+#[must_use]
+pub fn upload_retry(composer: &str, index: usize) -> String {
+    format!("{composer}/uploadRetry{index}")
+}
+
 /// An emoji of the open emoji picker, by its shortcode without the colons (`tada` for `:tada:`).
 /// It exists while the grid shows it.
 #[must_use]
@@ -648,6 +727,35 @@ mod tests {
             "mainWindow/msg_m7/quote0/quoteAuthor"
         );
         assert_eq!(quote("m7", 1, ""), "mainWindow/msg_m7/quote1");
+    }
+
+    // INFRA-002
+    #[test]
+    fn staged_files_and_uploads_are_addressed_through_their_composer() {
+        assert_eq!(
+            staged_file(main_window::COMPOSER, 1, staged_file_part::SIZE),
+            "mainWindow/roomComposer/composerAttachment1/composerAttachmentSize"
+        );
+        assert_eq!(
+            staged_file_remove(main_window::THREAD_COMPOSER, 0),
+            "mainWindow/threadComposer/composerAttachmentRemove0"
+        );
+        assert_eq!(
+            upload(main_window::COMPOSER, 0, ""),
+            "mainWindow/roomComposer/upload0"
+        );
+        assert_eq!(
+            upload(main_window::COMPOSER, 2, upload_part::STATUS),
+            "mainWindow/roomComposer/upload2/uploadStatus"
+        );
+        assert_eq!(
+            upload_retry(main_window::COMPOSER, 0),
+            "mainWindow/roomComposer/uploadRetry0"
+        );
+        assert_eq!(
+            upload_cancel(main_window::THREAD_COMPOSER, 3),
+            "mainWindow/threadComposer/uploadCancel3"
+        );
     }
 
     // INFRA-002

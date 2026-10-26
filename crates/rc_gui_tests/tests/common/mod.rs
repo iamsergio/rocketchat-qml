@@ -63,6 +63,43 @@ pub fn launch() -> App {
     App::launch_with(&[("TZ", "UTC")]).unwrap()
 }
 
+/// Starts the app like [`launch`], with the files the paperclip of a composer attaches: the apps
+/// take the paths of `RC_TEST_ATTACH_FILES` instead of opening a file dialog, which Spix can't
+/// drive.
+pub fn launch_attaching(files: &[&std::path::Path]) -> App {
+    let paths = env::join_paths(files).unwrap();
+    App::launch_with(&[
+        ("TZ", "UTC"),
+        ("RC_TEST_ATTACH_FILES", paths.to_str().unwrap()),
+    ])
+    .unwrap()
+}
+
+/// The `count` messages of the channel that come after the one with id `before`, oldest first,
+/// once the server has them all: how a test learns the ids of what the app uploaded, which the
+/// server picked.
+pub fn wait_for_messages_after(
+    admin: &Admin,
+    channel_id: &str,
+    before: &str,
+    count: usize,
+) -> Vec<Posted> {
+    let deadline = Instant::now() + TIMEOUT;
+    loop {
+        let mut newest = admin.last_messages(channel_id, count + 1);
+        if newest.len() == count + 1 && newest[count].id == before {
+            newest.truncate(count);
+            newest.reverse();
+            return newest;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the {count} messages never reached the server"
+        );
+        thread::sleep(Duration::from_millis(100));
+    }
+}
+
 /// Presses Home in the message list.
 pub fn press_home(gui: &Gui) {
     gui.enter_key(main_window::MESSAGE_LIST, Key::HOME, Modifiers::NONE)

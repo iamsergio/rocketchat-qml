@@ -610,6 +610,30 @@ impl Admin {
         }
     }
 
+    /// The newest `count` messages of a channel, whatever their kind, the newest first.
+    ///
+    /// # Panics
+    ///
+    /// If the server refuses.
+    #[must_use]
+    pub fn last_messages(&self, channel_id: &str, count: usize) -> Vec<Posted> {
+        let json = self.get(&format!(
+            "channels.history?roomId={channel_id}&count={count}"
+        ));
+        json["messages"]
+            .as_array()
+            .map(|messages| {
+                messages
+                    .iter()
+                    .map(|message| Posted {
+                        id: message["_id"].as_str().unwrap().to_owned(),
+                        ts: message["ts"].as_str().unwrap().to_owned(),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
     /// The newest reply in the thread of `thread_id` (`chat.getThreadMessages`, newest first),
     /// or `None` if it has none. The channel's history does not list a reply unless it was also
     /// sent to the channel.
