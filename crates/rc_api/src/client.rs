@@ -10,9 +10,9 @@ use serde_json::json;
 
 use crate::error::Error;
 use crate::types::{
-    Credentials, CustomEmoji, Download, HistoryPage, LoginResult, Message, MessageChanges,
-    MessageSettings, RoomType, ServerInfo, Subscription, ThreadPage, ThreadsKind, ThreadsPage,
-    User,
+    Credentials, CustomEmoji, DirectoryChannel, DirectoryPage, DirectoryUser, Download,
+    HistoryPage, LoginResult, Message, MessageChanges, MessageSettings, RoomInfo, RoomType,
+    ServerInfo, Subscription, ThreadPage, ThreadsKind, ThreadsPage, User,
 };
 use crate::wire;
 
@@ -714,6 +714,130 @@ impl RestSession {
         let payload = json!({ "roomId": room_id });
         self.call_json(Method::POST, path, &payload).await?;
         Ok(())
+    }
+
+    /// The users of the server's directory whose name or username match `text` (`GET
+    /// /api/v1/directory` with `type=users`), at most `count`. `text` and `type` are parameters of
+    /// their own: the older `query` parameter, a JSON object that holds them, is ignored by
+    /// Rocket.Chat 8 and the server then lists everybody. The page's `total` is how many match.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Unauthorized`] if the token is expired or revoked, or any of the other errors.
+    pub async fn directory_users(
+        &self,
+        text: &str,
+        count: usize,
+    ) -> Result<DirectoryPage<DirectoryUser>, Error> {
+        let body = self.directory("users", text, count, None).await?;
+        wire::parse_directory_users(&body).map_err(Error::Decode)
+    }
+
+    /// The public channels of the server's directory whose name matches `text`, the ones with the
+    /// most members first, at most `count` (see [`directory_users`](Self::directory_users)). The
+    /// directory doesn't say whether the user is in a channel, and lists no private group.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Unauthorized`] if the token is expired or revoked, or any of the other errors.
+    pub async fn directory_channels(
+        &self,
+        text: &str,
+        count: usize,
+    ) -> Result<DirectoryPage<DirectoryChannel>, Error> {
+        let sort = json!({ "usersCount": -1 }).to_string();
+        let body = self.directory("channels", text, count, Some(&sort)).await?;
+        wire::parse_directory_channels(&body).map_err(Error::Decode)
+    }
+
+    async fn directory(
+        &self,
+        kind: &str,
+        text: &str,
+        count: usize,
+        sort: Option<&str>,
+    ) -> Result<Vec<u8>, Error> {
+        // Only a URL to escape the query with; the host is never used.
+        let mut escaped =
+            Url::parse("http://unused/").map_err(|e| Error::InvalidUrl(e.to_string()))?;
+        {
+            let mut pairs = escaped.query_pairs_mut();
+            pairs.append_pair("text", text);
+            pairs.append_pair("type", kind);
+            pairs.append_pair("workspace", "local");
+            pairs.append_pair("count", &count.to_string());
+            pairs.append_pair("offset", "0");
+            if let Some(sort) = sort {
+                pairs.append_pair("sort", sort);
+            }
+        }
+        let path = format!("api/v1/directory?{}", escaped.query().unwrap_or_default());
+        self.call(Method::GET, &path).await
+    }
+
+    /// Opens the direct message with `username` (`POST /api/v1/im.create`), which the server
+    /// creates the first time and finds after that, and shows again in the user's rooms if they
+    /// had closed it. Returns the room's id. Careful: the server doesn't check that the user
+    /// exists, and makes an empty direct message with a name nobody has, so only ask for
+    /// usernames that were found.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Unauthorized`] if the token is expired or revoked, [`Error::Server`] if the server
+    /// refuses, or any of the other errors.
+    pub async fn create_direct(&self, username: &str) -> Result<String, Error> {
+        let payload = json!({ "username": username });
+        let body = self
+            .call_json(Method::POST, "api/v1/im.create", &payload)
+            .await?;
+        wire::parse_direct_created(&body).map_err(Error::Decode)
+    }
+
+    /// Joins a public channel (`POST /api/v1/channels.join`). Joining one the user is in already
+    /// succeeds. The server then pushes the new subscription.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Unauthorized`] if the token is expired or revoked, [`Error::Server`] if the room
+    /// doesn't exist or can't be joined, or any of the other errors.
+    pub async fn join_channel(&self, room_id: &str) -> Result<(), Error> {
+        let payload = json!({ "roomId": room_id });
+        self.call_json(Method::POST, "api/v1/channels.join", &payload)
+            .await?;
+        Ok(())
+    }
+
+    /// A room the user can see (`GET /api/v1/rooms.info`): any public channel, in or not.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Unauthorized`] if the token is expired or revoked, [`Error::Server`] if the room
+    /// doesn't exist or isn't visible to the user, or any of the other errors.
+    pub async fn room_info(&self, room_id: &str) -> Result<RoomInfo, Error> {
+        let path = format!("api/v1/rooms.info?{}", query("roomId", room_id)?);
+        let body = self.call(Method::GET, &path).await?;
+        wire::parse_room_info(&body).map_err(Error::Decode)
+    }
+
+    /// The user's subscription to one room (`GET /api/v1/subscriptions.getOne`), `None` if the
+    /// user isn't in it, filled in with the room's last message time, avatar and topic like
+    /// [`subscriptions`](Self::subscriptions) does (from `rooms.info`).
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Unauthorized`] if the token is expired or revoked, [`Error::Server`] if the room
+    /// doesn't exist, or any of the other errors.
+    pub async fn subscription(&self, room_id: &str) -> Result<Option<Subscription>, Error> {
+        let path = format!("api/v1/subscriptions.getOne?{}", query("roomId", room_id)?);
+        let body = self.call(Method::GET, &path).await?;
+        let Some(mut subscription) = wire::parse_subscription(&body).map_err(Error::Decode)? else {
+            return Ok(None);
+        };
+        let info = self.room_info(room_id).await?;
+        subscription.last_message = info.last_message;
+        subscription.avatar_etag = info.avatar_etag;
+        subscription.topic = info.topic;
+        Ok(Some(subscription))
     }
 
     /// Ends the session on the server (`POST /api/v1/logout`), which revokes the token. Servers

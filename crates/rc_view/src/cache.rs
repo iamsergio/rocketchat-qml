@@ -6,6 +6,7 @@
 
 use std::collections::HashMap;
 
+use rc_core::directory::{ActionState, Directory, DirectoryAction};
 use rc_core::domain::{AccountId, AvatarOwner, Identity, Message, MessageId, Room, RoomId, UserId};
 use rc_core::emoji::CustomEmojis;
 use rc_core::policy::MessagePolicy;
@@ -19,6 +20,7 @@ use rc_core::{Connection, Event};
 use crate::accounts::{AccountView, Status, account_status, monogram};
 use crate::attachment_view::ImageUrls;
 use crate::avatar_view::AvatarUrls;
+use crate::directory::{DirectoryView, directory_view};
 use crate::emoji_image_view::EmojiImageUrls;
 use crate::message_view::{author_name, body, can_edit};
 use crate::room_view::{RoomState, room_state, typing_line};
@@ -44,6 +46,13 @@ pub struct Cache {
     rooms: Vec<Room>,
     /// The rooms the room list holds back, in the order the core sent them.
     quiet_rooms: Vec<Room>,
+    /// What the directory search holds, as the core last said.
+    directory: Directory,
+    /// The last thing the core said of a directory action: `Working` while it is under way. `None`
+    /// before the first, and after the session ends.
+    directory_action: Option<(DirectoryAction, ActionState)>,
+    /// The channel the open room shows without the user being in it.
+    preview: Option<Room>,
     /// The room `messages` belong to.
     room: Option<RoomId>,
     messages: Vec<Message>,
@@ -101,6 +110,9 @@ impl Cache {
             },
             rooms: Vec::new(),
             quiet_rooms: Vec::new(),
+            directory: Directory::cleared(),
+            directory_action: None,
+            preview: None,
             room: None,
             messages: Vec::new(),
             status: TimelineStatus {
@@ -152,6 +164,10 @@ impl Cache {
                     }
                     SessionState::Connecting | SessionState::Resuming => {}
                 }
+                if !matches!(state, SessionState::LoggedIn(_)) {
+                    // The core says nothing more of an action when the session ends.
+                    self.directory_action = None;
+                }
                 self.state = Some(state.clone());
                 (self.username, self.user_id, self.server) = match state {
                     SessionState::LoggedIn(account) => (
@@ -184,6 +200,11 @@ impl Cache {
                 }
             }
             Event::QuietRooms(rooms) => self.quiet_rooms.clone_from(rooms),
+            Event::Directory(directory) => self.directory.clone_from(directory),
+            Event::DirectoryAction { action, state } => {
+                self.directory_action = Some((action.clone(), state.clone()));
+            }
+            Event::Preview(room) => self.preview.clone_from(room),
             Event::Timeline(changes) => {
                 for change in changes {
                     change.apply(&mut self.messages);
@@ -334,6 +355,35 @@ impl Cache {
     #[must_use]
     pub fn quiet_rooms(&self) -> &[Room] {
         &self.quiet_rooms
+    }
+
+    /// What the directory search holds, as the core sent it: the server's results whole. See
+    /// [`directory_view`](Self::directory_view) for what to show.
+    #[must_use]
+    pub fn directory(&self) -> &Directory {
+        &self.directory
+    }
+
+    /// The directory results worth showing now: without the user, the people they have a direct
+    /// message with, and the channels they are in. Changes with the room list, so ask again when
+    /// it does.
+    #[must_use]
+    pub fn directory_view(&self) -> DirectoryView {
+        let own = self.username.as_deref().unwrap_or_default();
+        directory_view(&self.directory, &self.rooms, &self.quiet_rooms, own)
+    }
+
+    /// The last thing the core said of a directory action: the action is under way if the state
+    /// is `Working`. `None` before any, and after the session ends.
+    #[must_use]
+    pub fn directory_action(&self) -> Option<&(DirectoryAction, ActionState)> {
+        self.directory_action.as_ref()
+    }
+
+    /// The channel the open room shows without the user being in it, if any.
+    #[must_use]
+    pub fn preview(&self) -> Option<&Room> {
+        self.preview.as_ref()
     }
 
     /// The change that brings an empty model to the current room list.
@@ -956,6 +1006,75 @@ mod tests {
         assert_eq!(cache.rooms(), [room("c", "gamma")]);
         cache.apply(&Event::QuietRooms(vec![]));
         assert!(cache.quiet_rooms().is_empty());
+    }
+
+    // ACT-008
+    #[test]
+    fn the_directory_the_action_and_the_preview_are_the_last_the_core_sent() {
+        let mut cache = Cache::new();
+        assert_eq!(cache.directory(), &Directory::cleared());
+        assert_eq!(cache.directory_action(), None);
+        assert_eq!(cache.preview(), None);
+        let found = Directory {
+            query: "bob".to_owned(),
+            ..Directory::cleared()
+        };
+        let working = (
+            DirectoryAction::Join("c".to_owned().into()),
+            ActionState::Working,
+        );
+
+        cache.apply(&Event::Directory(found.clone()));
+        cache.apply(&Event::DirectoryAction {
+            action: working.0.clone(),
+            state: working.1.clone(),
+        });
+        cache.apply(&Event::Preview(Some(room("c", "chat"))));
+
+        assert_eq!(cache.directory(), &found);
+        assert_eq!(cache.directory_action(), Some(&working));
+        assert_eq!(cache.preview(), Some(&room("c", "chat")));
+        cache.apply(&Event::Preview(None));
+        cache.apply(&Event::Directory(Directory::cleared()));
+        assert_eq!(cache.preview(), None);
+        assert_eq!(cache.directory(), &Directory::cleared());
+        // The session ending leaves no action under way.
+        cache.apply(&Event::Session(SessionState::LoggedOut { failure: None }));
+        assert_eq!(cache.directory_action(), None);
+    }
+
+    // ACT-007
+    #[test]
+    fn the_directory_view_follows_the_room_list_without_a_new_search() {
+        let mut cache = Cache::new();
+        cache.apply(&Event::Session(SessionState::LoggedIn(
+            rc_core::domain::Account {
+                server: "http://h".to_owned(),
+                user: rc_core::domain::User {
+                    id: "uid".to_owned().into(),
+                    username: "alice".to_owned(),
+                    display_name: None,
+                },
+            },
+        )));
+        let person = |username: &str| rc_core::directory::Person {
+            username: username.to_owned(),
+            name: None,
+        };
+        cache.apply(&Event::Directory(Directory {
+            query: "b".to_owned(),
+            people: vec![person("alice"), person("bob")],
+            people_total: 2,
+            ..Directory::cleared()
+        }));
+        assert_eq!(cache.directory_view().people, [person("bob")]);
+
+        let mut dm = room("d", "bob");
+        dm.kind = rc_core::domain::RoomKind::Direct;
+        dm.peer = Some("bob".to_owned());
+        cache.apply(&Event::Rooms(vec![RoomChange::Reset(vec![dm])]));
+
+        assert!(cache.directory_view().people.is_empty());
     }
 
     // MSG-001

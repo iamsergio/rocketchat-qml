@@ -35,6 +35,7 @@ use crate::tuning::Tuning;
 use crate::typing::Typists;
 use crate::users::Users;
 
+mod directory;
 mod media;
 mod message_actions;
 mod open_room;
@@ -45,6 +46,7 @@ mod thread;
 mod thread_list;
 mod typing;
 
+use directory::{DirectoryActionDone, DirectoryDone, DirectorySearch, RunningAction};
 use media::{DownloadDone, Media};
 use thread::{OpenThread, PendingThread};
 use thread_list::OpenThreadList;
@@ -226,6 +228,8 @@ enum Done<A> {
     MarkRead(MarkReadDone),
     Action(ActionDone),
     RoomAction(RoomActionDone),
+    Directory(DirectoryDone),
+    DirectoryAction(DirectoryActionDone),
 }
 
 /// A history fetch in flight.
@@ -340,6 +344,15 @@ struct Actor<C: Connector> {
     /// The messages of the rooms opened so far. Cleared on logout.
     messages: Box<dyn MessageStore>,
     open: Option<OpenRoom>,
+    /// The public channel the user looks at without being in it: the open room, though the room
+    /// list lacks it. It ends when the channel is listed or another room opens.
+    preview: Option<Room>,
+    /// The search of the server's directory.
+    directory: DirectorySearch,
+    /// The directory action under way: only one runs at a time.
+    directory_action: Option<RunningAction>,
+    /// Counts the directory actions, to tell the answer of the current one from a stale one.
+    directory_actions: u64,
     /// The thread beside the open room: always one of its messages, and closed with it.
     open_thread: Option<OpenThread>,
     /// Who types in the open room and its threads (see [`Actor::handle_typing`]).
@@ -439,6 +452,10 @@ impl<C: Connector> Actor<C> {
             emoji_images: Media::new(Refresh::OncePerSession),
             messages: Box::new(MemoryMessageStore::default()),
             open: None,
+            preview: None,
+            directory: DirectorySearch::new(tuning.directory_debounce),
+            directory_action: None,
+            directory_actions: 0,
             open_thread: None,
             typists: Typists::default(),
             typing_told: None,
@@ -498,6 +515,8 @@ impl<C: Connector> Actor<C> {
                     Done::MarkRead(done) => self.handle_mark_read_done(done),
                     Done::Action(done) => self.handle_action_done(done),
                     Done::RoomAction(done) => self.handle_room_action_done(done),
+                    Done::Directory(done) => self.handle_directory_done(done),
+                    Done::DirectoryAction(done) => self.handle_directory_action_done(done),
                 },
                 () = async {
                     match &mut deadline {
@@ -517,6 +536,7 @@ impl<C: Connector> Actor<C> {
             self.rooms.next_quiet(),
             self.rooms.next_release(),
             self.typists.next_deadline(),
+            self.directory.due(),
         ]
         .into_iter()
         .flatten()
@@ -529,6 +549,7 @@ impl<C: Connector> Actor<C> {
         self.hide_quiet_rooms();
         self.release_channels();
         self.expire_typists();
+        self.start_due_directory_search();
     }
 
     /// Tells who the stored account is, if there is one, and resumes it if it holds a token. A stored
@@ -581,6 +602,7 @@ impl<C: Connector> Actor<C> {
         self.images.abort();
         self.emoji_images.abort();
         self.abort_history_task();
+        self.abort_directory();
         if let Some(task) = self.thread_task.take() {
             task.abort();
         }
@@ -628,6 +650,10 @@ impl<C: Connector> Actor<C> {
             Command::React { id, emoji, react } => self.react_to_message(id, emoji, react),
             Command::RoomAction { room, action } => self.act_on_room(room, action),
             Command::WantEmojiImages(names) => self.want_emoji_images(names),
+            Command::SearchDirectory(text) => self.search_directory(&text),
+            Command::OpenDirect(username) => self.open_direct(username),
+            Command::PreviewChannel(room) => self.preview_channel(room),
+            Command::JoinChannel(room) => self.join_channel(room),
         }
     }
 
@@ -764,6 +790,7 @@ impl<C: Connector> Actor<C> {
             self.abort_rooms_task();
             self.abort_realtime_task();
             self.set_state(SessionState::LoggedOut { failure: None });
+            self.clear_directory();
             self.clear_rooms();
             self.clear_emoji();
             self.clear_policy();
@@ -787,6 +814,7 @@ impl<C: Connector> Actor<C> {
         self.set_state(SessionState::LoggedOut {
             failure: Some(LoginFailure::SessionExpired),
         });
+        self.clear_directory();
         self.clear_rooms();
         self.clear_emoji();
         self.clear_policy();

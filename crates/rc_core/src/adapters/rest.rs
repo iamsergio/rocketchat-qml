@@ -7,6 +7,7 @@ use rc_api::{DdpClient, DdpEvent, DdpEvents, RestClient, ServerVersion, Subscrip
 use secrecy::SecretString;
 use tokio::sync::mpsc;
 
+use crate::directory::{DirectoryChannel, Found, Person};
 use crate::domain::{
     AvatarOwner, Credentials, Message, MessageId, RoomId, RoomKind, User, message_from,
 };
@@ -307,6 +308,78 @@ impl ServerApi for RestApi {
         };
         let session = self.client.session(api_credentials(credentials));
         Ok(session.leave(room.as_str(), &room_type).await?)
+    }
+
+    async fn directory_users(
+        &self,
+        credentials: &Credentials,
+        text: &str,
+        count: usize,
+    ) -> Result<Found<Person>, ApiError> {
+        let session = self.client.session(api_credentials(credentials));
+        let page = session.directory_users(text, count).await?;
+        Ok(Found {
+            total: page.total,
+            items: (page.items.into_iter())
+                .map(|user| Person {
+                    username: user.username,
+                    name: user.name,
+                })
+                .collect(),
+        })
+    }
+
+    async fn directory_channels(
+        &self,
+        credentials: &Credentials,
+        text: &str,
+        count: usize,
+    ) -> Result<Found<DirectoryChannel>, ApiError> {
+        let session = self.client.session(api_credentials(credentials));
+        let page = session.directory_channels(text, count).await?;
+        Ok(Found {
+            total: page.total,
+            items: (page.items.into_iter())
+                .map(|channel| DirectoryChannel {
+                    id: channel.id.into(),
+                    name: channel.display_name.unwrap_or(channel.name),
+                    topic: channel.topic,
+                    members: channel.users_count,
+                })
+                .collect(),
+        })
+    }
+
+    async fn create_direct(
+        &self,
+        credentials: &Credentials,
+        username: &str,
+    ) -> Result<RoomId, ApiError> {
+        let session = self.client.session(api_credentials(credentials));
+        Ok(session.create_direct(username).await?.into())
+    }
+
+    async fn join_channel(&self, credentials: &Credentials, room: &RoomId) -> Result<(), ApiError> {
+        let session = self.client.session(api_credentials(credentials));
+        Ok(session.join_channel(room.as_str()).await?)
+    }
+
+    async fn room_info(
+        &self,
+        credentials: &Credentials,
+        room: &RoomId,
+    ) -> Result<rc_api::RoomInfo, ApiError> {
+        let session = self.client.session(api_credentials(credentials));
+        Ok(session.room_info(room.as_str()).await?)
+    }
+
+    async fn subscription(
+        &self,
+        credentials: &Credentials,
+        room: &RoomId,
+    ) -> Result<Option<rc_api::Subscription>, ApiError> {
+        let session = self.client.session(api_credentials(credentials));
+        Ok(session.subscription(room.as_str()).await?)
     }
 
     async fn changes_since(

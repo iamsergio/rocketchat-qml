@@ -98,7 +98,9 @@ impl Switchboard {
                     shown.push(Shown::Event(event));
                 } else if matches!(
                     event,
-                    Event::MessageAction { .. } | Event::RoomAction { .. }
+                    Event::MessageAction { .. }
+                        | Event::RoomAction { .. }
+                        | Event::DirectoryAction { .. }
                 ) {
                     tracing::debug!(%account, "answer of another account dropped");
                 }
@@ -183,6 +185,7 @@ impl Switchboard {
 #[cfg(test)]
 mod tests {
     use rc_core::Connection;
+    use rc_core::directory::{ActionState, Directory, DirectoryAction};
     use rc_core::domain::{Account, Identity, User};
     use rc_core::policy::{ActionError, MessageAction};
     use rc_core::rooms::Unread;
@@ -291,6 +294,37 @@ mod tests {
             },
         );
         assert!(shown.is_empty());
+    }
+
+    // ACT-008
+    #[test]
+    fn the_directory_events_of_the_current_account_are_shown_and_kept_for_the_others() {
+        let mut board = three();
+        let events = [
+            Event::Directory(Directory::searching("bob")),
+            Event::DirectoryAction {
+                action: DirectoryAction::Join("c".to_owned().into()),
+                state: ActionState::Working,
+            },
+            Event::Preview(None),
+        ];
+
+        for event in events.clone() {
+            assert_eq!(
+                board.dispatch(&id("a"), event.clone()),
+                [Shown::Event(event)]
+            );
+        }
+        for event in events {
+            assert!(board.dispatch(&id("b"), event).is_empty());
+        }
+
+        let query_of = |board: &mut Switchboard, name: &str| {
+            board.select(&id(name));
+            board.accounts().current_cache().directory().query.clone()
+        };
+        assert_eq!(query_of(&mut board, "b"), "bob");
+        assert_eq!(query_of(&mut board, "c"), "");
     }
 
     // ACCT-003

@@ -13,8 +13,9 @@ use serde::{Deserialize, Deserializer};
 use crate::md;
 use crate::types::{
     Attachment, AttachmentImage, Author, AvatarOwner, Credentials, CustomEmoji, DdpEvent,
-    HistoryPage, LoginResult, Message, MessageChanges, MessageSettings, Quote, Reaction, RoomType,
-    ServerInfo, ServerVersion, Subscription, ThreadPage, ThreadsPage, User,
+    DirectoryChannel, DirectoryPage, DirectoryUser, HistoryPage, LoginResult, Message,
+    MessageChanges, MessageSettings, Quote, Reaction, RoomInfo, RoomType, ServerInfo,
+    ServerVersion, Subscription, ThreadPage, ThreadsPage, User,
 };
 
 #[derive(Deserialize)]
@@ -156,6 +157,82 @@ struct UserInfoBody {
 #[derive(Deserialize)]
 struct RoomInfoBody {
     room: AvatarOwnerBody,
+}
+
+/// The answer of `subscriptions.getOne`: no subscription is `null`.
+#[derive(Deserialize)]
+struct SubscriptionOneBody {
+    subscription: Option<SubscriptionBody>,
+}
+
+/// The `room` of `rooms.info`.
+#[derive(Deserialize)]
+struct RoomInfoFullBody {
+    room: RoomInfoEntry,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RoomInfoEntry {
+    #[serde(rename = "_id")]
+    id: String,
+    t: String,
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    fname: Option<String>,
+    #[serde(default)]
+    topic: Option<String>,
+    #[serde(default, rename = "avatarETag")]
+    avatar_etag: Option<String>,
+    #[serde(default, deserialize_with = "optional_timestamp")]
+    lm: Option<jiff::Timestamp>,
+    #[serde(default, deserialize_with = "optional_timestamp")]
+    ts: Option<jiff::Timestamp>,
+}
+
+/// The answer of `directory`: the entries are `result`, not named after what they are.
+#[derive(Deserialize)]
+struct DirectoryBody<T> {
+    #[serde(default = "Vec::new")]
+    result: Vec<T>,
+    #[serde(default)]
+    total: u32,
+}
+
+#[derive(Deserialize)]
+struct DirectoryUserEntry {
+    #[serde(rename = "_id")]
+    id: String,
+    username: String,
+    #[serde(default)]
+    name: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DirectoryChannelEntry {
+    #[serde(rename = "_id")]
+    id: String,
+    name: String,
+    #[serde(default)]
+    fname: Option<String>,
+    #[serde(default)]
+    users_count: u32,
+    #[serde(default)]
+    topic: Option<String>,
+}
+
+/// The answer of `im.create`: the direct message.
+#[derive(Deserialize)]
+struct DirectCreatedBody {
+    room: DirectCreatedRoom,
+}
+
+#[derive(Deserialize)]
+struct DirectCreatedRoom {
+    #[serde(rename = "_id")]
+    id: String,
 }
 
 #[derive(Deserialize)]
@@ -427,14 +504,19 @@ impl From<UserBody> for User {
     }
 }
 
+/// The room type a `t` field says.
+fn room_type(t: String) -> RoomType {
+    match t.as_str() {
+        "c" => RoomType::Channel,
+        "p" => RoomType::Private,
+        "d" => RoomType::Direct,
+        _ => RoomType::Other(t),
+    }
+}
+
 impl From<SubscriptionBody> for Subscription {
     fn from(body: SubscriptionBody) -> Self {
-        let room_type = match body.t.as_str() {
-            "c" => RoomType::Channel,
-            "p" => RoomType::Private,
-            "d" => RoomType::Direct,
-            _ => RoomType::Other(body.t),
-        };
+        let room_type = room_type(body.t);
         Self {
             room_id: body.rid,
             room_type,
@@ -629,6 +711,68 @@ pub(crate) fn parse_rooms(bytes: &[u8]) -> Result<HashMap<String, RoomBody>, ser
         .into_iter()
         .map(|room| (room.id.clone(), room))
         .collect())
+}
+
+/// The answer of `subscriptions.getOne`: `None` for a room the user isn't in.
+pub(crate) fn parse_subscription(bytes: &[u8]) -> Result<Option<Subscription>, serde_json::Error> {
+    let body: SubscriptionOneBody = serde_json::from_slice(bytes)?;
+    Ok(body.subscription.map(Subscription::from))
+}
+
+/// The answer of `rooms.info`.
+pub(crate) fn parse_room_info(bytes: &[u8]) -> Result<RoomInfo, serde_json::Error> {
+    let room = serde_json::from_slice::<RoomInfoFullBody>(bytes)?.room;
+    Ok(RoomInfo {
+        room_id: room.id,
+        room_type: room_type(room.t),
+        name: room.name,
+        display_name: room.fname.filter(|name| !name.is_empty()),
+        topic: room.topic.unwrap_or_default(),
+        avatar_etag: room.avatar_etag,
+        last_message: room.lm,
+        created: room.ts,
+    })
+}
+
+/// The users of a `directory` answer.
+pub(crate) fn parse_directory_users(
+    bytes: &[u8],
+) -> Result<DirectoryPage<DirectoryUser>, serde_json::Error> {
+    let body: DirectoryBody<DirectoryUserEntry> = serde_json::from_slice(bytes)?;
+    Ok(DirectoryPage {
+        total: body.total,
+        items: (body.result.into_iter())
+            .map(|user| DirectoryUser {
+                id: user.id,
+                username: user.username,
+                name: user.name.filter(|name| !name.is_empty()),
+            })
+            .collect(),
+    })
+}
+
+/// The channels of a `directory` answer.
+pub(crate) fn parse_directory_channels(
+    bytes: &[u8],
+) -> Result<DirectoryPage<DirectoryChannel>, serde_json::Error> {
+    let body: DirectoryBody<DirectoryChannelEntry> = serde_json::from_slice(bytes)?;
+    Ok(DirectoryPage {
+        total: body.total,
+        items: (body.result.into_iter())
+            .map(|channel| DirectoryChannel {
+                id: channel.id,
+                name: channel.name,
+                display_name: channel.fname.filter(|name| !name.is_empty()),
+                users_count: channel.users_count,
+                topic: channel.topic.unwrap_or_default(),
+            })
+            .collect(),
+    })
+}
+
+/// The id of the direct message an `im.create` answer holds.
+pub(crate) fn parse_direct_created(bytes: &[u8]) -> Result<String, serde_json::Error> {
+    Ok(serde_json::from_slice::<DirectCreatedBody>(bytes)?.room.id)
 }
 
 /// The avatar etag of a `users.info` answer: none for a user with the generated avatar.
@@ -2238,5 +2382,99 @@ mod tests {
         let changes = parse_changes(br#"{"result":{},"success":true}"#).unwrap();
         assert_eq!(changes.updated, []);
         assert_eq!(changes.deleted, Vec::<String>::new());
+    }
+
+    // ACT-008
+    #[test]
+    fn parses_the_users_of_the_directory_and_drops_their_emails() {
+        let body = r#"{"result":[
+            {"_id":"u1","createdAt":"2026-10-23T18:38:31.938Z","username":"bob",
+             "emails":[{"address":"bob@example.com","verified":false}],"name":"Bob B"},
+            {"_id":"u2","username":"carol","name":""}],
+            "count":2,"offset":0,"total":40,"success":true}"#;
+        let page = parse_directory_users(body.as_bytes()).unwrap();
+        assert_eq!(page.total, 40);
+        assert_eq!(page.items.len(), 2);
+        assert_eq!(page.items[0].id, "u1");
+        assert_eq!(page.items[0].username, "bob");
+        assert_eq!(page.items[0].name.as_deref(), Some("Bob B"));
+        assert_eq!(page.items[1].name, None);
+    }
+
+    // ACT-008
+    #[test]
+    fn parses_the_channels_of_the_directory() {
+        // The first has no display name, a topic or last message; the second has all three.
+        let body = r#"{"result":[
+            {"_id":"GENERAL","ts":"2026-10-20T22:34:24.883Z","t":"c","name":"general",
+             "usersCount":68333,"default":true,"lastMessage":{"msg":"hi"}},
+            {"_id":"c2","fname":"Chat Two","name":"chat-two","t":"c","usersCount":2,
+             "topic":"About it"}],"count":2,"offset":0,"total":4,"success":true}"#;
+        let page = parse_directory_channels(body.as_bytes()).unwrap();
+        assert_eq!(page.total, 4);
+        assert_eq!(page.items[0].id, "GENERAL");
+        assert_eq!(page.items[0].name, "general");
+        assert_eq!(page.items[0].display_name, None);
+        assert_eq!(page.items[0].users_count, 68333);
+        assert_eq!(page.items[0].topic, "");
+        assert_eq!(page.items[1].display_name.as_deref(), Some("Chat Two"));
+        assert_eq!(page.items[1].topic, "About it");
+    }
+
+    // ACT-008
+    #[test]
+    fn an_empty_directory_page_has_no_entries() {
+        let page = parse_directory_users(br#"{"result":[],"total":0,"success":true}"#).unwrap();
+        assert_eq!((page.items.len(), page.total), (0, 0));
+    }
+
+    // ACT-007
+    #[test]
+    fn parses_the_direct_message_that_was_created() {
+        let body =
+            r#"{"room":{"t":"d","rid":"r1","usernames":["a","b"],"_id":"r1"},"success":true}"#;
+        assert_eq!(parse_direct_created(body.as_bytes()).unwrap(), "r1");
+    }
+
+    // ACT-008
+    #[test]
+    fn a_subscription_that_is_null_is_none() {
+        assert_eq!(
+            parse_subscription(br#"{"subscription":null,"success":true}"#).unwrap(),
+            None
+        );
+        let body = r#"{"subscription":{"_id":"s","rid":"r1","t":"c","name":"chat","fname":"Chat",
+            "open":true,"alert":true,"unread":1,"userMentions":1,"groupMentions":0,
+            "ts":"2026-10-26T10:12:12.039Z"},"success":true}"#;
+        let found = parse_subscription(body.as_bytes()).unwrap().unwrap();
+        assert_eq!(found.room_id, "r1");
+        assert_eq!(found.room_type, RoomType::Channel);
+        assert_eq!(found.display_name.as_deref(), Some("Chat"));
+        assert!(found.open);
+        assert_eq!(found.unread, 1);
+    }
+
+    // ACT-008
+    #[test]
+    fn parses_the_info_of_a_room() {
+        let body = r#"{"room":{"_id":"r1","fname":"Chat","name":"chat","t":"c","usersCount":2,
+            "topic":"About","avatarETag":"etag","lm":"2026-10-23T17:18:53.642Z",
+            "ts":"2026-10-23T17:18:53.497Z","lastMessage":{"msg":"hi"}},"success":true}"#;
+        let info = parse_room_info(body.as_bytes()).unwrap();
+        assert_eq!(info.room_id, "r1");
+        assert_eq!(info.room_type, RoomType::Channel);
+        assert_eq!(info.name, "chat");
+        assert_eq!(info.display_name.as_deref(), Some("Chat"));
+        assert_eq!(info.topic, "About");
+        assert_eq!(info.avatar_etag.as_deref(), Some("etag"));
+        assert_eq!(
+            info.last_message.map(|t| t.to_string()).as_deref(),
+            Some("2026-10-23T17:18:53.642Z")
+        );
+        assert!(info.created.is_some());
+        let bare = parse_room_info(br#"{"room":{"_id":"r2","t":"p"},"success":true}"#).unwrap();
+        assert_eq!(bare.room_type, RoomType::Private);
+        assert_eq!((bare.name.as_str(), bare.topic.as_str()), ("", ""));
+        assert_eq!((bare.last_message, bare.created), (None, None));
     }
 }

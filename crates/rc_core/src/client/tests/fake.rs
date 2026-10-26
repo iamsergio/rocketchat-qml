@@ -81,6 +81,21 @@ pub(super) struct FileScript {
     pub(super) result: Result<Image, ApiError>,
 }
 
+/// A call that waits for its gate, if it has one, then answers.
+pub(super) struct Scripted<T> {
+    /// Holds the call until the test notifies it.
+    pub(super) gate: Option<Arc<Notify>>,
+    pub(super) result: Result<T, ApiError>,
+}
+
+/// What a request of the directory was asked: what it looks for, and how many.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct DirectoryCall {
+    pub(super) kind: &'static str,
+    pub(super) text: String,
+    pub(super) count: usize,
+}
+
 /// What `send_message` was asked.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct SendCall {
@@ -238,6 +253,23 @@ pub(super) struct FakeState {
     pub(super) room_calls: Vec<RoomCall>,
     /// Room commands that got past their gate.
     pub(super) room_actions_returned: usize,
+    /// One per request for the directory's users, and one per request for its channels; nothing
+    /// found once they run out.
+    pub(super) directory_people: VecDeque<Scripted<Found<Person>>>,
+    pub(super) directory_channels: VecDeque<Scripted<Found<DirectoryChannel>>>,
+    pub(super) directory_calls: Vec<DirectoryCall>,
+    /// One per `create_direct`; refused once they run out.
+    pub(super) directs: VecDeque<Scripted<RoomId>>,
+    pub(super) direct_calls: Vec<String>,
+    /// One per `join_channel`; a success once they run out.
+    pub(super) joins: VecDeque<Scripted<()>>,
+    pub(super) join_calls: Vec<String>,
+    /// One per `room_info`; refused once they run out.
+    pub(super) infos: VecDeque<Scripted<rc_api::RoomInfo>>,
+    pub(super) info_calls: Vec<String>,
+    /// What `subscription` answers for a room: not in it if unset.
+    pub(super) own_subscriptions: HashMap<String, Result<Option<rc_api::Subscription>, ApiError>>,
+    pub(super) subscription_calls: Vec<String>,
     /// One per mark-as-read call; a success once they run out.
     pub(super) mark_reads: VecDeque<Result<(), ApiError>>,
     /// The rooms `mark_read` was asked for.
@@ -543,6 +575,87 @@ impl Fake {
         }
         self.state().room_actions_returned += 1;
         result
+    }
+
+    pub(super) fn script_directory(
+        &self,
+        people: Result<Found<Person>, ApiError>,
+        channels: Result<Found<DirectoryChannel>, ApiError>,
+    ) {
+        self.script_directory_gated(None, people, channels);
+    }
+
+    /// Like [`script_directory`](Self::script_directory); the request for the users waits for the gate.
+    pub(super) fn script_directory_gated(
+        &self,
+        gate: Option<Arc<Notify>>,
+        people: Result<Found<Person>, ApiError>,
+        channels: Result<Found<DirectoryChannel>, ApiError>,
+    ) {
+        let mut state = self.state();
+        state.directory_people.push_back(Scripted {
+            gate,
+            result: people,
+        });
+        state.directory_channels.push_back(Scripted {
+            gate: None,
+            result: channels,
+        });
+    }
+
+    /// The directory requests have started: `count` of them, users and channels together.
+    pub(super) fn wait_for_directory_calls(&self, count: usize) -> Vec<DirectoryCall> {
+        wait_until(|| {
+            let calls = self.state().directory_calls.clone();
+            (calls.len() >= count).then_some(calls)
+        })
+    }
+
+    pub(super) fn script_direct(
+        &self,
+        gate: Option<Arc<Notify>>,
+        result: Result<RoomId, ApiError>,
+    ) {
+        self.state().directs.push_back(Scripted { gate, result });
+    }
+
+    pub(super) fn script_join(&self, gate: Option<Arc<Notify>>, result: Result<(), ApiError>) {
+        self.state().joins.push_back(Scripted { gate, result });
+    }
+
+    pub(super) fn script_info(
+        &self,
+        gate: Option<Arc<Notify>>,
+        result: Result<rc_api::RoomInfo, ApiError>,
+    ) {
+        self.state().infos.push_back(Scripted { gate, result });
+    }
+
+    /// Makes `subscription` answer for the room from now on.
+    pub(super) fn script_own_subscription(
+        &self,
+        room: &str,
+        result: Result<Option<rc_api::Subscription>, ApiError>,
+    ) {
+        self.state()
+            .own_subscriptions
+            .insert(room.to_owned(), result);
+    }
+
+    /// Records a call and plays the next script of the queue `pick` takes it from.
+    async fn scripted<T>(
+        &self,
+        pick: impl FnOnce(&mut FakeState) -> Option<Scripted<T>>,
+        default: Result<T, ApiError>,
+    ) -> Result<T, ApiError> {
+        let script = pick(&mut self.state());
+        let Some(script) = script else {
+            return default;
+        };
+        if let Some(gate) = script.gate {
+            gate.notified().await;
+        }
+        script.result
     }
 
     pub(super) fn script_mark_read(&self, result: Result<(), ApiError>) {
@@ -1121,6 +1234,117 @@ impl ServerApi for Fake {
     ) -> Result<(), ApiError> {
         let room = room.to_string();
         self.room_action(RoomCall::Leave { room, kind }).await
+    }
+
+    async fn directory_users(
+        &self,
+        _credentials: &Credentials,
+        text: &str,
+        count: usize,
+    ) -> Result<Found<Person>, ApiError> {
+        let call = DirectoryCall {
+            kind: "users",
+            text: text.to_owned(),
+            count,
+        };
+        let empty = Found {
+            items: Vec::new(),
+            total: 0,
+        };
+        self.scripted(
+            |state| {
+                state.directory_calls.push(call);
+                state.directory_people.pop_front()
+            },
+            Ok(empty),
+        )
+        .await
+    }
+
+    async fn directory_channels(
+        &self,
+        _credentials: &Credentials,
+        text: &str,
+        count: usize,
+    ) -> Result<Found<DirectoryChannel>, ApiError> {
+        let call = DirectoryCall {
+            kind: "channels",
+            text: text.to_owned(),
+            count,
+        };
+        let empty = Found {
+            items: Vec::new(),
+            total: 0,
+        };
+        self.scripted(
+            |state| {
+                state.directory_calls.push(call);
+                state.directory_channels.pop_front()
+            },
+            Ok(empty),
+        )
+        .await
+    }
+
+    async fn create_direct(
+        &self,
+        _credentials: &Credentials,
+        username: &str,
+    ) -> Result<RoomId, ApiError> {
+        let username = username.to_owned();
+        self.scripted(
+            |state| {
+                state.direct_calls.push(username);
+                state.directs.pop_front()
+            },
+            Err(refused()),
+        )
+        .await
+    }
+
+    async fn join_channel(
+        &self,
+        _credentials: &Credentials,
+        room: &RoomId,
+    ) -> Result<(), ApiError> {
+        let room = room.to_string();
+        self.scripted(
+            |state| {
+                state.join_calls.push(room);
+                state.joins.pop_front()
+            },
+            Ok(()),
+        )
+        .await
+    }
+
+    async fn room_info(
+        &self,
+        _credentials: &Credentials,
+        room: &RoomId,
+    ) -> Result<rc_api::RoomInfo, ApiError> {
+        let room = room.to_string();
+        self.scripted(
+            |state| {
+                state.info_calls.push(room);
+                state.infos.pop_front()
+            },
+            Err(refused()),
+        )
+        .await
+    }
+
+    fn subscription(
+        &self,
+        _credentials: &Credentials,
+        room: &RoomId,
+    ) -> impl Future<Output = Result<Option<rc_api::Subscription>, ApiError>> + Send {
+        let mut state = self.state();
+        state.subscription_calls.push(room.to_string());
+        let answer = (state.own_subscriptions.get(room.as_str()))
+            .cloned()
+            .unwrap_or(Ok(None));
+        std::future::ready(answer)
     }
 
     async fn realtime(&self, credentials: &Credentials) -> Result<Realtime, ApiError> {

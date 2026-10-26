@@ -21,7 +21,8 @@ pub use client::{RestClient, RestSession};
 pub use ddp::{DdpClient, DdpEvents, SubscriptionId};
 pub use error::Error;
 pub use types::{
-    Attachment, AttachmentImage, Author, AvatarOwner, Credentials, CustomEmoji, DdpEvent, Download,
-    HistoryPage, LoginResult, Message, MessageChanges, MessageSettings, Quote, Reaction, RoomType,
-    ServerInfo, ServerVersion, Subscription, ThreadPage, ThreadsKind, ThreadsPage, User,
+    Attachment, AttachmentImage, Author, AvatarOwner, Credentials, CustomEmoji, DdpEvent,
+    DirectoryChannel, DirectoryPage, DirectoryUser, Download, HistoryPage, LoginResult, Message,
+    MessageChanges, MessageSettings, Quote, Reaction, RoomInfo, RoomType, ServerInfo,
+    ServerVersion, Subscription, ThreadPage, ThreadsKind, ThreadsPage, User,
 };

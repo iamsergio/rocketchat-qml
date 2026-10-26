@@ -4,6 +4,7 @@
 //! The knobs of the core that tests turn to make it quick.
 
 use crate::backoff::Backoff;
+use crate::directory::DEBOUNCE;
 use crate::rooms::{CHANNEL_BATCH, QUIET_AFTER};
 use crate::timeline::PAGE_SIZE;
 
@@ -19,6 +20,10 @@ const CHANNEL_BATCH_VAR: &str = "RC_CHANNEL_BATCH_SECS";
 /// (see [`Tuning::from_env`]).
 const THREADS_PAGE_VAR: &str = "RC_THREADS_PAGE_SIZE";
 
+/// The environment variable that overrides how long the directory search waits for the typing to
+/// stop, in whole milliseconds (see [`Tuning::from_env`]). `0` searches at once.
+const DIRECTORY_DEBOUNCE_VAR: &str = "RC_DIRECTORY_DEBOUNCE_MS";
+
 /// Timings that the core has a default for and tests change.
 #[derive(Clone, Debug)]
 pub(crate) struct Tuning {
@@ -30,6 +35,9 @@ pub(crate) struct Tuning {
     pub(crate) channel_batch: jiff::SignedDuration,
     /// How many threads one request of the thread list asks for.
     pub(crate) threads_page_size: usize,
+    /// How long the directory search waits after the last change of the text. Zero searches at
+    /// once.
+    pub(crate) directory_debounce: jiff::SignedDuration,
 }
 
 impl Default for Tuning {
@@ -39,6 +47,7 @@ impl Default for Tuning {
             quiet_after: QUIET_AFTER,
             channel_batch: CHANNEL_BATCH,
             threads_page_size: PAGE_SIZE,
+            directory_debounce: DEBOUNCE,
         }
     }
 }
@@ -49,7 +58,9 @@ impl Tuning {
     /// `channel_batch`, which `RC_CHANNEL_BATCH_SECS` sets in whole seconds (a testing aid: the
     /// news of channels shows in seconds, or at once with 0), and `threads_page_size`, which
     /// `RC_THREADS_PAGE_SIZE` sets (a testing aid too: the thread list loads more without hundreds
-    /// of threads). A value that isn't a number of the kind is ignored, with a warning.
+    /// of threads), and `directory_debounce`, which `RC_DIRECTORY_DEBOUNCE_MS` sets in whole
+    /// milliseconds (a testing aid too). A value that isn't a number of the kind is ignored, with
+    /// a warning.
     pub(crate) fn from_env() -> Self {
         let mut tuning = Self::default();
         match std::env::var(QUIET_AFTER_VAR) {
@@ -86,6 +97,23 @@ impl Tuning {
             Err(std::env::VarError::NotPresent) => {}
             Err(std::env::VarError::NotUnicode(_)) => {
                 tracing::warn!("{THREADS_PAGE_VAR} isn't a positive number");
+            }
+        }
+        match std::env::var(DIRECTORY_DEBOUNCE_VAR) {
+            Ok(value) => {
+                if let Ok(millis) = value.trim().parse::<u32>() {
+                    tuning.directory_debounce =
+                        jiff::SignedDuration::from_millis(i64::from(millis));
+                } else {
+                    tracing::warn!(
+                        value,
+                        "{DIRECTORY_DEBOUNCE_VAR} isn't a number of milliseconds"
+                    );
+                }
+            }
+            Err(std::env::VarError::NotPresent) => {}
+            Err(std::env::VarError::NotUnicode(_)) => {
+                tracing::warn!("{DIRECTORY_DEBOUNCE_VAR} isn't a number of milliseconds");
             }
         }
         tuning
