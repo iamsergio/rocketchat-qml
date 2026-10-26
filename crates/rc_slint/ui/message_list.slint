@@ -211,4 +211,21 @@ export component MessageList inherits FocusScope {
             }
         }
     }
+
+    // How far the list is scrolled up from its newest message, in logical pixels, as the text the
+    // GUI tests read: Slint's testing API can't read the flickable's position, and an element
+    // inside the content is not found once it is scrolled out of view, but an element outside it
+    // that says where the content is can always be read. It is at the end of the content and not
+    // the start because messages loaded above move the start and not the distance to the newest
+    // message. The binding is evaluated when read and not per frame, so it costs nothing, and the
+    // element draws nothing, takes no input and has no place in the layout.
+    Rectangle {
+        accessible-id: root.in-thread-pane ? "threadMessageListOffset" : "messageListOffset";
+        accessible-role: text;
+        accessible-value: "\{(flick.content-y + flick.content-height - flick.height) / 1px}";
+        x: Theme.scroll-probe-x;
+        y: Theme.scroll-top;
+        width: Theme.scroll-probe-size;
+        height: Theme.scroll-probe-size;
+    }
 }

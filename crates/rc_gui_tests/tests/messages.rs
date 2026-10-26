@@ -184,6 +184,14 @@ fn scrolling_up_with_the_wheel_loads_older_messages() {
     assert!(gui.count(main_window::MESSAGE_LIST).unwrap() < total);
     assert!(!gui.exists_and_visible(main_window::HISTORY_START).unwrap());
 
+    let offset = || {
+        gui.scroll_offset(main_window::MESSAGE_LIST, main_window::MESSAGE_LIST_OFFSET)
+            .unwrap()
+    };
+    // The newest message is in view: no way scrolled up. The frames are counted from here, where
+    // the app can count them.
+    assert!(offset().abs() < 1.0, "{}", offset());
+    let frames = gui.frame_count(main_window::WINDOW).unwrap();
     let at_the_start = || -> Result<bool, GuiError> {
         Ok(gui.count(main_window::MESSAGE_LIST)? == total
             && gui.exists_and_visible(&message(oldest, message_row::BODY))?
@@ -196,6 +204,19 @@ fn scrolling_up_with_the_wheel_loads_older_messages() {
             .unwrap();
         batches += 1;
     }
+    // Scrolled up past more than a screenful of history, and the view drew while it moved.
+    let list_height = gui.bounding_box(main_window::MESSAGE_LIST).unwrap().height;
+    assert!(
+        offset() > list_height,
+        "{} in a list of {list_height}",
+        offset()
+    );
+    let frames_after = gui.frame_count(main_window::WINDOW).unwrap();
+    assert_eq!(frames.is_some(), frames_after.is_some());
+    assert!(
+        frames_after >= frames.map(|frames| frames + 1),
+        "{frames:?} then {frames_after:?}"
+    );
     assert_eq!(
         gui.text(&message(oldest, message_row::BODY)).unwrap(),
         "message 000"
