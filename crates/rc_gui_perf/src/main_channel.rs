@@ -239,18 +239,41 @@ pub fn measure(
     Ok(Measured {
         start_offset,
         end_offset,
-        frames: frames_before
-            .zip(frames_after)
-            .map(|(before, after)| after.saturating_sub(before)),
+        frames: frames_drawn(frames_before, frames_after, start_offset, end_offset),
         input,
         wall,
         window,
     })
 }
 
+/// The frames drawn between two reads of the counter, or none when the app can't count them. A
+/// count that didn't move while the list did is not 0 frames but a counter that doesn't fire (Skia
+/// on wgpu, so far), so it is unknown too.
+fn frames_drawn(
+    before: Option<u64>,
+    after: Option<u64>,
+    start_offset: f64,
+    end_offset: f64,
+) -> Option<u64> {
+    let frames = after?.saturating_sub(before?);
+    (frames > 0 || (end_offset - start_offset).abs() < f64::EPSILON).then_some(frames)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // INFRA-007
+    #[test]
+    fn no_frames_while_the_list_moved_are_unknown_and_not_zero() {
+        assert_eq!(frames_drawn(Some(10), Some(50), 0.0, 8000.0), Some(40));
+        assert_eq!(frames_drawn(Some(0), Some(0), 0.0, 8000.0), None);
+        assert_eq!(frames_drawn(Some(7), Some(7), 100.0, 0.0), None);
+        // Nothing moved and nothing was drawn: that is a real 0.
+        assert_eq!(frames_drawn(Some(7), Some(7), 100.0, 100.0), Some(0));
+        assert_eq!(frames_drawn(None, None, 0.0, 8000.0), None);
+        assert_eq!(frames_drawn(Some(1), None, 0.0, 8000.0), None);
+    }
 
     // INFRA-007
     #[test]

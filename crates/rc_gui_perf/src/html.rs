@@ -196,8 +196,9 @@ time and frames); per pixel is the same number divided by about the same distanc
 Less is better for every counter.</li>
 <li>The variants are the Qt app and the Slint app with each of its renderers. The ratio is
 <b>each Slint variant / Qt</b>: below 1 Slint needs less. The software renderer has no rendering
-notifier, so its frames are not counted: its per frame numbers, and so its ratios per frame, are
-unknown, not 0.</li>
+notifier, so its frames are not counted, and a run that counted no frame while the list moved
+(a rendering notifier that doesn't fire) counts as not counted too: the per frame numbers, and so
+the ratios per frame, are unknown, not 0.</li>
 <li>The change against a baseline is called better or worse only when it is larger than the two
 spreads added up, and than 3%; otherwise it is within noise.</li>
 <li>Qt's Spix has a 10 ms timer in the GUI thread, which wakes the Qt app 100 times a second

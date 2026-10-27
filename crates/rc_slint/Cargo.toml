@@ -31,8 +31,9 @@ thiserror.workspace = true
 tracing.workspace = true
 
 [features]
-# Slint's Skia renderer, for the performance runs (`RC_SLINT_RENDERER=skia`). It builds Skia, which
-# takes long and needs clang, so only the `perf-slint` preset turns it on.
+# Slint's Skia renderer, for the performance runs (`RC_SLINT_RENDERER=skia-opengl` and
+# `skia-vulkan`). It downloads a prebuilt Skia and makes the binary much bigger, so only the
+# `perf-slint` preset turns it on.
 skia = ["slint/renderer-skia"]
 # Also log to a file next to the executable, and `--dev` fills the login page in.
 developer-mode = ["rc_view/developer-mode"]

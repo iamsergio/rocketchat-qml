@@ -123,7 +123,8 @@ The decided design (counters, platforms, batched input, the same-distance compar
 - [x] Scenario `drag_main_channel`: the seeded channel dragged by its content in the same strokes in both apps (as many as drag 8000 px), so both get the same input in the same time and their frames compare directly, see [Performance tests](docs/design/performance-tests.md)
 - [x] Renderer variants: every run is one of `qt`, `slint-femtovg`, `slint-skia`, `slint-software` (`--list` shows each scenario per variant; a bare name runs all four, `slint.<scenario>` the three Slint ones). The Slint app picks its renderer explicitly (`slint::BackendSelector`) and fails if the build lacks it, instead of falling back. Old JSON with app `slint` reads as `slint-femtovg`. The report shows the four side by side, each Slint variant against Qt
 - [x] Skia in the Slint perf build: an `rc_slint` feature for Slint's `renderer-skia`, on in the `perf-slint` preset only, so dev builds and CI don't build Skia
-- [ ] Frame counts with the software renderer, which has no rendering notifier: another way in `spix_slint`, or the report says per frame is unknown for it
+- [x] Skia on OpenGL and on Vulkan as two variants, `slint-skia-opengl` and `slint-skia-vulkan` (`RC_SLINT_RENDERER=skia-opengl|skia-vulkan`, the surface required through `BackendSelector`), so Skia compares with Qt and femtovg on the same graphics API as well as on its own default. The old `slint-skia` was Skia's first choice, wgpu on Vulkan, and reads as `slint-skia-vulkan`
+- [ ] Frame counts with the software renderer and with Skia on wgpu, whose rendering notifiers don't fire (Skia on wgpu counted 0 frames): another way in `spix_slint`, or the report says per frame is unknown for them. Until then `rc_gui_perf` records 0 frames of a list that moved as unknown
 - [ ] `perf record` flame graphs per scenario and variant
 
 ## Phase 8: personal nice to haves

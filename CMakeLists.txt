@@ -11,7 +11,7 @@ if(NOT ROCKETCHATQML_QT AND NOT ROCKETCHATQML_SLINT)
 endif()
 
 # Before project(): that's where the vcpkg toolchain installs the manifest's features.
-option(ROCKETCHATQML_SLINT_SKIA "Build Slint's Skia renderer into the Slint app, for the performance runs (RC_SLINT_RENDERER=skia). Builds Skia: slow, needs clang" OFF)
+option(ROCKETCHATQML_SLINT_SKIA "Build Slint's Skia renderer into the Slint app, for the performance runs (RC_SLINT_RENDERER=skia-opengl, skia-vulkan). Downloads a prebuilt Skia at the first build" OFF)
 option(ROCKETCHATQML_SPIX "Build the Spix UI test server into the app, for the GUI tests (C++ Spix for Qt, the Rust server of rc_slint for Slint)" OFF)
 if(ROCKETCHATQML_SPIX AND ROCKETCHATQML_QT)
   list(APPEND VCPKG_MANIFEST_FEATURES spix)
