@@ -17,9 +17,13 @@ pub const ENV: &str = "RC_SLINT_RENDERER";
 pub enum Renderer {
     Femtovg,
     Software,
-    /// Only with the `skia` feature of `rc_slint`, which builds Slint's Skia renderer.
+    /// Skia drawing with OpenGL. Only with the `skia` feature of `rc_slint`, which builds Slint's
+    /// Skia renderer.
     #[cfg(feature = "skia")]
-    Skia,
+    SkiaOpenGl,
+    /// Skia drawing with Vulkan (through wgpu). Only with the `skia` feature.
+    #[cfg(feature = "skia")]
+    SkiaVulkan,
 }
 
 /// What `RC_SLINT_RENDERER` accepts, in the order the error lists them.
@@ -27,7 +31,9 @@ const NAMES: &[(&str, Renderer)] = &[
     ("femtovg", Renderer::Femtovg),
     ("software", Renderer::Software),
     #[cfg(feature = "skia")]
-    ("skia", Renderer::Skia),
+    ("skia-opengl", Renderer::SkiaOpenGl),
+    #[cfg(feature = "skia")]
+    ("skia-vulkan", Renderer::SkiaVulkan),
 ];
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -86,18 +92,28 @@ impl Renderer {
     /// Makes Slint's winit backend with this renderer the platform. Call it before the first
     /// window. It takes precedence over `SLINT_BACKEND`.
     ///
+    /// Plain `skia` picks its surface at run time and falls back, with only a line on stderr, to
+    /// the next one when it can't make one. Requiring the graphics API makes Slint ask for that
+    /// one surface alone, so when it can't be made, opening the window fails with Slint's error
+    /// instead of drawing with another surface. That error comes when the window is shown, not
+    /// here.
+    ///
     /// # Errors
     ///
     /// If the winit backend can't start, for example without a display.
     pub fn select(self) -> Result<(), RendererError> {
-        slint::BackendSelector::new()
-            .backend_name("winit".into())
-            .renderer_name(self.name().into())
-            .select()
-            .map_err(|error| RendererError::Select {
-                renderer: self.name(),
-                message: error.to_string(),
-            })
+        let selector = slint::BackendSelector::new().backend_name("winit".into());
+        let selector = match self {
+            Self::Femtovg | Self::Software => selector.renderer_name(self.name().into()),
+            #[cfg(feature = "skia")]
+            Self::SkiaOpenGl => selector.renderer_name("skia".into()).require_opengl(),
+            #[cfg(feature = "skia")]
+            Self::SkiaVulkan => selector.renderer_name("skia".into()).require_vulkan(),
+        };
+        selector.select().map_err(|error| RendererError::Select {
+            renderer: self.name(),
+            message: error.to_string(),
+        })
     }
 }
 
@@ -117,11 +133,18 @@ mod tests {
     // APP-001
     #[cfg(feature = "skia")]
     #[test]
-    fn skia_is_a_renderer_of_a_build_with_the_skia_feature() {
-        assert_eq!(Renderer::parse("skia"), Ok(Renderer::Skia));
-        assert_eq!(Renderer::Skia.name(), "skia");
+    fn skia_on_opengl_and_on_vulkan_are_renderers_of_a_build_with_the_skia_feature() {
+        assert_eq!(Renderer::parse("skia-opengl"), Ok(Renderer::SkiaOpenGl));
+        assert_eq!(Renderer::parse("skia-vulkan"), Ok(Renderer::SkiaVulkan));
+        assert_eq!(Renderer::SkiaOpenGl.name(), "skia-opengl");
+        assert_eq!(Renderer::SkiaVulkan.name(), "skia-vulkan");
+        // Plain `skia` would pick a surface and fall back, so it is not one.
+        assert_eq!(
+            Renderer::parse("skia"),
+            Err(RendererError::Unknown("skia".to_owned()))
+        );
         let message = Renderer::parse("vulkan").unwrap_err().to_string();
-        assert!(message.contains("femtovg, software, skia"));
+        assert!(message.contains("femtovg, software, skia-opengl, skia-vulkan"));
     }
 
     // APP-001
@@ -129,10 +152,10 @@ mod tests {
     #[test]
     fn skia_is_not_a_renderer_of_a_build_without_the_skia_feature() {
         assert_eq!(
-            Renderer::parse("skia"),
-            Err(RendererError::Unknown("skia".to_owned()))
+            Renderer::parse("skia-vulkan"),
+            Err(RendererError::Unknown("skia-vulkan".to_owned()))
         );
-        let message = Renderer::parse("skia").unwrap_err().to_string();
+        let message = Renderer::parse("skia-opengl").unwrap_err().to_string();
         assert!(message.contains("not a renderer of this build"));
         assert!(message.contains("femtovg, software") && !message.contains("software, skia"));
     }
@@ -140,7 +163,7 @@ mod tests {
     // APP-001
     #[test]
     fn an_unknown_renderer_is_an_error_that_lists_the_known_ones() {
-        for name in ["", "Software", "gl", "Skia"] {
+        for name in ["", "Software", "gl", "Skia", "skia"] {
             assert_eq!(
                 Renderer::parse(name),
                 Err(RendererError::Unknown(name.to_owned()))
