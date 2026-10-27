@@ -8,6 +8,7 @@
 pub mod app;
 mod emoji_picker_model;
 mod message_model;
+pub mod renderer;
 pub mod rich_markdown;
 mod room_model;
 mod room_search_model;

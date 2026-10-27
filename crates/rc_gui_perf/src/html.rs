@@ -14,6 +14,7 @@ use serde_json::Value;
 use crate::aggregate::{
     self, AppSummary, Change, CounterSummary, Measure, Run, Stat, Verdict, summarize,
 };
+use crate::cli::Variant;
 use crate::error::Error;
 
 /// The runs of a directory, and when the newest was written.
@@ -134,12 +135,13 @@ fn num(value: f64) -> String {
     }
 }
 
-fn app_name(app: &str) -> &str {
-    match app {
-        "qt" => "Qt",
-        "slint" => "Slint",
-        other => other,
-    }
+fn app_name(app: &str) -> String {
+    Variant::from_stored(app).map_or_else(|| app.to_owned(), |variant| variant.label().to_owned())
+}
+
+/// The variants in the order of the report.
+fn variant_ids() -> [&'static str; Variant::ALL.len()] {
+    Variant::ALL.map(Variant::id)
 }
 
 const CSS: &str = "\
@@ -192,7 +194,10 @@ the same number of frames. Here the numbers <b>per frame</b> compare directly (a
 time and frames); per pixel is the same number divided by about the same distance.</li>
 <li>Each number is the <b>median</b> of the runs; the <b>spread</b> is (max - min) / median.
 Less is better for every counter.</li>
-<li>The ratio is <b>Slint / Qt</b>: below 1 Slint needs less.</li>
+<li>The variants are the Qt app and the Slint app with each of its renderers. The ratio is
+<b>each Slint variant / Qt</b>: below 1 Slint needs less. The software renderer has no rendering
+notifier, so its frames are not counted: its per frame numbers, and so its ratios per frame, are
+unknown, not 0.</li>
 <li>The change against a baseline is called better or worse only when it is larger than the two
 spreads added up; otherwise it is within noise.</li>
 <li>Qt's Spix has a 10 ms timer in the GUI thread, which wakes the Qt app 100 times a second
@@ -401,31 +406,42 @@ fn counters_table(out: &mut String, apps: &[(&str, &AppSummary)]) {
     out.push_str("</table></div>\n");
 }
 
-fn ratio_table(out: &mut String, qt: &AppSummary, slint: &AppSummary) {
-    let ratios: Vec<f64> = qt
-        .counters
+fn ratio_table(out: &mut String, qt: &AppSummary, slint: &[(&str, &AppSummary)]) {
+    let ratios: Vec<f64> = slint
         .iter()
-        .filter_map(|q| find(Some(slint), &q.event).map(|s| (q, s)))
+        .flat_map(|(_, summary)| {
+            qt.counters
+                .iter()
+                .filter_map(|q| find(Some(summary), &q.event).map(|s| (q, s)))
+        })
         .flat_map(|(q, s)| [(&s.per_pixel, &q.per_pixel), (&s.per_frame, &q.per_frame)])
         .filter_map(|(s, q)| aggregate::ratio(s.stat()?, q.stat()?))
         .collect();
     let scale = ratios.iter().copied().fold(2.0, f64::max).ceil();
     out.push_str(
         "<h3>Slint / Qt</h3>\n<p class=\"note\">Below 1 Slint needs less; the line in each bar \
-         marks 1.</p>\n<div class=\"table\"><table><tr><th>Counter</th><th>per px</th>\
-         <th>per frame</th></tr>\n",
+         marks 1.</p>\n<div class=\"table\"><table><tr><th rowspan=\"2\">Counter</th>",
     );
+    for (app, _) in slint {
+        let _ = write!(out, "<th colspan=\"2\">{}</th>", app_name(app));
+    }
+    out.push_str("</tr>\n<tr>");
+    for _ in slint {
+        out.push_str("<th>per px</th><th>per frame</th>");
+    }
+    out.push_str("</tr>\n");
     for q in &qt.counters {
-        let Some(s) = find(Some(slint), &q.event) else {
-            continue;
-        };
-        let _ = writeln!(
-            out,
-            "<tr><td>{}</td>{}{}</tr>",
-            label(q),
-            ratio_cell(&s.per_pixel, &q.per_pixel, scale),
-            ratio_cell(&s.per_frame, &q.per_frame, scale),
-        );
+        let _ = write!(out, "<tr><td>{}</td>", label(q));
+        for (_, summary) in slint {
+            match find(Some(summary), &q.event) {
+                Some(s) => {
+                    out.push_str(&ratio_cell(&s.per_pixel, &q.per_pixel, scale));
+                    out.push_str(&ratio_cell(&s.per_frame, &q.per_frame, scale));
+                }
+                None => out.push_str("<td class=\"no\">-</td><td class=\"no\">-</td>"),
+            }
+        }
+        out.push_str("</tr>\n");
     }
     out.push_str("</table></div>\n");
 }
@@ -484,7 +500,7 @@ pub fn render(runs: &[Run], baseline: Option<&[Run]>, date: &str) -> String {
             .cloned()
             .collect();
         let _ = writeln!(out, "<h2>{}</h2>", escape(scenario));
-        let summaries: Vec<(&str, AppSummary)> = ["qt", "slint"]
+        let summaries: Vec<(&str, AppSummary)> = variant_ids()
             .into_iter()
             .filter_map(|app| {
                 let app_runs = runs_of(runs, app, scenario);
@@ -496,14 +512,18 @@ pub fn render(runs: &[Run], baseline: Option<&[Run]>, date: &str) -> String {
         let apps: Vec<(&str, &AppSummary)> = summaries.iter().map(|(app, s)| (*app, s)).collect();
         facts_table(&mut out, &apps);
         counters_table(&mut out, &apps);
-        if let (Some((_, qt)), Some((_, slint))) = (
-            summaries.iter().find(|(app, _)| *app == "qt"),
-            summaries.iter().find(|(app, _)| *app == "slint"),
-        ) {
-            ratio_table(&mut out, qt, slint);
+        let slint: Vec<(&str, &AppSummary)> = apps
+            .iter()
+            .copied()
+            .filter(|(app, _)| *app != "qt")
+            .collect();
+        if let Some((_, qt)) = apps.iter().find(|(app, _)| *app == "qt")
+            && !slint.is_empty()
+        {
+            ratio_table(&mut out, qt, &slint);
         }
         if let Some(baseline) = baseline {
-            let old: Vec<(&str, Option<AppSummary>)> = ["qt", "slint"]
+            let old: Vec<(&str, Option<AppSummary>)> = variant_ids()
                 .into_iter()
                 .map(|app| {
                     let app_runs = runs_of(baseline, app, scenario);
@@ -568,7 +588,7 @@ mod tests {
     fn the_report_has_the_values_the_ratio_and_the_baseline_change() {
         let now = [
             run("qt", false, 4e9, Some(400.0)),
-            run("slint", false, 1e9, None),
+            run("slint-femtovg", false, 1e9, None),
         ];
         let before = [run("qt", false, 2e9, Some(400.0))];
         let html = render(&now, Some(&before), "2026-10-27 13:05 UTC");
@@ -586,12 +606,53 @@ mod tests {
 
     // INFRA-007
     #[test]
+    fn three_variants_side_by_side_each_slint_one_against_qt() {
+        let mut software = run("slint-software", false, 2e9, None);
+        software.counters[0].value = Some(2e9);
+        let runs = [
+            run("qt", false, 4e9, Some(400.0)),
+            run("slint-femtovg", false, 1e9, Some(500.0)),
+            software,
+        ];
+        // The baseline has the file of before the variants, which said `slint`.
+        let old = [Run::from_json(&serde_json::json!({
+            "schema": 1, "app": "slint", "scenario": "scroll_main_channel", "platform": "xcb",
+            "git_revision": "abc123", "distance_px": 1000.0, "frames": 500.0,
+            "wall_time_ms": 3000.0,
+            "counters": [{"event": "instructions:u", "state": "counted", "value": 2e9,
+                          "unit": "count"}],
+        }))
+        .unwrap_or_else(|e| panic!("{e}"))];
+        let html = render(&runs, Some(&old), "d");
+        for name in ["Qt", "Slint femtovg", "Slint software"] {
+            assert!(
+                html.contains(&format!("<td>{name}</td>")),
+                "{name} in the facts"
+            );
+            assert!(html.contains(&format!("<th colspan=\"2\">{name}</th>")) || name == "Qt");
+        }
+        // 1e9 / 4e9 and 2e9 / 4e9 per px, in one row of the ratio table.
+        assert!(html.contains("0.25") && html.contains("0.50"));
+        // Frames are known for two variants and unknown, not 0, for the software one.
+        assert!(html.contains("no frame count"));
+        assert!(html.contains("<td class=\"no\">unknown</td>"));
+        // `slint` of the baseline is the femtovg variant: -50 %, and software has none.
+        assert!(html.contains("-50.0 %, better"));
+        assert!(html.contains("no baseline"));
+    }
+
+    // INFRA-007
+    #[test]
     fn a_drag_scenario_shows_its_strokes_and_a_wheel_one_its_batches() {
         let mut drag = run("qt", false, 4e9, Some(400.0));
         drag.scenario = "drag_main_channel".to_owned();
         drag.wheel_batches = None;
         drag.drag_strokes = Some(23.0);
-        let html = render(&[drag, run("slint", false, 1e9, Some(400.0))], None, "d");
+        let html = render(
+            &[drag, run("slint-femtovg", false, 1e9, Some(400.0))],
+            None,
+            "d",
+        );
         assert!(html.contains("<th>Drag strokes</th>"));
         assert!(html.contains("<th>Wheel batches</th>"));
         assert!(html.contains("drag_main_channel"));

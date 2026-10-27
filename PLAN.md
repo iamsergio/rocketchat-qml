@@ -121,7 +121,10 @@ The decided design (counters, platforms, batched input, the same-distance compar
 - [x] Spix `mouseDrag(path, fromX, fromY, toX, toY, steps, intervalMs, holdMs)` in the fork, both servers: press, `steps` moves at a constant velocity, hold still, release, played inside the app like `mouseWheel`
 - [x] `Gui::mouse_drag` in `rc_gui_tests`, and a GUI test against both apps that dragging the message list's content scrolls it by the dragged distance without a flick
 - [x] Scenario `drag_main_channel`: the seeded channel dragged by its content in the same strokes in both apps (as many as drag 8000 px), so both get the same input in the same time and their frames compare directly, see [Performance tests](docs/design/performance-tests.md)
-- [ ] Later: `perf record` flame graphs per scenario
+- [x] Renderer variants: every run is one of `qt`, `slint-femtovg`, `slint-skia`, `slint-software` (`--list` shows each scenario per variant; a bare name runs all four, `slint.<scenario>` the three Slint ones). The Slint app picks its renderer explicitly (`slint::BackendSelector`) and fails if the build lacks it, instead of falling back. Old JSON with app `slint` reads as `slint-femtovg`. The report shows the four side by side, each Slint variant against Qt
+- [ ] Skia in the Slint perf build: an `rc_slint` feature for Slint's `renderer-skia`, on in the `perf-slint` preset only, so dev builds and CI don't build Skia
+- [ ] Frame counts with the software renderer, which has no rendering notifier: another way in `spix_slint`, or the report says per frame is unknown for it
+- [ ] `perf record` flame graphs per scenario and variant
 
 ## Phase 8: personal nice to haves
 - [ ] Move logout icon. Logout is seldom used. right lcick on the server rail on a server tile can have the logout option.

@@ -20,7 +20,7 @@ pub struct RunInfo<'a> {
     pub git_revision: &'a str,
 }
 
-/// `<app>.<scenario>.<run>.json`
+/// `<variant>.<scenario>.<run>.json`
 #[must_use]
 pub fn file_name(job: Job, run: u32) -> String {
     format!("{}.{run}.json", job.id())
@@ -37,7 +37,9 @@ pub fn path(out: &Path, job: Job, run: u32) -> PathBuf {
 pub fn to_json(info: &RunInfo<'_>, measured: &Measured, counters: &[Counter]) -> Value {
     let mut json = json!({
         "schema": 1,
-        "app": info.job.frontend.name(),
+        "app": info.job.variant.id(),
+        // What the app draws with, null for Qt.
+        "renderer": info.job.variant.renderer(),
         "scenario": info.job.scenario,
         "platform": info.platform.name(),
         // A smoke run only checked the code path: its numbers mean nothing.
@@ -83,12 +85,12 @@ mod tests {
     use std::time::Duration;
 
     use super::*;
-    use crate::cli::Frontend;
+    use crate::cli::Variant;
     use crate::perf::parse_csv;
 
     fn job() -> Job {
         Job {
-            frontend: Frontend::Slint,
+            variant: Variant::SlintFemtovg,
             scenario: "scroll_main_channel",
         }
     }
@@ -96,10 +98,13 @@ mod tests {
     // INFRA-007
     #[test]
     fn one_file_per_run_named_after_app_scenario_and_run() {
-        assert_eq!(file_name(job(), 3), "slint.scroll_main_channel.3.json");
+        assert_eq!(
+            file_name(job(), 3),
+            "slint-femtovg.scroll_main_channel.3.json"
+        );
         assert_eq!(
             path(Path::new("/o"), job(), 0),
-            Path::new("/o/slint.scroll_main_channel.0.json")
+            Path::new("/o/slint-femtovg.scroll_main_channel.0.json")
         );
     }
 
@@ -129,7 +134,8 @@ mod tests {
             &measured,
             &parse_csv("<not supported>,,instructions:u,0,100.00,,\n"),
         );
-        assert_eq!(json["app"], "slint");
+        assert_eq!(json["app"], "slint-femtovg");
+        assert_eq!(json["renderer"], "femtovg");
         assert_eq!(json["smoke"], true);
         assert_eq!(json["distance_px"], 8100.0);
         assert_eq!(json["frames"], Value::Null);
@@ -147,7 +153,7 @@ mod tests {
     fn a_drag_run_has_the_stroke_fields_instead_of_the_wheel_ones() {
         let info = RunInfo {
             job: Job {
-                frontend: Frontend::Qt,
+                variant: Variant::Qt,
                 scenario: "drag_main_channel",
             },
             platform: Platform::Xcb,
@@ -171,6 +177,7 @@ mod tests {
         };
         let json = to_json(&info, &measured, &[]);
         assert_eq!(json["scenario"], "drag_main_channel");
+        assert_eq!(json["renderer"], Value::Null);
         assert_eq!(json["smoke"], false);
         assert_eq!(json["distance_px"], 8100.0);
         assert_eq!(json["frames"], 900);

@@ -5245,6 +5245,7 @@ dependencies = [
  "slint",
  "slint-build",
  "spix_slint",
+ "thiserror 2.0.21",
  "tracing",
 ]
 

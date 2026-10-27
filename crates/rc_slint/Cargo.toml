@@ -27,6 +27,7 @@ secrecy.workspace = true
 slint.workspace = true
 # Optional, behind `spix`: the Spix test server that speaks to the GUI test suite.
 spix_slint = { path = "../../3rdparty/spix/rust/spix_slint", optional = true }
+thiserror.workspace = true
 tracing.workspace = true
 
 [features]

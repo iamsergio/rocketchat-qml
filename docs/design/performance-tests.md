@@ -1,6 +1,20 @@
 # Performance tests
 
-`rc_gui_perf` runs micro performance scenarios against the Qt app and the Slint app and writes one JSON file per run. It is a binary, not a `cargo test` target, and CI does not run it: the apps run visibly with GPU rendering on the developer's display. It drives the apps through Spix like the GUI tests (`rc_gui_tests`, `rc_test_server`) but runs only its own scenarios. `rc_gui_perf report` and `scripts/run_perf_test.sh` read the JSON files and the command line described here.
+`rc_gui_perf` runs micro performance scenarios against the Qt app and the Slint app (with each of its renderers) and writes one JSON file per run. It is a binary, not a `cargo test` target, and CI does not run it: the apps run visibly with GPU rendering on the developer's display. It drives the apps through Spix like the GUI tests (`rc_gui_tests`, `rc_test_server`) but runs only its own scenarios. `rc_gui_perf report` and `scripts/run_perf_test.sh` read the JSON files and the command line described here.
+
+## Variants
+
+Every run is one variant, which is a binary and an environment:
+
+| Variant | App | Renderer |
+|---|---|---|
+| `qt` | the Qt app | Qt Quick's own |
+| `slint-femtovg` | the Slint app | femtovg (OpenGL), through winit |
+| `slint-software` | the Slint app | Slint's software renderer, through winit |
+
+`slint-skia` joins them with the Skia build (PLAN.md): one entry in `Variant` (`cli.rs`) and one in `renderer.rs` of `rc_slint`. All Slint variants run the same binary (`--slint` / `RC_PERF_SLINT_APP`) and differ in the environment variable `RC_SLINT_RENDERER`.
+
+**`RC_SLINT_RENDERER`** (`crates/rc_slint/src/renderer.rs`) is read by the Slint app before it makes its window: `femtovg` or `software` select Slint's winit backend with that renderer through `slint::BackendSelector` (public API, no unstable Slint feature), also under `--spix-port` and winning over `SLINT_BACKEND`. Any other value, including an empty one, stops the app with an error that lists the renderers of the build. Slint itself would take its default renderer, with one line on stderr, for a name the build lacks, and a run would measure the wrong thing; so the build's own list decides, and Skia is added to it with its feature. The app logs `renderer: <name> (from RC_SLINT_RENDERER)` at startup; Slint has no public call to read the renderer back from a window. Unset, nothing changes: the GUI tests' testing backend with `--spix-port`, else `SLINT_BACKEND` or Slint's default.
 
 ## How a run works
 
@@ -15,9 +29,9 @@ perf stat -D -1 --control fifo:<dir>/ctl,<dir>/ack -x, -o <dir>/perf.csv \
 
 - **FIFO order.** perf opens its end of the acknowledgement FIFO for writing before it starts the app, and blocks until somebody reads it, while the harness waits for the app. So `Control::create` opens the reading end without blocking before the launch, and `Control::connect` opens the command end after it (it fails until perf has its end open, so it retries). perf ends its acknowledgement with a NUL byte, which is dropped.
 - **Counters.** `:u` counts user space only, which `perf_event_paranoid` 2 allows without root. `instructions` is the stable metric; `ref-cycles` and `task-clock` are noisy. An event perf can't count (`<not supported>`, `<not counted>`, or no line) is recorded with that state and no value, never as 0. Without `perf` on `PATH` the runner stops with the reason.
-- **Platforms.** `--platform wayland` (default) or `xcb`: Qt gets `QT_QPA_PLATFORM`; Slint gets `SLINT_BACKEND=winit-femtovg` (winit with the femtovg GPU renderer the app builds), and for `xcb` empty `WAYLAND_DISPLAY` and `WAYLAND_SOCKET`, as winit takes Wayland whenever it can. `--platform offscreen` (Qt's offscreen platform, Slint's testing backend, which draws nothing and has no frame count) is a smoke mode only: it checks the code path without a display and its numbers mean nothing. The JSON says `"smoke": true`.
-- **Order.** Seeding happens first, once per invocation, before any app starts. The runs then go run by run across the selected apps, so drift of the machine falls on both alike.
-- **What is inside the counters besides the scenario.** Qt's C++ Spix has a 10 ms timer in the GUI thread (`QtQmlBot`) that looks for commands, so the Qt app wakes 100 times a second also when idle. Slint's Spix server waits for connections on its own thread and has no timer. Both count frames from the first `frameCount` read, which is made just before `enable`: a `frameSwapped` handler in Qt, a rendering notifier in Slint. Each Spix call is also app work inside the counters, so the scenario keeps its calls few and slow (below).
+- **Platforms.** `--platform wayland` (default) or `xcb`: Qt gets `QT_QPA_PLATFORM`; the Slint variants get `RC_SLINT_RENDERER` (above), and for `xcb` empty `WAYLAND_DISPLAY` and `WAYLAND_SOCKET`, as winit takes Wayland whenever it can. `--platform offscreen` (Qt's offscreen platform, Slint's testing backend for every Slint variant, since winit needs a display: `RC_SLINT_RENDERER` is not set; the testing backend draws nothing and has no frame count) is a smoke mode only: it checks the code path without a display and its numbers mean nothing. The JSON says `"smoke": true`.
+- **Order.** Seeding happens first, once per invocation, before any app starts. The runs then go run by run across the selected jobs, so drift of the machine falls on every variant alike.
+- **What is inside the counters besides the scenario.** Qt's C++ Spix has a 10 ms timer in the GUI thread (`QtQmlBot`) that looks for commands, so the Qt app wakes 100 times a second also when idle. Slint's Spix server waits for connections on its own thread and has no timer. Frames are counted from the first `frameCount` read, which is made just before `enable`: a `frameSwapped` handler in Qt, a rendering notifier in Slint. Slint's software renderer has no rendering notifier (`set_rendering_notifier` fails with it, also on winit), so for `slint-software` `frameCount` answers empty, `frames` is null and everything per frame is unknown, in the JSON and in the report. Each Spix call is also app work inside the counters, so the scenario keeps its calls few and slow (below).
 
 ## Command line
 
@@ -26,7 +40,7 @@ rc_gui_perf --list
 rc_gui_perf [--qt <binary>] [--slint <binary>] [--platform wayland|xcb|offscreen] [--runs N] [--out <dir>] [scenario...]
 ```
 
-`--list` prints `qt.scroll_main_channel`, `qt.drag_main_channel`, `slint.scroll_main_channel` and `slint.drag_main_channel`, one per line. A prefixed name runs that one, a bare name (`scroll_main_channel`) runs it in both apps, no name runs everything. The binaries come from `--qt` / `--slint` or `RC_PERF_QT_APP` / `RC_PERF_SLINT_APP`; a selected app without one is an error. `--runs` defaults to 5, `--out` to `target/perf`. The server is the one `RC_TEST_SERVER_URL` names.
+`--list` prints `<variant>.<scenario>` for every variant and scenario, one per line (`qt.scroll_main_channel`, `slint-femtovg.scroll_main_channel`, `slint-software.drag_main_channel`, ...). A full name runs that one, `slint.<scenario>` (`slint.drag_main_channel`) runs it in every Slint variant, a bare name (`scroll_main_channel`) in all variants, no name everything. `qt.<scenario>` is as before. The binaries come from `--qt` / `--slint` or `RC_PERF_QT_APP` / `RC_PERF_SLINT_APP`; a selected app without one is an error. `--runs` defaults to 5, `--out` to `target/perf`. The server is the one `RC_TEST_SERVER_URL` names.
 
 The apps are built with the `perf` and `perf-slint` presets: RelWithDebInfo with Spix and without developer mode. Corrosion builds RelWithDebInfo with cargo's release profile (optimised, no debug info), so the presets turn on `ROCKETCHATQML_RUST_DEBUG_INFO`, which sets `CARGO_PROFILE_RELEASE_DEBUG=true` and leaves the code optimised with symbols, for flame graphs later. For a smoke run `build-dev` and `build-dev-slint` do.
 
@@ -52,12 +66,13 @@ The strokes are not the same count in both apps: Qt's Flickable loses about the 
 
 ## The JSON of a run
 
-`<out>/<app>.<scenario>.<run>.json`, for example `slint.scroll_main_channel.0.json`:
+`<out>/<variant>.<scenario>.<run>.json`, for example `slint-femtovg.scroll_main_channel.0.json`:
 
 | Field | |
 |---|---|
 | `schema` | 1 |
-| `app`, `scenario`, `run` | `qt` or `slint`; the scenario name; the run index |
+| `app`, `scenario`, `run` | the variant id (`qt`, `slint-femtovg`, `slint-software`); the scenario name; the run index. Files from before the variants say `slint`, which the report reads as `slint-femtovg` |
+| `renderer` | the value of `RC_SLINT_RENDERER` the run asked for; null for Qt |
 | `platform`, `smoke` | the `--platform` value; `true` for offscreen |
 | `binary`, `git_revision` | absolute path of the binary; `git describe --always --dirty` of the checkout (tracked files only) |
 | `window` | `{width, height}` as the app reports it, or null |
@@ -77,16 +92,16 @@ The strokes are not the same count in both apps: Qt's Flickable loses about the 
 
 ## The script
 
-`scripts/run_perf_test.sh` is what a developer runs: `--list`, scenario names, `--platform` (default `wayland`), `--runs`, and `--qt` / `--slint` to use a given binary (which is then not built; handy for a smoke run against `build-dev`). It first configures (`cmake --preset perf` / `perf-slint`, only if the build directory has no cache) and builds the apps the names select (only Qt for `qt.*`, both for a bare name or none) and `rc_gui_perf` in release mode; `--no-build` skips that. The run goes into `target/perf/<UTC timestamp>-<platform>/`, then `rc_gui_perf report` writes `report.html` there, against `target/perf/baseline` if that exists, and the script prints its path. `RC_TEST_SERVER_URL` defaults to `http://127.0.0.1:3000`.
+`scripts/run_perf_test.sh` is what a developer runs: `--list`, scenario names, `--platform` (default `wayland`), `--runs`, and `--qt` / `--slint` to use a given binary (which is then not built; handy for a smoke run against `build-dev`). It first configures (`cmake --preset perf` / `perf-slint`, only if the build directory has no cache) and builds what the names select (the Qt preset for `qt.*`, the Slint preset for `slint.*` and every Slint variant, both for a bare name or none) and `rc_gui_perf` in release mode; `--no-build` skips that. The run goes into `target/perf/<UTC timestamp>-<platform>/`, then `rc_gui_perf report` writes `report.html` there, against `target/perf/baseline` if that exists, and the script prints its path. `RC_TEST_SERVER_URL` defaults to `http://127.0.0.1:3000`.
 
 **Baseline.** `--save-baseline` makes `target/perf/baseline` a symlink to the run's directory (not a copy: the directories are small, and the link shows which run it is). Compare runs of the same platform, on a quiet machine.
 
 ## The report
 
-`rc_gui_perf report <dir> [--baseline <dir>] [-o <file>]` reads every `*.json` of the directory and writes one self-contained HTML file (default `<dir>/report.html`): inline CSS, no script, no external resource, light and dark through `prefers-color-scheme`. The aggregation is in `aggregate.rs` (plain functions, unit tested), the page in `html.rs`. Per scenario:
+`rc_gui_perf report <dir> [--baseline <dir>] [-o <file>]` reads every `*.json` of the directory (a baseline from before the variants loads too: its `slint` is `slint-femtovg`) and writes one self-contained HTML file (default `<dir>/report.html`): inline CSS, no script, no external resource, light and dark through `prefers-color-scheme`. The aggregation is in `aggregate.rs` (plain functions, unit tested), the page in `html.rs`. Per scenario:
 
 - a header: date (when the newest run file was written), git revision, platform, window size, runs per app; smoke runs get a banner saying the numbers mean nothing;
-- the scroll facts per app (medians): distance, frames, px per frame, wall time, and wheel batches or, for `drag_main_channel`, drag strokes;
-- the counters per app: the median per pixel scrolled and per frame drawn, each with its spread, (max - min) / median. A counter perf couldn't count, or per frame in an app without a frame count, says so instead of showing 0;
-- with both apps, the Slint/Qt ratio per counter (per pixel and per frame) with a bar, 1 marked;
-- with `--baseline`, the change of each median against the baseline's for the same app, scenario and counter, in %. Less is better, so a drop is better and a rise worse, but only when the change is larger than the two spreads added up; otherwise "within noise". A baseline without that app, scenario or counter shows "no baseline".
+- the scroll facts per variant (medians): distance, frames, px per frame, wall time, and wheel batches or, for `drag_main_channel`, drag strokes;
+- the counters per variant, one row each: the median per pixel scrolled and per frame drawn, each with its spread, (max - min) / median. A counter perf couldn't count, or per frame in a variant without a frame count (`slint-software`), says so instead of showing 0;
+- with Qt and a Slint variant, one column group per Slint variant with its ratio to Qt per counter (per pixel and per frame) with a bar, 1 marked; where either side is unknown the cell says so;
+- with `--baseline`, the change of each median against the baseline's for the same variant, scenario and counter, in %. Less is better, so a drop is better and a rise worse, but only when the change is larger than the two spreads added up; otherwise "within noise". A baseline without that variant, scenario or counter shows "no baseline".
