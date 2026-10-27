@@ -104,11 +104,14 @@ impl<C: Connector> Actor<C> {
     fn begin_directory_search(&mut self, text: &str, at_once: bool) {
         self.abort_directory_request();
         self.directory.attempt += 1;
-        self.set_directory(Directory::searching(text));
-        if at_once || self.directory.debounce <= jiff::SignedDuration::ZERO {
-            self.request_directory();
-        } else {
+        let at_once = at_once || self.directory.debounce <= jiff::SignedDuration::ZERO;
+        // The pause counts from before the event goes out: whoever hears it may move the clock on.
+        if !at_once {
             self.directory.due = self.clock.now().checked_add(self.directory.debounce).ok();
+        }
+        self.set_directory(Directory::searching(text));
+        if at_once {
+            self.request_directory();
         }
     }
 
