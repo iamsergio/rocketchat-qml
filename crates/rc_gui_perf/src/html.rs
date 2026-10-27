@@ -199,7 +199,7 @@ Less is better for every counter.</li>
 notifier, so its frames are not counted: its per frame numbers, and so its ratios per frame, are
 unknown, not 0.</li>
 <li>The change against a baseline is called better or worse only when it is larger than the two
-spreads added up; otherwise it is within noise.</li>
+spreads added up, and than 3%; otherwise it is within noise.</li>
 <li>Qt's Spix has a 10 ms timer in the GUI thread, which wakes the Qt app 100 times a second
 also when idle; that work is inside Qt's counters. Slint's Spix has no such timer.</li>
 <li>A counter shown as <i>not counted</i> or <i>not supported</i> is unknown, not 0.</li>

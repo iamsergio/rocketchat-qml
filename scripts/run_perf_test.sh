@@ -16,7 +16,7 @@
 #       in every Slint variant, a bare name in all variants, no name runs everything. Options:
 #         --platform wayland|xcb|offscreen   wayland by default; offscreen is a smoke run only,
 #                                            its numbers mean nothing
-#         --runs <n>          runs per scenario and variant (default 5)
+#         --runs <n>          runs per scenario and variant (default 1)
 #         --qt <binary>       use this Qt app instead of build-perf/bin/rocketchat_qml (no build
 #         --slint <binary>    of that app), likewise build-perf-slint/bin/rocketchat_slint, for
 #                             every Slint variant

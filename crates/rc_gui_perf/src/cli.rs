@@ -13,7 +13,7 @@ pub const SCENARIOS: [&str; 2] = ["scroll_main_channel", "drag_main_channel"];
 pub const QT_ENV: &str = "RC_PERF_QT_APP";
 pub const SLINT_ENV: &str = "RC_PERF_SLINT_APP";
 
-const DEFAULT_RUNS: u32 = 5;
+const DEFAULT_RUNS: u32 = 1;
 const DEFAULT_OUT: &str = "target/perf";
 
 pub const HELP: &str = "\
@@ -35,7 +35,7 @@ Usage: rc_gui_perf [options] [scenario...]
                      offscreen is a smoke mode only (Qt offscreen, Slint testing backend, which
                      draws nothing, whatever the Slint variant): it checks the code path without
                      a display, and its numbers mean nothing. The JSON says so (\"smoke\": true).
-  --runs <n>         runs per scenario and variant (default 5)
+  --runs <n>         runs per scenario and variant (default 1)
   --out <dir>        where the JSON files go (default target/perf)
   --help             this text
 
@@ -592,7 +592,7 @@ mod tests {
     fn defaults_and_values() {
         let options = run(&["--qt", "q", "qt.scroll_main_channel"]).unwrap();
         assert_eq!(options.platform, Platform::Wayland);
-        assert_eq!(options.runs, 5);
+        assert_eq!(options.runs, 1);
         assert_eq!(options.out, PathBuf::from("target/perf"));
         let options = run(&[
             "--qt",

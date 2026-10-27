@@ -268,16 +268,22 @@ pub struct Change {
     pub verdict: Verdict,
 }
 
+/// Changes this small are within noise whatever the spreads say: a single run has a spread of 0,
+/// and `instructions` moved by up to about 3% between quiet runs of the same build.
+pub const NOISE_FLOOR_PCT: f64 = 3.0;
+
 /// The change of a median against the baseline's in %. For these counters less is better. It is
 /// better or worse only when it is larger than the two spreads added up (a missing spread counts
-/// as 0), otherwise it is within noise. None if the baseline's median is 0.
+/// as 0) and than [`NOISE_FLOOR_PCT`], otherwise it is within noise. None if the baseline's median
+/// is 0.
 #[must_use]
 pub fn change(current: &Stat, baseline: &Stat) -> Option<Change> {
     if baseline.median == 0.0 {
         return None;
     }
     let pct = (current.median - baseline.median) / baseline.median.abs() * 100.0;
-    let noise = current.spread_pct.unwrap_or(0.0) + baseline.spread_pct.unwrap_or(0.0);
+    let noise = (current.spread_pct.unwrap_or(0.0) + baseline.spread_pct.unwrap_or(0.0))
+        .max(NOISE_FLOOR_PCT);
     let verdict = if pct.abs() <= noise {
         Verdict::WithinNoise
     } else if pct < 0.0 {
@@ -360,6 +366,21 @@ mod tests {
             Some(Verdict::WithinNoise)
         );
         assert_eq!(change(&base, &stat_of(0.0, 0.0)), None);
+    }
+
+    // INFRA-007
+    #[test]
+    fn single_runs_differ_only_beyond_the_noise_floor() {
+        // One run each: no spread.
+        let base = stat_of(100.0, 0.0);
+        assert_eq!(
+            change(&stat_of(102.5, 0.0), &base).map(|c| c.verdict),
+            Some(Verdict::WithinNoise)
+        );
+        assert_eq!(
+            change(&stat_of(104.0, 0.0), &base).map(|c| c.verdict),
+            Some(Verdict::Worse)
+        );
     }
 
     // INFRA-007
