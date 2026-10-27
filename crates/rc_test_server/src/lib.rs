@@ -668,6 +668,25 @@ impl Admin {
         );
     }
 
+    /// [`create_emoji`](Self::create_emoji) unless the server already lists an emoji of that name,
+    /// for callers that want a fixed name across runs. Returns whether it was created.
+    ///
+    /// # Panics
+    ///
+    /// If the server refuses.
+    // Callers that don't care whether it was new may ignore the result.
+    #[allow(clippy::must_use_candidate)]
+    pub fn create_emoji_if_missing(&self, name: &str) -> bool {
+        let listed = self.get("emoji-custom.list");
+        let exists = listed["emojis"]["update"]
+            .as_array()
+            .is_some_and(|emojis| emojis.iter().any(|emoji| emoji["name"] == name));
+        if !exists {
+            self.create_emoji(name);
+        }
+        !exists
+    }
+
     /// Sets the avatar of the user to a one-pixel PNG (`users.setAvatar`) and waits until the
     /// server says the user has one (`avatarETag` of `users.info`), which it does a moment later.
     /// The server announces it on its stream of avatar changes, and serves the image from

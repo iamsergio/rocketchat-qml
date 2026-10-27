@@ -5193,6 +5193,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "rc_gui_perf"
+version = "0.0.0"
+dependencies = [
+ "png",
+ "rc_gui_tests",
+ "rc_test_server",
+ "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "rc_gui_tests"
 version = "0.0.0"
 dependencies = [

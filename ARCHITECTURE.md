@@ -59,4 +59,5 @@ There is no fake Rocket.Chat. Contract and GUI tests use the real local test ser
 - [Quoting](docs/design/quoting.md): permalinks, `Site_Url`, hiding quote links, sending
 - [Threads](docs/design/threads.md): what the server does, opening a thread, replying, the thread pane, Qt side, the list of a room's threads
 - [GUI testing contract](docs/design/gui-testing.md): Spix protocol subset, element paths, harness environment
+- [Performance tests](docs/design/performance-tests.md): `rc_gui_perf`, `perf stat` runs of micro scenarios against both apps, the scroll scenario, the JSON of a run
 - [Third-party dependencies](docs/design/dependencies.md): what each dependency is for

@@ -24,6 +24,8 @@ option(ROCKETCHATQML_COVERAGE "Instrument the app's Rust code for coverage (scri
 # already check overflow. Needs Rust_CARGO_TARGET, so that the flags skip build scripts and proc macros.
 set(ROCKETCHATQML_RUST_SANITIZER "" CACHE STRING "Sanitizer for the app's Rust code: address or thread (needs rust-src)")
 
+# Corrosion builds RelWithDebInfo with cargo's release profile: optimised, but without debug info.
+option(ROCKETCHATQML_RUST_DEBUG_INFO "Keep debug info in the optimised Rust code, so profiles have symbols (the perf presets)" OFF)
 option(ROCKETCHATQML_DEVELOPER_MODE "Build with developer options" OFF)
 
 set(CMAKE_CXX_STANDARD 23)
@@ -93,6 +95,9 @@ if(ROCKETCHATQML_SLINT)
     bin
     LOCKED
     ${rc_slint_features})
+  if(ROCKETCHATQML_RUST_DEBUG_INFO)
+    corrosion_set_env_vars(rocketchat_slint CARGO_PROFILE_RELEASE_DEBUG=true)
+  endif()
   # Next to the Qt app, whatever CMAKE_RUNTIME_OUTPUT_DIRECTORY did at import time.
   set_target_properties(rocketchat_slint PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
   # An imported target, which install(TARGETS) refuses.
@@ -125,6 +130,9 @@ if(ROCKETCHATQML_QT)
     Qt6::Core
     Qt6::Gui
     Qt6::Qml)
+  if(ROCKETCHATQML_RUST_DEBUG_INFO)
+    corrosion_set_env_vars(rc_qt CARGO_PROFILE_RELEASE_DEBUG=true)
+  endif()
   if(ROCKETCHATQML_COVERAGE)
     # For rc_qt and every crate it builds. The profiler runtime is linked in src/gui/CMakeLists.txt.
     # The app writes its profile (LLVM_PROFILE_FILE) when it exits normally.
