@@ -8,7 +8,7 @@
 #
 # Usage:
 #   scripts/run_perf_test.sh --list
-#       Every scenario once per app (qt.scroll_main_channel, slint.scroll_main_channel).
+#       Every scenario once per app (qt.scroll_main_channel, slint.drag_main_channel, ...).
 #   scripts/run_perf_test.sh [options] [scenario...]
 #       A prefixed name (qt.scroll_main_channel) runs that one, a bare name runs it in both apps,
 #       no name runs everything. Options:

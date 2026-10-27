@@ -140,13 +140,13 @@ pub fn image(index: usize, width: u32, height: u32) -> Result<Vec<u8>, png::Enco
     Ok(bytes)
 }
 
-/// Posts the channel for `scroll_main_channel`: a viewer for the app and three authors with
+/// Posts the channel for the scenarios on the main channel: a viewer for the app and three authors with
 /// avatars, who are all in a new channel.
 ///
 /// # Panics
 ///
 /// If the server refuses a call (the support crate's calls do).
-pub fn scroll_main_channel(log: impl Fn(&str)) -> Result<Channel, png::EncodingError> {
+pub fn main_channel(log: impl Fn(&str)) -> Result<Channel, png::EncodingError> {
     let admin = Admin::login();
     let viewer = admin.create_user_named("Perf Viewer");
     let authors: Vec<TestUser> = ["Perf Alice", "Perf Bob", "Perf Carol"]

@@ -26,7 +26,7 @@ rc_gui_perf --list
 rc_gui_perf [--qt <binary>] [--slint <binary>] [--platform wayland|xcb|offscreen] [--runs N] [--out <dir>] [scenario...]
 ```
 
-`--list` prints `qt.scroll_main_channel` and `slint.scroll_main_channel`, one per line. A prefixed name runs that one, a bare name (`scroll_main_channel`) runs it in both apps, no name runs everything. The binaries come from `--qt` / `--slint` or `RC_PERF_QT_APP` / `RC_PERF_SLINT_APP`; a selected app without one is an error. `--runs` defaults to 5, `--out` to `target/perf`. The server is the one `RC_TEST_SERVER_URL` names.
+`--list` prints `qt.scroll_main_channel`, `qt.drag_main_channel`, `slint.scroll_main_channel` and `slint.drag_main_channel`, one per line. A prefixed name runs that one, a bare name (`scroll_main_channel`) runs it in both apps, no name runs everything. The binaries come from `--qt` / `--slint` or `RC_PERF_QT_APP` / `RC_PERF_SLINT_APP`; a selected app without one is an error. `--runs` defaults to 5, `--out` to `target/perf`. The server is the one `RC_TEST_SERVER_URL` names.
 
 The apps are built with the `perf` and `perf-slint` presets: RelWithDebInfo with Spix and without developer mode. Corrosion builds RelWithDebInfo with cargo's release profile (optimised, no debug info), so the presets turn on `ROCKETCHATQML_RUST_DEBUG_INFO`, which sets `CARGO_PROFILE_RELEASE_DEBUG=true` and leaves the code optimised with symbols, for flame graphs later. For a smoke run `build-dev` and `build-dev-slint` do.
 
@@ -38,7 +38,17 @@ The apps are built with the `perf` and `perf-slint` presets: RelWithDebInfo with
 
 **Measured:** read the offset and the frame count, `enable`, wheel up in batches of 10 notches (20 ms apart, one `mouse_wheel` call per batch, so no round trip falls in the middle of a batch) and read the offset after each batch, until the list has moved `DISTANCE` = 8000 logical px (about 13 screens, under half of the roughly 20000 px list, so no run reaches the oldest page and loads history inside the counters); then poll the offset every 250 ms until two reads agree (the list glides on after the last notch, and the counters stay on until it stops), `disable`, read the offset and the frame count again.
 
-The apps are compared over the same distance, not the same wheel input: a notch is 60 px in Slint and about 30 in Qt. The report divides by the pixels scrolled and the frames drawn. The offset is `Gui::scroll_offset`. Qt's `contentY` is off by a constant once older messages were loaded above the view, so only differences between reads are distances, and the bottom is where the offset stops changing.
+The apps are compared over the same distance, not the same wheel input (that is what `drag_main_channel` below avoids): a notch is 60 px in Slint and about 30 in Qt. The report divides by the pixels scrolled and the frames drawn. The offset is `Gui::scroll_offset`. Qt's `contentY` is off by a constant once older messages were loaded above the view, so only differences between reads are distances, and the bottom is where the offset stops changing.
+
+## The scenario `drag_main_channel`
+
+The wheel scenario cannot compare frames or wall time between the apps: for the same input Qt glides (about 23 px a frame over 11.6 s) and Slint jumps 60 px a notch (about 99 px a frame over 3 s). Dragging the list's content moves both lists 1:1 with the pointer, so both cover the same distance in the same time, and both draw about the same number of frames on a real display: per-frame numbers (and wall time, frames, px per frame) compare directly, which the report says.
+
+**Content and preparation** are those of `scroll_main_channel`: the same seeded channel and `main_channel::prepare`. The seeding is per content, not per scenario, so one invocation that runs both scenarios seeds one channel (`content_of` and `seed_for` in `main.rs`).
+
+**Measured:** read the offset and the frame count, `enable`, then the number of strokes that drag `DISTANCE` (8000 px, the same constant): 22 of 370 px. Both apps get the same strokes rather than as many as each needs to move its list that far, so the input and its time are the same: Qt loses the first moves of each stroke before its list follows and would need about two strokes more. Each app's distance is measured and the report divides by it. A stroke presses at x = `MESSAGE_LIST_DRAG_X` (8 px, the gutter left of the avatars, where a press drags the list in both apps) and `MARGIN` = 40 px below the list's top, and drags straight down to 40 px above its bottom: `list height - 80` px, 370 px in the 450 px list both apps have (the length comes from the list's bounding box, read before `enable`, and the JSON has it). Down, because the content follows the pointer and shows older messages, as the wheel up does. It has 30 moves 16 ms apart (about 770 px/s, the same in both apps), a 250 ms hold (over the 100 ms after which Slint's flickable ignores the pointer's velocity, so the list does not flick on at release) and the release; a stroke lasts about 0.73 s. One `Gui::mouse_drag` call per stroke, then a property read, which in the Qt app waits for the stroke to end (the app only queues it), and 100 ms pass before the next stroke. Then the offset is polled every 250 ms until two reads agree, `disable`, read the offset and the frame count again.
+
+The strokes are not the same count in both apps: Qt's Flickable loses about the first two moves of every stroke before the content follows, so it needs a stroke or two more for the same distance (24 against 22 in a smoke run); the wall time stays within a few %, as every stroke has the same duration.
 
 ## The JSON of a run
 
@@ -53,15 +63,16 @@ The apps are compared over the same distance, not the same wheel input: a notch 
 | `window` | `{width, height}` as the app reports it, or null |
 | `target_distance_px`, `distance_px` | the scenario's `DISTANCE`; what the offsets say was scrolled |
 | `frames` | frames drawn in the measured part; null where the app can't count |
-| `wheel_batches`, `wheel_notches` | what was sent |
+| `wheel_batches`, `wheel_notches` | what was sent, `scroll_main_channel` only |
+| `drag_strokes`, `drag_length_px`, `drag_steps`, `drag_interval_ms`, `drag_hold_ms` | what was sent, `drag_main_channel` only: the strokes and the parameters of each |
 | `wall_time_ms` | from `enable` to `disable`, including the wait for the list to stop |
 | `counters` | one entry per event: `{event, state: "counted", value, unit, running_ns, running_pct}`, or `{event, state}` with `not_supported`, `not_counted` or `missing`. `running_pct` below 100 means perf multiplexed the counter and scaled it |
 
 ## Adding a scenario
 
 1. Name it in `SCENARIOS` in `cli.rs`; `--list` and the selection follow.
-2. Write `<scenario>.rs` with `prepare` (everything before the counters) and `measure` (read what is needed, `control.enable()`, the input, wait for the app to be at rest, `control.disable()`, read again), returning a measurement like `scroll_main_channel::Measured`.
-3. Seed its content in `seed.rs`, deterministic in the index, and add the arms in `seed_for` and `run_once` in `main.rs`.
+2. Write `<scenario>.rs` with a `measure` that calls `main_channel::measure` with a function that plays the input until the list has moved `DISTANCE`, waits for the app to be at rest and returns the end offset and an `Input` (a new variant, with its fields in `report::to_json` and, if the report shows it, in `aggregate.rs` and `html.rs`). `main_channel::measure` reads the offset and frames, switches the counters and reads again. A scenario on other content also needs its own `prepare`.
+3. A scenario on new content seeds it in `seed.rs`, deterministic in the index, and adds that content to `content_of` and `seed_for` in `main.rs`; one on the main channel only adds its name to `content_of`. Add the arm in `run_once`.
 4. Keep Spix calls inside the counters few and slow, and say how slow.
 
 ## The script
@@ -75,7 +86,7 @@ The apps are compared over the same distance, not the same wheel input: a notch 
 `rc_gui_perf report <dir> [--baseline <dir>] [-o <file>]` reads every `*.json` of the directory and writes one self-contained HTML file (default `<dir>/report.html`): inline CSS, no script, no external resource, light and dark through `prefers-color-scheme`. The aggregation is in `aggregate.rs` (plain functions, unit tested), the page in `html.rs`. Per scenario:
 
 - a header: date (when the newest run file was written), git revision, platform, window size, runs per app; smoke runs get a banner saying the numbers mean nothing;
-- the scroll facts per app (medians): distance, frames, px per frame, wall time, wheel batches;
+- the scroll facts per app (medians): distance, frames, px per frame, wall time, and wheel batches or, for `drag_main_channel`, drag strokes;
 - the counters per app: the median per pixel scrolled and per frame drawn, each with its spread, (max - min) / median. A counter perf couldn't count, or per frame in an app without a frame count, says so instead of showing 0;
 - with both apps, the Slint/Qt ratio per counter (per pixel and per frame) with a bar, 1 marked;
 - with `--baseline`, the change of each median against the baseline's for the same app, scenario and counter, in %. Less is better, so a drop is better and a rise worse, but only when the change is larger than the two spreads added up; otherwise "within noise". A baseline without that app, scenario or counter shows "no baseline".
