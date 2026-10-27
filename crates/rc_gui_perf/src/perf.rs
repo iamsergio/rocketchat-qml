@@ -19,14 +19,58 @@ use crate::cli::Frontend;
 
 /// The events, in the order the report shows them. `:u` counts user space only, which
 /// `perf_event_paranoid` 2 allows without root. `instructions` is the stable metric; `ref-cycles`
-/// and `task-clock` are noisy.
-pub const EVENTS: [&str; 5] = [
+/// and `task-clock` are noisy. `page-faults:u` says its side, as perf would count kernel-side faults
+/// too once the level allows it (`--kernel`), and the counter would change its meaning.
+/// `major-faults:u` should be 0: everything was loaded before the measured part, so a major fault
+/// means the run waited on disk (a cold page cache, swap), and the report flags it.
+pub const EVENTS: [&str; 7] = [
     "instructions:u",
     "branch-misses:u",
     "ref-cycles:u",
     "cycles:u",
     "task-clock",
+    "page-faults:u",
+    "major-faults:u",
 ];
+
+/// What `--kernel` adds: the kernel side of the same work, which needs `perf_event_paranoid` 1.
+/// Kept apart from the user-space counters, never summed with them.
+pub const KERNEL_EVENTS: [&str; 2] = ["cycles:k", "instructions:k"];
+
+/// The highest `perf_event_paranoid` that lets a user count kernel events.
+const KERNEL_PARANOID_MAX: i32 = 1;
+const PARANOID_PATH: &str = "/proc/sys/kernel/perf_event_paranoid";
+
+/// The events a run asks for.
+#[must_use]
+pub fn events(kernel: bool) -> Vec<&'static str> {
+    let mut events = EVENTS.to_vec();
+    if kernel {
+        events.extend(KERNEL_EVENTS);
+    }
+    events
+}
+
+/// Fails with the reason and the fix unless this machine lets a user count kernel events.
+///
+/// # Errors
+///
+/// If `perf_event_paranoid` is above 1, or can't be read.
+pub fn check_kernel_counting() -> Result<(), PerfError> {
+    check_paranoid(&std::fs::read_to_string(PARANOID_PATH))
+}
+
+fn check_paranoid(content: &io::Result<String>) -> Result<(), PerfError> {
+    let level = match content {
+        Ok(text) => text.trim().parse::<i32>().ok(),
+        Err(_) => None,
+    };
+    match level {
+        Some(level) if level <= KERNEL_PARANOID_MAX => Ok(()),
+        Some(level) => Err(PerfError::Paranoid(level)),
+        None => Err(PerfError::ParanoidUnreadable),
+    }
+}
 
 /// How long perf may take to acknowledge a command, and to open its end of the control FIFOs.
 const ACK_TIMEOUT: Duration = Duration::from_secs(10);
@@ -51,6 +95,16 @@ pub enum PerfError {
     },
     #[error("perf doesn't answer on its control FIFOs: {0}")]
     Control(String),
+    #[error(
+        "--kernel counts kernel events, which perf_event_paranoid {0} forbids (1 or lower \
+         allows them): run `sudo sysctl kernel.perf_event_paranoid=1`, which resets on reboot"
+    )]
+    Paranoid(i32),
+    #[error(
+        "--kernel needs perf_event_paranoid 1 or lower, but {PARANOID_PATH} can't be read: \
+         run `sudo sysctl kernel.perf_event_paranoid=1` if it exists"
+    )]
+    ParanoidUnreadable,
     #[error("perf wrote no result to {}", .path.display())]
     NoOutput {
         path: PathBuf,
@@ -81,7 +135,7 @@ pub fn check_available() -> Result<(), PerfError> {
 /// The arguments after `perf`, up to and including the `--` before the app: counters off at the
 /// start (`-D -1`), driven through the FIFOs, CSV into `output`.
 #[must_use]
-pub fn stat_args(control: &Control, output: &Path) -> Vec<OsString> {
+pub fn stat_args(control: &Control, output: &Path, kernel: bool) -> Vec<OsString> {
     let mut args: Vec<OsString> = ["stat", "-D", "-1", "--control"].map(Into::into).to_vec();
     args.push(
         format!(
@@ -93,7 +147,7 @@ pub fn stat_args(control: &Control, output: &Path) -> Vec<OsString> {
     );
     args.extend(["-x,", "-o"].map(OsString::from));
     args.push(output.into());
-    args.extend(["-e".into(), EVENTS.join(",").into(), "--".into()]);
+    args.extend(["-e".into(), events(kernel).join(",").into(), "--".into()]);
     args
 }
 
@@ -368,11 +422,25 @@ fn base(event: &str) -> &str {
     event.split(':').next().unwrap_or(event)
 }
 
+/// Whether the event counts kernel space (`:k`). perf prints the modifiers it was given, and for
+/// a software event without any it prints `:u` at paranoid 2, so user space is "not kernel".
+fn is_kernel(event: &str) -> bool {
+    event
+        .split_once(':')
+        .is_some_and(|(_, modifiers)| modifiers.contains('k'))
+}
+
+/// Whether perf's `line` event name is the `requested` one: the same event, on the same side.
+fn same_event(line: &str, requested: &str) -> bool {
+    base(line) == base(requested) && is_kernel(line) == is_kernel(requested)
+}
+
 /// Reads the CSV of `perf stat -x,`: `value,unit,event,run time,percent running,...`, one line per
-/// event, after `#` comments. Returns one counter for each of [`EVENTS`], in that order.
+/// event, after `#` comments. Returns one counter for each of the `requested` events, in that
+/// order.
 #[must_use]
-pub fn parse_csv(text: &str) -> Vec<Counter> {
-    EVENTS
+pub fn parse_csv(text: &str, requested: &[&str]) -> Vec<Counter> {
+    requested
         .iter()
         .map(|requested| {
             let reading = text
@@ -382,7 +450,7 @@ pub fn parse_csv(text: &str) -> Vec<Counter> {
                 .find(|fields| {
                     fields
                         .get(2)
-                        .is_some_and(|name| base(name) == base(requested))
+                        .is_some_and(|name| same_event(name, requested))
                 })
                 .map_or(Reading::Missing, |fields| reading(&fields));
             Counter {
@@ -437,12 +505,27 @@ mod tests {
 <not supported>,,ref-cycles:u,0,100.00,,
 245076014,,cycles:u,44863879,52.50,5.463,GHz
 44863879,,task-clock:u,44863879,100.00,0.992,CPUs utilized
+52,,page-faults:u,44863879,100.00,1.159,K/sec
+";
+
+    // The format of real `perf stat -x,` output at paranoid 2 (instructions:u, task-clock:u,
+    // page-faults:u and cycles:u are as perf printed them), with the kernel lines as perf prints
+    // them for `:k` events: the event name keeps its modifier.
+    const WITH_KERNEL: &str = "\
+# started on Tue Oct 27 19:57:29 2026
+
+179197,,instructions:u,581258,100.00,0.37,insn per cycle
+581258,,task-clock:u,581258,100.00,0.742,CPUs utilized
+52,,page-faults:u,581258,100.00,89.461,K/sec
+483234,,cycles:u,581258,100.00,0.831,GHz
+912345,,cycles:k,581258,100.00,1.570,GHz
+301234,,instructions:k,581258,100.00,0.33,insn per cycle
 ";
 
     // INFRA-007
     #[test]
     fn reads_perfs_csv() {
-        let counters = parse_csv(SAMPLE);
+        let counters = parse_csv(SAMPLE, &EVENTS);
         let events: Vec<_> = counters.iter().map(|c| c.event.as_str()).collect();
         assert_eq!(events, EVENTS);
         assert_eq!(
@@ -468,8 +551,72 @@ mod tests {
 
     // INFRA-007
     #[test]
+    fn page_faults_match_the_line_perf_marks_as_user_space() {
+        let counters = parse_csv(SAMPLE, &EVENTS);
+        assert_eq!(counters[5].event, "page-faults:u");
+        assert!(matches!(
+            &counters[5].reading,
+            Reading::Counted { value, unit, .. } if (*value - 52.0).abs() < 1e-9 && unit == "count"
+        ));
+    }
+
+    // INFRA-007
+    #[test]
+    fn user_and_kernel_counters_of_one_event_are_told_apart() {
+        let counters = parse_csv(WITH_KERNEL, &events(true));
+        let value = |event: &str| match counters.iter().find(|c| c.event == event) {
+            Some(Counter {
+                reading: Reading::Counted { value, .. },
+                ..
+            }) => Some(*value),
+            _ => None,
+        };
+        assert_eq!(value("cycles:u"), Some(483_234.0));
+        assert_eq!(value("cycles:k"), Some(912_345.0));
+        assert_eq!(value("instructions:u"), Some(179_197.0));
+        assert_eq!(value("instructions:k"), Some(301_234.0));
+        // Without --kernel the kernel lines are not asked for and not read.
+        assert_eq!(parse_csv(WITH_KERNEL, &events(false)).len(), EVENTS.len());
+        // A kernel event whose line is missing is missing, not the user line.
+        let user_only = parse_csv(SAMPLE, &events(true));
+        assert_eq!(user_only[6].reading, Reading::Missing);
+        assert_eq!(user_only[7].reading, Reading::Missing);
+    }
+
+    // INFRA-007
+    #[test]
+    fn kernel_events_are_added_to_the_arguments_only_on_request() {
+        let dir = temp_dir("kernel_args");
+        let control = Control::create(&dir).unwrap();
+        let args = stat_args(&control, Path::new("/o.csv"), true);
+        assert!(args.iter().any(|arg| {
+            arg.to_string_lossy()
+                .ends_with(",page-faults:u,major-faults:u,cycles:k,instructions:k")
+        }));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // INFRA-007
+    #[test]
+    fn kernel_counting_needs_paranoid_1_or_lower_and_the_error_gives_the_command() {
+        assert!(check_paranoid(&Ok("1\n".to_owned())).is_ok());
+        assert!(check_paranoid(&Ok("-1\n".to_owned())).is_ok());
+        let error = check_paranoid(&Ok("2\n".to_owned()))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("sudo sysctl kernel.perf_event_paranoid=1"),
+            "{error}"
+        );
+        assert!(error.contains("resets on reboot"), "{error}");
+        assert!(check_paranoid(&Err(io::Error::other("no"))).is_err());
+        assert!(check_paranoid(&Ok("x".to_owned())).is_err());
+    }
+
+    // INFRA-007
+    #[test]
     fn an_unsupported_event_is_not_a_zero() {
-        let counters = parse_csv(SAMPLE);
+        let counters = parse_csv(SAMPLE, &EVENTS);
         assert_eq!(counters[2].reading, Reading::NotSupported);
         assert_eq!(
             counters[2].to_json(),
@@ -480,16 +627,16 @@ mod tests {
     // INFRA-007
     #[test]
     fn not_counted_and_missing_events_are_told_apart() {
-        let counters = parse_csv("<not counted>,,instructions:u,0,100.00,,\n");
+        let counters = parse_csv("<not counted>,,instructions:u,0,100.00,,\n", &EVENTS);
         assert_eq!(counters[0].reading, Reading::NotCounted);
         assert_eq!(counters[1].reading, Reading::Missing);
-        assert_eq!(parse_csv("").len(), EVENTS.len());
+        assert_eq!(parse_csv("", &EVENTS).len(), EVENTS.len());
     }
 
     // INFRA-007
     #[test]
     fn the_counted_json_has_value_unit_and_shares() {
-        let json = parse_csv(SAMPLE)[1].to_json();
+        let json = parse_csv(SAMPLE, &EVENTS)[1].to_json();
         assert_eq!(json["state"], "counted");
         assert_eq!(json["value"], 8057.0);
         assert_eq!(json["unit"], "count");
@@ -509,7 +656,7 @@ mod tests {
     fn the_arguments_start_with_the_counters_off_and_name_the_fifos() {
         let dir = temp_dir("args");
         let control = Control::create(&dir).unwrap();
-        let args = stat_args(&control, Path::new("/o.csv"));
+        let args = stat_args(&control, Path::new("/o.csv"), false);
         let args: Vec<_> = args.iter().map(|arg| arg.to_string_lossy()).collect();
         assert_eq!(&args[..4], ["stat", "-D", "-1", "--control"]);
         assert_eq!(
@@ -517,7 +664,8 @@ mod tests {
             format!("fifo:{}/ctl,{}/ack", dir.display(), dir.display())
         );
         assert_eq!(args.last().map(|arg| &**arg), Some("--"));
-        assert!(args.iter().any(|arg| arg == "instructions:u,branch-misses:u,ref-cycles:u,cycles:u,task-clock"));
+        assert!(args.iter().any(|arg| arg
+            == "instructions:u,branch-misses:u,ref-cycles:u,cycles:u,task-clock,page-faults:u,major-faults:u"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

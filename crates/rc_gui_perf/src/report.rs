@@ -138,7 +138,10 @@ mod tests {
         let json = to_json(
             &info,
             &measured,
-            &parse_csv("<not supported>,,instructions:u,0,100.00,,\n"),
+            &parse_csv(
+                "<not supported>,,instructions:u,0,100.00,,\n",
+                &crate::perf::EVENTS,
+            ),
         );
         assert_eq!(json["app"], "slint-femtovg");
         assert_eq!(json["renderer"], "femtovg");
@@ -148,7 +151,7 @@ mod tests {
         assert_eq!(json["wall_time_ms"], 2500.0);
         assert_eq!(json["window"]["width"], 964.0);
         assert_eq!(json["counters"][0]["state"], "not_supported");
-        assert_eq!(json["counters"].as_array().map(Vec::len), Some(5));
+        assert_eq!(json["counters"].as_array().map(Vec::len), Some(7));
         assert_eq!(json["wheel_batches"], 14);
         assert_eq!(json["wheel_notches"], 140);
         assert_eq!(json["drag_strokes"], Value::Null);

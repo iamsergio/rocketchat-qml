@@ -41,6 +41,9 @@ Usage: rc_gui_perf [options] [scenario...]
   --record           sample the measured part with `perf record` (user space, frame pointer call
                      graphs) and write <variant>.<scenario>.<run>.perf.data, .folded and .svg (a
                      flame graph) instead of the JSON: sampling skews the counters
+  --kernel           also count the kernel side (cycles:k, instructions:k): needs
+                     perf_event_paranoid 1 or lower (`sudo sysctl kernel.perf_event_paranoid=1`);
+                     not with --record
   --help             this text
 
 report reads the JSON files of a directory and writes one self-contained HTML file (default
@@ -61,6 +64,8 @@ pub enum CliError {
     UnknownPlatform(String),
     #[error("report needs the directory of the runs")]
     NoReportDir,
+    #[error("--kernel and --record don't go together: recording stays in user space")]
+    KernelWithRecord,
     #[error("--runs wants a positive number, not {0:?}")]
     BadRuns(String),
     #[error("the {frontend} app is selected but has no binary: pass {flag} or set {env}")]
@@ -242,6 +247,8 @@ pub struct Options {
     pub out: PathBuf,
     /// Sample with `perf record` and write flame graphs, not counter JSON.
     pub record: bool,
+    /// Also count kernel space (`--kernel`).
+    pub kernel: bool,
 }
 
 impl Options {
@@ -378,6 +385,7 @@ pub fn parse(
     let mut runs = DEFAULT_RUNS;
     let mut out = PathBuf::from(DEFAULT_OUT);
     let mut record = false;
+    let mut kernel = false;
     while let Some(arg) = args.next() {
         // `--flag=value` is the same as `--flag value`.
         let (flag, mut inline) = match arg.split_once('=') {
@@ -408,12 +416,16 @@ pub fn parse(
             }
             "--out" => out = PathBuf::from(value()?),
             "--record" => record = true,
+            "--kernel" => kernel = true,
             _ if flag.starts_with('-') => return Err(CliError::UnknownOption(flag)),
             _ => names.push(arg),
         }
     }
     if list_only {
         return Ok(Cli::List);
+    }
+    if kernel && record {
+        return Err(CliError::KernelWithRecord);
     }
     let jobs = select(&names)?;
     for frontend in Frontend::ALL {
@@ -437,6 +449,7 @@ pub fn parse(
         runs,
         out,
         record,
+        kernel,
     }))
 }
 
@@ -685,6 +698,28 @@ mod tests {
         assert!(!options.record);
         let options = run(&["--qt", "q", "--record", "qt.scroll_main_channel"]).unwrap();
         assert!(options.record);
+    }
+
+    // INFRA-007
+    #[test]
+    fn kernel_is_an_option_of_runs_off_by_default_and_not_with_record() {
+        assert!(
+            !run(&["--qt", "q", "qt.scroll_main_channel"])
+                .unwrap()
+                .kernel
+        );
+        let options = run(&["--qt", "q", "--kernel", "qt.scroll_main_channel"]).unwrap();
+        assert!(options.kernel);
+        assert_eq!(
+            run(&[
+                "--qt",
+                "q",
+                "--kernel",
+                "--record",
+                "qt.scroll_main_channel"
+            ]),
+            Err(CliError::KernelWithRecord)
+        );
     }
 
     // INFRA-007
