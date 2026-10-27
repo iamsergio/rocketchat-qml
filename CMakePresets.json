@@ -63,6 +63,7 @@
       ],
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "ROCKETCHATQML_FRAME_POINTERS": "ON",
         "ROCKETCHATQML_RUST_DEBUG_INFO": "ON",
         "ROCKETCHATQML_SPIX": "ON"
       }
@@ -99,6 +100,7 @@
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "RelWithDebInfo",
         "ROCKETCHATQML_QT": "OFF",
+        "ROCKETCHATQML_FRAME_POINTERS": "ON",
         "ROCKETCHATQML_RUST_DEBUG_INFO": "ON",
         "ROCKETCHATQML_SLINT": "ON",
         "ROCKETCHATQML_SLINT_SKIA": "ON",

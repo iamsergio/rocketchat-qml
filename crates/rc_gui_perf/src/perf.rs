@@ -15,6 +15,8 @@ use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 
+use crate::cli::Frontend;
+
 /// The events, in the order the report shows them. `:u` counts user space only, which
 /// `perf_event_paranoid` 2 allows without root. `instructions` is the stable metric; `ref-cycles`
 /// and `task-clock` are noisy.
@@ -96,15 +98,15 @@ pub fn stat_args(control: &Control, output: &Path) -> Vec<OsString> {
 }
 
 /// Samples per second of `perf record`. A scroll run of 3 to 12 s gives thousands of samples
-/// with dwarf unwinding, and a perf.data of tens to a few hundred MB.
+/// and a perf.data of a few MB.
 pub const RECORD_FREQUENCY: u32 = 4000;
 
 /// The arguments after `perf` of `perf record`, up to and including the `--` before the app. Like
 /// [`stat_args`] it starts with sampling off (`-D -1`) and is driven through the FIFOs. `cycles:u`
-/// samples user space only, which `perf_event_paranoid` 2 allows; dwarf unwinding because the Rust
-/// release build has no frame pointers.
+/// samples user space only, which `perf_event_paranoid` 2 allows. The call graphs unwind as
+/// [`call_graph`] says for the app.
 #[must_use]
-pub fn record_args(control: &Control, output: &Path) -> Vec<OsString> {
+pub fn record_args(control: &Control, output: &Path, frontend: Frontend) -> Vec<OsString> {
     let mut args: Vec<OsString> = ["record", "-D", "-1", "--control"].map(Into::into).to_vec();
     args.push(
         format!(
@@ -119,7 +121,7 @@ pub fn record_args(control: &Control, output: &Path) -> Vec<OsString> {
             "-e",
             "cycles:u",
             "--call-graph",
-            "dwarf",
+            call_graph(frontend),
             "-F",
             &RECORD_FREQUENCY.to_string(),
             "-o",
@@ -129,6 +131,19 @@ pub fn record_args(control: &Control, output: &Path) -> Vec<OsString> {
     args.push(output.into());
     args.push("--".into());
     args
+}
+
+/// How `perf record` unwinds the stacks of an app. The Slint app is Rust through and through, and
+/// the perf presets keep its frame pointers (`ROCKETCHATQML_FRAME_POINTERS`); dwarf unwinding loses
+/// its deep stacks. Qt's own libraries come without frame pointers, so the Qt app unwinds with
+/// dwarf and the largest stack copy perf takes, which completes nearly all of its stacks where the
+/// default 8 kB left a fifth short.
+#[must_use]
+pub fn call_graph(frontend: Frontend) -> &'static str {
+    match frontend {
+        Frontend::Qt => "dwarf,65528",
+        Frontend::Slint => "fp",
+    }
 }
 
 /// The pair of FIFOs `perf stat --control` reads commands from and acknowledges on.
@@ -511,7 +526,7 @@ mod tests {
     fn the_record_arguments_start_sampling_off_and_name_the_fifos_and_the_file() {
         let dir = temp_dir("record_args");
         let control = Control::create(&dir).unwrap();
-        let args = record_args(&control, Path::new("/o.data"));
+        let args = record_args(&control, Path::new("/o.data"), Frontend::Slint);
         let args: Vec<_> = args.iter().map(|arg| arg.to_string_lossy()).collect();
         assert_eq!(&args[..4], ["record", "-D", "-1", "--control"]);
         assert_eq!(
@@ -524,13 +539,28 @@ mod tests {
                 "-e",
                 "cycles:u",
                 "--call-graph",
-                "dwarf",
+                "fp",
                 "-F",
                 &RECORD_FREQUENCY.to_string(),
                 "-o",
                 "/o.data",
                 "--"
             ]
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // INFRA-008
+    #[test]
+    fn the_qt_app_unwinds_with_dwarf_and_the_slint_app_with_frame_pointers() {
+        assert_eq!(call_graph(Frontend::Qt), "dwarf,65528");
+        assert_eq!(call_graph(Frontend::Slint), "fp");
+        let dir = temp_dir("record_args_qt");
+        let control = Control::create(&dir).unwrap();
+        let args = record_args(&control, Path::new("/o.data"), Frontend::Qt);
+        assert!(
+            args.windows(2)
+                .any(|pair| pair[0] == "--call-graph" && pair[1] == "dwarf,65528")
         );
         let _ = std::fs::remove_dir_all(&dir);
     }

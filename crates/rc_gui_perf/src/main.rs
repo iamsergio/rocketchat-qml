@@ -158,7 +158,7 @@ fn run_once(
     let data = report::recording_path(&options.out, job, run, "perf.data");
     let mut control = Control::create(&work.0)?;
     let wrapper_args = if options.record {
-        perf::record_args(&control, &data)
+        perf::record_args(&control, &data, job.variant.frontend())
     } else {
         perf::stat_args(&control, &csv)
     };

@@ -38,9 +38,9 @@ Usage: rc_gui_perf [options] [scenario...]
                      a display, and its numbers mean nothing. The JSON says so (\"smoke\": true).
   --runs <n>         runs per scenario and variant (default 1)
   --out <dir>        where the JSON files go (default target/perf)
-  --record           sample the measured part with `perf record` (user space, dwarf call graphs)
-                     and write <variant>.<scenario>.<run>.perf.data, .folded and .svg (a flame
-                     graph) instead of the JSON: sampling skews the counters
+  --record           sample the measured part with `perf record` (user space, frame pointer call
+                     graphs) and write <variant>.<scenario>.<run>.perf.data, .folded and .svg (a
+                     flame graph) instead of the JSON: sampling skews the counters
   --help             this text
 
 report reads the JSON files of a directory and writes one self-contained HTML file (default
