@@ -25,6 +25,10 @@ pub enum Error {
     Image(#[from] png::EncodingError),
     #[error("{} is not a file: build the app with Spix (see docs/design/performance-tests.md)", .0.display())]
     NoSuchBinary(PathBuf),
+    #[error("{path} is not a run: {what}")]
+    BadRun { path: String, what: String },
+    #[error("{} has no run files (*.json)", .0.display())]
+    NoRuns(PathBuf),
     #[error("{0}")]
     Scenario(String),
     #[error("{what}: {path}")]

@@ -4,8 +4,10 @@
 //! `rc_gui_perf`: micro performance scenarios against the Qt and the Slint app, each run a fresh
 //! app under `perf stat` that counts only the measured part. See docs/design/performance-tests.md.
 
+mod aggregate;
 mod cli;
 mod error;
+mod html;
 mod perf;
 mod report;
 mod scroll_main_channel;
@@ -44,6 +46,10 @@ fn run() -> Result<(), Error> {
     match cli::parse(env::args().skip(1), |name| env::var(name).ok())? {
         Cli::Help => println!("{}", cli::HELP),
         Cli::List => print!("{}", cli::list()),
+        Cli::Report(options) => {
+            html::write(&options.dir, options.baseline.as_deref(), &options.output)?;
+            println!("{}", options.output.display());
+        }
         Cli::Run(options) => run_all(&options)?,
     }
     Ok(())
