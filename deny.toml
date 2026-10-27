@@ -66,6 +66,11 @@ crate = "slint-macros"
 # the Slint crates above, and the same choice still to be made.
 allow = ["GPL-3.0-only", "LicenseRef-Slint-Royalty-free-2.0"]
 crate = "i-slint-backend-testing"
+[[licenses.exceptions]]
+# Draws the flame graphs of `rc_gui_perf --record`. Only that dev tool uses it: it is not published
+# and never shipped, so CDDL-1.0's file-level copyleft doesn't reach anything we distribute.
+allow = ["CDDL-1.0"]
+crate = "inferno"
 
 [bans]
 # Duplicates come from build dependencies (cxx-qt's generators), which we don't control.

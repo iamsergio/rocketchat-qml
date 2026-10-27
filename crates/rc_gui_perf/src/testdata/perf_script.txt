@@ -1,0 +1,30 @@
+spix 1699588 1550242.464105:          1 cycles:u: 
+	    7fdae2fa1463 accept4+0x23 (/usr/lib/x86_64-linux-gnu/libc.so.6)
+	    5632869165d3 <std::sys::net::connection::socket::unix::Socket>::accept::{closure#0}+0x43 (inlined)
+	    5632869165d3 std::sys::pal::unix::cvt_r::<i32, <std::sys::net::connection::socket::unix::Socket>::accept::{closure#0}>+0x43 (inlined)
+	    5632869165d3 <std::sys::net::connection::socket::unix::Socket>::accept+0x43 (/opt/app/bin/rocketchat_sli
+
+spix 1699588 1550242.464113:          1 cycles:u: 
+	    56328691e0d0 <core::result::Result<std::sys::net::connection::socket::unix::Socket, core::io::error::Error> as core::ops::try_trait::Try>::branch
+	    56328691e0d0 <std::sys::net::connection::socket::TcpListener>::accept+0x30 (inlined)
+	    56328691e0d0 <std::net::tcp::TcpListener>::accept+0x30 (/opt/app/bin/rocketchat_slint)
+	    56328693b808 <std::net::tcp::Incoming as core::iter::traits::iterator::Iterator>::next+0x18 (/opt/app/bin/rocketchat_slint)
+	    563284d54906 spix_slint::server::serve+0x76 (/opt/app/bin/rocketchat_slint)
+	    563284d52994 spix_slint::server::start::<rc_slint::ui::slint_generatedMainWindow::MainWindow, [(&str, i_slint_core::api::weak_handle::Weak<rc_sli
+
+spix 1699588 1550242.464118:         78 cycles:u: 
+	    7fdae2f1fa77 malloc+0xd7 (/usr/lib/x86_64-linux-gnu/libc.so.6)
+	    563284d5496d alloc::alloc::alloc+0xdd (inlined)
+	    563284d5496d <alloc::alloc::Global>::alloc_impl_runtime+0xdd (inlined)
+	    563284d5496d <alloc::alloc::Global>::alloc_impl+0xdd (inlined)
+	    563284d5496d <alloc::alloc::Global as core::alloc::Allocator>::allocate+0xdd (inlined)
+	    563284d5496d <alloc::raw_vec::RawVecInner>::try_allocate_in+0xdd (inlined)
+
+spix 1699588 1550242.464118:         78 cycles:u: 
+	    7fdae2f1fa77 malloc+0xd7 (/usr/lib/x86_64-linux-gnu/libc.so.6)
+	    563284d5496d alloc::alloc::alloc+0xdd (inlined)
+	    563284d5496d <alloc::alloc::Global>::alloc_impl_runtime+0xdd (inlined)
+	    563284d5496d <alloc::alloc::Global>::alloc_impl+0xdd (inlined)
+	    563284d5496d <alloc::alloc::Global as core::alloc::Allocator>::allocate+0xdd (inlined)
+	    563284d5496d <alloc::raw_vec::RawVecInner>::try_allocate_in+0xdd (inlined)
+

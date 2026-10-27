@@ -31,6 +31,12 @@ pub fn path(out: &Path, job: Job, run: u32) -> PathBuf {
     out.join(file_name(job, run))
 }
 
+/// A file of a recording, `<variant>.<scenario>.<run>.<extension>`: the stem of [`path`].
+#[must_use]
+pub fn recording_path(out: &Path, job: Job, run: u32, extension: &str) -> PathBuf {
+    out.join(format!("{}.{run}.{extension}", job.id()))
+}
+
 /// The run as JSON. Distances are logical px, times ms, counters as perf reported them: one that
 /// perf couldn't count has a `state` other than `counted` and no value.
 #[must_use]

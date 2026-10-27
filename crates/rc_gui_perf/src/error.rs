@@ -15,6 +15,8 @@ pub enum Error {
     Cli(#[from] CliError),
     #[error(transparent)]
     Perf(#[from] PerfError),
+    #[error(transparent)]
+    Flamegraph(#[from] crate::flamegraph::FlamegraphError),
     #[error("can't start the app")]
     Launch(#[from] LaunchError),
     #[error("can't stop the app")]
