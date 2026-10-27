@@ -101,6 +101,7 @@
         "ROCKETCHATQML_QT": "OFF",
         "ROCKETCHATQML_RUST_DEBUG_INFO": "ON",
         "ROCKETCHATQML_SLINT": "ON",
+        "ROCKETCHATQML_SLINT_SKIA": "ON",
         "ROCKETCHATQML_SPIX": "ON"
       }
     },

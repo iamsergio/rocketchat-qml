@@ -254,6 +254,10 @@ mod tests {
             [("RC_SLINT_RENDERER", "software")]
         );
         assert_eq!(
+            platform_env(Variant::SlintSkia, Platform::Wayland),
+            [("RC_SLINT_RENDERER", "skia")]
+        );
+        assert_eq!(
             platform_env(Variant::SlintFemtovg, Platform::Xcb),
             [
                 ("RC_SLINT_RENDERER", "femtovg"),

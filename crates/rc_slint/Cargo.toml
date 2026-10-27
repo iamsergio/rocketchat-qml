@@ -31,6 +31,9 @@ thiserror.workspace = true
 tracing.workspace = true
 
 [features]
+# Slint's Skia renderer, for the performance runs (`RC_SLINT_RENDERER=skia`). It builds Skia, which
+# takes long and needs clang, so only the `perf-slint` preset turns it on.
+skia = ["slint/renderer-skia"]
 # Also log to a file next to the executable, and `--dev` fills the login page in.
 developer-mode = ["rc_view/developer-mode"]
 # `--spix-port` starts the Spix test server, on Slint's testing backend: headless, so the GUI tests
