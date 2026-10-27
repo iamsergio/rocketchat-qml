@@ -22,8 +22,8 @@
 #         --slint <binary>    of that app), likewise build-perf-slint/bin/rocketchat_slint, for
 #                             every Slint variant
 #         --no-build          don't configure or build anything
-#         --record            sample the measured part with `perf record` (user space, dwarf call
-#                             graphs) and write <variant>.<scenario>.<run>.perf.data, .folded and
+#         --record            sample the measured part with `perf record` (user space, frame
+#                             pointer call graphs) and write <variant>.<scenario>.<run>.perf.data, .folded and
 #                             .svg (a flame graph) instead of JSON files and a report; sampling
 #                             skews the counters. Open the .perf.data in hotspot.
 #         --save-baseline     afterwards make this run the baseline: target/perf/baseline becomes

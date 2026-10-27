@@ -127,7 +127,7 @@ The decided design (counters, platforms, batched input, the same-distance compar
 - [x] Skia in the Slint perf build: an `rc_slint` feature for Slint's `renderer-skia`, on in the `perf-slint` preset only, so dev builds and CI don't build Skia
 - [x] Skia on OpenGL and on Vulkan as two variants, `slint-skia-opengl` and `slint-skia-vulkan` (`RC_SLINT_RENDERER=skia-opengl|skia-vulkan`, the surface required through `BackendSelector`), so Skia compares with Qt and femtovg on the same graphics API as well as on its own default. The old `slint-skia` was Skia's first choice, wgpu on Vulkan, and reads as `slint-skia-vulkan`
 - [ ] Frame counts with the software renderer and with Skia on wgpu, whose rendering notifiers don't fire (Skia on wgpu counted 0 frames): another way in `spix_slint`, or the report says per frame is unknown for them. Until then `rc_gui_perf` records 0 frames of a list that moved as unknown
-- [x] `rc_gui_perf --record`: `perf record` (user space, dwarf) of the measured part, with the perf.data, the collapsed stacks and a flame graph SVG per run (`scripts/run_perf_test.sh --record`)
+- [x] `rc_gui_perf --record`: `perf record` (user space; frame pointers for the Slint app, dwarf for the Qt app) of the measured part, with the perf.data, the collapsed stacks and a flame graph SVG per run (`scripts/run_perf_test.sh --record`)
 - [ ] `rc_gui_perf report` shows the flame graphs of record runs (and a Slint-vs-Qt differential)
 
 ## Phase 8: personal nice to haves

@@ -27,11 +27,16 @@ set(ROCKETCHATQML_RUST_SANITIZER "" CACHE STRING "Sanitizer for the app's Rust c
 
 # Corrosion builds RelWithDebInfo with cargo's release profile: optimised, but without debug info.
 option(ROCKETCHATQML_RUST_DEBUG_INFO "Keep debug info in the optimised Rust code, so profiles have symbols (the perf presets)" OFF)
+# perf's dwarf unwinding loses the deep stacks of the Slint app (docs/design/performance-tests.md).
+option(ROCKETCHATQML_FRAME_POINTERS "Keep frame pointers in the Rust and C++ code, so perf record can unwind (the perf presets)" OFF)
 option(ROCKETCHATQML_DEVELOPER_MODE "Build with developer options" OFF)
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+if(ROCKETCHATQML_FRAME_POINTERS)
+  add_compile_options(-fno-omit-frame-pointer -mno-omit-leaf-frame-pointer)
+endif()
 
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
@@ -102,6 +107,10 @@ if(ROCKETCHATQML_SLINT)
   if(ROCKETCHATQML_RUST_DEBUG_INFO)
     corrosion_set_env_vars(rocketchat_slint CARGO_PROFILE_RELEASE_DEBUG=true)
   endif()
+  if(ROCKETCHATQML_FRAME_POINTERS)
+    # For rocketchat_slint and every crate it builds, Slint's included.
+    corrosion_add_target_rustflags(rocketchat_slint -Cforce-frame-pointers=yes)
+  endif()
   # Next to the Qt app, whatever CMAKE_RUNTIME_OUTPUT_DIRECTORY did at import time.
   set_target_properties(rocketchat_slint PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
   # An imported target, which install(TARGETS) refuses.
@@ -136,6 +145,9 @@ if(ROCKETCHATQML_QT)
     Qt6::Qml)
   if(ROCKETCHATQML_RUST_DEBUG_INFO)
     corrosion_set_env_vars(rc_qt CARGO_PROFILE_RELEASE_DEBUG=true)
+  endif()
+  if(ROCKETCHATQML_FRAME_POINTERS)
+    corrosion_add_target_rustflags(rc_qt -Cforce-frame-pointers=yes)
   endif()
   if(ROCKETCHATQML_COVERAGE)
     # For rc_qt and every crate it builds. The profiler runtime is linked in src/gui/CMakeLists.txt.
