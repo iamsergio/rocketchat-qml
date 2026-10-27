@@ -226,6 +226,83 @@ fn scrolling_up_with_the_wheel_loads_older_messages() {
 // MSG-002
 #[test]
 #[ignore = "needs the app and a Rocket.Chat server: run through ctest"]
+fn dragging_the_list_scrolls_it_by_the_distance_and_does_not_flick() {
+    // Constant velocity: 10 px every 10 ms. The hold is longer than the 100 ms after which Slint's
+    // flickable ignores the pointer's velocity (without it the Slint list flicks on to 500 px), so
+    // the list stops where the pointer does.
+    const DISTANCE: f64 = 300.0;
+    const STEPS: u32 = 30;
+    const STEP_INTERVAL: Duration = Duration::from_millis(10);
+    const HOLD: Duration = Duration::from_millis(250);
+    // Where the drag starts, from the top of the list: the list is 450 px high in both apps.
+    const DRAG_TOP: f64 = 60.0;
+    // What the toolkit may spend on recognising the drag before the content follows the pointer.
+    // Slint spends nothing; Qt skips the first two moves (20 px here) however long they are.
+    const MOST_LOST: f64 = 30.0;
+
+    let admin = Admin::login();
+    let user = admin.create_user();
+    let total = TOTAL;
+    let texts: Vec<String> = (0..total).map(|n| format!("message {n:03}")).collect();
+    let (channel_id, posted) = channel_with_messages(&admin, &user, &texts);
+    let app = launch();
+    let gui = app.gui();
+    log_in_and_wait_for_room(gui, &user, &channel_id);
+    open_room(gui, &channel_id);
+    gui.wait_until_visible(&message(&posted[total - 1].id, message_row::BODY), TIMEOUT)
+        .unwrap();
+
+    let offset = || {
+        gui.scroll_offset(main_window::MESSAGE_LIST, main_window::MESSAGE_LIST_OFFSET)
+            .unwrap()
+    };
+    // The offset once the list has stopped: the Qt app only queues the drag and the views animate.
+    let settled = || {
+        let mut last = offset();
+        gui.wait_until("the list to stop", TIMEOUT, || {
+            gui.wait(Duration::from_millis(200))?;
+            let now = offset();
+            let stopped = (now - last).abs() < 0.5;
+            last = now;
+            Ok(stopped)
+        })
+        .unwrap();
+        last
+    };
+    let before = settled();
+    assert!(before.abs() < 1.0, "{before}");
+
+    // Down the gutter, from near the top: the content follows the pointer down, which
+    // shows older messages.
+    let list = gui.bounding_box(main_window::MESSAGE_LIST).unwrap();
+    let x = main_window::MESSAGE_LIST_DRAG_X;
+    let top = DRAG_TOP;
+    assert!(list.height > top + DISTANCE, "a list of {}", list.height);
+    gui.mouse_drag(
+        main_window::MESSAGE_LIST,
+        (x, top),
+        (x, top + DISTANCE),
+        STEPS,
+        STEP_INTERVAL,
+        HOLD,
+    )
+    .unwrap();
+    gui.wait_until("the list to scroll", TIMEOUT, || Ok(offset() > 1.0))
+        .unwrap();
+    let dragged = settled() - before;
+    assert!(
+        (DISTANCE - MOST_LOST..=DISTANCE + 1.0).contains(&dragged),
+        "dragged {dragged} for {DISTANCE}"
+    );
+
+    // No flick after the release.
+    gui.wait(Duration::from_millis(600)).unwrap();
+    assert!((offset() - before - dragged).abs() < 1.0);
+}
+
+// MSG-002
+#[test]
+#[ignore = "needs the app and a Rocket.Chat server: run through ctest"]
 fn loading_older_messages_keeps_the_view_in_place() {
     let admin = Admin::login();
     let user = admin.create_user();

@@ -197,6 +197,48 @@ impl Gui {
         .map(drop)
     }
 
+    /// Drags with the left button over the element at `path`: presses at `from`, moves `steps`
+    /// times (at least 1) along the straight line to `to`, each by the same distance, holds still
+    /// at `to` for `hold`, and releases. The points are logical pixels from the element's top-left.
+    /// Move `k` is due `k * interval` after the press and the release `steps * interval + hold`
+    /// after it, in both apps: the stroke lasts that long however late single events run (the Qt
+    /// app's moves can be up to 10 ms late, without delaying the later ones).
+    ///
+    /// A drag over a list moves its content with the pointer, less what the toolkit spends on
+    /// recognising the drag. The hold is what stops the view from flicking on at release: Slint's
+    /// flickable ignores a pointer velocity older than 100 ms, so pass more (the Qt app's
+    /// Flickable did not flick after a drag in these tests whatever the hold). The Slint app
+    /// answers after the release; the Qt app only queues the gesture, so (as with
+    /// [`Gui::mouse_wheel`]) callers wait for what they expect to see, and a later call that goes
+    /// through the app's queue, like any property read, returns after the release.
+    pub fn mouse_drag(
+        &self,
+        path: &str,
+        from: (f64, f64),
+        to: (f64, f64),
+        steps: u32,
+        interval: Duration,
+        hold: Duration,
+    ) -> Result<()> {
+        let millis = |duration: Duration| {
+            Value::Int(i32::try_from(duration.as_millis()).unwrap_or(i32::MAX))
+        };
+        self.command(
+            "mouseDrag",
+            &[
+                path.into(),
+                Value::Double(from.0),
+                Value::Double(from.1),
+                Value::Double(to.0),
+                Value::Double(to.1),
+                Value::Int(i32::try_from(steps).unwrap_or(i32::MAX)),
+                millis(interval),
+                millis(hold),
+            ],
+        )
+        .map(drop)
+    }
+
     /// Types `text` into the window of the element at `path`, which goes to the focused element.
     pub fn input_text(&self, path: &str, text: &str) -> Result<()> {
         self.command("inputText", &[path.into(), text.into()])
