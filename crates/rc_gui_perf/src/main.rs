@@ -68,6 +68,9 @@ fn run_all(options: &Options) -> Result<(), Error> {
         }
     }
     perf::check_available()?;
+    if options.kernel {
+        perf::check_kernel_counting()?;
+    }
     fs::create_dir_all(&options.out)
         .map_err(|source| Error::io("can't make", &options.out, source))?;
     let server = rc_test_server::server_url();
@@ -160,7 +163,7 @@ fn run_once(
     let wrapper_args = if options.record {
         perf::record_args(&control, &data, job.variant.frontend())
     } else {
-        perf::stat_args(&control, &csv)
+        perf::stat_args(&control, &csv, options.kernel)
     };
     // The session stays in memory (the harness default), never in the user's keyring.
     let launch = LaunchOptions::new()
@@ -197,7 +200,7 @@ fn run_once(
         path: csv.clone(),
         source,
     })?;
-    let counters = perf::parse_csv(&text);
+    let counters = perf::parse_csv(&text, &perf::events(options.kernel));
     // The file says where the binary was, wherever the runner was started from.
     let binary = binary.canonicalize().unwrap_or_else(|_| binary.clone());
     let info = RunInfo {

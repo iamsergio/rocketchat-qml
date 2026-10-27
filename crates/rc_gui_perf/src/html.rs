@@ -183,7 +183,11 @@ const HOW_TO_READ: &str = "\
 <details open><summary>How to read this</summary>
 <ul>
 <li><b>Instructions</b> is the stable metric. Cycles, ref-cycles and task-clock depend on the
-clock speed and on what else the machine does; look at their spread before trusting them.</li>
+clock speed and on what else the machine does; look at their spread before trusting them.
+<b>page-faults</b> counts the app's user-space page faults (minor and major), a measure of memory
+touched for the first time. Counters ending in <b>:k</b> (cycles, instructions) exist only for
+runs made with <code>--kernel</code>: the kernel side of the app's own work, counted apart from
+the user-space counters, never summed with them.</li>
 <li><b>scroll_main_channel</b>: the apps scroll differently, Qt glides after each wheel notch,
 Slint jumps per notch. They are compared over the same distance, not the same input, and since
 the number of frames differs a lot, both <b>per pixel scrolled</b> and <b>per frame drawn</b> are
@@ -329,6 +333,25 @@ fn header(out: &mut String, runs: &[Run], date: &str, counts: &[(&str, usize)]) 
         out.push_str(
             "<div class=\"banner\">Smoke runs: nothing real was drawn, the numbers mean \
              nothing. They only show that the code path works.</div>\n",
+        );
+    }
+    let disturbed: Vec<String> = runs
+        .iter()
+        .filter_map(|run| {
+            let faults = run
+                .counters
+                .iter()
+                .find(|counter| counter.event == "major-faults:u")?
+                .value?;
+            (faults > 0.0).then(|| format!("{} {} ({faults:.0})", app_name(&run.app), run.scenario))
+        })
+        .collect();
+    if !disturbed.is_empty() {
+        let _ = writeln!(
+            out,
+            "<div class=\"banner\">Major page faults in the measured part: these runs waited on \
+             disk, so their cycles and task-clock aren't comparable: {}.</div>",
+            escape(&disturbed.join(", "))
         );
     }
 }
@@ -658,6 +681,47 @@ mod tests {
         assert!(html.contains("<th>Wheel batches</th>"));
         assert!(html.contains("drag_main_channel"));
         assert!(html.contains("compare directly"));
+    }
+
+    fn counter(event: &str, value: f64) -> CounterValue {
+        CounterValue {
+            event: event.to_owned(),
+            state: "counted".to_owned(),
+            value: Some(value),
+            unit: "count".to_owned(),
+        }
+    }
+
+    // INFRA-007
+    #[test]
+    fn kernel_and_page_fault_rows_show_only_for_runs_that_have_them() {
+        let plain = [run("qt", false, 4e9, Some(400.0))];
+        let html = render(&plain, None, "d");
+        assert!(!html.contains("<td>cycles:k</td>"));
+        assert!(!html.contains("<td>page-faults:u</td>"));
+        let mut with = run("qt", false, 4e9, Some(400.0));
+        with.counters.push(counter("page-faults:u", 5000.0));
+        with.counters.push(counter("cycles:k", 3e9));
+        let html = render(&[with], None, "d");
+        assert!(html.contains("<td>page-faults:u</td>"));
+        assert!(html.contains("<td>cycles:k</td>"));
+        assert!(
+            html.contains("3,000,000"),
+            "cycles:k per px, apart from the user ones"
+        );
+    }
+
+    // INFRA-007
+    #[test]
+    fn runs_that_read_from_disk_get_the_banner() {
+        let mut quiet = run("qt", false, 4e9, Some(400.0));
+        quiet.counters.push(counter("major-faults:u", 0.0));
+        assert!(!render(&[quiet], None, "d").contains("Major page faults"));
+        let mut disturbed = run("qt", false, 4e9, Some(400.0));
+        disturbed.counters.push(counter("major-faults:u", 3.0));
+        let html = render(&[disturbed], None, "d");
+        assert!(html.contains("Major page faults"));
+        assert!(html.contains("scroll_main_channel (3)"));
     }
 
     // INFRA-007

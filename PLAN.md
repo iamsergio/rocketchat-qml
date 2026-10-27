@@ -129,6 +129,8 @@ The decided design (counters, platforms, batched input, the same-distance compar
 - [ ] Frame counts with the software renderer and with Skia on wgpu, whose rendering notifiers don't fire (Skia on wgpu counted 0 frames): another way in `spix_slint`, or the report says per frame is unknown for them. Until then `rc_gui_perf` records 0 frames of a list that moved as unknown
 - [x] `rc_gui_perf --record`: `perf record` (user space; frame pointers for the Slint app, dwarf for the Qt app) of the measured part, with the perf.data, the collapsed stacks and a flame graph SVG per run (`scripts/run_perf_test.sh --record`)
 - [ ] `rc_gui_perf report` shows the flame graphs of record runs (and a Slint-vs-Qt differential)
+- [x] `rc_gui_perf`: `page-faults:u` among the default counters, `major-faults:u` with a report banner over runs that read from disk, and `--kernel` (`cycles:k`, `instructions:k`, needs `perf_event_paranoid` 1 or lower, not with `--record`) with its own report rows, see [Performance tests](docs/design/performance-tests.md)
+- [ ] System-wide counting (Xorg/compositor, driver threads) and GPU time per frame
 - [x] Slint message list: `clip: true` on `MessageDelegate`, so the renderer prunes the off-screen rows (it visits the descendants of every unclipped one): instructions per frame 27.4 M to 14.2 M (drag) and 42.9 M to 29.4 M (scroll), see [SLINT.md](SLINT.md)
 - [ ] The per-event repeater walk over all rows (`ensure_tree_instantiated`, about 35% of what is left in the drag scenario): a lazy message list, or an upstream Slint patch
 

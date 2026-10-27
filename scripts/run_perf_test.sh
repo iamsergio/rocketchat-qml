@@ -26,6 +26,9 @@
 #                             pointer call graphs) and write <variant>.<scenario>.<run>.perf.data, .folded and
 #                             .svg (a flame graph) instead of JSON files and a report; sampling
 #                             skews the counters. Open the .perf.data in hotspot.
+#         --kernel            also count the kernel side of the app (cycles:k, instructions:k): needs
+#                             perf_event_paranoid 1 or lower, `sudo sysctl kernel.perf_event_paranoid=1`
+#                             (resets on reboot); not with --record
 #         --save-baseline     afterwards make this run the baseline: target/perf/baseline becomes
 #                             a symlink to the run's directory
 #
@@ -52,6 +55,7 @@ runs=
 build=1
 save_baseline=0
 record=0
+kernel=0
 qt_app=${RC_PERF_QT_APP:-}
 slint_app=${RC_PERF_SLINT_APP:-}
 names=()
@@ -73,14 +77,17 @@ while [ $# -gt 0 ]; do
     --slint) slint_app=${2:?--slint needs a value}; shift ;;
     --no-build) build=0 ;;
     --record) record=1 ;;
+    --kernel) kernel=1 ;;
     --save-baseline) save_baseline=1 ;;
-    -h | --help) sed -n '8,37p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h | --help) sed -n '8,40p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     -*) die "unknown option $1" ;;
     *) names+=("$1") ;;
     esac
     shift
 done
 [ "$record" = 1 ] && [ "$save_baseline" = 1 ] && die "--record writes no JSON, so it can't be a baseline"
+
+[ "$record" = 1 ] && [ "$kernel" = 1 ] && die "--kernel can't be combined with --record: recording stays in user space"
 
 case $platform in
 wayland | xcb | offscreen) ;;
@@ -126,6 +133,7 @@ mkdir -p "$out"
 
 args=(--platform "$platform" --out "$out")
 [ "$record" = 1 ] && args+=(--record)
+[ "$kernel" = 1 ] && args+=(--kernel)
 [ -n "$runs" ] && args+=(--runs "$runs")
 [ -n "$qt_app" ] && args+=(--qt "$qt_app")
 [ -n "$slint_app" ] && args+=(--slint "$slint_app")
