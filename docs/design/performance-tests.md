@@ -1,6 +1,6 @@
 # Performance tests
 
-`rc_gui_perf` runs micro performance scenarios against the Qt app and the Slint app and writes one JSON file per run. It is a binary, not a `cargo test` target, and CI does not run it: the apps run visibly with GPU rendering on the developer's display. It drives the apps through Spix like the GUI tests (`rc_gui_tests`, `rc_test_server`) but runs only its own scenarios. The HTML report and `scripts/run_perf_test.sh` read the JSON files and the command line described here.
+`rc_gui_perf` runs micro performance scenarios against the Qt app and the Slint app and writes one JSON file per run. It is a binary, not a `cargo test` target, and CI does not run it: the apps run visibly with GPU rendering on the developer's display. It drives the apps through Spix like the GUI tests (`rc_gui_tests`, `rc_test_server`) but runs only its own scenarios. `rc_gui_perf report` and `scripts/run_perf_test.sh` read the JSON files and the command line described here.
 
 ## How a run works
 
@@ -63,3 +63,19 @@ The apps are compared over the same distance, not the same wheel input: a notch 
 2. Write `<scenario>.rs` with `prepare` (everything before the counters) and `measure` (read what is needed, `control.enable()`, the input, wait for the app to be at rest, `control.disable()`, read again), returning a measurement like `scroll_main_channel::Measured`.
 3. Seed its content in `seed.rs`, deterministic in the index, and add the arms in `seed_for` and `run_once` in `main.rs`.
 4. Keep Spix calls inside the counters few and slow, and say how slow.
+
+## The script
+
+`scripts/run_perf_test.sh` is what a developer runs: `--list`, scenario names, `--platform` (default `wayland`), `--runs`, and `--qt` / `--slint` to use a given binary (which is then not built; handy for a smoke run against `build-dev`). It first configures (`cmake --preset perf` / `perf-slint`, only if the build directory has no cache) and builds the apps the names select (only Qt for `qt.*`, both for a bare name or none) and `rc_gui_perf` in release mode; `--no-build` skips that. The run goes into `target/perf/<UTC timestamp>-<platform>/`, then `rc_gui_perf report` writes `report.html` there, against `target/perf/baseline` if that exists, and the script prints its path. `RC_TEST_SERVER_URL` defaults to `http://127.0.0.1:3000`.
+
+**Baseline.** `--save-baseline` makes `target/perf/baseline` a symlink to the run's directory (not a copy: the directories are small, and the link shows which run it is). Compare runs of the same platform, on a quiet machine.
+
+## The report
+
+`rc_gui_perf report <dir> [--baseline <dir>] [-o <file>]` reads every `*.json` of the directory and writes one self-contained HTML file (default `<dir>/report.html`): inline CSS, no script, no external resource, light and dark through `prefers-color-scheme`. The aggregation is in `aggregate.rs` (plain functions, unit tested), the page in `html.rs`. Per scenario:
+
+- a header: date (when the newest run file was written), git revision, platform, window size, runs per app; smoke runs get a banner saying the numbers mean nothing;
+- the scroll facts per app (medians): distance, frames, px per frame, wall time, wheel batches;
+- the counters per app: the median per pixel scrolled and per frame drawn, each with its spread, (max - min) / median. A counter perf couldn't count, or per frame in an app without a frame count, says so instead of showing 0;
+- with both apps, the Slint/Qt ratio per counter (per pixel and per frame) with a bar, 1 marked;
+- with `--baseline`, the change of each median against the baseline's for the same app, scenario and counter, in %. Less is better, so a drop is better and a rise worse, but only when the change is larger than the two spreads added up; otherwise "within noise". A baseline without that app, scenario or counter shows "no baseline".

@@ -21,6 +21,7 @@ Runs micro performance scenarios against the Qt and the Slint app under `perf st
 JSON file per run.
 
 Usage: rc_gui_perf [options] [scenario...]
+       rc_gui_perf report <dir> [--baseline <dir>] [-o <file>]
 
   --list             print every scenario once per app (qt.<name>, slint.<name>) and exit
   scenario           a prefixed name (qt.scroll_main_channel) runs that one; a bare name
@@ -35,6 +36,10 @@ Usage: rc_gui_perf [options] [scenario...]
   --out <dir>        where the JSON files go (default target/perf)
   --help             this text
 
+report reads the JSON files of a directory and writes one self-contained HTML file (default
+<dir>/report.html): the scroll facts, the counters per pixel and per frame with their spread,
+the Slint/Qt ratio and, with --baseline, the change against the runs of another directory.
+
 The test server is the one RC_TEST_SERVER_URL names.";
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -47,6 +52,8 @@ pub enum CliError {
     UnknownScenario(String),
     #[error("unknown platform {0:?}: wayland, xcb or offscreen")]
     UnknownPlatform(String),
+    #[error("report needs the directory of the runs")]
+    NoReportDir,
     #[error("--runs wants a positive number, not {0:?}")]
     BadRuns(String),
     #[error("the {frontend} app is selected but has no binary: pass {flag} or set {env}")]
@@ -151,10 +158,19 @@ impl Options {
     }
 }
 
+/// `rc_gui_perf report`: the runs of `dir` as HTML.
+#[derive(Debug, PartialEq, Eq)]
+pub struct ReportOptions {
+    pub dir: PathBuf,
+    pub baseline: Option<PathBuf>,
+    pub output: PathBuf,
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub enum Cli {
     Help,
     List,
+    Report(ReportOptions),
     Run(Options),
 }
 
@@ -204,6 +220,40 @@ fn select(names: &[String]) -> Result<Vec<Job>, CliError> {
     Ok(jobs)
 }
 
+fn parse_report(mut args: impl Iterator<Item = String>) -> Result<Cli, CliError> {
+    let mut dir = None;
+    let mut baseline = None;
+    let mut output = None;
+    while let Some(arg) = args.next() {
+        let (flag, mut inline) = match arg.split_once('=') {
+            Some((flag, value)) if flag.starts_with("--") => {
+                (flag.to_owned(), Some(value.to_owned()))
+            }
+            _ => (arg.clone(), None),
+        };
+        let mut value = || {
+            inline
+                .take()
+                .or_else(|| args.next())
+                .ok_or_else(|| CliError::MissingValue(flag.clone()))
+        };
+        match flag.as_str() {
+            "--help" | "-h" => return Ok(Cli::Help),
+            "--baseline" => baseline = Some(PathBuf::from(value()?)),
+            "-o" | "--output" => output = Some(PathBuf::from(value()?)),
+            _ if flag.starts_with('-') => return Err(CliError::UnknownOption(flag)),
+            _ => dir = Some(PathBuf::from(arg)),
+        }
+    }
+    let dir = dir.ok_or(CliError::NoReportDir)?;
+    let output = output.unwrap_or_else(|| dir.join("report.html"));
+    Ok(Cli::Report(ReportOptions {
+        dir,
+        baseline,
+        output,
+    }))
+}
+
 /// Reads the command line (without the program name). `env` looks up an environment variable.
 ///
 /// # Errors
@@ -213,7 +263,10 @@ pub fn parse(
     args: impl IntoIterator<Item = String>,
     env: impl Fn(&str) -> Option<String>,
 ) -> Result<Cli, CliError> {
-    let mut args = args.into_iter();
+    let mut args = args.into_iter().peekable();
+    if args.next_if(|arg| arg == "report").is_some() {
+        return parse_report(args);
+    }
     let mut names = Vec::new();
     let mut list_only = false;
     let mut qt = env(QT_ENV)
@@ -291,6 +344,23 @@ mod tests {
 
     fn args(args: &[&str]) -> Vec<String> {
         args.iter().map(|arg| (*arg).to_owned()).collect()
+    }
+
+    // INFRA-007
+    #[test]
+    fn report_takes_a_directory_a_baseline_and_an_output() {
+        let Ok(Cli::Report(options)) = parse(args(&["report", "d", "--baseline", "b"]), no_env)
+        else {
+            panic!("not a report");
+        };
+        assert_eq!(options.dir, PathBuf::from("d"));
+        assert_eq!(options.baseline, Some(PathBuf::from("b")));
+        assert_eq!(options.output, PathBuf::from("d/report.html"));
+        let Ok(Cli::Report(options)) = parse(args(&["report", "-o", "x.html", "d"]), no_env) else {
+            panic!("not a report");
+        };
+        assert_eq!(options.output, PathBuf::from("x.html"));
+        assert_eq!(parse(args(&["report"]), no_env), Err(CliError::NoReportDir));
     }
 
     fn no_env(_: &str) -> Option<String> {
