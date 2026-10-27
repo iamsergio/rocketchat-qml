@@ -49,6 +49,8 @@ while IFS= read -r path; do
     crates/rc_qt/*) rust=true qt=true ;;
     crates/rc_slint/*) rust=true slint=true ;;
     crates/rc_tui/*) rust=true ;;
+    # The perf runner: a binary nothing else uses, which CI only lints and unit-tests.
+    crates/rc_gui_perf/*) rust=true ;;
     crates/rc_view/* | crates/rc_gui_tests/*) rust=true qt=true slint=true ;;
     # rc_api, rc_core and rc_test_server, the build, the toolchain, the submodules, the workflows.
     *) everything ;;

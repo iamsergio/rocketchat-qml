@@ -29,7 +29,7 @@ Read only what the step needs: the files you change, their neighbours of the sam
 ## Testing
 - The real Rocket.Chat test server runs at http://127.0.0.1:3000 (admin/admin); there are no containers here. Never use the user's keyring: anything you launch gets `RC_SECRET_STORE=memory`.
 - While iterating: `scripts/check.sh quick -p <crate>... -g <gui test file>... -s <gui test file>...` (fmt, clippy, unit tests of those crates, those GUI files: `-g` against the Qt app, `-s` the file's `slint.txt` tests against the Slint app; output is one line per step, full logs in target/check-logs/). Read a log only for a failing step, and only the part you need.
-- Once, before reporting: `scripts/check.sh full`. Contract tests by hand: `RC_TEST_SERVER_URL=http://127.0.0.1:3000 cargo test -p rc_core --test contract -- --ignored --exact <name>`.
+- Once, before reporting: `scripts/check.sh scoped`, which runs the part of `full` the change needs, as CI decides it (`scripts/ci_scope.sh`). Run `full` only when the brief asks for it. Contract tests by hand: `RC_TEST_SERVER_URL=http://127.0.0.1:3000 cargo test -p rc_core --test contract -- --ignored --exact <name>`.
 - Never paste long command output into your reasoning: pipe through `tail`/`grep`.
 - The test server is shared with CI and other agents. A "Peer disconnected" or a login timeout that passes on a rerun of that one file is load, not your change: say so in the report. A failure that repeats is yours to fix or report.
 - Stale fingerprints happen: if cargo says an item that exists is missing, touch the file and rebuild.
@@ -38,4 +38,4 @@ Read only what the step needs: the files you change, their neighbours of the sam
 Launch `build-dev/bin/rocketchat_qml --dev --spix-port <port>` with `QT_QPA_PLATFORM=offscreen RC_SECRET_STORE=memory`, drive it with python's `xmlrpc.client` (Spix: `mouseClick("mainWindow/<name>")`, `inputText`, `takeScreenshot("mainWindow", path)`), save where the brief says.
 
 ## Report
-Short, in this order: what changed and why (by crate, one line per file group); decisions the brief didn't settle; anything you were unsure about or that the brief got wrong; the `scripts/check.sh full` summary lines (and any rerun); screenshot paths. No code listings, no restating the brief.
+Short, in this order: what changed and why (by crate, one line per file group); decisions the brief didn't settle; anything you were unsure about or that the brief got wrong; the scopes line and `target/check-logs/summary.txt` of that run (each step's start and duration, and the total), and any rerun; screenshot paths. No code listings, no restating the brief.
