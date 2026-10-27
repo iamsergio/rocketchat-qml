@@ -135,3 +135,16 @@ A `FlexboxLayout` whose `for` produces no item reports a maximum width of about 
 - **Workaround:** the bar sets `max-width: Theme.unbounded` (a width too large to ever limit), and `rc_slint`'s `the_composer_fills_its_column_with_no_file_waiting` guards it. A bar that is not a flexbox (the uploads, a `VerticalLayout`) is not affected.
 - **Possible patch:** an empty flexbox reporting no maximum.
 
+## The renderer visits every descendant of an off-screen item, unless the item clips
+
+`item_rendering::render_item_children` does not prune an item that `filter_item` finds outside the clip: it still returns `ContinueRenderingChildren`, so each frame visits every descendant of every row of a list that isn't lazy. Each visit reads the item's geometry with dependency tracking, which allocates a dependency node, all of them freed the next frame. With the message list (200 rows, all instantiated, see the `ListView` entries above) that was about 45% of the app's cycles while scrolling. The only pruning is `visit_clip`: a `Clip` element (what `clip: true` lowers to) whose region misses the view returns `ContinueRenderingWithoutChildren`.
+
+- **Workaround:** `clip: true` on the root of `MessageDelegate`, which draws nothing outside its bounds (the menu is a popup and isn't cut; screenshots of the room, a hovered row, the menu and the thread pane are pixel-identical). Median instructions per frame on the perf scenarios (femtovg, 3 runs): `drag_main_channel` 27.4 M to 14.2 M, `scroll_main_channel` 42.9 M to 29.4 M; cycles per frame 13.2 M to 8.8 M and 21.3 M to 15.9 M (cycles vary 2x between runs). `RoomSearchResults` has the same shape but few, light rows and no perf scenario, so it has no clip.
+- **Possible patch:** skip the children of an item that is outside the clip when they are known to stay inside it, or cache the result.
+
+## `ensure_tree_instantiated` walks every repeater and conditional before each event and frame
+
+`WindowInner::ensure_tree_instantiated` runs before every mouse event, key event and render, and walks every repeater and conditional of the whole tree. `MessageDelegate` has 32 `if`/`for`, times 200 rows. After the clip fix above it is about 35% of the remaining cycles in `drag_main_channel`.
+
+- **Workaround:** none yet, short of a lazy message list, which can't keep its place (see above).
+- **Possible patch:** dirty-tracking, so that a repeater or conditional whose model and condition haven't changed is skipped.
