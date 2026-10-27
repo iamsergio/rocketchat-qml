@@ -10,7 +10,8 @@
 # Usage:
 #   scripts/run_perf_test.sh --list
 #       Every scenario once per variant (qt.scroll_main_channel,
-#       slint-femtovg.drag_main_channel, slint-software.drag_main_channel, ...).
+#       slint-femtovg.drag_main_channel, slint-skia.drag_main_channel,
+#       slint-software.drag_main_channel, ...).
 #   scripts/run_perf_test.sh [options] [scenario...]
 #       A full name (slint-software.scroll_main_channel) runs that one, slint.<scenario> runs it
 #       in every Slint variant, a bare name in all variants, no name runs everything. Options:

@@ -17,14 +17,17 @@ pub const ENV: &str = "RC_SLINT_RENDERER";
 pub enum Renderer {
     Femtovg,
     Software,
-    // Skia comes with its `rc_slint` feature (`#[cfg(feature = "skia")]`): the variant, its name
-    // here and in `NAMES`, and Slint's `renderer-skia` feature behind it.
+    /// Only with the `skia` feature of `rc_slint`, which builds Slint's Skia renderer.
+    #[cfg(feature = "skia")]
+    Skia,
 }
 
 /// What `RC_SLINT_RENDERER` accepts, in the order the error lists them.
-const NAMES: [(&str, Renderer); 2] = [
+const NAMES: &[(&str, Renderer)] = &[
     ("femtovg", Renderer::Femtovg),
     ("software", Renderer::Software),
+    #[cfg(feature = "skia")]
+    ("skia", Renderer::Skia),
 ];
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -112,9 +115,32 @@ mod tests {
     }
 
     // APP-001
+    #[cfg(feature = "skia")]
+    #[test]
+    fn skia_is_a_renderer_of_a_build_with_the_skia_feature() {
+        assert_eq!(Renderer::parse("skia"), Ok(Renderer::Skia));
+        assert_eq!(Renderer::Skia.name(), "skia");
+        let message = Renderer::parse("vulkan").unwrap_err().to_string();
+        assert!(message.contains("femtovg, software, skia"));
+    }
+
+    // APP-001
+    #[cfg(not(feature = "skia"))]
+    #[test]
+    fn skia_is_not_a_renderer_of_a_build_without_the_skia_feature() {
+        assert_eq!(
+            Renderer::parse("skia"),
+            Err(RendererError::Unknown("skia".to_owned()))
+        );
+        let message = Renderer::parse("skia").unwrap_err().to_string();
+        assert!(message.contains("not a renderer of this build"));
+        assert!(message.contains("femtovg, software") && !message.contains("software, skia"));
+    }
+
+    // APP-001
     #[test]
     fn an_unknown_renderer_is_an_error_that_lists_the_known_ones() {
-        for name in ["skia", "", "Software", "gl"] {
+        for name in ["", "Software", "gl", "Skia"] {
             assert_eq!(
                 Renderer::parse(name),
                 Err(RendererError::Unknown(name.to_owned()))

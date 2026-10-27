@@ -18,7 +18,7 @@ const DEFAULT_OUT: &str = "target/perf";
 
 pub const HELP: &str = "\
 Runs micro performance scenarios against the Qt and the Slint app under `perf stat` and writes one
-JSON file per run. Every run is one variant: qt, slint-femtovg or slint-software (the Slint ones
+JSON file per run. Every run is one variant: qt, slint-femtovg, slint-skia or slint-software (the Slint ones
 are the same app with another renderer, picked through RC_SLINT_RENDERER).
 
 Usage: rc_gui_perf [options] [scenario...]
@@ -92,17 +92,23 @@ impl fmt::Display for Frontend {
 }
 
 /// What a run measures: the Qt app, or the Slint app with one of its renderers. A Slint renderer
-/// that needs another build (Skia) is one more entry here, in `ALL` and in the matches below.
+/// that needs another build (Skia, which only the perf build has) fails when the app starts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Variant {
     Qt,
     SlintFemtovg,
+    SlintSkia,
     SlintSoftware,
 }
 
 impl Variant {
     /// In the order of `--list` and of the report.
-    pub const ALL: [Self; 3] = [Self::Qt, Self::SlintFemtovg, Self::SlintSoftware];
+    pub const ALL: [Self; 4] = [
+        Self::Qt,
+        Self::SlintFemtovg,
+        Self::SlintSkia,
+        Self::SlintSoftware,
+    ];
 
     /// `qt`, `slint-femtovg`: how the command line, the JSON and the file names say it.
     #[must_use]
@@ -110,6 +116,7 @@ impl Variant {
         match self {
             Self::Qt => "qt",
             Self::SlintFemtovg => "slint-femtovg",
+            Self::SlintSkia => "slint-skia",
             Self::SlintSoftware => "slint-software",
         }
     }
@@ -119,7 +126,7 @@ impl Variant {
     pub fn frontend(self) -> Frontend {
         match self {
             Self::Qt => Frontend::Qt,
-            Self::SlintFemtovg | Self::SlintSoftware => Frontend::Slint,
+            Self::SlintFemtovg | Self::SlintSkia | Self::SlintSoftware => Frontend::Slint,
         }
     }
 
@@ -129,6 +136,7 @@ impl Variant {
         match self {
             Self::Qt => None,
             Self::SlintFemtovg => Some("femtovg"),
+            Self::SlintSkia => Some("skia"),
             Self::SlintSoftware => Some("software"),
         }
     }
@@ -149,6 +157,7 @@ impl Variant {
         match self {
             Self::Qt => "Qt",
             Self::SlintFemtovg => "Slint femtovg",
+            Self::SlintSkia => "Slint Skia",
             Self::SlintSoftware => "Slint software",
         }
     }
@@ -455,6 +464,7 @@ mod tests {
             list(),
             "qt.scroll_main_channel\nqt.drag_main_channel\n\
              slint-femtovg.scroll_main_channel\nslint-femtovg.drag_main_channel\n\
+             slint-skia.scroll_main_channel\nslint-skia.drag_main_channel\n\
              slint-software.scroll_main_channel\nslint-software.drag_main_channel\n"
         );
         assert_eq!(parse(args(&["--list"]), no_env), Ok(Cli::List));
@@ -485,15 +495,19 @@ mod tests {
             ids,
             [
                 "slint-femtovg.scroll_main_channel",
+                "slint-skia.scroll_main_channel",
                 "slint-software.scroll_main_channel"
             ]
         );
+        let skia = run(&["--slint", "s", "slint-skia.drag_main_channel"]).unwrap();
+        assert_eq!(skia.jobs.len(), 1);
+        assert_eq!(skia.jobs[0].variant, Variant::SlintSkia);
         // The Qt app isn't needed for them.
         assert_eq!(slint.qt, None);
         assert_eq!(
-            run(&["slint-skia.scroll_main_channel"]),
+            run(&["slint-gl.scroll_main_channel"]),
             Err(CliError::UnknownScenario(
-                "slint-skia.scroll_main_channel".into()
+                "slint-gl.scroll_main_channel".into()
             ))
         );
     }
@@ -505,6 +519,7 @@ mod tests {
         assert_eq!(Variant::SlintSoftware.frontend(), Frontend::Slint);
         assert_eq!(Variant::Qt.renderer(), None);
         assert_eq!(Variant::SlintFemtovg.renderer(), Some("femtovg"));
+        assert_eq!(Variant::SlintSkia.renderer(), Some("skia"));
         assert_eq!(Variant::SlintSoftware.renderer(), Some("software"));
         for variant in Variant::ALL {
             assert_eq!(Variant::from_stored(variant.id()), Some(variant));
@@ -519,11 +534,17 @@ mod tests {
     fn a_bare_name_runs_every_variant_and_no_name_runs_everything() {
         let all = run(&["--qt", "q", "--slint", "s", "scroll_main_channel"]).unwrap();
         let none = run(&["--qt", "q", "--slint", "s"]).unwrap();
-        assert_eq!(all.jobs.len(), 3);
-        assert_eq!(none.jobs.len(), 6);
-        assert_eq!(all.jobs, [none.jobs[0], none.jobs[2], none.jobs[4]]);
+        assert_eq!(all.jobs.len(), 4);
+        assert_eq!(none.jobs.len(), 8);
+        assert_eq!(
+            all.jobs,
+            [none.jobs[0], none.jobs[2], none.jobs[4], none.jobs[6]]
+        );
         let drag = run(&["--qt", "q", "--slint", "s", "drag_main_channel"]).unwrap();
-        assert_eq!(drag.jobs, [none.jobs[1], none.jobs[3], none.jobs[5]]);
+        assert_eq!(
+            drag.jobs,
+            [none.jobs[1], none.jobs[3], none.jobs[5], none.jobs[7]]
+        );
         assert_eq!(drag.jobs[0].id(), "qt.drag_main_channel");
     }
 
@@ -539,7 +560,7 @@ mod tests {
             "scroll_main_channel",
         ])
         .unwrap();
-        assert_eq!(options.jobs.len(), 3);
+        assert_eq!(options.jobs.len(), 4);
         assert_eq!(options.jobs[0].variant, Variant::Qt);
     }
 

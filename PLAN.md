@@ -122,7 +122,7 @@ The decided design (counters, platforms, batched input, the same-distance compar
 - [x] `Gui::mouse_drag` in `rc_gui_tests`, and a GUI test against both apps that dragging the message list's content scrolls it by the dragged distance without a flick
 - [x] Scenario `drag_main_channel`: the seeded channel dragged by its content in the same strokes in both apps (as many as drag 8000 px), so both get the same input in the same time and their frames compare directly, see [Performance tests](docs/design/performance-tests.md)
 - [x] Renderer variants: every run is one of `qt`, `slint-femtovg`, `slint-skia`, `slint-software` (`--list` shows each scenario per variant; a bare name runs all four, `slint.<scenario>` the three Slint ones). The Slint app picks its renderer explicitly (`slint::BackendSelector`) and fails if the build lacks it, instead of falling back. Old JSON with app `slint` reads as `slint-femtovg`. The report shows the four side by side, each Slint variant against Qt
-- [ ] Skia in the Slint perf build: an `rc_slint` feature for Slint's `renderer-skia`, on in the `perf-slint` preset only, so dev builds and CI don't build Skia
+- [x] Skia in the Slint perf build: an `rc_slint` feature for Slint's `renderer-skia`, on in the `perf-slint` preset only, so dev builds and CI don't build Skia
 - [ ] Frame counts with the software renderer, which has no rendering notifier: another way in `spix_slint`, or the report says per frame is unknown for it
 - [ ] `perf record` flame graphs per scenario and variant
 
