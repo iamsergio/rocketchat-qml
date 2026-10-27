@@ -27,7 +27,9 @@ pub struct Run {
     pub window: Option<(f64, f64)>,
     pub distance_px: f64,
     pub frames: Option<f64>,
-    pub wheel_batches: f64,
+    /// What was sent: the wheel scenarios have batches, the drag ones strokes.
+    pub wheel_batches: Option<f64>,
+    pub drag_strokes: Option<f64>,
     pub wall_time_ms: f64,
     pub counters: Vec<CounterValue>,
 }
@@ -80,7 +82,8 @@ impl Run {
             window,
             distance_px: number("distance_px")?,
             frames: json["frames"].as_f64(),
-            wheel_batches: number("wheel_batches")?,
+            wheel_batches: json["wheel_batches"].as_f64(),
+            drag_strokes: json["drag_strokes"].as_f64(),
             wall_time_ms: number("wall_time_ms")?,
             counters,
         })
@@ -139,7 +142,7 @@ pub struct CounterSummary {
     pub per_frame: Measure,
 }
 
-/// Facts about the scroll, each the median of the runs.
+/// Facts about the scroll or drag, each the median of the runs.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Facts {
     pub distance_px: Option<Stat>,
@@ -147,6 +150,7 @@ pub struct Facts {
     pub px_per_frame: Option<Stat>,
     pub wall_time_ms: Option<Stat>,
     pub wheel_batches: Option<Stat>,
+    pub drag_strokes: Option<Stat>,
 }
 
 /// All runs of one app in one scenario.
@@ -230,7 +234,8 @@ pub fn summarize(runs: &[Run]) -> AppSummary {
             frames: fact(|run| run.frames),
             px_per_frame: fact(|run| run.frames.filter(|f| *f > 0.0).map(|f| run.distance_px / f)),
             wall_time_ms: fact(|run| Some(run.wall_time_ms)),
-            wheel_batches: fact(|run| Some(run.wheel_batches)),
+            wheel_batches: fact(|run| run.wheel_batches),
+            drag_strokes: fact(|run| run.drag_strokes),
         },
         counters,
     }
@@ -298,7 +303,8 @@ mod tests {
             window: None,
             distance_px: distance,
             frames,
-            wheel_batches: 10.0,
+            wheel_batches: Some(10.0),
+            drag_strokes: None,
             wall_time_ms: 1000.0,
             counters,
         }
@@ -413,6 +419,8 @@ mod tests {
         assert_eq!(run.frames, None);
         assert_eq!(run.window, Some((964.0, 600.0)));
         assert_eq!(run.counters[1].value, None);
+        assert_eq!(run.wheel_batches, Some(14.0));
+        assert_eq!(run.drag_strokes, None);
         assert!(Run::from_json(&serde_json::json!({"schema": 2})).is_err());
     }
 }

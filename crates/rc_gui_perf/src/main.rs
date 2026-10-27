@@ -6,8 +6,10 @@
 
 mod aggregate;
 mod cli;
+mod drag_main_channel;
 mod error;
 mod html;
+mod main_channel;
 mod perf;
 mod report;
 mod scroll_main_channel;
@@ -72,19 +74,24 @@ fn run_all(options: &Options) -> Result<(), Error> {
         eprintln!("smoke mode: offscreen draws nothing real, the numbers mean nothing");
     }
 
-    // Seeding first, once per scenario: no app is running while the server is busy.
+    // Seeding first, once per content: no app is running while the server is busy. Scenarios on
+    // the same content share the channel.
     let mut channels: BTreeMap<&'static str, Channel> = BTreeMap::new();
     for job in &options.jobs {
-        if !channels.contains_key(job.scenario) {
-            eprintln!("seeding {}", job.scenario);
-            channels.insert(job.scenario, seed_for(job.scenario)?);
+        let content = content_of(job.scenario)?;
+        if !channels.contains_key(content) {
+            eprintln!("seeding {content}");
+            channels.insert(content, seed_for(content)?);
         }
     }
 
     // Run by run across the jobs, so that drift of the machine falls on both apps alike.
     for run in 0..options.runs {
         for job in &options.jobs {
-            let Some(channel) = channels.get(job.scenario) else {
+            let Some(channel) = content_of(job.scenario)
+                .ok()
+                .and_then(|content| channels.get(content))
+            else {
                 continue;
             };
             let file = run_once(options, *job, run, channel, &server, &git_revision)?;
@@ -94,10 +101,18 @@ fn run_all(options: &Options) -> Result<(), Error> {
     Ok(())
 }
 
-fn seed_for(scenario: &str) -> Result<Channel, Error> {
+/// The content a scenario runs on: the name of its seeding.
+fn content_of(scenario: &str) -> Result<&'static str, Error> {
     match scenario {
-        "scroll_main_channel" => Ok(seed::scroll_main_channel(|line| eprintln!("  {line}"))?),
-        _ => Err(Error::Scenario(format!("no seeding for {scenario}"))),
+        "scroll_main_channel" | "drag_main_channel" => Ok("main_channel"),
+        _ => Err(Error::Scenario(format!("no content for {scenario}"))),
+    }
+}
+
+fn seed_for(content: &str) -> Result<Channel, Error> {
+    match content {
+        "main_channel" => Ok(seed::main_channel(|line| eprintln!("  {line}"))?),
+        _ => Err(Error::Scenario(format!("no seeding for {content}"))),
     }
 }
 
@@ -143,10 +158,14 @@ fn run_once(
     control.connect()?;
 
     let measured = match job.scenario {
-        "scroll_main_channel" => {
-            let length = scroll_main_channel::prepare(app.gui(), app.cache_dir(), server, channel)?;
+        "scroll_main_channel" | "drag_main_channel" => {
+            let length = main_channel::prepare(app.gui(), app.cache_dir(), server, channel)?;
             eprintln!("  {}: the list is {length:.0} px long", job.id());
-            scroll_main_channel::measure(app.gui(), &mut control)?
+            if job.scenario == "drag_main_channel" {
+                drag_main_channel::measure(app.gui(), &mut control)?
+            } else {
+                scroll_main_channel::measure(app.gui(), &mut control)?
+            }
         }
         other => return Err(Error::Scenario(format!("unknown scenario {other}"))),
     };

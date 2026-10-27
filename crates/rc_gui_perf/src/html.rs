@@ -182,10 +182,14 @@ const HOW_TO_READ: &str = "\
 <ul>
 <li><b>Instructions</b> is the stable metric. Cycles, ref-cycles and task-clock depend on the
 clock speed and on what else the machine does; look at their spread before trusting them.</li>
-<li>The apps scroll differently: Qt glides after each wheel notch, Slint jumps per notch. They
-are compared over the same distance, not the same input, and since the number of frames differs
-a lot, both <b>per pixel scrolled</b> and <b>per frame drawn</b> are shown. Per frame exists only
-where the app can count its frames.</li>
+<li><b>scroll_main_channel</b>: the apps scroll differently, Qt glides after each wheel notch,
+Slint jumps per notch. They are compared over the same distance, not the same input, and since
+the number of frames differs a lot, both <b>per pixel scrolled</b> and <b>per frame drawn</b> are
+shown. Per frame exists only where the app can count its frames.</li>
+<li><b>drag_main_channel</b>: both apps get the same strokes in the same time and their lists
+follow the pointer 1:1, so they cover about the same distance and on a real display draw about
+the same number of frames. Here the numbers <b>per frame</b> compare directly (and so do wall
+time and frames); per pixel is the same number divided by about the same distance.</li>
 <li>Each number is the <b>median</b> of the runs; the <b>spread</b> is (max - min) / median.
 Less is better for every counter.</li>
 <li>The ratio is <b>Slint / Qt</b>: below 1 Slint needs less.</li>
@@ -324,9 +328,17 @@ fn header(out: &mut String, runs: &[Run], date: &str, counts: &[(&str, usize)]) 
 }
 
 fn facts_table(out: &mut String, apps: &[(&str, &AppSummary)]) {
-    out.push_str(
+    // What was sent: strokes for a drag scenario, wheel batches otherwise (and in old files).
+    let drag = apps.iter().any(|(_, s)| s.facts.drag_strokes.is_some());
+    let _ = writeln!(
+        out,
         "<h3>The scroll</h3>\n<div class=\"table\"><table><tr><th>App</th><th>Distance</th>\
-         <th>Frames</th><th>px per frame</th><th>Wall time</th><th>Wheel batches</th></tr>\n",
+         <th>Frames</th><th>px per frame</th><th>Wall time</th><th>{}</th></tr>",
+        if drag {
+            "Drag strokes"
+        } else {
+            "Wheel batches"
+        },
     );
     for (app, summary) in apps {
         let facts = &summary.facts;
@@ -348,7 +360,14 @@ fn facts_table(out: &mut String, apps: &[(&str, &AppSummary)]) {
                     .as_ref(),
                 " s"
             ),
-            fact_cell(facts.wheel_batches.as_ref(), ""),
+            fact_cell(
+                if drag {
+                    facts.drag_strokes.as_ref()
+                } else {
+                    facts.wheel_batches.as_ref()
+                },
+                ""
+            ),
         );
     }
     out.push_str("</table></div>\n");
@@ -524,7 +543,8 @@ mod tests {
             window: Some((964.0, 600.0)),
             distance_px: 1000.0,
             frames,
-            wheel_batches: 14.0,
+            wheel_batches: Some(14.0),
+            drag_strokes: None,
             wall_time_ms: 3000.0,
             counters: vec![
                 CounterValue {
@@ -562,6 +582,20 @@ mod tests {
         assert!(html.contains("964 x 600"));
         assert!(!html.contains("Smoke runs"));
         assert!(!html.contains("<script"));
+    }
+
+    // INFRA-007
+    #[test]
+    fn a_drag_scenario_shows_its_strokes_and_a_wheel_one_its_batches() {
+        let mut drag = run("qt", false, 4e9, Some(400.0));
+        drag.scenario = "drag_main_channel".to_owned();
+        drag.wheel_batches = None;
+        drag.drag_strokes = Some(23.0);
+        let html = render(&[drag, run("slint", false, 1e9, Some(400.0))], None, "d");
+        assert!(html.contains("<th>Drag strokes</th>"));
+        assert!(html.contains("<th>Wheel batches</th>"));
+        assert!(html.contains("drag_main_channel"));
+        assert!(html.contains("compare directly"));
     }
 
     // INFRA-007

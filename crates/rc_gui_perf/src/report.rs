@@ -8,8 +8,8 @@ use std::path::{Path, PathBuf};
 use serde_json::{Value, json};
 
 use crate::cli::{Job, Platform};
+use crate::main_channel::{DISTANCE, Input, Measured};
 use crate::perf::Counter;
-use crate::scroll_main_channel::{DISTANCE, Measured};
 
 /// What the file says about the run besides what was measured.
 pub struct RunInfo<'a> {
@@ -35,7 +35,7 @@ pub fn path(out: &Path, job: Job, run: u32) -> PathBuf {
 /// perf couldn't count has a `state` other than `counted` and no value.
 #[must_use]
 pub fn to_json(info: &RunInfo<'_>, measured: &Measured, counters: &[Counter]) -> Value {
-    json!({
+    let mut json = json!({
         "schema": 1,
         "app": info.job.frontend.name(),
         "scenario": info.job.scenario,
@@ -49,11 +49,33 @@ pub fn to_json(info: &RunInfo<'_>, measured: &Measured, counters: &[Counter]) ->
         "target_distance_px": DISTANCE,
         "distance_px": measured.end_offset - measured.start_offset,
         "frames": measured.frames,
-        "wheel_batches": measured.batches,
-        "wheel_notches": measured.notches,
         "wall_time_ms": measured.wall.as_secs_f64() * 1000.0,
         "counters": counters.iter().map(Counter::to_json).collect::<Vec<_>>(),
-    })
+    });
+    // What was sent depends on the scenario: a wheel scenario has the wheel fields (what older
+    // files have), a drag scenario the stroke fields.
+    let fields = match measured.input {
+        Input::Wheel { batches, notches } => {
+            json!({ "wheel_batches": batches, "wheel_notches": notches })
+        }
+        Input::Drag {
+            strokes,
+            length_px,
+            steps,
+            interval,
+            hold,
+        } => json!({
+            "drag_strokes": strokes,
+            "drag_length_px": length_px,
+            "drag_steps": steps,
+            "drag_interval_ms": interval.as_secs_f64() * 1000.0,
+            "drag_hold_ms": hold.as_secs_f64() * 1000.0,
+        }),
+    };
+    if let (Some(json), Value::Object(fields)) = (json.as_object_mut(), fields) {
+        json.extend(fields);
+    }
+    json
 }
 
 #[cfg(test)]
@@ -95,8 +117,10 @@ mod tests {
             start_offset: 0.0,
             end_offset: 8100.0,
             frames: None,
-            batches: 14,
-            notches: 140,
+            input: Input::Wheel {
+                batches: 14,
+                notches: 140,
+            },
             wall: Duration::from_millis(2500),
             window: Some((964.0, 600.0)),
         };
@@ -113,5 +137,52 @@ mod tests {
         assert_eq!(json["window"]["width"], 964.0);
         assert_eq!(json["counters"][0]["state"], "not_supported");
         assert_eq!(json["counters"].as_array().map(Vec::len), Some(5));
+        assert_eq!(json["wheel_batches"], 14);
+        assert_eq!(json["wheel_notches"], 140);
+        assert_eq!(json["drag_strokes"], Value::Null);
+    }
+
+    // INFRA-007
+    #[test]
+    fn a_drag_run_has_the_stroke_fields_instead_of_the_wheel_ones() {
+        let info = RunInfo {
+            job: Job {
+                frontend: Frontend::Qt,
+                scenario: "drag_main_channel",
+            },
+            platform: Platform::Xcb,
+            run: 0,
+            binary: Path::new("/b/app"),
+            git_revision: "abc123",
+        };
+        let measured = Measured {
+            start_offset: 100.0,
+            end_offset: 8200.0,
+            frames: Some(900),
+            input: Input::Drag {
+                strokes: 23,
+                length_px: 370.0,
+                steps: 30,
+                interval: Duration::from_millis(16),
+                hold: Duration::from_millis(250),
+            },
+            wall: Duration::from_secs(20),
+            window: None,
+        };
+        let json = to_json(&info, &measured, &[]);
+        assert_eq!(json["scenario"], "drag_main_channel");
+        assert_eq!(json["smoke"], false);
+        assert_eq!(json["distance_px"], 8100.0);
+        assert_eq!(json["frames"], 900);
+        assert_eq!(json["drag_strokes"], 23);
+        assert_eq!(json["drag_length_px"], 370.0);
+        assert_eq!(json["drag_steps"], 30);
+        assert_eq!(json["drag_interval_ms"], 16.0);
+        assert_eq!(json["drag_hold_ms"], 250.0);
+        assert_eq!(json["wheel_batches"], Value::Null);
+        assert_eq!(json["wheel_notches"], Value::Null);
+        // The report reads it, with the same schema as the wheel runs.
+        let run = crate::aggregate::Run::from_json(&json);
+        assert_eq!(run.map(|run| run.drag_strokes), Ok(Some(23.0)));
     }
 }

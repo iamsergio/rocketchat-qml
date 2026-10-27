@@ -120,7 +120,7 @@ The decided design (counters, platforms, batched input, the same-distance compar
 - [x] The HTML report (`rc_gui_perf report`: Qt and Slint side by side, ratio, change against a saved baseline)
 - [x] Spix `mouseDrag(path, fromX, fromY, toX, toY, steps, intervalMs, holdMs)` in the fork, both servers: press, `steps` moves at a constant velocity, hold still, release, played inside the app like `mouseWheel`
 - [x] `Gui::mouse_drag` in `rc_gui_tests`, and a GUI test against both apps that dragging the message list's content scrolls it by the dragged distance without a flick
-- [ ] Scenario `drag_main_channel`: the seeded channel scrolled 8000 px by dragging its content in strokes of the same length and speed in both apps, so both cover the same distance in the same time and their frames compare directly
+- [x] Scenario `drag_main_channel`: the seeded channel dragged by its content in the same strokes in both apps (as many as drag 8000 px), so both get the same input in the same time and their frames compare directly, see [Performance tests](docs/design/performance-tests.md)
 - [ ] Later: `perf record` flame graphs per scenario
 
 ## Phase 8: personal nice to haves

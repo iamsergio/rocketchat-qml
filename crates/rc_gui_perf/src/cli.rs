@@ -7,7 +7,7 @@ use std::fmt;
 use std::path::PathBuf;
 
 /// The scenarios, each of which runs in both apps.
-pub const SCENARIOS: [&str; 1] = ["scroll_main_channel"];
+pub const SCENARIOS: [&str; 2] = ["scroll_main_channel", "drag_main_channel"];
 
 /// Environment variables that name the app binaries, for `--qt` and `--slint`.
 pub const QT_ENV: &str = "RC_PERF_QT_APP";
@@ -379,7 +379,8 @@ mod tests {
     fn list_prints_every_scenario_once_per_app() {
         assert_eq!(
             list(),
-            "qt.scroll_main_channel\nslint.scroll_main_channel\n"
+            "qt.scroll_main_channel\nqt.drag_main_channel\n\
+             slint.scroll_main_channel\nslint.drag_main_channel\n"
         );
         assert_eq!(parse(args(&["--list"]), no_env), Ok(Cli::List));
     }
@@ -403,7 +404,11 @@ mod tests {
         let both = run(&["--qt", "q", "--slint", "s", "scroll_main_channel"]).unwrap();
         let none = run(&["--qt", "q", "--slint", "s"]).unwrap();
         assert_eq!(both.jobs.len(), 2);
-        assert_eq!(both.jobs, none.jobs);
+        assert_eq!(none.jobs.len(), 4);
+        assert_eq!(both.jobs, [none.jobs[0], none.jobs[2]]);
+        let drag = run(&["--qt", "q", "--slint", "s", "drag_main_channel"]).unwrap();
+        assert_eq!(drag.jobs, [none.jobs[1], none.jobs[3]]);
+        assert_eq!(drag.jobs[0].id(), "qt.drag_main_channel");
     }
 
     // INFRA-007
