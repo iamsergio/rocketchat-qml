@@ -80,7 +80,8 @@ One directory per task, outside the repo, never committed:
 3. decisions the brief didn't settle;
 4. doubts, and anything the brief got wrong;
 5. `git status --short --ignore-submodules=all` from where it works;
-6. the check summary lines (`scripts/check.sh full`, `ninja -C build-dev all_qmllint`, reruns);
+6. the check summary lines (`scripts/check.sh scoped` and its `target/check-logs/summary.txt`,
+   `ninja -C build-dev all_qmllint`, reruns);
    for a bug fix, also the new test's failing line with the fix reverted;
 7. screenshot paths.
 

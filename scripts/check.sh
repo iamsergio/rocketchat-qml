@@ -4,7 +4,8 @@
 # SPDX-License-Identifier: MIT
 
 # The checks of a change, with short output: one line per step, and for a failing step only the
-# lines that say what failed. Each step's whole log is kept in target/check-logs/<step>.log.
+# lines that say what failed. Each step's whole log is kept in target/check-logs/<step>.log, and
+# target/check-logs/summary.txt lists when each step started, how long it took and the total.
 #
 # Usage:
 #   scripts/check.sh quick [-p <crate>]... [-g <gui test file>]... [-s <gui test file>]...
@@ -18,6 +19,10 @@
 #       Slint's Spix), cargo deny, the workspace's tests, the contract tests, both builds, qmllint,
 #       every GUI test against the Qt app and those of slint.txt against the Slint app, carrying on
 #       past a failing GUI test file.
+#   scripts/check.sh scoped
+#       Before a commit, the part of `full` that the change needs, as CI decides it for a pull
+#       request (scripts/ci_scope.sh): from the files changed since origin/main, committed or not,
+#       and the untracked ones. fmt always runs.
 #
 # The contract and GUI tests need the Rocket.Chat test server (scripts/run_test_server.sh), at
 # RC_TEST_SERVER_URL (default http://127.0.0.1:3000). The app under test never uses the keyring.
@@ -33,8 +38,10 @@ SLINT_APP=$PWD/build-dev-slint/bin/rocketchat_slint
 SLINT_TESTS=crates/rc_gui_tests/slint.txt
 
 LOGS=target/check-logs
+SUMMARY=$LOGS/summary.txt
 mkdir -p "$LOGS"
 failed=()
+echo "check.sh $* started $(date '+%F %T')" >"$SUMMARY"
 
 # Runs a step quietly: `step <name> <command...>`.
 step() {
@@ -42,10 +49,14 @@ step() {
     shift
     local log="$LOGS/$name.log"
     local start=$SECONDS
+    local started
+    started=$(date +%T)
     if "$@" >"$log" 2>&1; then
         echo "ok    $name ($((SECONDS - start))s)"
+        echo "$started ok    $name $((SECONDS - start))s" >>"$SUMMARY"
     else
         echo "FAIL  $name ($((SECONDS - start))s), log: $log"
+        echo "$started FAIL  $name $((SECONDS - start))s" >>"$SUMMARY"
         grep -E '^(error|warning)(\[|:)|FAILED|panicked at|^  (left|right):|Timeout \{|^Diff in|^Warning: |Error:' "$log" |
             grep -v '^error: test failed, to rerun' | head -n 40 | sed 's/^/      /'
         failed+=("$name")
@@ -88,6 +99,38 @@ slint_gui_tests() {
     RC_GUI_TEST_APP=$SLINT_APP cargo test -p rc_gui_tests --test "$1" --locked -- --ignored --exact "${names[@]}"
 }
 
+# The steps of `full`, by the scopes of scripts/ci_scope.sh.
+rust_steps() {
+    step clippy cargo clippy --workspace --all-targets --locked -- -D warnings
+    step clippy-spix cargo clippy --workspace --all-targets --locked --features rc_slint/spix -- -D warnings
+    step deny cargo deny check
+    step test cargo test --workspace --locked
+}
+
+contract_steps() {
+    step contract-api cargo test -p rc_api --test contract --locked -- --ignored --test-threads=6
+    step contract-core cargo test -p rc_core --test contract --locked -- --ignored --test-threads=6
+}
+
+qt_steps() {
+    step build build_preset dev
+    step qmllint ninja -C build-dev all_qmllint
+    step gui gui_tests --no-fail-fast
+}
+
+slint_steps() {
+    step build-slint build_preset dev-slint
+    for gui in $(slint_files); do
+        step "gui-slint-$gui" slint_gui_tests "$gui"
+    done
+}
+
+# The paths a change touches: changed since origin/main (committed or not) and untracked.
+changed_paths() {
+    git diff --name-only "$(git merge-base origin/main HEAD)"
+    git ls-files --others --exclude-standard
+}
+
 mode=${1:-}
 shift || true
 
@@ -127,12 +170,9 @@ quick)
 full)
     server_up
     step fmt cargo fmt --all --check
-    step clippy cargo clippy --workspace --all-targets --locked -- -D warnings
-    step clippy-spix cargo clippy --workspace --all-targets --locked --features rc_slint/spix -- -D warnings
-    step deny cargo deny check
-    step test cargo test --workspace --locked
-    step contract-api cargo test -p rc_api --test contract --locked -- --ignored --test-threads=6
-    step contract-core cargo test -p rc_core --test contract --locked -- --ignored --test-threads=6
+    rust_steps
+    contract_steps
+    # Both builds before the GUI tests, as the steps ran before they were grouped.
     step build build_preset dev
     step build-slint build_preset dev-slint
     step qmllint ninja -C build-dev all_qmllint
@@ -141,12 +181,32 @@ full)
         step "gui-slint-$gui" slint_gui_tests "$gui"
     done
     ;;
+scoped)
+    rust=false contract=false qt=false slint=false
+    while IFS='=' read -r scope needed; do
+        case $scope in
+        rust | contract | qt | slint) printf -v "$scope" '%s' "$needed" ;;
+        esac
+    done < <(changed_paths | sort -u | scripts/ci_scope.sh)
+    echo "scopes: rust=$rust contract=$contract qt=$qt slint=$slint"
+    echo "scopes: rust=$rust contract=$contract qt=$qt slint=$slint" >>"$SUMMARY"
+    if $contract || $qt || $slint; then
+        server_up
+    fi
+    step fmt cargo fmt --all --check
+    if $rust; then rust_steps; fi
+    if $contract; then contract_steps; fi
+    if $qt; then qt_steps; fi
+    if $slint; then slint_steps; fi
+    ;;
 *)
     sed -n '/^# Usage:/,/^# The contract/p' "$0" | sed 's/^# \{0,1\}//' | head -n -1
     exit 2
     ;;
 esac
 
+echo "total $((SECONDS / 60))m $((SECONDS % 60))s"
+echo "total $((SECONDS / 60))m $((SECONDS % 60))s" >>"$SUMMARY"
 if [ ${#failed[@]} -gt 0 ]; then
     echo "failed: ${failed[*]}"
     exit 1

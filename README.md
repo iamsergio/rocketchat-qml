@@ -58,8 +58,10 @@ same way. Start one with `scripts/run_test_server.sh`, then:
     RC_TEST_SERVER_URL=http://127.0.0.1:3000 cargo test -p rc_core --test contract -- --ignored
 
 `scripts/check.sh` runs these with short output, one line per step and only the failing lines of a
-step that fails: `quick -p <crate> -g <gui test file>` while working, `full` before a commit (what
-CI runs on the `dev` and `dev-slint` presets). `-g` runs a GUI test file against the Qt app in
+step that fails: `quick -p <crate> -g <gui test file>` while working, `scoped` before a commit (the
+part of `full` the change needs, chosen as CI chooses it for a pull request by
+`scripts/ci_scope.sh`), `full` for everything CI runs on the `dev` and `dev-slint` presets. Each
+run writes `target/check-logs/summary.txt`: when each step started, how long it took, the total. `-g` runs a GUI test file against the Qt app in
 `build-dev`, `-s` runs the tests of that file listed in `crates/rc_gui_tests/slint.txt` against the
 Slint app in `build-dev-slint`.
 

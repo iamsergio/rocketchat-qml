@@ -42,6 +42,7 @@ expect "qt slint" src/gui/icons/plus.svg
 expect "rust qt" crates/rc_qt/src/room_list.rs
 expect "rust slint" crates/rc_slint/ui/main.slint
 expect "rust" crates/rc_tui/src/main.rs
+expect "rust" crates/rc_gui_perf/src/main.rs
 
 # Both frontends.
 expect "rust qt slint" crates/rc_view/src/room_view.rs

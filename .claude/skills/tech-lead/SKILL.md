@@ -40,7 +40,7 @@ You design, delegate, review, commit and merge. The `implementer` agent (`.claud
   - `// <ID>` on tests, TRACEABILITY.md, design doc, PLAN.md item.
 - Costs at scale: what happens with hundreds of rooms, DMs, threads or avatars?
 - Fix trivial things yourself (a comment's wrapping, a margin); send anything bigger back in one message.
-- Verify review fixes with `scripts/check.sh quick -p <crate> -g <gui file>` (`-s <gui file>` for the Slint app). Trust the agent's `full` run unless something looks off.
+- Verify review fixes with `scripts/check.sh quick -p <crate> -g <gui file>` (`-s <gui file>` for the Slint app). Trust the agent's `scoped` run unless something looks off.
 
 ## Committing (git-loom)
 Load the `git-loom` skill. `main` is loom's integration branch; never `git commit`, `rebase`, `cherry-pick` or `reset` on it.
