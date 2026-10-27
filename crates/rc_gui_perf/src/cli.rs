@@ -1,12 +1,12 @@
 // SPDX-FileCopyrightText: 2026 Sergio Martins
 // SPDX-License-Identifier: MIT
 
-//! The command line: which scenarios run in which app, on which platform, how often.
+//! The command line: which scenarios run in which variant, on which platform, how often.
 
 use std::fmt;
 use std::path::PathBuf;
 
-/// The scenarios, each of which runs in both apps.
+/// The scenarios, each of which runs in every variant.
 pub const SCENARIOS: [&str; 2] = ["scroll_main_channel", "drag_main_channel"];
 
 /// Environment variables that name the app binaries, for `--qt` and `--slint`.
@@ -18,27 +18,30 @@ const DEFAULT_OUT: &str = "target/perf";
 
 pub const HELP: &str = "\
 Runs micro performance scenarios against the Qt and the Slint app under `perf stat` and writes one
-JSON file per run.
+JSON file per run. Every run is one variant: qt, slint-femtovg or slint-software (the Slint ones
+are the same app with another renderer, picked through RC_SLINT_RENDERER).
 
 Usage: rc_gui_perf [options] [scenario...]
        rc_gui_perf report <dir> [--baseline <dir>] [-o <file>]
 
-  --list             print every scenario once per app (qt.<name>, slint.<name>) and exit
-  scenario           a prefixed name (qt.scroll_main_channel) runs that one; a bare name
-                     (scroll_main_channel) runs it in both apps; no name runs everything
+  --list             print every scenario once per variant (<variant>.<name>) and exit
+  scenario           a full name (slint-software.scroll_main_channel) runs that one;
+                     slint.<name> runs it in every Slint variant; a bare name
+                     (scroll_main_channel) runs it in all variants; no name runs everything
   --qt <binary>      the Qt app, built with Spix (or set RC_PERF_QT_APP)
-  --slint <binary>   the Slint app, built with Spix (or set RC_PERF_SLINT_APP)
+  --slint <binary>   the Slint app, built with Spix, for every Slint variant (or set
+                     RC_PERF_SLINT_APP)
   --platform <name>  wayland (default) or xcb: the apps run visibly with GPU rendering.
                      offscreen is a smoke mode only (Qt offscreen, Slint testing backend, which
-                     draws nothing): it checks the code path without a display, and its numbers
-                     mean nothing. The JSON says so (\"smoke\": true).
-  --runs <n>         runs per scenario and app (default 5)
+                     draws nothing, whatever the Slint variant): it checks the code path without
+                     a display, and its numbers mean nothing. The JSON says so (\"smoke\": true).
+  --runs <n>         runs per scenario and variant (default 5)
   --out <dir>        where the JSON files go (default target/perf)
   --help             this text
 
 report reads the JSON files of a directory and writes one self-contained HTML file (default
 <dir>/report.html): the scroll facts, the counters per pixel and per frame with their spread,
-the Slint/Qt ratio and, with --baseline, the change against the runs of another directory.
+each Slint variant's ratio to Qt and, with --baseline, the change against the runs of another directory.
 
 The test server is the one RC_TEST_SERVER_URL names.";
 
@@ -88,6 +91,75 @@ impl fmt::Display for Frontend {
     }
 }
 
+/// What a run measures: the Qt app, or the Slint app with one of its renderers. A Slint renderer
+/// that needs another build (Skia) is one more entry here, in `ALL` and in the matches below.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Variant {
+    Qt,
+    SlintFemtovg,
+    SlintSoftware,
+}
+
+impl Variant {
+    /// In the order of `--list` and of the report.
+    pub const ALL: [Self; 3] = [Self::Qt, Self::SlintFemtovg, Self::SlintSoftware];
+
+    /// `qt`, `slint-femtovg`: how the command line, the JSON and the file names say it.
+    #[must_use]
+    pub fn id(self) -> &'static str {
+        match self {
+            Self::Qt => "qt",
+            Self::SlintFemtovg => "slint-femtovg",
+            Self::SlintSoftware => "slint-software",
+        }
+    }
+
+    /// The app the variant runs, whose binary it needs.
+    #[must_use]
+    pub fn frontend(self) -> Frontend {
+        match self {
+            Self::Qt => Frontend::Qt,
+            Self::SlintFemtovg | Self::SlintSoftware => Frontend::Slint,
+        }
+    }
+
+    /// The value of the Slint app's `RC_SLINT_RENDERER`; none for Qt.
+    #[must_use]
+    pub fn renderer(self) -> Option<&'static str> {
+        match self {
+            Self::Qt => None,
+            Self::SlintFemtovg => Some("femtovg"),
+            Self::SlintSoftware => Some("software"),
+        }
+    }
+
+    /// The variant an `app` field of a JSON file names. Files from before the variants say `slint`
+    /// for the femtovg renderer, the only one they ran.
+    #[must_use]
+    pub fn from_stored(app: &str) -> Option<Self> {
+        match app {
+            "slint" => Some(Self::SlintFemtovg),
+            other => Self::ALL.into_iter().find(|variant| variant.id() == other),
+        }
+    }
+
+    /// For the report: `Qt`, `Slint femtovg`.
+    #[must_use]
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Qt => "Qt",
+            Self::SlintFemtovg => "Slint femtovg",
+            Self::SlintSoftware => "Slint software",
+        }
+    }
+}
+
+impl fmt::Display for Variant {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.id())
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Platform {
     Wayland,
@@ -122,10 +194,10 @@ impl Platform {
     }
 }
 
-/// One scenario in one app.
+/// One scenario in one variant.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Job {
-    pub frontend: Frontend,
+    pub variant: Variant,
     pub scenario: &'static str,
 }
 
@@ -133,7 +205,7 @@ impl Job {
     /// `qt.scroll_main_channel`: how `--list` and the command line name it.
     #[must_use]
     pub fn id(self) -> String {
-        format!("{}.{}", self.frontend, self.scenario)
+        format!("{}.{}", self.variant, self.scenario)
     }
 }
 
@@ -174,25 +246,25 @@ pub enum Cli {
     Run(Options),
 }
 
-/// Every scenario once per app, one id per line.
+/// Every scenario once per variant, one id per line.
 #[must_use]
 pub fn list() -> String {
     all_jobs().iter().map(|job| job.id() + "\n").collect()
 }
 
 fn all_jobs() -> Vec<Job> {
-    Frontend::ALL
+    Variant::ALL
         .into_iter()
-        .flat_map(|frontend| {
+        .flat_map(|variant| {
             SCENARIOS
                 .into_iter()
-                .map(move |scenario| Job { frontend, scenario })
+                .map(move |scenario| Job { variant, scenario })
         })
         .collect()
 }
 
-/// The jobs the names select: a prefixed name one job, a bare name that scenario in both apps,
-/// no name everything. Each job once, in the order they were asked for.
+/// The jobs the names select: a full name (`slint-software.drag_main_channel`) one job, `slint.<name>`
+/// that scenario in every Slint variant, a bare name in all variants, no name everything. Each job once, in the order they were asked for.
 fn select(names: &[String]) -> Result<Vec<Job>, CliError> {
     if names.is_empty() {
         return Ok(all_jobs());
@@ -205,7 +277,9 @@ fn select(names: &[String]) -> Result<Vec<Job>, CliError> {
             .into_iter()
             .filter(|job| {
                 job.scenario == bare.unwrap_or(name)
-                    && prefix.is_none_or(|prefix| job.frontend.name() == prefix)
+                    && prefix.is_none_or(|prefix| {
+                        job.variant.id() == prefix || job.variant.frontend().name() == prefix
+                    })
             })
             .collect();
         if selected.is_empty() {
@@ -320,7 +394,7 @@ pub fn parse(
             Frontend::Qt => (&qt, "--qt", QT_ENV),
             Frontend::Slint => (&slint, "--slint", SLINT_ENV),
         };
-        if binary.is_none() && jobs.iter().any(|job| job.frontend == frontend) {
+        if binary.is_none() && jobs.iter().any(|job| job.variant.frontend() == frontend) {
             return Err(CliError::NoBinary {
                 frontend,
                 flag,
@@ -376,11 +450,12 @@ mod tests {
 
     // INFRA-007
     #[test]
-    fn list_prints_every_scenario_once_per_app() {
+    fn list_prints_every_scenario_once_per_variant() {
         assert_eq!(
             list(),
             "qt.scroll_main_channel\nqt.drag_main_channel\n\
-             slint.scroll_main_channel\nslint.drag_main_channel\n"
+             slint-femtovg.scroll_main_channel\nslint-femtovg.drag_main_channel\n\
+             slint-software.scroll_main_channel\nslint-software.drag_main_channel\n"
         );
         assert_eq!(parse(args(&["--list"]), no_env), Ok(Cli::List));
     }
@@ -392,7 +467,7 @@ mod tests {
         assert_eq!(
             options.jobs,
             [Job {
-                frontend: Frontend::Qt,
+                variant: Variant::Qt,
                 scenario: "scroll_main_channel"
             }]
         );
@@ -400,14 +475,55 @@ mod tests {
 
     // INFRA-007
     #[test]
-    fn a_bare_name_runs_both_apps_and_no_name_runs_everything() {
-        let both = run(&["--qt", "q", "--slint", "s", "scroll_main_channel"]).unwrap();
+    fn a_full_name_runs_one_variant_and_slint_runs_every_slint_one() {
+        let one = run(&["--slint", "s", "slint-software.drag_main_channel"]).unwrap();
+        assert_eq!(one.jobs.len(), 1);
+        assert_eq!(one.jobs[0].variant, Variant::SlintSoftware);
+        let slint = run(&["--slint", "s", "slint.scroll_main_channel"]).unwrap();
+        let ids: Vec<String> = slint.jobs.iter().map(|job| job.id()).collect();
+        assert_eq!(
+            ids,
+            [
+                "slint-femtovg.scroll_main_channel",
+                "slint-software.scroll_main_channel"
+            ]
+        );
+        // The Qt app isn't needed for them.
+        assert_eq!(slint.qt, None);
+        assert_eq!(
+            run(&["slint-skia.scroll_main_channel"]),
+            Err(CliError::UnknownScenario(
+                "slint-skia.scroll_main_channel".into()
+            ))
+        );
+    }
+
+    // INFRA-007
+    #[test]
+    fn variants_know_their_app_renderer_and_old_names() {
+        assert_eq!(Variant::Qt.frontend(), Frontend::Qt);
+        assert_eq!(Variant::SlintSoftware.frontend(), Frontend::Slint);
+        assert_eq!(Variant::Qt.renderer(), None);
+        assert_eq!(Variant::SlintFemtovg.renderer(), Some("femtovg"));
+        assert_eq!(Variant::SlintSoftware.renderer(), Some("software"));
+        for variant in Variant::ALL {
+            assert_eq!(Variant::from_stored(variant.id()), Some(variant));
+        }
+        // Files from before the variants.
+        assert_eq!(Variant::from_stored("slint"), Some(Variant::SlintFemtovg));
+        assert_eq!(Variant::from_stored("gtk"), None);
+    }
+
+    // INFRA-007
+    #[test]
+    fn a_bare_name_runs_every_variant_and_no_name_runs_everything() {
+        let all = run(&["--qt", "q", "--slint", "s", "scroll_main_channel"]).unwrap();
         let none = run(&["--qt", "q", "--slint", "s"]).unwrap();
-        assert_eq!(both.jobs.len(), 2);
-        assert_eq!(none.jobs.len(), 4);
-        assert_eq!(both.jobs, [none.jobs[0], none.jobs[2]]);
+        assert_eq!(all.jobs.len(), 3);
+        assert_eq!(none.jobs.len(), 6);
+        assert_eq!(all.jobs, [none.jobs[0], none.jobs[2], none.jobs[4]]);
         let drag = run(&["--qt", "q", "--slint", "s", "drag_main_channel"]).unwrap();
-        assert_eq!(drag.jobs, [none.jobs[1], none.jobs[3]]);
+        assert_eq!(drag.jobs, [none.jobs[1], none.jobs[3], none.jobs[5]]);
         assert_eq!(drag.jobs[0].id(), "qt.drag_main_channel");
     }
 
@@ -423,8 +539,8 @@ mod tests {
             "scroll_main_channel",
         ])
         .unwrap();
-        assert_eq!(options.jobs.len(), 2);
-        assert_eq!(options.jobs[0].frontend, Frontend::Qt);
+        assert_eq!(options.jobs.len(), 3);
+        assert_eq!(options.jobs[0].variant, Variant::Qt);
     }
 
     // INFRA-007

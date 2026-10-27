@@ -3,26 +3,29 @@
 #
 # SPDX-License-Identifier: MIT
 
-# Runs the performance scenarios against the Qt and the Slint app and writes an HTML report.
+# Runs the performance scenarios against the Qt app and the Slint app with each of its renderers
+# and writes an HTML report.
 # See docs/design/performance-tests.md.
 #
 # Usage:
 #   scripts/run_perf_test.sh --list
-#       Every scenario once per app (qt.scroll_main_channel, slint.drag_main_channel, ...).
+#       Every scenario once per variant (qt.scroll_main_channel,
+#       slint-femtovg.drag_main_channel, slint-software.drag_main_channel, ...).
 #   scripts/run_perf_test.sh [options] [scenario...]
-#       A prefixed name (qt.scroll_main_channel) runs that one, a bare name runs it in both apps,
-#       no name runs everything. Options:
+#       A full name (slint-software.scroll_main_channel) runs that one, slint.<scenario> runs it
+#       in every Slint variant, a bare name in all variants, no name runs everything. Options:
 #         --platform wayland|xcb|offscreen   wayland by default; offscreen is a smoke run only,
 #                                            its numbers mean nothing
-#         --runs <n>          runs per scenario and app (default 5)
+#         --runs <n>          runs per scenario and variant (default 5)
 #         --qt <binary>       use this Qt app instead of build-perf/bin/rocketchat_qml (no build
-#         --slint <binary>    of that app), likewise build-perf-slint/bin/rocketchat_slint
+#         --slint <binary>    of that app), likewise build-perf-slint/bin/rocketchat_slint, for
+#                             every Slint variant
 #         --no-build          don't configure or build anything
 #         --save-baseline     afterwards make this run the baseline: target/perf/baseline becomes
 #                             a symlink to the run's directory
 #
-# The apps are built first with the `perf` and `perf-slint` presets (only the Qt one for
-# qt.* names), and rc_gui_perf in release mode. The JSON files and report.html go to
+# What the names select is built first: the `perf` preset for qt, `perf-slint` for any Slint
+# variant, and rc_gui_perf in release mode. The JSON files and report.html go to
 # target/perf/<UTC timestamp>-<platform>/; the report compares with target/perf/baseline if there
 # is one. The apps run visibly, so run it on a display, with nothing else busy.
 #
@@ -64,7 +67,7 @@ while [ $# -gt 0 ]; do
     --slint) slint_app=${2:?--slint needs a value}; shift ;;
     --no-build) build=0 ;;
     --save-baseline) save_baseline=1 ;;
-    -h | --help) sed -n '8,31p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h | --help) sed -n '8,33p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     -*) die "unknown option $1" ;;
     *) names+=("$1") ;;
     esac
@@ -76,7 +79,8 @@ wayland | xcb | offscreen) ;;
 *) die "unknown platform $platform: wayland, xcb or offscreen" ;;
 esac
 
-# Which apps the names select: qt.* needs Qt, slint.* Slint, a bare name or none both.
+# Which apps the names select: qt.* needs Qt, slint.* and slint-<renderer>.* Slint, a bare name or
+# none both.
 need_qt=0
 need_slint=0
 if [ ${#names[@]} -eq 0 ]; then
@@ -86,7 +90,7 @@ fi
 for name in "${names[@]}"; do
     case $name in
     qt.*) need_qt=1 ;;
-    slint.*) need_slint=1 ;;
+    slint.* | slint-*) need_slint=1 ;;
     *) need_qt=1; need_slint=1 ;;
     esac
 done

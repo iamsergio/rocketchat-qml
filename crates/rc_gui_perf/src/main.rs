@@ -23,7 +23,7 @@ use std::{env, fs};
 
 use rc_gui_tests::{App, LaunchOptions};
 
-use crate::cli::{Cli, Frontend, Job, Options, Platform};
+use crate::cli::{Cli, Job, Options, Platform, Variant};
 use crate::error::Error;
 use crate::perf::Control;
 use crate::report::RunInfo;
@@ -59,7 +59,7 @@ fn run() -> Result<(), Error> {
 
 fn run_all(options: &Options) -> Result<(), Error> {
     for job in &options.jobs {
-        if let Some(binary) = options.binary(job.frontend)
+        if let Some(binary) = options.binary(job.variant.frontend())
             && !binary.is_file()
         {
             return Err(Error::NoSuchBinary(binary.clone()));
@@ -85,7 +85,7 @@ fn run_all(options: &Options) -> Result<(), Error> {
         }
     }
 
-    // Run by run across the jobs, so that drift of the machine falls on both apps alike.
+    // Run by run across the jobs, so that drift of the machine falls on every variant alike.
     for run in 0..options.runs {
         for job in &options.jobs {
             let Some(channel) = content_of(job.scenario)
@@ -116,21 +116,26 @@ fn seed_for(content: &str) -> Result<Channel, Error> {
     }
 }
 
-/// The environment that picks the platform for an app.
-fn platform_env(frontend: Frontend, platform: Platform) -> Vec<(&'static str, &'static str)> {
+/// The environment that picks the platform, and for Slint the renderer, of a variant.
+fn platform_env(variant: Variant, platform: Platform) -> Vec<(&'static str, &'static str)> {
     // Spix's own defaults are Qt's offscreen platform and Slint's testing backend.
-    match (frontend, platform) {
-        (Frontend::Qt, platform) => vec![("QT_QPA_PLATFORM", platform.name())],
-        (Frontend::Slint, Platform::Offscreen) => Vec::new(),
-        // Winit with the GPU renderer the app builds (femtovg). Winit takes Wayland whenever a
-        // compositor is there and has no variable to pick X11 (WINIT_UNIX_BACKEND went in 0.29),
-        // but it treats empty Wayland variables as unset.
-        (Frontend::Slint, Platform::Xcb) => vec![
-            ("SLINT_BACKEND", "winit-femtovg"),
+    let Some(renderer) = variant.renderer() else {
+        return vec![("QT_QPA_PLATFORM", platform.name())];
+    };
+    match platform {
+        // A smoke run keeps the testing backend whatever the variant: it has no window and
+        // RC_SLINT_RENDERER would ask for winit, which needs a display.
+        Platform::Offscreen => Vec::new(),
+        // The app's winit backend with that renderer (`RC_SLINT_RENDERER`, which wins over
+        // SLINT_BACKEND). Winit takes Wayland whenever a compositor is there and has no variable
+        // to pick X11 (WINIT_UNIX_BACKEND went in 0.29), but it treats empty Wayland variables as
+        // unset.
+        Platform::Xcb => vec![
+            ("RC_SLINT_RENDERER", renderer),
             ("WAYLAND_DISPLAY", ""),
             ("WAYLAND_SOCKET", ""),
         ],
-        (Frontend::Slint, _) => vec![("SLINT_BACKEND", "winit-femtovg")],
+        Platform::Wayland => vec![("RC_SLINT_RENDERER", renderer)],
     }
 }
 
@@ -142,8 +147,8 @@ fn run_once(
     server: &str,
     git_revision: &str,
 ) -> Result<PathBuf, Error> {
-    let Some(binary) = options.binary(job.frontend) else {
-        return Err(Error::Scenario(format!("no binary for {}", job.frontend)));
+    let Some(binary) = options.binary(job.variant.frontend()) else {
+        return Err(Error::Scenario(format!("no binary for {}", job.variant)));
     };
     let work = TempDir::new(&format!("{}-{run}", job.id()))?;
     let csv = work.0.join("perf.csv");
@@ -153,7 +158,7 @@ fn run_once(
         .binary(binary)
         .wrapper("perf", perf::stat_args(&control, &csv))
         .env(&[("TZ", "UTC")])
-        .env(&platform_env(job.frontend, options.platform));
+        .env(&platform_env(job.variant, options.platform));
     let app = App::launch_with_options(&launch)?;
     control.connect()?;
 
@@ -230,5 +235,33 @@ impl Drop for TempDir {
     fn drop(&mut self) {
         // Nothing to do if it is gone.
         let _ = fs::remove_dir_all(&self.0);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // INFRA-007
+    #[test]
+    fn the_environment_of_a_variant_names_its_platform_and_renderer() {
+        assert_eq!(
+            platform_env(Variant::Qt, Platform::Xcb),
+            [("QT_QPA_PLATFORM", "xcb")]
+        );
+        assert_eq!(
+            platform_env(Variant::SlintSoftware, Platform::Wayland),
+            [("RC_SLINT_RENDERER", "software")]
+        );
+        assert_eq!(
+            platform_env(Variant::SlintFemtovg, Platform::Xcb),
+            [
+                ("RC_SLINT_RENDERER", "femtovg"),
+                ("WAYLAND_DISPLAY", ""),
+                ("WAYLAND_SOCKET", "")
+            ]
+        );
+        // The testing backend, which needs no renderer name and would not take one.
+        assert!(platform_env(Variant::SlintFemtovg, Platform::Offscreen).is_empty());
     }
 }

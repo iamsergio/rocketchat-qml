@@ -6,6 +6,8 @@
 
 use serde_json::Value;
 
+use crate::cli::Variant;
+
 /// One counter of one run, as the JSON has it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct CounterValue {
@@ -32,6 +34,12 @@ pub struct Run {
     pub drag_strokes: Option<f64>,
     pub wall_time_ms: f64,
     pub counters: Vec<CounterValue>,
+}
+
+/// The variant an `app` field names, as its id. Files from before the variants say `slint`, which
+/// was the femtovg renderer; an id this tool doesn't know is kept as it is.
+fn variant_id(app: &str) -> String {
+    Variant::from_stored(app).map_or_else(|| app.to_owned(), |variant| variant.id().to_owned())
 }
 
 impl Run {
@@ -74,7 +82,7 @@ impl Run {
             })
             .collect();
         Ok(Self {
-            app: text("app")?,
+            app: variant_id(&text("app")?),
             scenario: text("scenario")?,
             platform: text("platform")?,
             smoke: json["smoke"].as_bool().unwrap_or(false),
@@ -241,7 +249,7 @@ pub fn summarize(runs: &[Run]) -> AppSummary {
     }
 }
 
-/// Slint over Qt: below 1 the Slint app needs less. None if Qt's median is 0.
+/// A Slint variant over Qt: below 1 the Slint app needs less. None if Qt's median is 0.
 #[must_use]
 pub fn ratio(slint: &Stat, qt: &Stat) -> Option<f64> {
     (qt.median != 0.0).then(|| slint.median / qt.median)
@@ -416,6 +424,8 @@ mod tests {
         });
         let run = Run::from_json(&json).unwrap_or_else(|e| panic!("{e}"));
         assert!(run.smoke);
+        // Old files say `slint` for what is now the femtovg variant.
+        assert_eq!(run.app, "slint-femtovg");
         assert_eq!(run.frames, None);
         assert_eq!(run.window, Some((964.0, 600.0)));
         assert_eq!(run.counters[1].value, None);

@@ -5,6 +5,7 @@
 
 use std::error::Error;
 
+use rc_slint::renderer::{self, Renderer};
 use slint::ComponentHandle;
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -13,9 +14,21 @@ fn main() -> Result<(), Box<dyn Error>> {
     if args.dev {
         enable_dev_login();
     }
-    // `--spix-port` uses the testing backend unless SLINT_BACKEND picks another (winit, to watch the app).
+    // RC_SLINT_RENDERER picks winit with that renderer, also under `--spix-port`: the performance
+    // runs need a real one. It wins over SLINT_BACKEND.
+    // As strings, so that `main` prints the message and not the enum's debug form.
+    let renderer = Renderer::from_env().map_err(|error| error.to_string())?;
+    if let Some(renderer) = renderer {
+        renderer.select().map_err(|error| error.to_string())?;
+        tracing::info!("renderer: {} (from {})", renderer.name(), renderer::ENV);
+    } else {
+        tracing::info!("renderer: Slint's choice (SLINT_BACKEND, else the default)");
+    }
+    // `--spix-port` uses the testing backend unless SLINT_BACKEND or RC_SLINT_RENDERER picks
+    // another (winit, to watch the app).
     #[cfg(feature = "spix")]
-    if args.spix_port.is_some() && std::env::var_os("SLINT_BACKEND").is_none() {
+    if args.spix_port.is_some() && renderer.is_none() && std::env::var_os("SLINT_BACKEND").is_none()
+    {
         use i_slint_backend_testing::{TestingBackend, TestingBackendOptions};
 
         // Real time, as `init_integration_test_with_system_time` does, but with the software
