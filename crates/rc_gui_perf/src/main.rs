@@ -8,6 +8,7 @@ mod aggregate;
 mod cli;
 mod drag_main_channel;
 mod error;
+mod flamegraph;
 mod html;
 mod main_channel;
 mod perf;
@@ -19,6 +20,7 @@ use std::collections::BTreeMap;
 use std::error::Error as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
+use std::time::Instant;
 use std::{env, fs};
 
 use rc_gui_tests::{App, LaunchOptions};
@@ -152,11 +154,18 @@ fn run_once(
     };
     let work = TempDir::new(&format!("{}-{run}", job.id()))?;
     let csv = work.0.join("perf.csv");
+    // perf writes straight to where the recording stays: it can be hundreds of MB.
+    let data = report::recording_path(&options.out, job, run, "perf.data");
     let mut control = Control::create(&work.0)?;
+    let wrapper_args = if options.record {
+        perf::record_args(&control, &data)
+    } else {
+        perf::stat_args(&control, &csv)
+    };
     // The session stays in memory (the harness default), never in the user's keyring.
     let launch = LaunchOptions::new()
         .binary(binary)
-        .wrapper("perf", perf::stat_args(&control, &csv))
+        .wrapper("perf", wrapper_args)
         .env(&[("TZ", "UTC")])
         .env(&platform_env(job.variant, options.platform));
     let app = App::launch_with_options(&launch)?;
@@ -181,6 +190,9 @@ fn run_once(
     if !status.success() {
         eprintln!("  {}: the app exited with {status}", job.id());
     }
+    if options.record {
+        return write_recording(options, job, run, &data);
+    }
     let text = fs::read_to_string(&csv).map_err(|source| perf::PerfError::NoOutput {
         path: csv.clone(),
         source,
@@ -201,6 +213,31 @@ fn run_once(
         serde_json::to_string_pretty(&json).map_err(|error| Error::Scenario(error.to_string()))?;
     fs::write(&file, pretty + "\n").map_err(|source| Error::io("can't write", &file, source))?;
     Ok(file)
+}
+
+/// Writes the collapsed stacks and the flame graph beside the recording `data`. No JSON: sampling
+/// skews the counters, and the report must not mix such runs in. Returns the SVG.
+fn write_recording(options: &Options, job: Job, run: u32, data: &Path) -> Result<PathBuf, Error> {
+    let started = Instant::now();
+    let written = flamegraph::convert(
+        data,
+        &report::recording_path(&options.out, job, run, "folded"),
+        &report::recording_path(&options.out, job, run, "svg"),
+        &format!("{} run {run}", job.id()),
+        &format!(
+            "cycles:u, {} Hz, measured part only",
+            perf::RECORD_FREQUENCY
+        ),
+        "cycles",
+    )?;
+    eprintln!(
+        "  {}: {} cycles sampled, perf script and fold took {:.1} s: {}",
+        job.id(),
+        written.cycles,
+        started.elapsed().as_secs_f64(),
+        written.folded.display()
+    );
+    Ok(written.svg)
 }
 
 /// The revision the apps were built from, as far as this checkout says: `git describe` with

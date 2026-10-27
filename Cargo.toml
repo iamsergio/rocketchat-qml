@@ -36,6 +36,9 @@ keyring-core = "1.0.0"
 linkify = "0.10.0"
 # Opens a link in the default browser.
 open = "5.4.5"
+# Collapses `perf script` output and draws flame graphs, in the dev tool rc_gui_perf. CDDL-1.0, see
+# deny.toml.
+inferno = { version = "0.12.8", default-features = false }
 # Reads the screenshots of the GUI tests.
 png = "0.18.1"
 # Markdown for the topic of a room, parsed to events: no HTML renderer.

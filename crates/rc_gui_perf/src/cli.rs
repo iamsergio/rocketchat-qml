@@ -38,6 +38,9 @@ Usage: rc_gui_perf [options] [scenario...]
                      a display, and its numbers mean nothing. The JSON says so (\"smoke\": true).
   --runs <n>         runs per scenario and variant (default 1)
   --out <dir>        where the JSON files go (default target/perf)
+  --record           sample the measured part with `perf record` (user space, dwarf call graphs)
+                     and write <variant>.<scenario>.<run>.perf.data, .folded and .svg (a flame
+                     graph) instead of the JSON: sampling skews the counters
   --help             this text
 
 report reads the JSON files of a directory and writes one self-contained HTML file (default
@@ -237,6 +240,8 @@ pub struct Options {
     pub platform: Platform,
     pub runs: u32,
     pub out: PathBuf,
+    /// Sample with `perf record` and write flame graphs, not counter JSON.
+    pub record: bool,
 }
 
 impl Options {
@@ -372,6 +377,7 @@ pub fn parse(
     let mut platform = Platform::Wayland;
     let mut runs = DEFAULT_RUNS;
     let mut out = PathBuf::from(DEFAULT_OUT);
+    let mut record = false;
     while let Some(arg) = args.next() {
         // `--flag=value` is the same as `--flag value`.
         let (flag, mut inline) = match arg.split_once('=') {
@@ -401,6 +407,7 @@ pub fn parse(
                     .ok_or(CliError::BadRuns(text))?;
             }
             "--out" => out = PathBuf::from(value()?),
+            "--record" => record = true,
             _ if flag.starts_with('-') => return Err(CliError::UnknownOption(flag)),
             _ => names.push(arg),
         }
@@ -429,6 +436,7 @@ pub fn parse(
         platform,
         runs,
         out,
+        record,
     }))
 }
 
@@ -668,6 +676,15 @@ mod tests {
         assert!(options.platform.is_smoke());
         assert_eq!(options.runs, 2);
         assert_eq!(options.out, PathBuf::from("/o"));
+    }
+
+    // INFRA-008
+    #[test]
+    fn record_is_an_option_of_runs_and_off_by_default() {
+        let options = run(&["--qt", "q", "qt.scroll_main_channel"]).unwrap();
+        assert!(!options.record);
+        let options = run(&["--qt", "q", "--record", "qt.scroll_main_channel"]).unwrap();
+        assert!(options.record);
     }
 
     // INFRA-007

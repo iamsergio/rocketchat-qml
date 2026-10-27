@@ -95,6 +95,42 @@ pub fn stat_args(control: &Control, output: &Path) -> Vec<OsString> {
     args
 }
 
+/// Samples per second of `perf record`. A scroll run of 3 to 12 s gives thousands of samples
+/// with dwarf unwinding, and a perf.data of tens to a few hundred MB.
+pub const RECORD_FREQUENCY: u32 = 4000;
+
+/// The arguments after `perf` of `perf record`, up to and including the `--` before the app. Like
+/// [`stat_args`] it starts with sampling off (`-D -1`) and is driven through the FIFOs. `cycles:u`
+/// samples user space only, which `perf_event_paranoid` 2 allows; dwarf unwinding because the Rust
+/// release build has no frame pointers.
+#[must_use]
+pub fn record_args(control: &Control, output: &Path) -> Vec<OsString> {
+    let mut args: Vec<OsString> = ["record", "-D", "-1", "--control"].map(Into::into).to_vec();
+    args.push(
+        format!(
+            "fifo:{},{}",
+            control.ctl_path().display(),
+            control.ack_path().display()
+        )
+        .into(),
+    );
+    args.extend(
+        [
+            "-e",
+            "cycles:u",
+            "--call-graph",
+            "dwarf",
+            "-F",
+            &RECORD_FREQUENCY.to_string(),
+            "-o",
+        ]
+        .map(OsString::from),
+    );
+    args.push(output.into());
+    args.push("--".into());
+    args
+}
+
 /// The pair of FIFOs `perf stat --control` reads commands from and acknowledges on.
 ///
 /// Opening them takes care: perf opens the acknowledgement FIFO for writing and waits until
@@ -467,6 +503,35 @@ mod tests {
         );
         assert_eq!(args.last().map(|arg| &**arg), Some("--"));
         assert!(args.iter().any(|arg| arg == "instructions:u,branch-misses:u,ref-cycles:u,cycles:u,task-clock"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // INFRA-008
+    #[test]
+    fn the_record_arguments_start_sampling_off_and_name_the_fifos_and_the_file() {
+        let dir = temp_dir("record_args");
+        let control = Control::create(&dir).unwrap();
+        let args = record_args(&control, Path::new("/o.data"));
+        let args: Vec<_> = args.iter().map(|arg| arg.to_string_lossy()).collect();
+        assert_eq!(&args[..4], ["record", "-D", "-1", "--control"]);
+        assert_eq!(
+            args[4],
+            format!("fifo:{}/ctl,{}/ack", dir.display(), dir.display())
+        );
+        assert_eq!(
+            &args[5..],
+            [
+                "-e",
+                "cycles:u",
+                "--call-graph",
+                "dwarf",
+                "-F",
+                &RECORD_FREQUENCY.to_string(),
+                "-o",
+                "/o.data",
+                "--"
+            ]
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
