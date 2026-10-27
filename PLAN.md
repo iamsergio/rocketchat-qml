@@ -129,6 +129,8 @@ The decided design (counters, platforms, batched input, the same-distance compar
 - [ ] Frame counts with the software renderer and with Skia on wgpu, whose rendering notifiers don't fire (Skia on wgpu counted 0 frames): another way in `spix_slint`, or the report says per frame is unknown for them. Until then `rc_gui_perf` records 0 frames of a list that moved as unknown
 - [x] `rc_gui_perf --record`: `perf record` (user space; frame pointers for the Slint app, dwarf for the Qt app) of the measured part, with the perf.data, the collapsed stacks and a flame graph SVG per run (`scripts/run_perf_test.sh --record`)
 - [ ] `rc_gui_perf report` shows the flame graphs of record runs (and a Slint-vs-Qt differential)
+- [x] Slint message list: `clip: true` on `MessageDelegate`, so the renderer prunes the off-screen rows (it visits the descendants of every unclipped one): instructions per frame 27.4 M to 14.2 M (drag) and 42.9 M to 29.4 M (scroll), see [SLINT.md](SLINT.md)
+- [ ] The per-event repeater walk over all rows (`ensure_tree_instantiated`, about 35% of what is left in the drag scenario): a lazy message list, or an upstream Slint patch
 
 ## Phase 8: personal nice to haves
 - [ ] Move logout icon. Logout is seldom used. right lcick on the server rail on a server tile can have the logout option.

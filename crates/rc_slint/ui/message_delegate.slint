@@ -82,6 +82,10 @@ export component MessageDelegate inherits Rectangle {
         }
     }
 
+    // The renderer visits every descendant of an off-screen row of a list that isn't lazy, unless the
+    // row clips: only a clipped subtree outside the view is pruned (SLINT.md). Nothing of the row
+    // is drawn outside it; the menu is a popup and isn't cut.
+    clip: true;
     accessible-role: list-item;
     accessible-id: "msg_" + root.message.id;
     preferred-height: column.preferred-height;
