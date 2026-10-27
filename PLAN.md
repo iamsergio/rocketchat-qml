@@ -109,17 +109,13 @@ The Slint app grows one feature at a time, and CI stays green throughout: a seco
 
 Done when: a script runs micro performance scenarios (first: scrolling the main channel) against both apps under `perf stat`, and writes one HTML report comparing them.
 
-- Counters: `instructions:u`, `branch-misses:u`, `ref-cycles:u` (plus `cycles:u` and `task-clock`). `perf stat -D -1 --control fifo:<ctl>,<ack>` starts the app with the counters off, and the runner writes `enable` and `disable` around the scenario only, so login and setup don't count. `perf_event_paranoid` 2 allows `:u` events without root.
-- The apps run visibly with GPU rendering, on Wayland or X11 (xcb), chosen per run: the Qt app with `QT_QPA_PLATFORM=wayland` or `xcb`, the Slint app with `SLINT_BACKEND=winit` and its GPU renderer. Not the offscreen and testing backends of the GUI tests, which don't render like the real app (the Slint testing backend doesn't render at all). So the perf runs are local, not in CI.
-- Input through Spix, batched: one `mouseWheel` call plays a whole scroll inside the app, so no RPC round trip per step falls into the measurement. A blocking call after it returns once the last step ran, but both toolkits' views glide on: the counters stay on until the list stops moving.
-- The two apps are compared over the same scroll distance, not the same wheel input: one notch scrolls 60 logical pixels in Slint and a varying amount in a Qt `Flickable` (reaching the top took 12 batches of 10 notches in Qt, 5 in Slint). The report gives counters per pixel scrolled and per frame drawn. The list's position is read with `Gui::scroll_offset`: `contentY` in Qt, the text of the invisible `messageListOffset` element in Slint.
-- Stable input: a channel with fixed content (plain, markdown, emoji, reactions, thread counts, images), every page and avatar loaded before the counters go on, the same window size in both apps, several repetitions with median and spread. `instructions` is the stable metric; `ref-cycles` and `task-clock` are noisy.
+The decided design (counters, platforms, batched input, the same-distance comparison, stable input) is in [Performance tests](docs/design/performance-tests.md).
 
 - [x] Spix `mouseWheel(path, angleDeltaX, angleDeltaY, steps, intervalMs)` in the fork, both servers (C++ Spix and `spix_slint`)
 - [x] `Gui::mouse_wheel` in `rc_gui_tests`, and a wheel variant of the MSG-002 test against both apps
 - [x] The harness can start the app under a wrapper command (`perf stat ...`) and pick the binary explicitly: `LaunchOptions` and `App::launch_with_options`, see [GUI testing](docs/design/gui-testing.md)
 - [x] The list's scroll position readable in both apps, and frame counts (`QQuickWindow::frameSwapped`, Slint's rendering notifier)
-- [ ] `rc_gui_perf`: a binary on `rc_gui_tests` and `rc_test_server` with the `perf` control FIFO, the scroll scenario, JSON per run; a RelWithDebInfo preset with Spix for both apps. It runs only its own scenarios, never the GUI test suite
+- [x] `rc_gui_perf` (INFRA-007): a binary on `rc_gui_tests` and `rc_test_server` with the `perf` control FIFO, the scroll scenario, JSON per run; a RelWithDebInfo preset with Spix for both apps. It runs only its own scenarios, never the GUI test suite
 - [ ] `scripts/run_perf_test.sh`: `--list` prints every scenario once per app (`qt.scroll_main_channel`, `slint.scroll_main_channel`); a prefixed name runs that one, a bare name runs it in both apps, no name runs them all; `--platform wayland|xcb`, Wayland by default
 - [ ] The HTML report (Qt and Slint side by side, ratio, change against a saved baseline); later `perf record` flame graphs per scenario
 

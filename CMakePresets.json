@@ -57,6 +57,17 @@
       }
     },
     {
+      "name": "perf",
+      "inherits": [
+        "base"
+      ],
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "ROCKETCHATQML_RUST_DEBUG_INFO": "ON",
+        "ROCKETCHATQML_SPIX": "ON"
+      }
+    },
+    {
       "name": "dev-slint",
       "inherits": [
         "base-slint"
@@ -78,6 +89,19 @@
         "CMAKE_BUILD_TYPE": "RelWithDebInfo",
         "ROCKETCHATQML_QT": "OFF",
         "ROCKETCHATQML_SLINT": "ON"
+      }
+    },
+    {
+      "name": "perf-slint",
+      "inherits": [
+        "base-slint"
+      ],
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "ROCKETCHATQML_QT": "OFF",
+        "ROCKETCHATQML_RUST_DEBUG_INFO": "ON",
+        "ROCKETCHATQML_SLINT": "ON",
+        "ROCKETCHATQML_SPIX": "ON"
       }
     },
     {

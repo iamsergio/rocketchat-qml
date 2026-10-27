@@ -16,5 +16,5 @@ pub mod paths;
 mod slint_list;
 mod xmlrpc;
 
-pub use app::{APP_ENV, App, LaunchError, QuitError};
+pub use app::{APP_ENV, App, LaunchError, LaunchOptions, QuitError};
 pub use gui::{Gui, GuiError, Key, Modifiers, MouseButton, Rect};
