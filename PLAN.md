@@ -118,6 +118,9 @@ The decided design (counters, platforms, batched input, the same-distance compar
 - [x] `rc_gui_perf` (INFRA-007): a binary on `rc_gui_tests` and `rc_test_server` with the `perf` control FIFO, the scroll scenario, JSON per run; a RelWithDebInfo preset with Spix for both apps. It runs only its own scenarios, never the GUI test suite
 - [x] `scripts/run_perf_test.sh`: `--list` prints every scenario once per app (`qt.scroll_main_channel`, `slint.scroll_main_channel`); a prefixed name runs that one, a bare name runs it in both apps, no name runs them all; `--platform wayland|xcb`, Wayland by default
 - [x] The HTML report (`rc_gui_perf report`: Qt and Slint side by side, ratio, change against a saved baseline)
+- [x] Spix `mouseDrag(path, fromX, fromY, toX, toY, steps, intervalMs, holdMs)` in the fork, both servers: press, `steps` moves at a constant velocity, hold still, release, played inside the app like `mouseWheel`
+- [x] `Gui::mouse_drag` in `rc_gui_tests`, and a GUI test against both apps that dragging the message list's content scrolls it by the dragged distance without a flick
+- [ ] Scenario `drag_main_channel`: the seeded channel scrolled 8000 px by dragging its content in strokes of the same length and speed in both apps, so both cover the same distance in the same time and their frames compare directly
 - [ ] Later: `perf record` flame graphs per scenario
 
 ## Phase 8: personal nice to haves
@@ -129,6 +132,7 @@ The decided design (counters, platforms, batched input, the same-distance compar
 ## Later
 
 - Packaging (Flatpak, AppImage, Windows installer).
+- Spix fork: disable its Qt 5 CI jobs (`qt-5.15.2` in `.github/workflows/build.yml` and `run-examples.yml`). We only build against Qt 6.
 
 ## Decisions
 

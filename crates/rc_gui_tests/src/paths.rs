@@ -144,6 +144,11 @@ pub mod main_window {
     /// An invisible element of the Slint app whose `text` is how far the message list is scrolled
     /// up from the newest message, in logical pixels. The Qt app has none: its `ListView` says.
     pub const MESSAGE_LIST_OFFSET: &str = "mainWindow/messageListOffset";
+    /// Where, from the left edge of the message list, to press to drag the list by its content:
+    /// in the gutter left of the avatars, which no message part uses in either app (nothing
+    /// there to select, click or hover over), at half the width of the gutter or less. Down the
+    /// list, anywhere that is not under the scroll bar will do.
+    pub const MESSAGE_LIST_DRAG_X: f64 = 8.0;
     /// Above the first message once nothing older exists.
     pub const HISTORY_START: &str = "mainWindow/historyStart";
     /// Above the first message while older ones load.
