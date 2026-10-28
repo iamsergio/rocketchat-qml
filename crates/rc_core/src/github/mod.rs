@@ -122,6 +122,14 @@ pub enum PrAction {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct AttemptId(pub(crate) u64);
 
+impl AttemptId {
+    /// An id with this number, for the tests of a frontend's cache: the service numbers its own.
+    #[must_use]
+    pub const fn new(number: u64) -> Self {
+        Self(number)
+    }
+}
+
 impl std::fmt::Display for AttemptId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         self.0.fmt(f)
