@@ -7,6 +7,8 @@
 //! retried or removed; and the thread pane's composer uploads into the thread. The apps can't open
 //! a file dialog under test, so they take the files of `RC_TEST_ATTACH_FILES` when the paperclip is
 //! clicked (see `common::launch_attaching`). Dropping files on a pane is not tested: Spix can't drag.
+//! Ctrl+V in a composer attaches what the clipboard holds (ACT-012); the app puts the clipboard's
+//! contents there when it starts (see `common::launch_pasting`).
 //! Each test makes its own user and channel and only looks at those.
 
 // A failed step should just fail the test.
@@ -18,11 +20,12 @@ use rc_gui_tests::paths::{
     attachment, attachment_row, main_window, message, message_row, staged_file, staged_file_part,
     staged_file_remove, thread_message, upload, upload_cancel, upload_part, upload_retry,
 };
+use rc_gui_tests::{Key, Modifiers};
 use rc_test_server::{Admin, PIXEL_PNG, temp_file, unique};
 
 use common::{
-    TIMEOUT, choose, launch_attaching, log_in_and_wait_for_room, open_room,
-    wait_for_messages_after, wait_for_reply_after,
+    Clipboard, TIMEOUT, choose, launch_attaching, launch_pasting, log_in_and_wait_for_room,
+    open_room, wait_for_messages_after, wait_for_reply_after,
 };
 
 /// The two files most tests attach: a text file of 1.5 KB and a PNG of 70 bytes. Their names are
@@ -246,6 +249,223 @@ fn a_file_attached_in_the_thread_pane_is_uploaded_into_the_thread() {
             attachment_row::TITLE
         ),
         &file_name(&text_file),
+        TIMEOUT,
+    )
+    .unwrap();
+    assert_eq!(admin.last_message(&channel_id).id, in_room);
+}
+
+// ACT-012
+#[test]
+#[ignore = "needs the app and a Rocket.Chat server: run through ctest"]
+fn a_pasted_picture_waits_as_an_image_chip_and_is_uploaded_with_its_name() {
+    let admin = Admin::login();
+    let user = admin.create_user();
+    let (channel_id, _) = admin.create_channel(&[&user.username]);
+    let png = temp_file(&format!("clip-{}.png", unique()), &PIXEL_PNG);
+    let before = admin.post_message(&channel_id, "first").id;
+    let app = launch_pasting(&Clipboard {
+        image: Some(&png),
+        ..Clipboard::default()
+    });
+    let gui = app.gui();
+    log_in_and_wait_for_room(gui, &user, &channel_id);
+    open_room(gui, &channel_id);
+    let words = format!("a screenshot {}", unique());
+    gui.mouse_click(main_window::COMPOSER_FIELD).unwrap();
+    gui.set_text(main_window::COMPOSER_FIELD, &words).unwrap();
+
+    gui.enter_key(main_window::COMPOSER_FIELD, Key::V, Modifiers::CONTROL)
+        .unwrap();
+
+    // The chip has the picture as its thumbnail and a name from the time; the text stays put.
+    let chip = |part| staged_file(main_window::COMPOSER, 0, part);
+    gui.wait_until_visible(&chip(staged_file_part::THUMBNAIL), TIMEOUT)
+        .unwrap();
+    let name = gui.text(&chip(staged_file_part::NAME)).unwrap();
+    assert!(
+        // The exact name the app gives it, so `.PNG` would be wrong too.
+        name.strip_prefix("Pasted image ")
+            .and_then(|rest| rest.strip_suffix(".png"))
+            .is_some(),
+        "{name}"
+    );
+    assert_eq!(gui.text(main_window::COMPOSER_FIELD).unwrap(), words);
+
+    gui.enter_key(main_window::COMPOSER_FIELD, Key::RETURN, Modifiers::NONE)
+        .unwrap();
+
+    gui.wait_until_hidden(main_window::COMPOSER_ATTACHMENTS, TIMEOUT)
+        .unwrap();
+    let posted = wait_for_messages_after(&admin, &channel_id, &before, 1);
+    gui.wait_until_text(&message(&posted[0].id, message_row::BODY), &words, TIMEOUT)
+        .unwrap();
+    gui.wait_until_text(
+        &attachment(&posted[0].id, 0, attachment_row::TITLE),
+        &name,
+        TIMEOUT,
+    )
+    .unwrap();
+    gui.wait_until_visible(
+        &attachment(&posted[0].id, 0, attachment_row::IMAGE),
+        TIMEOUT,
+    )
+    .unwrap();
+}
+
+// ACT-012
+#[test]
+#[ignore = "needs the app and a Rocket.Chat server: run through ctest"]
+fn a_pasted_picture_taken_out_of_the_bar_can_be_pasted_again() {
+    let admin = Admin::login();
+    let user = admin.create_user();
+    let (channel_id, _) = admin.create_channel(&[&user.username]);
+    let png = temp_file(&format!("clip-{}.png", unique()), &PIXEL_PNG);
+    let app = launch_pasting(&Clipboard {
+        image: Some(&png),
+        ..Clipboard::default()
+    });
+    let gui = app.gui();
+    log_in_and_wait_for_room(gui, &user, &channel_id);
+    open_room(gui, &channel_id);
+    gui.mouse_click(main_window::COMPOSER_FIELD).unwrap();
+
+    gui.enter_key(main_window::COMPOSER_FIELD, Key::V, Modifiers::CONTROL)
+        .unwrap();
+    gui.wait_until_visible(main_window::COMPOSER_ATTACHMENTS, TIMEOUT)
+        .unwrap();
+    gui.mouse_click(&staged_file_remove(main_window::COMPOSER, 0))
+        .unwrap();
+    gui.wait_until_hidden(main_window::COMPOSER_ATTACHMENTS, TIMEOUT)
+        .unwrap();
+    // The click on the cross took the focus.
+    gui.mouse_click(main_window::COMPOSER_FIELD).unwrap();
+
+    gui.enter_key(main_window::COMPOSER_FIELD, Key::V, Modifiers::CONTROL)
+        .unwrap();
+    gui.wait_until_visible(main_window::COMPOSER_ATTACHMENTS, TIMEOUT)
+        .unwrap();
+}
+
+// ACT-012
+#[test]
+#[ignore = "needs the app and a Rocket.Chat server: run through ctest"]
+fn copied_files_are_attached_in_order() {
+    let admin = Admin::login();
+    let user = admin.create_user();
+    let (channel_id, _) = admin.create_channel(&[&user.username]);
+    let (text, png) = text_and_png();
+    let app = launch_pasting(&Clipboard {
+        files: &[&text, &png],
+        // A picture next to the files does not matter.
+        image: Some(&png),
+        ..Clipboard::default()
+    });
+    let gui = app.gui();
+    log_in_and_wait_for_room(gui, &user, &channel_id);
+    open_room(gui, &channel_id);
+    gui.mouse_click(main_window::COMPOSER_FIELD).unwrap();
+
+    gui.enter_key(main_window::COMPOSER_FIELD, Key::V, Modifiers::CONTROL)
+        .unwrap();
+
+    let chip = |index, part| staged_file(main_window::COMPOSER, index, part);
+    gui.wait_until_text(&chip(0, staged_file_part::NAME), &file_name(&text), TIMEOUT)
+        .unwrap();
+    gui.wait_until_text(&chip(1, staged_file_part::NAME), &file_name(&png), TIMEOUT)
+        .unwrap();
+    assert_eq!(gui.text(main_window::COMPOSER_FIELD).unwrap(), "");
+}
+
+// ACT-012
+#[test]
+#[ignore = "needs the app and a Rocket.Chat server: run through ctest"]
+fn text_on_the_clipboard_is_pasted_as_text_and_attaches_nothing() {
+    let admin = Admin::login();
+    let user = admin.create_user();
+    let (channel_id, _) = admin.create_channel(&[&user.username]);
+    let png = temp_file(&format!("clip-{}.png", unique()), &PIXEL_PNG);
+    // Spreadsheets put both on the clipboard: the text wins.
+    let app = launch_pasting(&Clipboard {
+        text: Some("cells A1 B2"),
+        image: Some(&png),
+        ..Clipboard::default()
+    });
+    let gui = app.gui();
+    log_in_and_wait_for_room(gui, &user, &channel_id);
+    open_room(gui, &channel_id);
+    gui.mouse_click(main_window::COMPOSER_FIELD).unwrap();
+
+    gui.enter_key(main_window::COMPOSER_FIELD, Key::V, Modifiers::CONTROL)
+        .unwrap();
+
+    gui.wait_until_text(main_window::COMPOSER_FIELD, "cells A1 B2", TIMEOUT)
+        .unwrap();
+    assert!(
+        !gui.exists_and_visible(main_window::COMPOSER_ATTACHMENTS)
+            .unwrap()
+    );
+}
+
+// ACT-012
+#[test]
+#[ignore = "needs the app and a Rocket.Chat server: run through ctest"]
+fn a_picture_pasted_in_the_thread_pane_is_uploaded_into_the_thread() {
+    let admin = Admin::login();
+    let user = admin.create_user();
+    let (channel_id, _) = admin.create_channel(&[&user.username]);
+    let parent = admin.post_message(&channel_id, &format!("parent {}", unique()));
+    let png = temp_file(&format!("clip-{}.png", unique()), &PIXEL_PNG);
+    let app = launch_pasting(&Clipboard {
+        image: Some(&png),
+        ..Clipboard::default()
+    });
+    let gui = app.gui();
+    log_in_and_wait_for_room(gui, &user, &channel_id);
+    open_room(gui, &channel_id);
+    gui.wait_until_visible(&message(&parent.id, message_row::BODY), TIMEOUT)
+        .unwrap();
+    choose(gui, &parent.id, main_window::MESSAGE_THREAD_ACTION);
+    gui.wait_until_visible(main_window::THREAD_PANE, TIMEOUT)
+        .unwrap();
+    let in_room = admin.last_message(&channel_id).id;
+    gui.mouse_click(main_window::THREAD_COMPOSER_FIELD).unwrap();
+
+    gui.enter_key(
+        main_window::THREAD_COMPOSER_FIELD,
+        Key::V,
+        Modifiers::CONTROL,
+    )
+    .unwrap();
+
+    // The picture waits in the thread's composer, not in the room's.
+    let chip = |part| staged_file(main_window::THREAD_COMPOSER, 0, part);
+    gui.wait_until_visible(&chip(staged_file_part::THUMBNAIL), TIMEOUT)
+        .unwrap();
+    let name = gui.text(&chip(staged_file_part::NAME)).unwrap();
+    assert!(name.starts_with("Pasted image "), "{name}");
+    assert!(
+        !gui.exists_and_visible(main_window::COMPOSER_ATTACHMENTS)
+            .unwrap()
+    );
+
+    gui.enter_key(
+        main_window::THREAD_COMPOSER_FIELD,
+        Key::RETURN,
+        Modifiers::NONE,
+    )
+    .unwrap();
+
+    gui.wait_until_hidden(main_window::THREAD_COMPOSER_ATTACHMENTS, TIMEOUT)
+        .unwrap();
+    let reply = wait_for_reply_after(&admin, &parent.id, None);
+    gui.wait_until_text(
+        &format!(
+            "{}/attachment0/{}",
+            thread_message(&reply.id, "").trim_end_matches('/'),
+            attachment_row::TITLE
+        ),
+        &name,
         TIMEOUT,
     )
     .unwrap();

@@ -18,6 +18,7 @@ pub mod emoji_picker_view;
 pub mod file_urls;
 pub mod message_list;
 pub mod message_view;
+pub mod paste;
 pub mod quote_view;
 pub mod reaction_view;
 pub mod rich_html;

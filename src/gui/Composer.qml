@@ -448,6 +448,8 @@ Rectangle {
                         } else if (event.key === Qt.Key_Escape && root.forThread) {
                             ThreadList.escape();
                             event.accepted = true;
+                        } else if (event.matches(StandardKey.Paste) && !root.editing && !root.previewing && root.staged.paste()) {
+                            event.accepted = true;
                         } else if (event.key === Qt.Key_Up && !root.editing && field.length === 0) {
                             root.editLast();
                             event.accepted = true;

@@ -566,6 +566,8 @@ pub mod staged_file_part {
     pub const NAME: &str = "composerAttachmentName";
     /// The file's size in words (`1.5 KB`): its `text`.
     pub const SIZE: &str = "composerAttachmentSize";
+    /// The picture itself, for an image file: visible only then.
+    pub const THUMBNAIL: &str = "thumbnailImage";
 }
 
 /// The file with this index (0 is the first, in the order attached) that waits in the composer

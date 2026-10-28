@@ -16,6 +16,8 @@
 pub mod account_list_model;
 #[allow(unsafe_code, clippy::unnecessary_box_returns)]
 pub mod app_info;
+#[allow(unsafe_code)]
+mod clipboard;
 #[allow(unsafe_code, clippy::unnecessary_box_returns)]
 pub mod emoji_picker_model;
 #[allow(unsafe_code)]
