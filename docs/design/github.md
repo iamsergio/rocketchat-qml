@@ -113,7 +113,17 @@ A rate limit (`RateLimited`) holds every request back, the manual ones too, unti
 
 ## Tests
 
-There is no local GitHub, so there is no fake one to test against in this crate. `tests/api.rs` runs every call against wiremock with GitHub-shaped JSON (request method, path, query and body, the authorization header, parsing, pagination, every error). No test talks to the real GitHub, not even read-only, and none uses the user's `gh` or token: the JSON shapes come from GitHub's documentation and ghw's own tests. The GUI tests will later use a stub, `rc_test_github`.
+There is no local GitHub, so there is no fake one to test against in this crate. `tests/api.rs` runs every call against wiremock with GitHub-shaped JSON (request method, path, query and body, the authorization header, parsing, pagination, every error). No test talks to the real GitHub, not even read-only, and none uses the user's `gh` or token: the JSON shapes come from GitHub's documentation and ghw's own tests. The GUI tests use a stub, `rc_test_github`.
+
+### The stub (`rc_test_github`)
+
+`GithubStub::start()` runs a wiremock `MockServer` on a thread of its own, on a free localhost port (`url()`), with one catch-all `Respond` that reads and changes an `Arc<Mutex<State>>` shared with the test's handle. Wiremock was chosen because it is already a dependency, serves real HTTP, and its `Respond` is all a stateful server needs; a hand-written HTTP server would only add code. The test sets the state (viewer, watched repositories, `PullRequest`s built with defaults and `Job`s, `Runner`s) and reads it back; the stub answers by the same queries `rc_github` sends (told apart by their text): `author:@me` gives the viewer's open pull requests, `-author:@me created:>=<date> repo:..` the others' in those repositories created since the date, paged by a cursor; REST lists are paged by `per_page` and `page`.
+
+Actions change the state as GitHub would, so that the next poll shows it: a merge (`merge-async`, 409 for a `sha` that is not the head, 405 when not open, optionally `pending` for a few polls) marks the pull request merged, which removes it from the searches, and the following `DELETE` of its head branch removes the branch; rerun failed and rerun a job turn those jobs to running (403 while a run is still in progress, as GitHub's); approve clears `needs_approval` and starts the jobs (a waiting run has none yet, so one is made); update branch sets the merge state to clean, a new head and the jobs to running (a conflict is a GraphQL error). Editing a pull request moves its update time to now, which reorders the lists. A test can plan failures for the next N requests to a path prefix or a GraphQL operation (401, a rate limit with its headers, 500, GraphQL `errors`), require a token (any is accepted otherwise), and read the log of requests (method, path, a short form of the GraphQL operation, the JSON body) to assert on.
+
+`rc_test_github/tests/client.rs` drives `GithubClient` against the stub for every call and state change, so that the stub and the client agree.
+
+The apps will find the stub through an environment variable in developer-mode builds; that comes with the Qt step, not before. The GUI tests must not run the real `gh` either: the Qt step points the app's `gh` program at a fake one.
 
 ## The views (`rc_view::github`)
 

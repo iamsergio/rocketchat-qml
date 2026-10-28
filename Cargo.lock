@@ -5296,6 +5296,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "rc_test_github"
+version = "0.0.0"
+dependencies = [
+ "jiff",
+ "rc_github",
+ "reqwest",
+ "secrecy",
+ "serde_json",
+ "tokio",
+ "wiremock",
+]
+
+[[package]]
 name = "rc_test_server"
 version = "0.0.0"
 dependencies = [
