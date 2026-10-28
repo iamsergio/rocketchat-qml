@@ -77,9 +77,11 @@ mod github;
 
 use github::GithubHub;
 pub use github::{
-    github_connect_with_gh, github_connect_with_token, github_disconnect, github_refresh,
-    github_select, github_show, github_show_tab, github_tick, register_github,
-    register_pull_requests, register_runners,
+    github_approve_runs, github_ask_merge, github_cancel_confirm, github_connect_with_gh,
+    github_connect_with_token, github_disconnect, github_dismiss_command, github_merge,
+    github_refresh, github_rerun_failed, github_rerun_job, github_select, github_set_notify,
+    github_show, github_show_tab, github_tick, github_update_branch, register_github,
+    register_jobs, register_pull_requests, register_runners,
 };
 
 static HUB: Mutex<Hub> = Mutex::new(Hub::new());

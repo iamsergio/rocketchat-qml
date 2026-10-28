@@ -38,11 +38,17 @@ qt_add_qml_module(
   FieldLabel.qml
   FlatButton.qml
   Icon.qml
+  GithubActionBar.qml
+  GithubApproval.qml
+  GithubButton.qml
+  GithubChecks.qml
   GithubConnectPage.qml
+  GithubJobRow.qml
   GithubMain.qml
   GithubPage.qml
   GithubSidebar.qml
   GithubTile.qml
+  GithubToast.qml
   InputField.qml
   LinkArea.qml
   LinkMenu.qml
@@ -69,6 +75,7 @@ qt_add_qml_module(
   fonts/InstrumentSans.ttf
   fonts/InstrumentSans-Italic.ttf
   icons/attach.svg
+  icons/bell-filled.svg
   icons/bell.svg
   icons/channel.svg
   icons/chevron.svg
@@ -80,6 +87,7 @@ qt_add_qml_module(
   icons/external.svg
   icons/file.svg
   icons/mark-github.svg
+  icons/merge.svg
   icons/plus.svg
   icons/pr-draft.svg
   icons/pr-failed.svg
@@ -91,6 +99,7 @@ qt_add_qml_module(
   icons/refresh.svg
   icons/search.svg
   icons/settings.svg
+  icons/shield.svg
   icons/thread.svg
   icons/upload.svg
   IMPORT_PATH

@@ -13,6 +13,7 @@ fn main() {
             "src/clipboard.rs",
             "src/emoji_picker_model.rs",
             "src/github_vm.rs",
+            "src/job_list_model.rs",
             "src/lifecycle.rs",
             "src/logging.rs",
             "src/message_list_model.rs",

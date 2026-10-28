@@ -53,6 +53,8 @@ QtObject {
     readonly property color success: "#52c48c"
     readonly property color successWash: "#1f52c48c"
     readonly property color warning: "#e8b44f"
+    // The text on a warning-coloured button.
+    readonly property color textOnWarning: "#1d1604"
     // Warning at 12%.
     readonly property color warningWash: "#1fe8b44f"
     readonly property color error: "#ff8a66"
@@ -333,6 +335,47 @@ QtObject {
     readonly property int prFoldChevronSize: 12
     readonly property int prFoldClosedRotation: 180
     readonly property int prFoldOpenRotation: -90
+    // The strip over the actions of a pull request that has runs waiting for approval, and the
+    // shield in it.
+    readonly property int prBannerPaddingV: 8
+    readonly property int prBannerIconSize: 16
+    // The bar of actions: its padding at the sides, its least height (so that it doesn't jump
+    // when the buttons give way to the question of a merge), and the icon in a button with one.
+    readonly property int prActionBarPaddingH: 24
+    readonly property int prActionBarMinHeight: 55
+    readonly property int prButtonIconSize: 14
+    // The small buttons (Approve runs, Rerun, the log of a job): their height, and the font of a
+    // Rerun button.
+    readonly property int prSmallButtonHeight: 26
+    // The line under the actions that says why a command failed.
+    readonly property int prErrorPaddingV: 8
+    // The checks: the padding around them, and the space between their parts.
+    readonly property int prChecksPaddingH: 24
+    // The header of a pull request's page: its sides line up with the action bar and the checks.
+    readonly property int prHeaderPaddingH: prActionBarPaddingH
+    readonly property int prHeaderPaddingTop: 18
+    readonly property int prHeaderPaddingBottom: 14
+    readonly property int prChecksPaddingV: 18
+    readonly property int prChecksSpacing: 16
+    // The square before each word of the tally, and the gaps between the words.
+    readonly property int prTallySwatchSize: 8
+    readonly property int prTallySpacing: 14
+    // How much taller a segment of the page's bar gets under the pointer, and the time it takes.
+    readonly property real checkBarHoverScale: 1.5
+    readonly property real checkBarRestScale: 1
+    readonly property int checkBarHoverDuration: 100
+    // A job row: its least height, and the glyph of its state.
+    readonly property int prJobRowMinHeight: 36
+    readonly property int prJobGlyphSize: 15
+    // A heading of a group of jobs: its height.
+    readonly property int prGroupHeadingHeight: 30
+    // The toast over the page: the space around its text, its distance from the bottom, and the
+    // check in it. It stays this long, in milliseconds.
+    readonly property int prToastPaddingH: 16
+    readonly property int prToastPaddingV: 10
+    readonly property int prToastBottomMargin: 24
+    readonly property int prToastIconSize: 14
+    readonly property int githubToastDuration: 2600
     // A runner's lamp, and the halo around it while it is busy or idle.
     readonly property int runnerLampSize: 8
     readonly property int runnerLampHalo: 3
@@ -357,4 +400,21 @@ QtObject {
 
     // Timing
     readonly property int toolTipDelay: 400
+
+    // The colour of a job or a segment of a check bar by its state: failed, running, passed,
+    // cancelled, anything else (waiting for approval) being the quiet one.
+    function checkColor(state: string): color {
+        switch (state) {
+        case "failed":
+            return signal;
+        case "running":
+            return warning;
+        case "passed":
+            return success;
+        case "cancelled":
+            return textFaint;
+        default:
+            return raisedHover;
+        }
+    }
 }

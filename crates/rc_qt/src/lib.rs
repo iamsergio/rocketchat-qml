@@ -23,6 +23,13 @@ pub mod emoji_picker_model;
 mod github_view;
 #[allow(unsafe_code, clippy::unnecessary_box_returns)]
 pub mod github_vm;
+#[allow(
+    unsafe_code,
+    clippy::unnecessary_box_returns,
+    clippy::must_use_candidate // The generated `dataChanged` signal.
+)]
+pub mod job_list_model;
+mod job_rows;
 #[allow(unsafe_code)]
 pub mod lifecycle;
 #[allow(unsafe_code)]

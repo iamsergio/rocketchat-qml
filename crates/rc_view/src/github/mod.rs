@@ -19,5 +19,5 @@ mod tests;
 
 pub use cache::{Applied, CommandStatus, GithubCache, PrCommand, Sections, Tab};
 pub use chrome::{ConnectState, ConnectView, HeaderView, RunnerLine, RunnerState, TileView};
-pub use page::{BaseNote, Button, ChecksView, JobGroupView, JobRowView, PrPageView};
+pub use page::{BaseNote, Button, ChecksView, JobGroupView, JobRowView, PrPageView, TallyPart};
 pub use row::{CiKind, Glyph, PrRowView, Segment};

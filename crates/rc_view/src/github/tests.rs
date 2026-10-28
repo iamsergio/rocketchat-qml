@@ -1085,6 +1085,20 @@ fn the_checks_section_tallies_groups_and_folds() {
     assert_eq!(checks.heading, "Checks failed");
     assert_eq!(checks.kind, CiKind::Failed);
     assert_eq!(checks.tally, "1 failed, 1 running, 1 cancelled, 2 passed");
+    // The tally by state, for a frontend that puts a swatch before each word.
+    assert_eq!(
+        checks
+            .tally_parts
+            .iter()
+            .map(|part| (part.state, part.text.as_str()))
+            .collect::<Vec<_>>(),
+        [
+            (JobState::Failed, "1 failed"),
+            (JobState::Running, "1 running"),
+            (JobState::Cancelled, "1 cancelled"),
+            (JobState::Passed, "2 passed"),
+        ]
+    );
     assert_eq!(
         checks.bar,
         [

@@ -72,6 +72,14 @@ pub struct JobGroupView {
     pub jobs: Vec<JobRowView>,
 }
 
+/// One word of the tally: "2 running", with the state it counts, so that a frontend can put a
+/// swatch of the state's colour before it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TallyPart {
+    pub state: JobState,
+    pub text: String,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ChecksView {
     /// "Checks passed", "Checks failed", "Checks running", "Runs waiting for approval" or "No
@@ -80,6 +88,8 @@ pub struct ChecksView {
     pub kind: CiKind,
     /// "1 failed, 2 running, 26 passed"; empty without jobs.
     pub tally: String,
+    /// The tally by state, failed first.
+    pub tally_parts: Vec<TallyPart>,
     pub bar: Vec<Segment>,
     /// The non-empty groups, failed first.
     pub groups: Vec<JobGroupView>,
@@ -233,7 +243,7 @@ fn checks(pr: &PullRequest, ctx: &PageContext<'_>) -> ChecksView {
         .collect();
     let all_passed = !rows.is_empty() && rows.iter().all(|row| row.state == JobState::Passed);
     let mut groups = Vec::new();
-    let mut tally = Vec::new();
+    let mut tally: Vec<TallyPart> = Vec::new();
     for (state, title, tally_word, folded) in [
         (JobState::Failed, "Failed", "failed", false),
         (JobState::Running, "Running", "running", false),
@@ -244,7 +254,10 @@ fn checks(pr: &PullRequest, ctx: &PageContext<'_>) -> ChecksView {
         if jobs.is_empty() {
             continue;
         }
-        tally.push(format!("{} {tally_word}", jobs.len()));
+        tally.push(TallyPart {
+            state,
+            text: format!("{} {tally_word}", jobs.len()),
+        });
         groups.push(JobGroupView {
             state,
             title: format!("{title} {}", jobs.len()),
@@ -256,7 +269,12 @@ fn checks(pr: &PullRequest, ctx: &PageContext<'_>) -> ChecksView {
     ChecksView {
         heading,
         kind,
-        tally: tally.join(", "),
+        tally: tally
+            .iter()
+            .map(|part| part.text.as_str())
+            .collect::<Vec<_>>()
+            .join(", "),
+        tally_parts: tally,
         bar: check_bar(pr),
         groups,
     }

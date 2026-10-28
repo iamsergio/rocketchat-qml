@@ -901,4 +901,76 @@ pub mod github {
     pub const PAGE_BASE_NOTE: &str = "mainWindow/prPageBaseNote";
     pub const PAGE_DRAFT: &str = "mainWindow/prPageDraft";
     pub const PAGE_OPEN_BUTTON: &str = "mainWindow/prPageOpenButton";
+
+    /// The banner over the actions, visible only while runs wait for approval, its `text`
+    /// `prApprovalText` ("Runs are waiting for your approval") and its button `prApprove`.
+    pub const APPROVAL: &str = "mainWindow/prApproval";
+    pub const APPROVAL_TEXT: &str = "mainWindow/prApprovalText";
+    pub const APPROVE: &str = "mainWindow/prApprove";
+    /// The buttons of the actions: their `enabled` and `visible` follow the view; `prMergeReason`
+    /// (its `text`) says why Merge is disabled and is visible only then.
+    pub const MERGE: &str = "mainWindow/prMerge";
+    pub const MERGE_REASON: &str = "mainWindow/prMergeReason";
+    pub const MERGE_ANYWAY: &str = "mainWindow/prMergeAnyway";
+    pub const UPDATE_BRANCH: &str = "mainWindow/prUpdateBranch";
+    pub const RERUN_FAILED: &str = "mainWindow/prRerunFailed";
+    /// The notify toggle: its `text` is "Notify me when done" or "Notifying you".
+    pub const NOTIFY: &str = "mainWindow/prNotify";
+    /// The question of Merge, in place of the buttons: its `text` (visible only then), with
+    /// `prConfirmMerge` or `prConfirmMergeAnyway` to say yes and `prConfirmCancel` to say no.
+    pub const CONFIRM: &str = "mainWindow/prConfirm";
+    pub const CONFIRM_MERGE: &str = "mainWindow/prConfirmMerge";
+    pub const CONFIRM_MERGE_ANYWAY: &str = "mainWindow/prConfirmMergeAnyway";
+    pub const CONFIRM_CANCEL: &str = "mainWindow/prConfirmCancel";
+    /// Why the last command failed, as its `text` (visible only then), and the button that
+    /// closes it.
+    pub const ERROR: &str = "mainWindow/prError";
+    pub const ERROR_DISMISS: &str = "mainWindow/prErrorDismiss";
+    /// What the last command did, as its `text`; visible for a moment.
+    pub const TOAST: &str = "mainWindow/prToast";
+    /// The checks: the list that scrolls, the heading (`text`), the tally (`text` "1 failed, 2
+    /// running") and the bar, whose segment `i` is [`checks_segment`].
+    pub const CHECKS: &str = "mainWindow/prChecks";
+    pub const CHECKS_HEADING: &str = "mainWindow/prChecksHeading";
+    pub const TALLY: &str = "mainWindow/prTally";
+    pub const CHECKS_BAR: &str = "mainWindow/prChecksBar";
+
+    /// Segment `index` of the bar of the page: its `text` is `failed`, `running`, `cancelled`,
+    /// `passed` or `waiting`.
+    #[must_use]
+    pub fn checks_segment(index: usize) -> String {
+        format!("{WINDOW}/prChecksBar/prSegment{index}")
+    }
+
+    /// The heading of a group of jobs, `Failed`, `Running`, `Cancelled` or `Passed`: its
+    /// `checked` says the group is open; `prJobGroupTitle` below it has its `text` ("Failed 2").
+    #[must_use]
+    pub fn job_group(name: &str) -> String {
+        format!("{WINDOW}/prJobGroup{name}")
+    }
+
+    /// The title of the group `name`.
+    #[must_use]
+    pub fn job_group_title(name: &str) -> String {
+        format!("{WINDOW}/prJobGroup{name}/prJobGroupTitle")
+    }
+
+    /// The row of the job at this position of the bar (it exists while its group is open), or one
+    /// of its parts: `prJobState` (`failed`, `running`, `cancelled` or `passed`), `prJobWorkflow`
+    /// ("CI / "), `prJobName` and `prJobDuration`, by their `text`.
+    #[must_use]
+    pub fn job(index: usize, part: &str) -> String {
+        let job = format!("{WINDOW}/prJob{index}");
+        if part.is_empty() {
+            job
+        } else {
+            format!("{job}/{part}")
+        }
+    }
+
+    /// The Rerun button of the job at this position of the bar, visible for failed jobs.
+    #[must_use]
+    pub fn job_rerun(index: usize) -> String {
+        format!("{WINDOW}/prJobRerun{index}")
+    }
 }
