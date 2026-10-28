@@ -442,3 +442,53 @@ fn an_author_name_that_fits_is_not_elided() {
         "the author's name fits and must not be elided"
     );
 }
+
+// MSG-007
+#[test]
+#[ignore = "needs the app and a Rocket.Chat server: run through ctest"]
+fn the_view_stays_at_the_newest_message_while_the_list_shrinks() {
+    let admin = Admin::login();
+    let user = admin.create_user();
+    let texts: Vec<String> = (0..TOTAL).map(|n| format!("message {n:03}")).collect();
+    let (channel_id, posted) = channel_with_messages(&admin, &user, &texts);
+    let newest = message(&posted[TOTAL - 1].id, message_row::BODY);
+    let app = launch();
+    let gui = app.gui();
+    log_in_and_wait_for_room(gui, &user, &channel_id);
+    open_room(gui, &channel_id);
+    gui.wait_until_visible(&newest, TIMEOUT).unwrap();
+    let offset = || {
+        gui.scroll_offset(main_window::MESSAGE_LIST, main_window::MESSAGE_LIST_OFFSET)
+            .unwrap()
+    };
+    // The newest message is wholly in view.
+    let newest_in_view = || -> bool {
+        let list = gui.bounding_box(main_window::MESSAGE_LIST).unwrap();
+        let row = gui.bounding_box(&newest).unwrap();
+        row.y >= list.y && row.y + row.height <= list.y + list.height
+    };
+    gui.wait_until("the newest message at the bottom", TIMEOUT, || {
+        Ok(offset().abs() < 1.0)
+    })
+    .unwrap();
+    let before = gui.bounding_box(main_window::MESSAGE_LIST).unwrap().height;
+
+    // Lines in the composer grow it, which makes the list shorter.
+    gui.set_text(
+        main_window::COMPOSER_FIELD,
+        "one\ntwo\nthree\nfour\nfive\nsix",
+    )
+    .unwrap();
+    gui.wait_until("the list is shorter", TIMEOUT, || {
+        Ok(gui.bounding_box(main_window::MESSAGE_LIST)?.height < before - 1.0)
+    })
+    .unwrap();
+    gui.wait(Duration::from_millis(300)).unwrap();
+
+    assert!(
+        offset().abs() < 1.0,
+        "the view moved off the newest: {}",
+        offset()
+    );
+    assert!(newest_in_view());
+}

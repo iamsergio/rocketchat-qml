@@ -140,6 +140,8 @@ QtObject {
     readonly property int separatorWidth: 1
 
     // Sizes
+    // How far a list may be from its newest message, in pixels, and still count as at it.
+    readonly property real scrollTolerance: 1
     // The box of a check box, its radius and the mark in it.
     readonly property int checkBoxSize: 15
     readonly property int checkMarkSize: 11
