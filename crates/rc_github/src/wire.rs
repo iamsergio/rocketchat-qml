@@ -40,6 +40,9 @@ macro_rules! check_suites {
     };
 }
 
+/// Who the token belongs to.
+pub(crate) const VIEWER_QUERY: &str = "query { viewer { login } }";
+
 /// A search for pull requests, one page. The caller pages on `pageInfo`.
 pub(crate) const SEARCH_QUERY: &str = concat!(
     "query($q: String!, $first: Int!, $after: String) {
@@ -139,6 +142,16 @@ pub(crate) struct GraphQlError {
 }
 
 // --- search ---
+
+#[derive(Deserialize)]
+pub(crate) struct ViewerData {
+    pub viewer: Viewer,
+}
+
+#[derive(Deserialize)]
+pub(crate) struct Viewer {
+    pub login: String,
+}
 
 #[derive(Deserialize)]
 pub(crate) struct SearchData {

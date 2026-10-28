@@ -9,10 +9,10 @@ use std::sync::mpsc as std_mpsc;
 use std::time::Duration;
 
 use secrecy::SecretString;
-use tokio::runtime::{Builder, Runtime};
+use tokio::runtime::{Builder, Handle, Runtime};
 use tokio::sync::mpsc::{self, UnboundedSender};
 
-use crate::adapters::{RestConnector, SystemClock};
+use crate::adapters::{GhProcess, RestConnector, RestGithubConnector, SystemClock};
 use crate::avatars::AvatarUpdate;
 use crate::core::{self, ActorSenders, CoreCommand};
 use crate::directory::{ActionState, Directory, DirectoryAction};
@@ -20,6 +20,7 @@ use crate::domain::{AccountId, Identity, MessageId, Room, RoomId};
 use crate::emoji::{self, CustomEmojis};
 use crate::emoji_images::EmojiImageUpdate;
 use crate::error::Error;
+use crate::github::{GitHub, GithubConfig, GithubEvent, GithubPorts, GithubStore};
 use crate::images::ImageUpdate;
 use crate::policy::{ActionError, MessageAction, MessagePolicy};
 use crate::ports::{Clock, Connector, FileCache, SecretStore};
@@ -266,6 +267,8 @@ pub struct Client {
     /// Signalled by the core when it has drained and is about to end.
     finished: std_mpsc::Receiver<()>,
     runtime: Option<Runtime>,
+    /// The runtime's, for the services that run beside the accounts.
+    handle: Handle,
 }
 
 impl Client {
@@ -330,6 +333,7 @@ impl Client {
             .enable_all()
             .build()
             .map_err(Error::Runtime)?;
+        let handle = runtime.handle().clone();
         let (commands, commands_rx) = mpsc::unbounded_channel();
         let senders = Arc::new(ActorSenders::default());
         let finished = core::spawn(
@@ -352,6 +356,7 @@ impl Client {
             senders,
             finished,
             runtime: Some(runtime),
+            handle,
         })
     }
 
@@ -388,6 +393,29 @@ impl Client {
     #[must_use]
     pub fn account<'a>(&'a self, id: &'a AccountId) -> AccountHandle<'a> {
         AccountHandle { client: self, id }
+    }
+
+    /// Starts the GitHub pull requests service beside the accounts, on this client's runtime. It
+    /// talks to the API at `api_url` (`rc_github::DEFAULT_API_URL`, or a stub's), reads the token
+    /// from `gh` or the `store`, and tells the frontend through `on_event`, once per event in
+    /// order, from a runtime thread; it must return quickly and not touch GUI objects, as
+    /// `Client`'s must.
+    ///
+    /// Drop the returned handle before the client: the service stops with the runtime.
+    pub fn github(
+        &self,
+        api_url: &str,
+        store: impl GithubStore,
+        config: GithubConfig,
+        on_event: impl Fn(GithubEvent) + Send + Sync + 'static,
+    ) -> GitHub {
+        let ports = GithubPorts {
+            connector: RestGithubConnector::new(api_url),
+            gh: GhProcess::default(),
+            store,
+            clock: SystemClock,
+        };
+        GitHub::start(&self.handle, ports, config, on_event)
     }
 
     fn send(&self, command: CoreCommand) {

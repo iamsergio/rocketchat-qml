@@ -6,8 +6,10 @@
 
 use super::blob::{decode, encode};
 use crate::domain::{AccountId, StoredAccount};
+use crate::github::{GithubAuth, GithubStore};
 use crate::ports::{SecretStore, StoreError};
 use keyring_core::{CredentialStore, Entry};
+use secrecy::{ExposeSecret, SecretString};
 use std::sync::Arc;
 
 const SERVICE: &str = "RocketChatQml";
@@ -150,6 +152,69 @@ impl SecretStore for KeyringStore {
     }
 }
 
+/// The entry with the GitHub login.
+const GITHUB: &str = "github";
+/// What the entry holds when the login is the GitHub CLI's.
+const GITHUB_CLI: &str = "gh";
+/// What the entry starts with when it holds a pasted token, which follows.
+const GITHUB_TOKEN: &str = "token:";
+
+fn github_entry_text(auth: &GithubAuth) -> SecretString {
+    match auth {
+        GithubAuth::GhCli => SecretString::from(GITHUB_CLI),
+        GithubAuth::Token(token) => {
+            SecretString::from(format!("{GITHUB_TOKEN}{}", token.expose_secret()))
+        }
+    }
+}
+
+fn github_auth_from(text: &str) -> Result<GithubAuth, StoreError> {
+    if text == GITHUB_CLI {
+        return Ok(GithubAuth::GhCli);
+    }
+    match text.strip_prefix(GITHUB_TOKEN) {
+        Some(token) if !token.is_empty() => Ok(GithubAuth::Token(SecretString::from(token))),
+        _ => Err(StoreError::Corrupt("the stored GitHub login".to_owned())),
+    }
+}
+
+/// Keeps the GitHub login, the choice and a pasted token, in one entry of the same keyring, apart
+/// from the accounts.
+pub struct KeyringGithubStore(KeyringStore);
+
+impl KeyringGithubStore {
+    /// # Errors
+    ///
+    /// [`StoreError::Unavailable`] if the platform has no credential store to use.
+    pub fn new() -> Result<Self, StoreError> {
+        KeyringStore::new().map(Self)
+    }
+}
+
+impl GithubStore for KeyringGithubStore {
+    fn load(&self) -> Result<Option<GithubAuth>, StoreError> {
+        match self.0.entry(GITHUB)?.get_password() {
+            Ok(text) => github_auth_from(&text).map(Some),
+            Err(keyring_core::Error::NoEntry) => Ok(None),
+            Err(error) => Err(store_error(&error)),
+        }
+    }
+
+    fn save(&self, auth: &GithubAuth) -> Result<(), StoreError> {
+        self.0
+            .entry(GITHUB)?
+            .set_password(github_entry_text(auth).expose_secret())
+            .map_err(|e| store_error(&e))
+    }
+
+    fn clear(&self) -> Result<(), StoreError> {
+        match self.0.entry(GITHUB)?.delete_credential() {
+            Ok(()) | Err(keyring_core::Error::NoEntry) => Ok(()),
+            Err(error) => Err(store_error(&error)),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::process;
@@ -170,6 +235,19 @@ mod tests {
                 let _ = entry.delete_credential();
             }
         }
+    }
+
+    // GH-009
+    #[test]
+    fn the_github_login_is_kept_as_text() {
+        let text = |auth: &GithubAuth| github_entry_text(auth).expose_secret().to_owned();
+        assert_eq!(text(&GithubAuth::GhCli), "gh");
+        let token = GithubAuth::Token(SecretString::from("ghp_x"));
+        assert_eq!(text(&token), "token:ghp_x");
+        assert_eq!(github_auth_from("gh").unwrap(), GithubAuth::GhCli);
+        assert_eq!(github_auth_from("token:ghp_x").unwrap(), token);
+        assert!(github_auth_from("token:").is_err());
+        assert!(github_auth_from("something").is_err());
     }
 
     // AUTH-004

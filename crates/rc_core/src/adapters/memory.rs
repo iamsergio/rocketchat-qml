@@ -7,6 +7,7 @@
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use crate::domain::{AccountId, StoredAccount};
+use crate::github::{GithubAuth, GithubStore};
 use crate::ports::{SecretStore, StoreError};
 
 /// Clones share the same content, so two clients can be given "the same disk" to simulate a restart.
@@ -37,6 +38,34 @@ impl SecretStore for MemoryStore {
 
     fn remove(&self, id: &AccountId) -> Result<(), StoreError> {
         self.lock()?.retain(|stored| &stored.id != id);
+        Ok(())
+    }
+}
+
+/// The GitHub login in memory. Clones share it, as the account store's do.
+#[derive(Clone, Default)]
+pub struct MemoryGithubStore(Arc<Mutex<Option<GithubAuth>>>);
+
+impl MemoryGithubStore {
+    fn lock(&self) -> Result<MutexGuard<'_, Option<GithubAuth>>, StoreError> {
+        self.0
+            .lock()
+            .map_err(|_| StoreError::Unavailable("the in-memory store is poisoned".to_owned()))
+    }
+}
+
+impl GithubStore for MemoryGithubStore {
+    fn load(&self) -> Result<Option<GithubAuth>, StoreError> {
+        Ok(self.lock()?.clone())
+    }
+
+    fn save(&self, auth: &GithubAuth) -> Result<(), StoreError> {
+        *self.lock()? = Some(auth.clone());
+        Ok(())
+    }
+
+    fn clear(&self) -> Result<(), StoreError> {
+        *self.lock()? = None;
         Ok(())
     }
 }

@@ -267,6 +267,37 @@ async fn watched_repos_follow_the_pages() {
     assert_eq!(repos[100], "last/one");
 }
 
+// GH-009
+#[tokio::test]
+async fn viewer_is_the_login_of_the_token() {
+    let server = MockServer::start().await;
+    mount_graphql(
+        &server,
+        "viewer",
+        json_response(200, r#"{"data":{"viewer":{"login":"iamsergio"}}}"#),
+    )
+    .await;
+
+    assert_eq!(client(&server).viewer().await.unwrap(), "iamsergio");
+}
+
+// GH-009
+#[tokio::test]
+async fn viewer_with_a_bad_token_is_unauthorized() {
+    let server = MockServer::start().await;
+    mount_graphql(
+        &server,
+        "viewer",
+        json_response(401, r#"{"message":"Bad credentials"}"#),
+    )
+    .await;
+
+    assert!(matches!(
+        client(&server).viewer().await,
+        Err(Error::Unauthorized)
+    ));
+}
+
 // GH-001
 #[tokio::test]
 async fn requests_say_who_they_are() {

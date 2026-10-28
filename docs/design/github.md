@@ -1,6 +1,6 @@
 # GitHub pull requests
 
-The GitHub page shows the user's open pull requests and their CI, and merges, updates, reruns and approves them: what the `ghw` command line tool does in a terminal. This document is the protocol part, `rc_github`, the GitHub analogue of `rc_api`. The actor (`rc_core::github`), the views and the pages come in later steps and extend it. Feature IDs: GH-001 to GH-008 in [TRACEABILITY.md](../../TRACEABILITY.md).
+The GitHub page shows the user's open pull requests and their CI, and merges, updates, reruns and approves them: what the `ghw` command line tool does in a terminal. It has two parts so far: the protocol crate `rc_github`, the GitHub analogue of `rc_api`, and the service in `rc_core::github`, which the views and the pages (later steps) use. Feature IDs: GH-001 to GH-009 in [TRACEABILITY.md](../../TRACEABILITY.md).
 
 ## The crate
 
@@ -14,6 +14,7 @@ A pull request is named by `PrRef` (`owner/name` and number), not by URL: the qu
 
 | Call | What it asks |
 |---|---|
+| `viewer` | GraphQL `viewer { login }`: who the token belongs to, the cheapest check of a token |
 | `my_pull_requests` | GraphQL `search(query: "is:pr is:open author:@me", type: ISSUE)` |
 | `watched_repos` | `GET /user/subscriptions` |
 | `watched_pull_requests(repos, since)` | the same search for `is:pr is:open -author:@me created:>=<since> repo:a repo:b ...`; no repository, no request, because a search without `repo:` covers all of GitHub |
@@ -62,6 +63,53 @@ A repository's self-hosted runners (name, OS, online, busy, the custom labels; t
 - `Api { status, message }`: any other non-2xx, with GitHub's message.
 - `GraphQl(messages)`: the `errors` array of a 200 answer, joined. Any error fails the call, even with partial data.
 - `Decode`, `Unreachable`, `InvalidUrl`, and the ones of the actions above: `NotAPullRequestUrl`, `PullRequestNotFound`, `NotOpen`, `ChecksNotPassed`, `MergeFailed`, `MergeTimeout`, `NothingToRerun`, `Partial`.
+
+## The service (`rc_core::github`)
+
+`GitHub` is the handle a frontend drives, the analogue of `Client` for the accounts, and it is a service apart from them: GitHub is not an account, has no room list and needs no Rocket.Chat login. `Client::github(api_url, store, config, on_event)` starts it on the client's own tokio runtime (the client keeps a handle to it), so there is one runtime and one set of threads; `GitHub::start` takes any runtime handle and ports, which is how the tests run it. `Client::start`'s callback is unchanged. `on_event: Fn(GithubEvent)` is called from a runtime thread, in order, and must return quickly, like `Client`'s. Dropping the `GitHub` stops the service; drop it before the client.
+
+Inside there is one actor task that owns the state. Everything slow (the token from `gh`, the keyring, GitHub's requests) runs in tasks of its own that report back through an inbox, so the actor never waits on I/O. It handles commands before the inbox and the inbox before the timer, like the account actors. Every answer carries the number of the connection (the session) it was made for, and the answer of an older one is dropped.
+
+### Ports
+
+In `github/ports.rs`, with the adapters in `adapters/github.rs`, `memory.rs` and `keyring.rs`:
+
+- `GithubConnector::connect(token)` makes a `GithubApi` (cheap to clone, `impl Future` methods like `ServerApi`): `viewer`, `my_pull_requests`, `watched_repos`, `watched_pull_requests(repos, since)`, `runners(repo)`, and the commands `merge`, `update_branch`, `rerun_failed`, `rerun_job`, `approve_runs`. It returns the core's own types and `GithubError`; `RestGithubConnector::new(api_url)` maps `rc_github`'s types and errors, with the API's address from the caller so that a GUI test can point it at a stub. `rerun_failed` is always called with `include_cancelled = false`, as `ghw` does.
+- `GhCli::token()` is `gh auth token` (`GhProcess`, a process run with no input). A missing `gh` (`NotInstalled`), one without a login (`NotLoggedIn`: it exits non-zero saying so, or prints nothing) and any other failure are `GhError`s, a state the connect page shows, not a crash. The tests run a script under `/bin/sh` in place of `gh`; nothing runs the real `gh` or reaches the real GitHub.
+- `GithubStore` keeps the user's choice: `GithubAuth::GhCli` (no token: it is read from `gh` at each start and never copied) or `GithubAuth::Token`, a pasted one. `KeyringGithubStore` keeps it in one entry of the accounts' keyring (service `RocketChatQml`, user `github`; the text `gh`, or `token:` and the token), `MemoryGithubStore` in memory, and `adapters::default_github_store()` is the keyring with memory as the fallback, as `default_store()` is for the accounts. The store calls block, so they run off the async threads, in a worker that keeps their order (a disconnect followed by a connect must not end with the old token). `RC_SECRET_STORE` is read by the frontends' startup (`rc_view::startup::secret_store`), which picks the store it hands to `Client::github`; the GitHub store follows it in the step that wires the frontends. There is no file-backed version yet.
+- The `Clock` port of the accounts tells the time and sleeps, so tests move time.
+
+### Connection
+
+`GithubEvent::Connection` is `NotConnected`, `Connecting`, `Connected { login }` or `Failed(ConnectFailure)` (`BadToken`, `GhMissing`, `GhNotLoggedIn`, `RateLimited`, `Unreachable`, `Other(message)`). It is the first event: at startup the stored choice is read and resumed (`Connecting`, then the outcome); with nothing stored it is `NotConnected`. `connect_with_gh()` reads the token from `gh`; `connect_with_token(token)` trims it; both ask `viewer { login }`, and only on success keep the choice. A blank token is `BadToken` without a request. A new connect replaces one that is under way or running. `disconnect()` forgets the stored choice and token and empties everything. `retry()` tries the stored choice again after a failed resume (GitHub was unreachable at startup; a stored pasted token can't be asked of the frontend). A token GitHub refuses later (a refresh or a command gets 401) ends the connection as `Failed(BadToken)`, with the stored choice kept.
+
+Losing the connection, for whatever reason, emits first what it empties: `Mine` and `Watched` reset to nothing, `Failing(0)`, `Runners([])` and `Notifying([])`, each only if it held something.
+
+### Polling
+
+A refresh fetches the user's pull requests, the watched ones, and the runners of the configured repositories (none until the settings step; `GithubConfig::runner_repos`), concurrently. It runs at once after connecting; then every 60 s while the frontend says the page is on screen (`set_on_screen`), every 5 minutes otherwise; at once on `refresh()`; and 3 s after any command, because GitHub's state lags (a rerun does not show as running yet). The next time is derived from when the last refresh started, the interval of the moment and the earlier of these requests, so coming on screen after two minutes off it fetches at once. Only one refresh runs: a request meanwhile is kept for after it. The watched repositories (`user/subscriptions`) are fetched again when more than 30 minutes old and on `refresh()`, not at each poll; the watched window is `GithubConfig::watched_days` (14) days back from today in UTC.
+
+`GithubEvent::Refresh` is `Started`, then `Done { at }` or `Failed { error, last_good }`. A list that failed keeps what it held and the other list is still applied, so `Failed` comes after the changes that got through; `last_good` is when everything was last fetched (the "updated N s ago"). A failed runners fetch is not a failure: it keeps the previous runners of that repository, and one without admin rights has none.
+
+A rate limit (`RateLimited`) holds every request back, the manual ones too, until its `reset`, or `retry_after` from now, or 60 s if neither came, and never less than 5 s. A 401 ends the connection (above).
+
+### Lists
+
+`Mine` and `Watched` hold `PullRequest`s (the core's type, with `PrKey` = repository and number, the jobs, the CI state, `needs_approval`) in display order: those that are not drafts first, then the drafts, each with the latest change first (the key breaks ties). The events are `Vec<ListChange<PullRequest>>`, the generic changes of `list_change` that the room list's `RoomChange` mirrors: the first fill (or the first after the list was emptied) is a `Reset`; later refreshes are diffed against what was emitted. Removals come first, highest index first, then moves, inserts and updates. The kept pull requests that are in the right order among themselves (the longest increasing run) stay put and the others are moved, so a push is one `Moved` (to the top) and a CI change one `Updated`; a refresh that changes nothing emits nothing, which keeps hundreds of watched pull requests cheap (the cost of a refresh is the diff, O(n log n), and the changes). A pull request that a query returns twice (paging can overlap) counts once. A tie in the run can be resolved either way (a draft made ready can be a move of it or of its neighbour), always with the same result.
+
+`Failing(n)` is the tile's red count: the user's pull requests that are not drafts and whose CI failed. It is recomputed after each refresh but emitted only when it changes. The "something finished" pip is `CiEnded`.
+
+### Commands
+
+`merge(pr, force)`, `update_branch`, `rerun_failed`, `rerun_job(pr, job_id)` and `approve_runs` each run in the background and answer with `GithubEvent::Command { pr, action, attempt, state }`: `Started`, then `Done` or `Failed(GithubError)` with the same `AttemptId` (counted for the life of the service). While one runs on a pull request, another on the same one is not started or queued: it answers `Refused`, with the attempt that runs. Different pull requests run side by side. An answer is dropped if the connection changed meanwhile, so an old attempt cannot report over a newer one. The state that the refresh timer and the rate limit need is set before the event, so a frontend that reacts to `Done` sees a consistent service. Commands while not connected are dropped. Asking the user before a merge is the frontend's.
+
+### Notify when done
+
+`notify_when_done(pr, on)` adds a pull request of the lists whose CI is `Pending` to the set (anything else is ignored), or takes it out. After each refresh the set is checked against the lists as they are: a pull request whose CI is `Success` or `Failure` emits `CiEnded { pr, state }` and leaves the set, so it fires once; one that is in neither list any more (merged, closed) leaves silently; a failed refresh changes no list, so it cannot make a pull request look gone. `Notifying(keys)` carries the set, sorted, whenever it changes (for the "notify me" toggle). The desktop notification is the frontend's.
+
+### Tests
+
+`github/tests` runs the service on a runtime of its own with a fake `GithubApi` (every call recorded, answers set by the test, commands that can be held), a fake `gh`, `MemoryGithubStore` and a clock the test moves. A test that expects nothing to happen moves the clock, waits until the service has handled all commands (a test-only barrier) and checks the calls; one that expects something waits for it. `github/list.rs` also checks the diff against random lists by applying the changes to a copy.
 
 ## Tests
 

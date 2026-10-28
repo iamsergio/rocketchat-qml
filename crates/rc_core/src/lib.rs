@@ -17,6 +17,7 @@ mod downloads;
 pub mod emoji;
 mod emoji_images;
 mod error;
+pub mod github;
 mod images;
 pub mod list_change;
 pub mod logging;

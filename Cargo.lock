@@ -5210,6 +5210,7 @@ dependencies = [
  "linkify",
  "pulldown-cmark",
  "rc_api",
+ "rc_github",
  "rc_test_server",
  "secrecy",
  "serde",
