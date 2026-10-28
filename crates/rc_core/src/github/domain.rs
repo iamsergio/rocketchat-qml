@@ -46,6 +46,32 @@ pub enum CiState {
     None,
 }
 
+/// What the reviews of a pull request add up to, when its branch asks for reviews.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ReviewDecision {
+    Approved,
+    ChangesRequested,
+    ReviewRequired,
+}
+
+/// Whether GitHub would let the pull request be merged (`mergeStateStatus`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MergeState {
+    /// The head is behind the base.
+    Behind,
+    /// Conflicts with the base.
+    Dirty,
+    /// A rule stops the merge: reviews, required checks.
+    Blocked,
+    Clean,
+    /// Mergeable, but a check that isn't required fails.
+    Unstable,
+    HasHooks,
+    Draft,
+    /// Also while GitHub is still working it out.
+    Unknown,
+}
+
 /// How one job stands. A cancelled job is apart from a failed one: it is usually a sibling that
 /// fail-fast stopped.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -79,6 +105,8 @@ pub struct PullRequest {
     pub url: String,
     pub updated_at: Timestamp,
     pub is_draft: bool,
+    pub review: Option<ReviewDecision>,
+    pub merge_state: MergeState,
     pub head_branch: String,
     pub base_branch: String,
     pub head_sha: String,

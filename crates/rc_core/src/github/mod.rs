@@ -23,8 +23,8 @@ mod ports;
 mod tests;
 
 pub use domain::{
-    CiState, GithubError, Job, JobState, PrKey, PullRequest, RepoRunners, Runner, RunnerJob,
-    display_order,
+    CiState, GithubError, Job, JobState, MergeState, PrKey, PullRequest, RepoRunners,
+    ReviewDecision, Runner, RunnerJob, display_order,
 };
 pub use ports::{GhCli, GhError, GithubApi, GithubAuth, GithubConnector, GithubPorts, GithubStore};
 

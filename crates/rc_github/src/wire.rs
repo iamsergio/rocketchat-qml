@@ -13,7 +13,8 @@ use jiff::Timestamp;
 use serde::Deserialize;
 
 use crate::types::{
-    CiState, Job, JobState, PrState, PullRequest, PullRequestStatus, Runner, RunnerJob,
+    CiState, Job, JobState, MergeState, PrState, PullRequest, PullRequestStatus, ReviewDecision,
+    Runner, RunnerJob,
 };
 
 /// What a check run is, as a GraphQL selection: for an Actions job its id (the job id), its
@@ -59,6 +60,8 @@ fragment Pr on PullRequest {
   url
   updatedAt
   isDraft
+  reviewDecision
+  mergeStateStatus
   headRefName
   baseRefName
   headRefOid
@@ -183,6 +186,10 @@ pub(crate) struct PrNode {
     url: String,
     updated_at: Timestamp,
     is_draft: bool,
+    /// Null when the branch has no review rule.
+    review_decision: Option<String>,
+    /// Missing in an answer of an old server: unknown then.
+    merge_state_status: Option<String>,
     head_ref_name: String,
     base_ref_name: String,
     head_ref_oid: String,
@@ -450,6 +457,8 @@ impl From<PrNode> for PullRequest {
             url: node.url,
             updated_at: node.updated_at,
             is_draft: node.is_draft,
+            review: ReviewDecision::from_wire(node.review_decision.as_deref()),
+            merge_state: MergeState::from_wire(node.merge_state_status.as_deref()),
             head_branch: node.head_ref_name,
             base_branch: node.base_ref_name,
             head_sha: node.head_ref_oid,

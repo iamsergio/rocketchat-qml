@@ -19,6 +19,6 @@ mod wire;
 pub use client::{DEFAULT_API_URL, GithubClient};
 pub use error::Error;
 pub use types::{
-    BranchDeletion, CiState, Job, JobState, MergeOutcome, PrRef, PrState, PullRequest,
-    PullRequestStatus, Runner, RunnerJob,
+    BranchDeletion, CiState, Job, JobState, MergeOutcome, MergeState, PrRef, PrState, PullRequest,
+    PullRequestStatus, ReviewDecision, Runner, RunnerJob,
 };

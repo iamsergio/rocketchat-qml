@@ -9,7 +9,10 @@
 use std::time::Duration;
 
 use jiff::civil::date;
-use rc_github::{BranchDeletion, CiState, Error, GithubClient, JobState, PrRef, PrState};
+use rc_github::{
+    BranchDeletion, CiState, Error, GithubClient, JobState, MergeState, PrRef, PrState,
+    ReviewDecision,
+};
 use secrecy::SecretString;
 use serde_json::{Value, json};
 use wiremock::matchers::{
@@ -113,6 +116,8 @@ async fn my_pull_requests_pages_and_parses() {
     for wanted in [
         "statusCheckRollup",
         "headRefOid",
+        "reviewDecision",
+        "mergeStateStatus",
         "baseRefName",
         "startedAt",
         "checkSuites",
@@ -133,6 +138,8 @@ async fn my_pull_requests_pages_and_parses() {
     assert_eq!(draft.ci, CiState::None);
     assert!(draft.jobs.is_empty());
     assert!(draft.needs_approval);
+    assert_eq!(draft.review, Some(ReviewDecision::ReviewRequired));
+    assert_eq!(draft.merge_state, MergeState::Draft);
     assert_eq!(draft.pr_ref().repo, "kdab/other");
 
     let first = &prs[1];
@@ -149,8 +156,12 @@ async fn my_pull_requests_pages_and_parses() {
     assert_eq!(first.head_sha, "9f1c2d3e4a5b6c7d8e9f00112233445566778899");
     assert_eq!(first.ci, CiState::Failure);
     assert!(!first.needs_approval);
+    assert_eq!(first.review, Some(ReviewDecision::Approved));
+    assert_eq!(first.merge_state, MergeState::Clean);
 
     assert_eq!(prs[2].ci, CiState::None);
+    assert_eq!(prs[2].review, None);
+    assert_eq!(prs[2].merge_state, MergeState::Behind);
 }
 
 // GH-001

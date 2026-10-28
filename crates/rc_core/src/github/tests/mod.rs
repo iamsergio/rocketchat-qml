@@ -13,8 +13,8 @@ use secrecy::SecretString;
 use tokio::runtime::{Builder, Runtime};
 
 use super::{
-    CiState, Connection, GitHub, GithubAuth, GithubConfig, GithubEvent, GithubPorts, PrKey,
-    PullRequest, RefreshState,
+    CiState, Connection, GitHub, GithubAuth, GithubConfig, GithubEvent, GithubPorts, MergeState,
+    PrKey, PullRequest, RefreshState,
 };
 use crate::adapters::MemoryGithubStore;
 use crate::list_change::ListChange;
@@ -50,6 +50,8 @@ fn pr(number: u64, minute: i64, ci: CiState) -> PullRequest {
         url: format!("https://github.com/o/r/pull/{number}"),
         updated_at: Timestamp::from_second(1_768_000_000 + minute * 60).unwrap(),
         is_draft: false,
+        review: None,
+        merge_state: MergeState::Clean,
         head_branch: format!("branch-{number}"),
         base_branch: "main".to_owned(),
         head_sha: format!("sha{number}"),

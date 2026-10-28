@@ -11,8 +11,8 @@ use rc_github::GithubClient;
 use secrecy::SecretString;
 
 use crate::github::{
-    CiState, GhCli, GhError, GithubApi, GithubConnector, GithubError, Job, JobState, PrKey,
-    PullRequest, Runner, RunnerJob,
+    CiState, GhCli, GhError, GithubApi, GithubConnector, GithubError, Job, JobState, MergeState,
+    PrKey, PullRequest, ReviewDecision, Runner, RunnerJob,
 };
 
 /// Opens the clients for one API address: GitHub's, or a stub's in the GUI tests.
@@ -159,12 +159,35 @@ fn pull_request_from(pr: rc_github::PullRequest) -> PullRequest {
         url: pr.url,
         updated_at: pr.updated_at,
         is_draft: pr.is_draft,
+        review: pr.review.map(review_from),
+        merge_state: merge_state_from(pr.merge_state),
         head_branch: pr.head_branch,
         base_branch: pr.base_branch,
         head_sha: pr.head_sha,
         ci: ci_from(pr.ci),
         jobs: pr.jobs.into_iter().map(job_from).collect(),
         needs_approval: pr.needs_approval,
+    }
+}
+
+fn review_from(review: rc_github::ReviewDecision) -> ReviewDecision {
+    match review {
+        rc_github::ReviewDecision::Approved => ReviewDecision::Approved,
+        rc_github::ReviewDecision::ChangesRequested => ReviewDecision::ChangesRequested,
+        rc_github::ReviewDecision::ReviewRequired => ReviewDecision::ReviewRequired,
+    }
+}
+
+fn merge_state_from(state: rc_github::MergeState) -> MergeState {
+    match state {
+        rc_github::MergeState::Behind => MergeState::Behind,
+        rc_github::MergeState::Dirty => MergeState::Dirty,
+        rc_github::MergeState::Blocked => MergeState::Blocked,
+        rc_github::MergeState::Clean => MergeState::Clean,
+        rc_github::MergeState::Unstable => MergeState::Unstable,
+        rc_github::MergeState::HasHooks => MergeState::HasHooks,
+        rc_github::MergeState::Draft => MergeState::Draft,
+        rc_github::MergeState::Unknown => MergeState::Unknown,
     }
 }
 

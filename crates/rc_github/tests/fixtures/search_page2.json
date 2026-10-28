@@ -11,6 +11,8 @@
           "url": "https://github.com/kdab/other/pull/7",
           "updatedAt": "2026-10-27T18:30:00Z",
           "isDraft": true,
+          "reviewDecision": "REVIEW_REQUIRED",
+          "mergeStateStatus": "DRAFT",
           "headRefName": "fix/typo",
           "baseRefName": "develop",
           "headRefOid": "0000000000000000000000000000000000000007",

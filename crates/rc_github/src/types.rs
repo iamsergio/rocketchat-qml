@@ -29,6 +29,59 @@ impl CiState {
     }
 }
 
+/// What the reviews of a pull request add up to, when the branch asks for reviews.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReviewDecision {
+    Approved,
+    ChangesRequested,
+    ReviewRequired,
+}
+
+impl ReviewDecision {
+    /// `None` for no decision (null) and for a word we don't know.
+    pub(crate) fn from_wire(state: Option<&str>) -> Option<Self> {
+        match state {
+            Some("APPROVED") => Some(Self::Approved),
+            Some("CHANGES_REQUESTED") => Some(Self::ChangesRequested),
+            Some("REVIEW_REQUIRED") => Some(Self::ReviewRequired),
+            _ => None,
+        }
+    }
+}
+
+/// Whether GitHub would let the pull request be merged, from `mergeStateStatus`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MergeState {
+    /// The head is behind the base.
+    Behind,
+    /// Conflicts with the base.
+    Dirty,
+    /// A rule stops the merge: reviews, required checks.
+    Blocked,
+    Clean,
+    /// Mergeable, but a non-required check fails.
+    Unstable,
+    HasHooks,
+    Draft,
+    /// Also while GitHub is still working it out, and for a word we don't know.
+    Unknown,
+}
+
+impl MergeState {
+    pub(crate) fn from_wire(state: Option<&str>) -> Self {
+        match state {
+            Some("BEHIND") => Self::Behind,
+            Some("DIRTY") => Self::Dirty,
+            Some("BLOCKED") => Self::Blocked,
+            Some("CLEAN") => Self::Clean,
+            Some("UNSTABLE") => Self::Unstable,
+            Some("HAS_HOOKS") => Self::HasHooks,
+            Some("DRAFT") => Self::Draft,
+            _ => Self::Unknown,
+        }
+    }
+}
+
 /// How a job stands. A cancelled job is apart from a failed one: it is usually a sibling that
 /// fail-fast stopped after another failed, so it is noise.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -75,6 +128,8 @@ pub struct PullRequest {
     pub url: String,
     pub updated_at: Timestamp,
     pub is_draft: bool,
+    pub review: Option<ReviewDecision>,
+    pub merge_state: MergeState,
     pub head_branch: String,
     pub base_branch: String,
     pub head_sha: String,

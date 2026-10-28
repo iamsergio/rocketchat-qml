@@ -157,7 +157,7 @@ mod tests {
     use jiff::Timestamp;
 
     use super::*;
-    use crate::github::domain::CiState;
+    use crate::github::domain::{CiState, MergeState};
 
     fn pr(number: u64, minute: i64, draft: bool) -> PullRequest {
         PullRequest {
@@ -167,6 +167,8 @@ mod tests {
             url: format!("https://github.com/o/r/pull/{number}"),
             updated_at: Timestamp::from_second(minute * 60).unwrap(),
             is_draft: draft,
+            review: None,
+            merge_state: MergeState::Clean,
             head_branch: "b".to_owned(),
             base_branch: "main".to_owned(),
             head_sha: "abc".to_owned(),
@@ -220,6 +222,25 @@ mod tests {
                 item: failed
             }]
         );
+    }
+
+    // GH-001
+    #[test]
+    fn a_changed_merge_state_updates_the_row_in_place() {
+        let mut list = PrList::default();
+        list.sync(vec![pr(1, 5, false)]);
+        let mut behind = pr(1, 5, false);
+        behind.merge_state = MergeState::Behind;
+        assert_eq!(
+            list.sync(vec![behind.clone()]),
+            [ListChange::Updated {
+                index: 0,
+                item: behind.clone()
+            }]
+        );
+        let mut approved = behind;
+        approved.review = Some(crate::github::domain::ReviewDecision::Approved);
+        assert_eq!(list.sync(vec![approved]).len(), 1);
     }
 
     // GH-001
