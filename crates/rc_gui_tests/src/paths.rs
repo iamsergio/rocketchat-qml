@@ -786,3 +786,119 @@ mod tests {
         assert_eq!(reaction("m7", 0, ""), "mainWindow/msg_m7/reaction0");
     }
 }
+
+/// The GitHub page: its tile in the rail, the connect page, the list of pull requests and the page
+/// of the one that is open. See docs/design/gui-testing.md.
+pub mod github {
+    use super::main_window::WINDOW;
+
+    /// The tile at the bottom of the rail, above the settings: a button whose `checked` says that
+    /// the GitHub page is on screen. Its parts are `githubTileFailing` (its `text` is how many of
+    /// the user's pull requests fail; visible only while connected and above zero),
+    /// `githubTilePip` (the short pip: a pull request finished while the page wasn't looked at)
+    /// and `githubTileCurrent` (the tall pip: the page is on screen).
+    pub const TILE: &str = "mainWindow/githubTile";
+    pub const TILE_FAILING: &str = "mainWindow/githubTile/githubTileFailing";
+    pub const TILE_PIP: &str = "mainWindow/githubTile/githubTilePip";
+    pub const TILE_CURRENT: &str = "mainWindow/githubTile/githubTileCurrent";
+    /// The item of the tile's right-click menu, a popup that exists only while the menu is open
+    /// (and only for a tile that is connected).
+    pub const DISCONNECT_ACTION: &str = "mainWindow/githubDisconnectAction";
+
+    /// The connect page. Visible while GitHub is not connected and its page is on screen.
+    pub const CONNECT_TITLE: &str = "mainWindow/githubConnectTitle";
+    /// "Use it": connects with the login of the gh command.
+    pub const CONNECT_GH: &str = "mainWindow/githubConnectGh";
+    /// The field for a personal access token: its `text` is the token.
+    pub const CONNECT_TOKEN_FIELD: &str = "mainWindow/githubConnectTokenField";
+    pub const CONNECT_TOKEN: &str = "mainWindow/githubConnectToken";
+    /// The spinner, visible while connecting.
+    pub const CONNECT_BUSY: &str = "mainWindow/githubConnectBusy";
+    /// Why connecting failed, as its `text`. Visible only then.
+    pub const CONNECT_ERROR: &str = "mainWindow/githubConnectError";
+
+    /// The header of the list: its `text` is "Pull requests".
+    pub const TITLE: &str = "mainWindow/githubTitle";
+    /// "<login>, updated 40 s ago", "updating…" or why the last fetch failed, as its `text`.
+    pub const STATUS: &str = "mainWindow/githubStatus";
+    pub const REFRESH_BUTTON: &str = "mainWindow/githubRefreshButton";
+    /// The two tabs: their `checked` says which list shows. The counts are the `text` of
+    /// `githubTabMineCount` and `githubTabWatchedCount`, below them.
+    pub const TAB_MINE: &str = "mainWindow/githubTabMine";
+    pub const TAB_WATCHED: &str = "mainWindow/githubTabWatched";
+    pub const TAB_MINE_COUNT: &str = "mainWindow/githubTabMine/githubTabMineCount";
+    pub const TAB_WATCHED_COUNT: &str = "mainWindow/githubTabWatched/githubTabWatchedCount";
+    /// The list: its `count` is the rows, the heading of the drafts included.
+    pub const LIST: &str = "mainWindow/githubPrList";
+    /// Visible while the list has no rows.
+    pub const EMPTY: &str = "mainWindow/githubEmpty";
+    /// The heading that folds the drafts: its `checked` says they show.
+    pub const DRAFTS: &str = "mainWindow/githubDrafts";
+    /// Its text, "Drafts 4".
+    pub const DRAFTS_TITLE: &str = "mainWindow/githubDrafts/githubDraftsTitle";
+
+    /// The row at this position of the list (from 0, the heading of the drafts counting as a row),
+    /// or one of its parts: the tile of a pull request is a button whose `checked` says its page is
+    /// open.
+    #[must_use]
+    pub fn pr_row(index: usize, part: &str) -> String {
+        let row = format!("{WINDOW}/prRow{index}");
+        if part.is_empty() {
+            row
+        } else {
+            format!("{row}/{part}")
+        }
+    }
+
+    /// The parts of a row, for [`pr_row`].
+    pub mod pr_row_part {
+        /// The state: its `text` is `draft`, `failed`, `waiting`, `running`, `passed` or `none`.
+        pub const GLYPH: &str = "prGlyph";
+        /// The repository, and on the Watched tab ", <author>"; its `text`.
+        pub const REPO: &str = "prRepo";
+        /// "40 s", "11 min": its `text`.
+        pub const AGE: &str = "prAge";
+        /// Visible while the user asked to be told when its CI ends.
+        pub const BELL: &str = "prBell";
+        /// The title as styled text, then the number, as its `text`.
+        pub const TITLE: &str = "prTitle";
+        /// The bar of the jobs: its `visible` is whether there are any.
+        pub const BAR: &str = "prBar";
+    }
+
+    /// Segment `index` of the check bar of the row: its `text` is `failed`, `running`,
+    /// `cancelled`, `passed` or `waiting`.
+    #[must_use]
+    pub fn pr_segment(row: usize, index: usize) -> String {
+        format!("{WINDOW}/prRow{row}/prBar/prSegment{index}")
+    }
+
+    /// The runner at this position of the foot of the list, or its part (`githubRunnerName`,
+    /// `githubRunnerStatus`, `githubRunnerLamp`).
+    #[must_use]
+    pub fn runner(index: usize, part: &str) -> String {
+        let runner = format!("{WINDOW}/githubRunner{index}");
+        if part.is_empty() {
+            runner
+        } else {
+            format!("{runner}/{part}")
+        }
+    }
+
+    /// "Pick a pull request to see its checks.", visible while none is open.
+    pub const PICK_HINT: &str = "mainWindow/githubPickHint";
+    /// The header of the open pull request, each part by its `text`: `prPageRepo`, `prPageNumber`
+    /// ("#41"), `prPageUpdated` ("updated 3 min ago"), `prPageTitle`, `prPageHead` and `prPageBase`
+    /// (the branches), `prPageReview` and `prPageBaseNote` (visible when they have something to
+    /// say), `prPageDraft` (visible for a draft) and the button `prPageOpenButton`.
+    pub const PAGE_REPO: &str = "mainWindow/prPageRepo";
+    pub const PAGE_NUMBER: &str = "mainWindow/prPageNumber";
+    pub const PAGE_UPDATED: &str = "mainWindow/prPageUpdated";
+    pub const PAGE_TITLE: &str = "mainWindow/prPageTitle";
+    pub const PAGE_HEAD: &str = "mainWindow/prPageHead";
+    pub const PAGE_BASE: &str = "mainWindow/prPageBase";
+    pub const PAGE_REVIEW: &str = "mainWindow/prPageReview";
+    pub const PAGE_BASE_NOTE: &str = "mainWindow/prPageBaseNote";
+    pub const PAGE_DRAFT: &str = "mainWindow/prPageDraft";
+    pub const PAGE_OPEN_BUTTON: &str = "mainWindow/prPageOpenButton";
+}

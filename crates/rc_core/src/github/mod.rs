@@ -27,6 +27,7 @@ pub use domain::{
     ReviewDecision, Runner, RunnerJob, display_order,
 };
 pub use ports::{GhCli, GhError, GithubApi, GithubAuth, GithubConnector, GithubPorts, GithubStore};
+pub use rc_github::DEFAULT_API_URL;
 
 /// How often the lists are fetched while the page is on screen.
 pub const POLL_ON_SCREEN: Duration = Duration::from_secs(60);

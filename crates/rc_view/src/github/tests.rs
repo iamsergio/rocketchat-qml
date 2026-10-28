@@ -11,7 +11,9 @@ use rc_core::list_change::ListChange;
 
 use super::page::merge_reason;
 use super::row::{CiKind, Glyph, Segment, check_bar, glyph};
-use super::{Applied, BaseNote, CommandStatus, ConnectState, GithubCache, Sections, Tab, text};
+use super::{
+    Applied, BaseNote, CommandStatus, ConnectState, GithubCache, RunnerState, Sections, Tab, text,
+};
 
 const NOW: i64 = 1_800_000_000;
 
@@ -346,6 +348,13 @@ fn a_row_is_bold_when_its_state_changed_since_it_was_seen() {
         item: pr(1, CiState::Failure, vec![]),
     }]));
     assert!(!cache.row(Tab::Mine, 0, now()).unwrap().changed);
+    assert!(!cache.changed(&key));
+    // The row built for a copy of the pull request says the same as the list's.
+    let copy = pr(1, CiState::Failure, vec![]);
+    assert_eq!(
+        cache.view_of(Tab::Mine, &copy, now()).changed,
+        cache.changed(&key)
+    );
 }
 
 // GH-001
@@ -1204,6 +1213,11 @@ fn the_runner_footer_has_a_line_per_runner() {
         .into_iter()
         .map(|l| (l.name, l.status))
         .collect();
+    let states: Vec<RunnerState> = cache.runner_lines().iter().map(|l| l.state).collect();
+    assert_eq!(
+        states,
+        [RunnerState::Busy, RunnerState::Idle, RunnerState::Offline]
+    );
     assert_eq!(
         lines,
         [

@@ -98,6 +98,9 @@ pub struct PrPageView {
     pub title: String,
     /// "<head> into <base>".
     pub branches: String,
+    /// The two branches alone, for a frontend that sets them apart.
+    pub head_branch: String,
+    pub base_branch: String,
     pub is_draft: bool,
     pub review: Option<ReviewDecision>,
     /// "Approved", "Changes requested" or "Review required"; empty without a decision.
@@ -283,6 +286,8 @@ pub(super) fn page_view(pr: &PullRequest, ctx: &PageContext<'_>) -> PrPageView {
         author: (!is_author).then(|| pr.author.clone()),
         title: pr.title.clone(),
         branches: format!("{} into {base}", pr.head_branch),
+        head_branch: pr.head_branch.clone(),
+        base_branch: pr.base_branch.clone(),
         is_draft: pr.is_draft,
         review: pr.review,
         review_text: review_text(pr.review),

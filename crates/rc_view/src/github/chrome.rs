@@ -57,11 +57,20 @@ pub struct ConnectView {
     pub reason: String,
 }
 
+/// What a runner is doing, which the lamp of its line shows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RunnerState {
+    Busy,
+    Idle,
+    Offline,
+}
+
 /// One line of the runner footer.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RunnerLine {
     pub repo: String,
     pub name: String,
+    pub state: RunnerState,
     /// "Linux runner, busy with <repo>", "idle" or "offline".
     pub status: String,
 }
@@ -105,20 +114,24 @@ pub(super) fn runner_lines(runners: &[RepoRunners]) -> Vec<RunnerLine> {
         .iter()
         .flat_map(|repo| {
             repo.runners.iter().map(|runner| {
-                let status = if !runner.online {
-                    "offline".to_owned()
+                let (state, status) = if !runner.online {
+                    (RunnerState::Offline, "offline".to_owned())
                 } else if runner.busy {
-                    format!(
-                        "{} runner, busy with {}",
-                        capitalized(&runner.os),
-                        repo.repo
+                    (
+                        RunnerState::Busy,
+                        format!(
+                            "{} runner, busy with {}",
+                            capitalized(&runner.os),
+                            repo.repo
+                        ),
                     )
                 } else {
-                    "idle".to_owned()
+                    (RunnerState::Idle, "idle".to_owned())
                 };
                 RunnerLine {
                     repo: repo.repo.clone(),
                     name: runner.name.clone(),
+                    state,
                     status,
                 }
             })

@@ -396,8 +396,8 @@ impl Client {
     }
 
     /// Starts the GitHub pull requests service beside the accounts, on this client's runtime. It
-    /// talks to the API at `api_url` (`rc_github::DEFAULT_API_URL`, or a stub's), reads the token
-    /// from `gh` or the `store`, and tells the frontend through `on_event`, once per event in
+    /// talks to the API at `api_url` (`github::DEFAULT_API_URL`, or a stub's), reads the token
+    /// from `gh` (the process `gh`, or another program in a GUI test) or the `store`, and tells the frontend through `on_event`, once per event in
     /// order, from a runtime thread; it must return quickly and not touch GUI objects, as
     /// `Client`'s must.
     ///
@@ -405,13 +405,14 @@ impl Client {
     pub fn github(
         &self,
         api_url: &str,
+        gh: GhProcess,
         store: impl GithubStore,
         config: GithubConfig,
         on_event: impl Fn(GithubEvent) + Send + Sync + 'static,
     ) -> GitHub {
         let ports = GithubPorts {
             connector: RestGithubConnector::new(api_url),
-            gh: GhProcess::default(),
+            gh,
             store,
             clock: SystemClock,
         };

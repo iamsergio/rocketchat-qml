@@ -5253,7 +5253,10 @@ dependencies = [
 name = "rc_gui_tests"
 version = "0.0.0"
 dependencies = [
+ "jiff",
  "png",
+ "rc_github",
+ "rc_test_github",
  "rc_test_server",
  "roxmltree",
  "thiserror 2.0.21",

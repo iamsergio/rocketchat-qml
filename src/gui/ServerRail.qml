@@ -28,7 +28,7 @@ Rectangle {
 
     // The tiles scroll when they don't fit, above the settings button. The + follows the last one.
     ListView {
-        anchors.bottom: settings.top
+        anchors.bottom: githubTile.top
         anchors.bottomMargin: Theme.spacingL
         anchors.left: parent.left
         anchors.right: parent.right
@@ -115,6 +115,17 @@ Rectangle {
                 }
             }
         }
+    }
+
+    // GitHub, below the servers and above the settings.
+    GithubTile {
+        id: githubTile
+
+        anchors.bottom: settings.top
+        anchors.bottomMargin: Theme.spacingL
+        anchors.horizontalCenter: parent.horizontalCenter
+
+        onTipShownChanged: root.setTip(githubTile, tipShown)
     }
 
     // Beside the tile it names, over the page. Not a Popup: a popup takes the mouse events of the

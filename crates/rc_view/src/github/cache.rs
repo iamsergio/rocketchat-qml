@@ -415,15 +415,32 @@ impl GithubCache {
     /// The row at `index` of a list, built now; `None` past the end.
     #[must_use]
     pub fn row(&self, tab: Tab, index: usize, now: Timestamp) -> Option<PrRowView> {
-        let pr = self.list(tab).get(index)?;
+        self.list(tab)
+            .get(index)
+            .map(|pr| self.view_of(tab, pr, now))
+    }
+
+    /// The row of `pr`, a pull request of the list `tab` (or one that was in it a moment ago): a
+    /// frontend that keeps its own copy of the list builds the rows of the changes with it.
+    #[must_use]
+    pub fn view_of(&self, tab: Tab, pr: &PullRequest, now: Timestamp) -> PrRowView {
         let changed = self.seen.get(&pr.key).is_some_and(|seen| *seen != pr.ci);
-        Some(row_view(
+        row_view(
             pr,
             tab == Tab::Watched,
             self.notifying.contains(&pr.key),
             changed,
             now,
-        ))
+        )
+    }
+
+    /// Whether the CI of `key` changed since the user last opened it: its row is bold.
+    #[must_use]
+    pub fn changed(&self, key: &PrKey) -> bool {
+        match (self.seen.get(key), self.find(key)) {
+            (Some(seen), Some((_, pr))) => *seen != pr.ci,
+            _ => false,
+        }
     }
 
     /// The page of a pull request of either list; `None` once it is gone (merged, closed).

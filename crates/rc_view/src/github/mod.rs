@@ -9,6 +9,7 @@
 
 mod cache;
 mod chrome;
+pub mod fold;
 mod page;
 mod row;
 pub mod text;
@@ -17,6 +18,6 @@ pub mod text;
 mod tests;
 
 pub use cache::{Applied, CommandStatus, GithubCache, PrCommand, Sections, Tab};
-pub use chrome::{ConnectState, ConnectView, HeaderView, RunnerLine, TileView};
+pub use chrome::{ConnectState, ConnectView, HeaderView, RunnerLine, RunnerState, TileView};
 pub use page::{BaseNote, Button, ChecksView, JobGroupView, JobRowView, PrPageView};
 pub use row::{CiKind, Glyph, PrRowView, Segment};

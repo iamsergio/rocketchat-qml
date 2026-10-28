@@ -31,6 +31,7 @@ use rc_core::adapters::DiskFileCache;
 use rc_core::directory::{ActionState, DirectoryAction};
 use rc_core::domain::{AccountId, AvatarOwner, MessageId, RoomId};
 use rc_core::emoji::CustomEmojis;
+use rc_core::github::GithubConfig;
 use rc_core::policy::{ActionError, MessageAction};
 use rc_core::rooms::{RoomActionError, RoomChange};
 use rc_core::threads::{ThreadFilter, ThreadListChange};
@@ -62,7 +63,7 @@ use rc_view::room_view::RoomState;
 use rc_view::session_view::SessionView;
 use rc_view::staged_view::{StagedFile, plan};
 use rc_view::startup;
-use rc_view::switchboard::{Shown, Switchboard};
+use rc_view::switchboard::{Screen, Shown, Switchboard};
 use rc_view::thread_list_view::{
     PaneStep, ThreadListState, ThreadUnread, back_steps, close_pane_steps, escape_steps,
     toggle_steps,
@@ -72,6 +73,15 @@ use rc_view::upload_view::UploadRow;
 use rc_view::viewer::Viewer;
 
 // There is exactly one core per process, so one hub.
+mod github;
+
+use github::GithubHub;
+pub use github::{
+    github_connect_with_gh, github_connect_with_token, github_disconnect, github_refresh,
+    github_select, github_show, github_show_tab, github_tick, register_github,
+    register_pull_requests, register_runners,
+};
+
 static HUB: Mutex<Hub> = Mutex::new(Hub::new());
 
 struct Hub {
@@ -80,6 +90,8 @@ struct Hub {
     switchboard: Switchboard,
     views: Views,
     list: Registered<AccountListModel>,
+    /// The GitHub pull requests, once the core has started.
+    github: Option<GithubHub>,
 }
 
 impl Hub {
@@ -89,6 +101,7 @@ impl Hub {
             switchboard: Switchboard::new(),
             views: Views::new(),
             list: Registered::new("AccountList"),
+            github: None,
         }
     }
 
@@ -101,8 +114,11 @@ impl Hub {
                 Shown::SessionView(view) => self.views.queue_session_view(view),
                 Shown::All => self.views.show_all(accounts),
                 Shown::Event(event) => self.views.show(accounts, event),
-                // Nothing shows the GitHub page yet.
-                Shown::Screen(_) => {}
+                Shown::Screen(screen) => {
+                    if let Some(github) = self.github.as_mut() {
+                        github.set_shown(screen == Screen::GitHub);
+                    }
+                }
             }
         }
     }
@@ -169,8 +185,24 @@ pub fn start(cache_dir: &str) {
     let store = startup::secret_store();
     let cache_dir = startup::cache_dir(cache_dir);
     crate::clipboard::init(&cache_dir);
+    // Before the client exists: the GitHub service's first event can come at once.
+    lock().github = Some(GithubHub::new());
     match Client::start(store, DiskFileCache::new(cache_dir), dispatch) {
-        Ok(client) => lock().client = Some(client),
+        Ok(client) => {
+            let setup = startup::github_setup();
+            let service = client.github(
+                &setup.api_url,
+                setup.gh,
+                startup::github_store(),
+                GithubConfig::default(),
+                github::dispatch,
+            );
+            let mut hub = lock();
+            if let Some(github) = hub.github.as_mut() {
+                github.service = Some(service);
+            }
+            hub.client = Some(client);
+        }
         Err(error) => tracing::error!(%error, "can't start the core"),
     }
 }
@@ -178,11 +210,14 @@ pub fn start(cache_dir: &str) {
 /// Stops the core. Call on the GUI thread, once the event loop has ended.
 pub fn stop() {
     // Dropped outside the lock: it waits for a pending logout, and the callback locks the hub.
-    let client = {
+    let (service, client) = {
         let mut hub = lock();
         hub.switchboard.clear();
-        hub.client.take()
+        let service = hub.github.as_mut().and_then(|github| github.service.take());
+        (service, hub.client.take())
     };
+    // The service stops with the client's runtime, so it goes first.
+    drop(service);
     drop(client);
 }
 

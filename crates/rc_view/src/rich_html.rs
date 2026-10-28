@@ -52,6 +52,15 @@ pub fn topic_html(topic: &str, viewer: &Viewer) -> String {
     render(&RichText::from_topic(topic), viewer, Clock::timeless())
 }
 
+/// `text` with the characters that mean something in HTML replaced, for a frontend that shows text
+/// of its own as rich text.
+#[must_use]
+pub fn escaped(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    push_escaped(&mut out, text);
+    out
+}
+
 /// `text` with the characters that mean something in HTML replaced.
 fn push_escaped(out: &mut String, text: &str) {
     for c in text.chars() {
