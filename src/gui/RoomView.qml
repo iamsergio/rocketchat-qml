@@ -248,9 +248,37 @@ Rectangle {
 
         // The model is newest first and the list runs bottom to top: row 0, the newest message, is at
         // the bottom, where a room opens. Older messages are added after the last row, above everything
-        // on screen, so the view keeps its place without any help.
+        // on screen, so loading them leaves the view where it is. A change of the layout under a view
+        // at the newest message does not: Qt keeps the scroll position, so a taller composer or a row
+        // that grows after the room opened pushes the newest out of sight. `followsNewest` says that
+        // the view was at the newest when it was last in the user's hands, and puts it back there.
         ListView {
             id: messages
+
+            // True when a room opens, and whenever the user stops moving the view at the newest.
+            property bool followsNewest: true
+
+            // Whether the bottom of the content, the newest message, is the bottom of the view. Worked
+            // out from the geometry: `atYEnd` is updated later than the changes that call this.
+            function showsNewest() {
+                return Math.abs(contentY + height - (originY + contentHeight)) < Theme.scrollTolerance;
+            }
+
+            // The view at the newest message again, if it was there and moved only because the layout
+            // changed. In this direction the beginning is the newest. Not while the user moves the view,
+            // and `showsNewest` keeps this from repositioning when there is nothing to do.
+            function followNewest() {
+                if (followsNewest && !moving && !scrollBar.pressed && !showsNewest())
+                    positionViewAtBeginning();
+            }
+
+            onContentHeightChanged: followNewest()
+            onOriginYChanged: followNewest()
+            onHeightChanged: followNewest()
+
+            // Wheel, drag and flicks end in a movementEnded. The scroll bar sets the position without
+            // moving the view, so it says when it lets go itself.
+            onMovementEnded: followsNewest = atYEnd
 
             objectName: "messageList"
             Layout.fillWidth: true
@@ -268,7 +296,14 @@ Rectangle {
             verticalLayoutDirection: ListView.BottomToTop
             boundsBehavior: Flickable.StopAtBounds
 
-            ScrollBar.vertical: ScrollBar {}
+            ScrollBar.vertical: ScrollBar {
+                id: scrollBar
+
+                onPressedChanged: {
+                    if (!pressed)
+                        messages.followsNewest = messages.atYEnd;
+                }
+            }
 
             // Above the oldest message, which in this direction is the footer: the start of the
             // conversation, or a spinner while older messages load.
@@ -312,21 +347,36 @@ Rectangle {
             Keys.onPressed: event => {
                 switch (event.key) {
                 case Qt.Key_Home:
+                    // First, or the change of the content height that moving causes would put the
+                    // view back.
+                    followsNewest = false;
                     positionViewAtEnd();
                     break;
                 case Qt.Key_End:
                     positionViewAtBeginning();
+                    followsNewest = true;
                     break;
                 case Qt.Key_PageUp:
+                    followsNewest = false;
                     contentY = Math.max(contentY - height, originY);
                     break;
                 case Qt.Key_PageDown:
                     contentY = Math.min(contentY + height, originY + contentHeight - height);
+                    followsNewest = showsNewest();
                     break;
                 default:
                     return;
                 }
                 event.accepted = true;
+            }
+
+            // A room opens at its newest message.
+            Connections {
+                function onModelReset() {
+                    messages.followsNewest = true;
+                }
+
+                target: messages.model
             }
 
             BusyIndicator {
