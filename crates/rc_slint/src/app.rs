@@ -350,6 +350,8 @@ impl App {
                 Shown::SessionView(view) => self.show_session(&view),
                 Shown::All => self.show_all(),
                 Shown::Event(event) => self.show(event),
+                // Nothing shows the GitHub page yet.
+                Shown::Screen(_) => {}
             }
         }
     }

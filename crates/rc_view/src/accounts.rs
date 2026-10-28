@@ -94,7 +94,8 @@ pub struct AccountView {
     pub unread_rooms: u32,
     /// The sum of the mention badges of the rooms.
     pub mentions: u32,
-    /// The view models show this account.
+    /// The account is on screen: it is the current one and nothing covers it (the GitHub page).
+    /// The view models show the current account even when covered.
     pub current: bool,
 }
 
@@ -141,6 +142,9 @@ pub struct Accounts {
     /// `None` only before the first account is added, and between the removal of the last one and
     /// the next addition.
     current: Option<AccountId>,
+    /// Another screen (GitHub) is shown over the current account: it stays current, so its events
+    /// still reach the views, but no row is `current` then.
+    covered: bool,
 }
 
 /// What the view models show when there is no current account.
@@ -158,7 +162,29 @@ impl Accounts {
         Self {
             entries: Vec::new(),
             current: None,
+            covered: false,
         }
+    }
+
+    /// Says whether another screen covers the current account. Returns whether that changed.
+    pub const fn cover(&mut self, covered: bool) -> bool {
+        let changed = self.covered != covered;
+        self.covered = covered;
+        changed
+    }
+
+    /// The account the user sees: the current one, unless covered.
+    #[must_use]
+    pub const fn on_screen(&self) -> Option<&AccountId> {
+        if self.covered {
+            None
+        } else {
+            self.current.as_ref()
+        }
+    }
+
+    fn lit(&self, id: &AccountId) -> bool {
+        self.on_screen() == Some(id)
     }
 
     fn row(&self, id: &AccountId) -> Option<usize> {
@@ -248,7 +274,7 @@ impl Accounts {
     #[must_use]
     pub fn view(&self, id: &AccountId) -> Option<(usize, AccountView)> {
         let row = self.row(id)?;
-        let current = self.current.as_ref() == Some(id);
+        let current = self.lit(id);
         Some((row, self.entries[row].cache.account_view(id, current)))
     }
 
@@ -258,7 +284,7 @@ impl Accounts {
         self.entries
             .iter()
             .map(|entry| {
-                let current = self.current.as_ref() == Some(&entry.id);
+                let current = self.lit(&entry.id);
                 entry.cache.account_view(&entry.id, current)
             })
             .collect()

@@ -101,6 +101,8 @@ impl Hub {
                 Shown::SessionView(view) => self.views.queue_session_view(view),
                 Shown::All => self.views.show_all(accounts),
                 Shown::Event(event) => self.views.show(accounts, event),
+                // Nothing shows the GitHub page yet.
+                Shown::Screen(_) => {}
             }
         }
     }
