@@ -75,6 +75,33 @@ pub fn launch_attaching(files: &[&std::path::Path]) -> App {
     .unwrap()
 }
 
+/// What the app finds on its clipboard when the test pastes (ACT-012): a test can't copy anything,
+/// so the app puts these on it when it starts (`RC_TEST_CLIPBOARD_*`).
+#[derive(Default)]
+pub struct Clipboard<'a> {
+    /// Files copied in a file manager.
+    pub files: &'a [&'a std::path::Path],
+    pub text: Option<&'a str>,
+    /// A picture: the PNG file it is read from.
+    pub image: Option<&'a std::path::Path>,
+}
+
+/// Starts the app like [`launch`], with `clipboard` on its clipboard.
+pub fn launch_pasting(clipboard: &Clipboard) -> App {
+    let files = env::join_paths(clipboard.files).unwrap();
+    let mut vars = vec![
+        ("TZ", "UTC"),
+        ("RC_TEST_CLIPBOARD_FILES", files.to_str().unwrap()),
+    ];
+    if let Some(text) = clipboard.text {
+        vars.push(("RC_TEST_CLIPBOARD_TEXT", text));
+    }
+    if let Some(image) = clipboard.image {
+        vars.push(("RC_TEST_CLIPBOARD_IMAGE", image.to_str().unwrap()));
+    }
+    App::launch_with(&vars).unwrap()
+}
+
 /// The `count` messages of the channel that come after the one with id `before`, oldest first,
 /// once the server has them all: how a test learns the ids of what the app uploaded, which the
 /// server picked.

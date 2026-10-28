@@ -166,6 +166,7 @@ pub fn start(cache_dir: &str) {
     }
     let store = startup::secret_store();
     let cache_dir = startup::cache_dir(cache_dir);
+    crate::clipboard::init(&cache_dir);
     match Client::start(store, DiskFileCache::new(cache_dir), dispatch) {
         Ok(client) => lock().client = Some(client),
         Err(error) => tracing::error!(%error, "can't start the core"),

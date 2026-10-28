@@ -168,9 +168,30 @@ with `forThread` and only wires them.
   `UploadProgress`, and whenever the open room or thread changes; the model computes
   `upload_view::changes` against what it holds and announces them row by row, so a progress
   repaints one row. `composerUploads` lists them over the field, below the chips.
+- **Paste (ACT-012).** Ctrl+V (anything that matches `StandardKey.Paste`) in a composer's field
+  calls the list's `paste()` from the field's `Keys.onPressed`; it returns whether it attached
+  something, and only then is the key accepted. `rc_view::paste::decide` takes what the clipboard
+  holds, in this order: (1) URLs that are all local `file://` ones (a copy in a file manager):
+  those files are staged; (2) non-empty plain text: nothing, the `TextArea` pastes it (a
+  spreadsheet puts text and a picture on the clipboard, and the text wins); (3) a picture: it is
+  saved as a PNG to `<cache dir>/pasted/Pasted image YYYY-MM-DD HH-MM-SS.png` (local time, ` 2`,
+  ` 3`... appended if the name exists; the name is the one the server shows) and staged, so its
+  chip's thumbnail is the picture; (4) otherwise nothing. Not while a message is edited or a
+  channel is previewed, as the paperclip. Reading the clipboard is a small C++ helper
+  (`crates/rc_qt/src/clipboard_probe.cpp`, bound in `clipboard.rs`), because cxx-qt-lib binds no
+  `QClipboard` (CXX-QT.md); it only reports and saves, the decisions are in Rust.
+  A pasted file is deleted when its chip is taken out, or dropped with the composer's list
+  (`remove`, `clear`), and only if it is directly in `pasted` (`rc_view::paste::is_pasted`; the
+  user's own files are never deleted). Send leaves it: the upload streams from the disk and Retry
+  needs it. `pasted` is emptied at startup, when the core is started with the cache directory.
 - **Tests.** `crates/rc_gui_tests/tests/uploads.rs`: staging and taking files out; sending two
   files with text (the order, the text on the first); an SVG the server refuses (the reason in
   words, Retry, Remove); an upload from the thread pane. Dropping isn't tested: Spix can't drag.
+  Paste (ACT-012): a picture becomes an image chip and is uploaded under its name, taking a pasted
+  chip out and pasting again, copied files, text winning over a picture, a picture pasted in the
+  thread pane. A test can't copy, so builds with `test-attach-files` put
+  `RC_TEST_CLIPBOARD_FILES`, `RC_TEST_CLIPBOARD_TEXT` and `RC_TEST_CLIPBOARD_IMAGE` on the
+  clipboard at startup (`common::launch_pasting`). The unit tests are in `rc_view::paste`.
 
 ## Slint side
 

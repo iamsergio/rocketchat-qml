@@ -145,11 +145,16 @@ pub mod qobject {
         #[cxx_name = "addTestFiles"]
         fn add_test_files(self: Pin<&mut RoomStagedFilesModel>) -> bool;
 
-        /// Takes the file in the row out.
+        /// Attaches what the clipboard holds, as `rc_view::paste` decides, and returns true, or
+        /// returns false if the text field should paste instead.
+        #[qinvokable]
+        fn paste(self: Pin<&mut RoomStagedFilesModel>) -> bool;
+
+        /// Takes the file in the row out. A pasted picture is deleted with it.
         #[qinvokable]
         fn remove(self: Pin<&mut RoomStagedFilesModel>, row: i32);
 
-        /// Takes all the files out.
+        /// Takes all the files out, deleting the pasted pictures among them.
         #[qinvokable]
         fn clear(self: Pin<&mut RoomStagedFilesModel>);
 
@@ -297,11 +302,16 @@ pub mod qobject {
         #[cxx_name = "addTestFiles"]
         fn add_test_files(self: Pin<&mut ThreadStagedFilesModel>) -> bool;
 
-        /// Takes the file in the row out.
+        /// Attaches what the clipboard holds, as `rc_view::paste` decides, and returns true, or
+        /// returns false if the text field should paste instead.
+        #[qinvokable]
+        fn paste(self: Pin<&mut ThreadStagedFilesModel>) -> bool;
+
+        /// Takes the file in the row out. A pasted picture is deleted with it.
         #[qinvokable]
         fn remove(self: Pin<&mut ThreadStagedFilesModel>, row: i32);
 
-        /// Takes all the files out.
+        /// Takes all the files out, deleting the pasted pictures among them.
         #[qinvokable]
         fn clear(self: Pin<&mut ThreadStagedFilesModel>);
 
@@ -387,6 +397,15 @@ macro_rules! staged_model {
                 true
             }
 
+            fn paste(self: Pin<&mut Self>) -> bool {
+                let files = crate::clipboard::files_to_paste();
+                if files.is_empty() {
+                    return false;
+                }
+                self.add_paths(files);
+                true
+            }
+
             fn add_paths(mut self: Pin<&mut Self>, paths: Vec<std::path::PathBuf>) {
                 let no_parent = QModelIndex::default();
                 for path in paths {
@@ -419,16 +438,26 @@ macro_rules! staged_model {
                     self.as_mut()
                         .begin_remove_rows(&no_parent, row(index), row(index));
                 }
-                self.as_mut().rust_mut().staged.remove(index);
+                let removed = self.as_mut().rust_mut().staged.remove(index);
                 // SAFETY: after `begin_remove_rows`.
                 unsafe { self.as_mut().end_remove_rows() };
                 self.count_now();
+                if let Some(file) = removed {
+                    crate::clipboard::forget(&file.path);
+                }
             }
 
-            fn clear(mut self: Pin<&mut Self>) {
+            fn clear(self: Pin<&mut Self>) {
+                for file in self.take_all() {
+                    crate::clipboard::forget(&file.path);
+                }
+            }
+
+            /// Takes all the files out and returns them.
+            fn take_all(mut self: Pin<&mut Self>) -> Vec<StagedFile> {
                 let all = self.staged.files().len();
                 if all == 0 {
-                    return;
+                    return Vec::new();
                 }
                 let no_parent = QModelIndex::default();
                 // SAFETY: balanced by `end_remove_rows` below.
@@ -436,10 +465,11 @@ macro_rules! staged_model {
                     self.as_mut()
                         .begin_remove_rows(&no_parent, 0, row(all - 1));
                 }
-                self.as_mut().rust_mut().staged.take();
+                let files = self.as_mut().rust_mut().staged.take();
                 // SAFETY: after `begin_remove_rows`.
                 unsafe { self.as_mut().end_remove_rows() };
                 self.count_now();
+                files
             }
 
             fn submit(
@@ -459,7 +489,8 @@ macro_rules! staged_model {
                     self.staged.files(),
                 );
                 if sent {
-                    self.as_mut().clear();
+                    // The pasted files stay: the uploads read them from disk, and Retry needs them.
+                    self.as_mut().take_all();
                 }
                 sent
             }

@@ -55,6 +55,13 @@ An `EmojiPickerModel` declared with `#[qml_element]` and `#[base = QAbstractList
 
 `#[qproperty(QString, query, READ, WRITE = set_query_text, NOTIFY)]` works when `set_query_text` is declared in the bridge as a `#[qinvokable]` with `#[cxx_name = "setQueryText"]`; Qt's `Q_PROPERTY(... WRITE setQueryText)` accepts an invokable. The function has to emit the `NOTIFY` signal itself. The default setter stores the value and emits the signal, with no hook to reset a model first.
 
+## No `QClipboard` or `QMimeData`
+
+cxx-qt-lib binds neither, and QML reaches the clipboard only for text (`Clipboard::setText` in `src/gui/clipboard.cpp` is our own singleton). Pasting a picture or copied files into the composer (ACT-012) needs the mime data's URLs, text and image.
+
+- **Workaround:** `crates/rc_qt/src/clipboard_probe.cpp`, compiled by `rc_qt`'s `build.rs` with `CxxQtBuilder::cpp_file` (and `qt_module("Gui")`), and bound by a plain `unsafe extern "C++"` bridge in `clipboard.rs`. It only reports what the clipboard holds and saves its picture as a PNG; `rc_view::paste` decides.
+- **Possible patch:** a `QClipboard`/`QMimeData` binding in cxx-qt-lib (`QGuiApplication::clipboard()`, `mimeData()`, `urls()`, `text()`, `hasImage()`, `imageData()`) is a reasonable addition, as cxx-qt-lib already has `QImage`, `QUrl` and `QVariant`; it would also make `Clipboard::setText` unnecessary.
+
 ## A model bridge can't be shared between two models
 
 The `begin*`/`end*` declarations, `dataChanged`, `index` and the overrides are declared in each bridge, with the bridge's own type as `self`, so `MessageList` and `ThreadMessageList` repeat about a hundred lines of declarations. A `#[cxx_qt::bridge]` can't be generic, and one shared `#[qobject]` can't be registered under two QML names.
