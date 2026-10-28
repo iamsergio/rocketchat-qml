@@ -1,6 +1,6 @@
 # Traceability
 
-Every test carries a `// <ID>` comment. A feature can have tests at several levels (unit; api against a mock HTTP server for `rc_api`; contract, `rc_api` and `rc_core` against the local test server, opt-in locally with `RC_TEST_SERVER_URL` and always in CI; GUI through Spix, which also needs the test server).
+Every test carries a `// <ID>` comment. A feature can have tests at several levels (unit; api against a mock HTTP server for `rc_api` and `rc_github`; contract, `rc_api` and `rc_core` against the local test server, opt-in locally with `RC_TEST_SERVER_URL` and always in CI; GUI through Spix, which also needs the test server).
 
 The `Slint` column is how much of a feature's GUI tests run against `rocketchat_slint`, the Slint frontend: `done` when all of them are in `crates/rc_gui_tests/slint.txt` (the list ctest runs against that app), `partial` when some are, `todo` when none is, and `n/a` when the feature has no GUI test at all. INFRA-005 checks that the column and the list agree.
 
@@ -121,6 +121,19 @@ The `Slint` column is how much of a feature's GUI tests run against `rocketchat_
 | DESK-001 | Desktop notifications for DMs and mentions | n/a | todo |
 | DESK-002 | Unread indicator in window title or tray | n/a | todo |
 | DESK-003 | Settings page | n/a | todo |
+
+## GitHub
+
+| ID | Feature | Slint | Tests |
+|---|---|---|---|
+| GH-001 | List my open pull requests with their CI: the GraphQL search (`is:pr is:open author:@me`, drafts included, all pages, most recently updated first) with each one's repository, number, title, author, branches, head sha, check rollup state and all the jobs of the head commit (name, workflow, state, conclusion, URL, times); token, API address, headers; the auth, rate-limit (primary, secondary, GraphQL), forbidden, server, GraphQL and decode errors | n/a | api: `crates/rc_github/tests/api.rs`; unit: `crates/rc_github/src/client.rs` |
+| GH-002 | Watched pull requests: other authors' open pull requests in the repositories of the user's subscriptions (paginated) created since a date, none asked for without a repository | n/a | api: `crates/rc_github/tests/api.rs` |
+| GH-003 | Merge with the rebase method: open and checks passed unless forced, `merge-async` with the head sha, polling until merged, the head branch deleted; where a pull request stands | n/a | api: `crates/rc_github/tests/api.rs`; unit: `crates/rc_github/src/types.rs` |
+| GH-004 | Update the branch by rebasing (the `updatePullRequestBranch` mutation) | n/a | api: `crates/rc_github/tests/api.rs` |
+| GH-005 | Rerun a pull request's failed jobs (cancelled ones apart, or with them) and one job | n/a | api: `crates/rc_github/tests/api.rs` |
+| GH-006 | Approve the runs waiting for approval | n/a | api: `crates/rc_github/tests/api.rs` |
+| GH-007 | A repository's self-hosted runners and the jobs on the busy ones | n/a | api: `crates/rc_github/tests/api.rs` |
+| GH-008 | Notify when a pull request's CI ends | n/a | todo |
 
 ## Test infrastructure
 

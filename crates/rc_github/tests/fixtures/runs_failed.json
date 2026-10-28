@@ -1,0 +1,39 @@
+{
+  "data": {
+    "repository": {
+      "pullRequest": {
+        "commits": {
+          "nodes": [
+            {
+              "commit": {
+                "statusCheckRollup": {
+                  "state": "FAILURE",
+                  "contexts": {
+                    "nodes": [
+                      { "__typename": "CheckRun", "databaseId": 11, "name": "a", "status": "COMPLETED", "conclusion": "FAILURE",
+                        "detailsUrl": "u", "startedAt": null, "completedAt": null,
+                        "checkSuite": { "workflowRun": { "databaseId": 100, "workflow": { "name": "W" } } } },
+                      { "__typename": "CheckRun", "databaseId": 12, "name": "b", "status": "COMPLETED", "conclusion": "SUCCESS",
+                        "detailsUrl": "u", "startedAt": null, "completedAt": null,
+                        "checkSuite": { "workflowRun": { "databaseId": 100, "workflow": { "name": "W" } } } },
+                      { "__typename": "CheckRun", "databaseId": 21, "name": "c", "status": "COMPLETED", "conclusion": "FAILURE",
+                        "detailsUrl": "u", "startedAt": null, "completedAt": null,
+                        "checkSuite": { "workflowRun": { "databaseId": 200, "workflow": { "name": "X" } } } },
+                      { "__typename": "CheckRun", "databaseId": 22, "name": "d", "status": "COMPLETED", "conclusion": "CANCELLED",
+                        "detailsUrl": "u", "startedAt": null, "completedAt": null,
+                        "checkSuite": { "workflowRun": { "databaseId": 200, "workflow": { "name": "X" } } } },
+                      { "__typename": "CheckRun", "databaseId": 31, "name": "e", "status": "COMPLETED", "conclusion": "CANCELLED",
+                        "detailsUrl": "u", "startedAt": null, "completedAt": null,
+                        "checkSuite": { "workflowRun": { "databaseId": 300, "workflow": { "name": "Y" } } } },
+                      { "__typename": "StatusContext", "context": "ci/x", "state": "FAILURE", "targetUrl": null }
+                    ]
+                  }
+                }
+              }
+            }
+          ]
+        }
+      }
+    }
+  }
+}

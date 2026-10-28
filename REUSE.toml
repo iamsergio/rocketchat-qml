@@ -34,7 +34,7 @@ SPDX-FileCopyrightText = "2026 Sergio Martins"
 SPDX-License-Identifier = "MIT"
 
 [[annotations]]
-path = ["crates/rc_api/tests/fixtures/**", "crates/rc_gui_perf/src/testdata/**"]
+path = ["crates/rc_api/tests/fixtures/**", "crates/rc_github/tests/fixtures/**", "crates/rc_gui_perf/src/testdata/**"]
 precedence = "aggregate"
 SPDX-FileCopyrightText = "2026 Sergio Martins"
 SPDX-License-Identifier = "MIT"

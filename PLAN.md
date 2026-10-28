@@ -140,6 +140,19 @@ The decided design (counters, platforms, batched input, the same-distance compar
 - [x] Batched channels (ROOM-011): the news of channels shows in batches at most every 25 minutes, see [Batched channels](docs/design/room-list.md#batched-channels)
 - [x] F5 shows the held channel news (ROOM-012): on every account, with a "No new notifications" toast when nothing is held, see [Batched channels](docs/design/room-list.md#batched-channels)
 
+## GitHub pull requests
+
+A tile with the GitHub mark at the bottom of the rail, above settings, opens a page with the user's open pull requests and their CI, and merges, updates, reruns and approves them: what the user's `ghw` CLI (`/pub_data/sources/gh_wrapper`) does in a terminal. Mockup: https://claude.ai/code/artifact/390931ee-a4e7-4412-a299-7fba3e707051. Feature IDs: `GH-`. The tile is always there, greyed out until GitHub is connected. The token comes from `gh auth token` or is pasted and kept in the keyring. Requests go out through reqwest, with the API's address configurable, and the queries are ported from ghw; no gh process and no GitHub crate.
+
+- [x] `rc_github`, the protocol crate beside `rc_api`: the GraphQL search for the user's pull requests, drafts included, and the watched ones (other authors, in the repositories of `user/subscriptions`, opened since a date), with the check rollup and the jobs of the latest check suites; rerun the failed jobs, rerun a job, approve the runs waiting for approval, update the branch by rebasing, merge with the rebase method, list a repository's runners. Wire types stay in the crate; wiremock tests
+- [ ] `rc_core::github`: one actor that polls (every minute while the page is on screen, every five otherwise, and on demand), keeps the lists in order and emits index-based changes like the rooms; commands for merge, update, rerun, approve and notify-when-done, with their results; the token through a port (`gh auth token`, or the keyring). The watched window is fourteen days until the setting exists
+- [ ] `rc_view::github`: the views of a row, the page and the tile (state, age, the check bar's segments, which buttons show and why one is disabled), for both frontends
+- [ ] `rc_test_github`: a local GitHub stub for the GUI tests, which keeps pull requests and jobs as state (a merge removes one, a rerun starts its jobs), lets a test change that state and records what the app asked for. The app finds it through an environment variable, in developer-mode builds only
+- [ ] Refactor: the switchboard shows a screen, an account or GitHub, apart from the current account, whose cache the views keep showing so that going back needs no snapshot. No behaviour change
+- [ ] Qt: the tile in the rail, the connect page, the list (Mine and Watched, the Drafts fold, the runner at its foot) and the pull request page, with GUI tests against `rc_test_github`
+- [ ] Slint: the same
+- [ ] Settings: the watched window, and the repositories whose runners show
+
 ## Later
 
 - Packaging (Flatpak, AppImage, Windows installer).
@@ -149,7 +162,7 @@ The decided design (counters, platforms, batched input, the same-distance compar
 
 - **One GUI test suite for both frontends.** It speaks the Spix XML-RPC protocol. The Qt app embeds C++ Spix and the Slint app embeds a Rust Spix server. See [docs/design/gui-testing.md](docs/design/gui-testing.md).
 - **Qt ≥ 6.12.0.**
-- **No fake server.** Integration and GUI tests run against a real Rocket.Chat (`scripts/run_test_server.sh`), which CI shares. Failures that a real server can't produce on demand are tested with port fakes (`rc_core`) and wiremock (`rc_api`).
+- **No fake server.** Integration and GUI tests run against a real Rocket.Chat (`scripts/run_test_server.sh`), which CI shares. Failures that a real server can't produce on demand are tested with port fakes (`rc_core`) and wiremock (`rc_api`). GitHub is the exception: there is no local GitHub, so its tests use wiremock and its GUI tests a stub (`rc_test_github`). No test talks to the real GitHub, not even read-only.
 - **File attachments open their server URL in the browser, without the token.** That works when the browser has a Rocket.Chat session. Downloading them through the app comes with file upload (Phase 5). Images are shown inline from the file cache.
 - **Rocket.Chat server.** Target the version the company server runs (check it with `/api/info` in Phase 1). Support older versions only where it's cheap. No compatibility shims for old servers.
 
