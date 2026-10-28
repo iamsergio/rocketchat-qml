@@ -1,0 +1,16 @@
+{
+  "data": {
+    "repository": {
+      "pullRequest": {
+        "number": 41,
+        "title": "Add the room menu",
+        "state": "OPEN",
+        "repository": { "nameWithOwner": "iamsergio/rocketchat-qml" },
+        "headRefName": "feature/room-menu",
+        "headRefOid": "9f1c2d3e4a5b6c7d8e9f00112233445566778899",
+        "headRepository": { "nameWithOwner": "iamsergio/rocketchat-qml" },
+        "commits": { "nodes": [ { "commit": { "statusCheckRollup": { "state": "SUCCESS" } } } ] }
+      }
+    }
+  }
+}

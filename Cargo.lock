@@ -5222,6 +5222,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "rc_github"
+version = "0.0.0"
+dependencies = [
+ "jiff",
+ "reqwest",
+ "secrecy",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "tokio",
+ "tracing",
+ "wiremock",
+]
+
+[[package]]
 name = "rc_gui_perf"
 version = "0.0.0"
 dependencies = [

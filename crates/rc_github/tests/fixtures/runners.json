@@ -1,0 +1,17 @@
+{
+  "total_count": 2,
+  "runners": [
+    {
+      "id": 1, "name": "builder-1", "os": "linux", "status": "online", "busy": true,
+      "labels": [
+        { "id": 1, "name": "self-hosted", "type": "read-only" },
+        { "id": 2, "name": "Linux", "type": "read-only" },
+        { "id": 3, "name": "gpu", "type": "custom" }
+      ]
+    },
+    {
+      "id": 2, "name": "builder-2", "os": "linux", "status": "offline", "busy": false,
+      "labels": [ { "id": 1, "name": "self-hosted", "type": "read-only" } ]
+    }
+  ]
+}

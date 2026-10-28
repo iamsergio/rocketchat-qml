@@ -1,0 +1,15 @@
+{
+  "total_count": 2,
+  "jobs": [
+    {
+      "id": 8001, "name": "build", "workflow_name": "Build", "head_branch": "room-menu",
+      "status": "in_progress", "conclusion": null, "started_at": "2026-10-28T08:00:00Z",
+      "html_url": "https://github.com/o/r/actions/runs/600/job/8001", "runner_name": "builder-1"
+    },
+    {
+      "id": 8002, "name": "lint", "workflow_name": "Build", "head_branch": "room-menu",
+      "status": "completed", "conclusion": "success", "started_at": "2026-10-28T07:59:00Z",
+      "html_url": "https://github.com/o/r/actions/runs/600/job/8002", "runner_name": "builder-2"
+    }
+  ]
+}

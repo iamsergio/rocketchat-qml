@@ -19,7 +19,7 @@
 | slint, slint-build | The Slint frontend (`rc_slint`): winit backend with the FemtoVG and software renderers, no Qt backend and no `accessibility` feature (it pulls in zbus). The licence is not chosen yet (see PLAN.md) |
 | rfd (xdg-portal backend only) | The Slint app's file dialog (Slint has none), for the paperclip. On Linux it asks the desktop's file chooser portal through libdbus, which it loads at run time, so it adds no GTK, no zbus and no Wayland crates (only `pollster`, a tiny executor) and nothing to link; on macOS and Windows it uses the system dialog. Without a portal running, the paperclip does nothing. The Qt app has its own `FileDialog` |
 | i-slint-backend-testing | Dev only: Slint's testing backend and element search API (`ElementHandle`), for the in-process tests of `rc_slint`. Its version must match slint's exactly |
-| wiremock | Dev only: mock HTTP server for the `rc_api` tests |
+| wiremock | Dev only: mock HTTP server for the `rc_api` and `rc_github` tests |
 | secrecy | Keeps passwords and tokens out of logs and `Debug` output |
 | keyring-core + native stores | OS credential storage for the session token (on Linux the Secret Service through the system libdbus, which Qt loads too, so it needs `libdbus-1-dev` to build) |
 | 3rdparty/spix (fork) | UI test server inside the app, with Qt Quick and Slint backends and XML-RPC control. Needs AnyRPC |
