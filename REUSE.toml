@@ -25,6 +25,7 @@ path = [
     ".claude/agents/*.md",
     ".claude/skills/**/SKILL.md",
     "docs/design/*.md",
+    "docs/architecture/presentation.pdf",
     "Cargo.lock",
     "vcpkg.json",
     ".mcp.json"
