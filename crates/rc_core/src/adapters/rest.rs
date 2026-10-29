@@ -13,6 +13,7 @@ use crate::directory::{DirectoryChannel, Found, Person};
 use crate::domain::{
     AvatarOwner, Credentials, Message, MessageId, RoomId, RoomKind, User, message_from,
 };
+use crate::members::Member;
 use crate::ports::{
     ApiError, Changes, Connector, Image, Page, Pushed, Realtime, ServerApi, ThreadTarget,
     ThreadsPage,
@@ -355,6 +356,27 @@ impl ServerApi for RestApi {
                 .map(|user| Person {
                     username: user.username,
                     name: user.name,
+                })
+                .collect(),
+        })
+    }
+
+    async fn room_members(
+        &self,
+        credentials: &Credentials,
+        room: &RoomId,
+        filter: &str,
+        count: usize,
+    ) -> Result<Found<Member>, ApiError> {
+        let session = self.client.session(api_credentials(credentials));
+        let page = session.room_members(room.as_str(), filter, count).await?;
+        Ok(Found {
+            total: page.total,
+            items: (page.items.into_iter())
+                .map(|member| Member {
+                    id: member.id,
+                    username: member.username,
+                    name: member.name,
                 })
                 .collect(),
         })

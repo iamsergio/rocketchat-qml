@@ -219,6 +219,7 @@ impl<C: Connector> Actor<C> {
     /// Ends the search and the action under way, for a session that ends.
     pub(super) fn clear_directory(&mut self) {
         self.clear_directory_search();
+        self.cancel_members_search();
         self.abort_directory_action();
     }
 

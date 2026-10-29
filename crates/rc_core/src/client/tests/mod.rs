@@ -33,6 +33,7 @@ use crate::domain::{
 use crate::emoji::CustomEmojis;
 use crate::emoji_images::EmojiImageUpdate;
 use crate::images::ImageUpdate;
+use crate::members::{Member, MemberError, MemberSearch, MemberSearchState};
 use crate::policy::{ActionError, MessageAction, MessagePolicy};
 use crate::ports::{
     ApiError, CacheError, CacheKey, Changes, Clock, Connector, FileCache, Image, Page, Pushed,
@@ -59,6 +60,7 @@ mod harness;
 mod images;
 mod login;
 mod mark_read;
+mod members;
 mod message_actions;
 mod quiet;
 mod quotes;

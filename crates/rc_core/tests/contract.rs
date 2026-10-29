@@ -24,6 +24,7 @@ use rc_core::domain::{
     AvatarOwner, Delivery, Message, MessageId, MessageKind, Room, RoomId, RoomKind,
 };
 use rc_core::emoji::{CustomEmojis, catalog};
+use rc_core::members::{MemberSearch, MemberSearchState};
 use rc_core::policy::{ActionError, MessageAction};
 use rc_core::ports::{
     CacheError, CacheKey, Connector, FileCache, Pushed, SecretStore, ServerApi, Stored,
@@ -3064,6 +3065,95 @@ fn the_directory_search_finds_a_person_and_a_channel_the_user_is_not_in() {
     assert_eq!(channels.channels_total, 1);
     assert_eq!(channels.channels[0].id.as_str(), channel);
     assert_eq!(channels.channels[0].members, 1);
+}
+
+/// The answer to the member search of `room` for `query`.
+fn member_answer(events: &Receiver<Event>, room: &str, query: &str) -> MemberSearchState {
+    wait_for(events, |event| match event {
+        Event::MemberSearch(Some(MemberSearch {
+            room: found_room,
+            query: found_query,
+            state,
+        })) if found_room.as_str() == room
+            && found_query == query
+            && *state != MemberSearchState::Searching =>
+        {
+            Some(state.clone())
+        }
+        _ => None,
+    })
+}
+
+// ACT-013
+#[test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+fn the_members_of_a_channel_are_searched_by_username_and_by_name() {
+    let admin = Admin::login();
+    let user = admin.create_user();
+    let alice = admin.create_user_named(&format!("Alice Doe{}", unique()));
+    let (channel, _) = admin.create_channel(&[&alice.username, &user.username]);
+    let (session, events) = logged_in(&user);
+    let room = channel.clone().into();
+
+    session.account().search_members(&room, &alice.username);
+    let by_username = member_answer(&events, &channel, &alice.username);
+    session.account().search_members(&room, "ALICE DOE");
+    let by_name = member_answer(&events, &channel, "ALICE DOE");
+
+    for state in [by_username, by_name] {
+        let MemberSearchState::Found { members, total } = state else {
+            panic!("{state:?}");
+        };
+        assert_eq!(total, 1);
+        assert_eq!(members[0].id, alice.id);
+        assert_eq!(members[0].username, alice.username);
+        assert_eq!(members[0].name.as_deref(), Some(alice.name.as_str()));
+    }
+}
+
+// ACT-013
+#[test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+fn the_user_is_not_among_the_members_found_nor_in_their_total() {
+    let admin = Admin::login();
+    let user = admin.create_user();
+    let alice = admin.create_user();
+    let (channel, _) = admin.create_channel(&[&alice.username, &user.username]);
+    let (session, events) = logged_in(&user);
+
+    // Both usernames start with "ct-user-".
+    session
+        .account()
+        .search_members(&channel.clone().into(), "ct-user-");
+    let state = member_answer(&events, &channel, "ct-user-");
+
+    let MemberSearchState::Found { members, total } = state else {
+        panic!("{state:?}");
+    };
+    assert_eq!(total, 1);
+    assert_eq!(members.len(), 1);
+    assert_eq!(members[0].username, alice.username);
+}
+
+// ACT-013
+#[test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+fn the_members_of_a_direct_message_are_the_other_person_without_the_servers_help() {
+    let admin = Admin::login();
+    let user = admin.create_user();
+    let dm = admin.create_dm(&user.username);
+    // The user's room list has it once it has a message.
+    admin.post_message(&dm, "hello");
+    let (session, events) = logged_in(&user);
+
+    session.account().search_members(&dm.clone().into(), "");
+    let state = member_answer(&events, &dm, "");
+
+    let MemberSearchState::Found { members, total } = state else {
+        panic!("{state:?}");
+    };
+    assert_eq!(total, 1);
+    assert_eq!(members[0].username, admin.username);
 }
 
 // ACT-007

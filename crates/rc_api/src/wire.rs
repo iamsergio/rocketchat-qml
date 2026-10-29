@@ -13,8 +13,8 @@ use serde::{Deserialize, Deserializer};
 use crate::md;
 use crate::types::{
     Attachment, AttachmentImage, Author, AvatarOwner, Credentials, CustomEmoji, DdpEvent,
-    DirectoryChannel, DirectoryPage, DirectoryUser, HistoryPage, LoginResult, Message,
-    MessageChanges, MessageSettings, Quote, Reaction, RoomInfo, RoomType, ServerInfo,
+    DirectoryChannel, DirectoryPage, DirectoryUser, HistoryPage, LoginResult, MemberPage, Message,
+    MessageChanges, MessageSettings, Quote, Reaction, RoomInfo, RoomMember, RoomType, ServerInfo,
     ServerVersion, Subscription, ThreadPage, ThreadsPage, User,
 };
 
@@ -196,6 +196,14 @@ struct RoomInfoEntry {
 struct DirectoryBody<T> {
     #[serde(default = "Vec::new")]
     result: Vec<T>,
+    #[serde(default)]
+    total: u32,
+}
+
+#[derive(Deserialize)]
+struct MembersBody {
+    #[serde(default = "Vec::new")]
+    members: Vec<DirectoryUserEntry>,
     #[serde(default)]
     total: u32,
 }
@@ -748,6 +756,21 @@ pub(crate) fn parse_directory_users(
         total: body.total,
         items: (body.result.into_iter())
             .map(|user| DirectoryUser {
+                id: user.id,
+                username: user.username,
+                name: user.name.filter(|name| !name.is_empty()),
+            })
+            .collect(),
+    })
+}
+
+/// The members of a `rooms.membersOrderedByRole` answer.
+pub(crate) fn parse_room_members(bytes: &[u8]) -> Result<MemberPage, serde_json::Error> {
+    let body: MembersBody = serde_json::from_slice(bytes)?;
+    Ok(MemberPage {
+        total: body.total,
+        items: (body.members.into_iter())
+            .map(|user| RoomMember {
                 id: user.id,
                 username: user.username,
                 name: user.name.filter(|name| !name.is_empty()),
@@ -2438,6 +2461,29 @@ mod tests {
         assert_eq!(page.items[0].username, "bob");
         assert_eq!(page.items[0].name.as_deref(), Some("Bob B"));
         assert_eq!(page.items[1].name, None);
+    }
+
+    // ACT-013
+    #[test]
+    fn parses_the_members_of_a_room_and_drops_the_rest() {
+        let body = r#"{"members":[
+            {"_id":"u1","username":"alice","name":"Alice Doe","status":"online","roles":["owner"]},
+            {"_id":"u2","username":"bob","name":"","status":"offline","utcOffset":0}],
+            "count":2,"offset":0,"total":7,"success":true}"#;
+        let page = parse_room_members(body.as_bytes()).unwrap();
+        assert_eq!(page.total, 7);
+        assert_eq!(page.items.len(), 2);
+        assert_eq!(page.items[0].id, "u1");
+        assert_eq!(page.items[0].username, "alice");
+        assert_eq!(page.items[0].name.as_deref(), Some("Alice Doe"));
+        assert_eq!(page.items[1].name, None);
+    }
+
+    // ACT-013
+    #[test]
+    fn an_answer_without_members_has_none() {
+        let page = parse_room_members(br#"{"success":true}"#).unwrap();
+        assert_eq!((page.items.len(), page.total), (0, 0));
     }
 
     // ACT-008

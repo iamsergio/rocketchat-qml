@@ -16,6 +16,7 @@ use crate::directory::{DirectoryChannel, Found, Person};
 use crate::domain::{
     AccountId, AvatarOwner, Credentials, Message, MessageId, RoomId, RoomKind, StoredAccount, User,
 };
+use crate::members::Member;
 use crate::threads::ThreadFilter;
 
 /// Why a server call failed. Owned strings only, so that fakes can build and compare them.
@@ -374,6 +375,22 @@ pub trait ServerApi: Clone + Send + Sync + 'static {
         text: &str,
         count: usize,
     ) -> impl Future<Output = Result<Found<DirectoryChannel>, ApiError>> + Send;
+
+    /// The members of the channel or private group `room` whose username or name contain
+    /// `filter`, ignoring case, at most `count` of them, in the server's order: owners, moderators,
+    /// then by name. An empty `filter` matches all. The server refuses a direct message.
+    ///
+    /// # Errors
+    ///
+    /// [`ApiError::Unauthorized`] if the credentials have expired or were revoked,
+    /// [`ApiError::Server`] if the server refuses.
+    fn room_members(
+        &self,
+        credentials: &Credentials,
+        room: &RoomId,
+        filter: &str,
+        count: usize,
+    ) -> impl Future<Output = Result<Found<Member>, ApiError>> + Send;
 
     /// Opens the direct message with the user `username`, which the server creates if there is
     /// none and shows again if the user had closed it, and returns its id. The server doesn't

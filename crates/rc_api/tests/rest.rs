@@ -2055,6 +2055,33 @@ async fn the_directory_is_asked_with_the_text_and_the_type_as_parameters_of_thei
     assert!(channels.items.is_empty());
 }
 
+// ACT-013
+#[tokio::test]
+async fn the_members_of_a_room_are_asked_with_the_filter_and_the_count_escaped() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/rooms.membersOrderedByRole"))
+        .and(query_param("roomId", "r1"))
+        .and(query_param("filter", "al & co"))
+        .and(query_param("count", "7"))
+        .and(header("X-User-Id", USER_ID))
+        .respond_with(json_response(
+            200,
+            r#"{"members":[{"_id":"u1","username":"alice"}],"count":1,"offset":0,"total":1}"#,
+        ))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let client = RestClient::new(&server.uri()).unwrap();
+
+    let page = session(&client)
+        .room_members("r1", "al & co", 7)
+        .await
+        .unwrap();
+
+    assert_eq!(page.items[0].username, "alice");
+}
+
 // ACT-007
 #[tokio::test]
 async fn a_direct_message_is_created_by_username_and_a_channel_joined_by_id() {

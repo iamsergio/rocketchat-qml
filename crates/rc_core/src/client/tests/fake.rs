@@ -105,6 +105,14 @@ pub(super) struct DirectoryCall {
     pub(super) count: usize,
 }
 
+/// What a request of a room's members was asked.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct MemberCall {
+    pub(super) room: String,
+    pub(super) filter: String,
+    pub(super) count: usize,
+}
+
 /// What `send_message` was asked.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct SendCall {
@@ -316,6 +324,9 @@ pub(super) struct FakeState {
     pub(super) directory_people: VecDeque<Scripted<Found<Person>>>,
     pub(super) directory_channels: VecDeque<Scripted<Found<DirectoryChannel>>>,
     pub(super) directory_calls: Vec<DirectoryCall>,
+    /// One per request for a room's members; nobody found once they run out.
+    pub(super) members: VecDeque<Scripted<Found<Member>>>,
+    pub(super) member_calls: Vec<MemberCall>,
     /// One per `create_direct`; refused once they run out.
     pub(super) directs: VecDeque<Scripted<RoomId>>,
     pub(super) direct_calls: Vec<String>,
@@ -702,6 +713,22 @@ impl Fake {
     pub(super) fn wait_for_directory_calls(&self, count: usize) -> Vec<DirectoryCall> {
         wait_until(|| {
             let calls = self.state().directory_calls.clone();
+            (calls.len() >= count).then_some(calls)
+        })
+    }
+
+    pub(super) fn script_members(
+        &self,
+        gate: Option<Arc<Notify>>,
+        result: Result<Found<Member>, ApiError>,
+    ) {
+        self.state().members.push_back(Scripted { gate, result });
+    }
+
+    /// The member requests have started: `count` of them.
+    pub(super) fn wait_for_member_calls(&self, count: usize) -> Vec<MemberCall> {
+        wait_until(|| {
+            let calls = self.state().member_calls.clone();
             (calls.len() >= count).then_some(calls)
         })
     }
@@ -1433,6 +1460,32 @@ impl ServerApi for Fake {
             |state| {
                 state.directory_calls.push(call);
                 state.directory_channels.pop_front()
+            },
+            Ok(empty),
+        )
+        .await
+    }
+
+    async fn room_members(
+        &self,
+        _credentials: &Credentials,
+        room: &RoomId,
+        filter: &str,
+        count: usize,
+    ) -> Result<Found<Member>, ApiError> {
+        let call = MemberCall {
+            room: room.to_string(),
+            filter: filter.to_owned(),
+            count,
+        };
+        let empty = Found {
+            items: Vec::new(),
+            total: 0,
+        };
+        self.scripted(
+            |state| {
+                state.member_calls.push(call);
+                state.members.pop_front()
             },
             Ok(empty),
         )

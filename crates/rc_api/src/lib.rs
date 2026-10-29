@@ -22,7 +22,7 @@ pub use ddp::{DdpClient, DdpEvents, SubscriptionId};
 pub use error::Error;
 pub use types::{
     Attachment, AttachmentImage, Author, AvatarOwner, Credentials, CustomEmoji, DdpEvent,
-    DirectoryChannel, DirectoryPage, DirectoryUser, Download, HistoryPage, LoginResult, Message,
-    MessageChanges, MessageSettings, Quote, Reaction, RoomInfo, RoomType, ServerInfo,
-    ServerVersion, Subscription, ThreadPage, ThreadsKind, ThreadsPage, User,
+    DirectoryChannel, DirectoryPage, DirectoryUser, Download, HistoryPage, LoginResult, MemberPage,
+    Message, MessageChanges, MessageSettings, Quote, Reaction, RoomInfo, RoomMember, RoomType,
+    ServerInfo, ServerVersion, Subscription, ThreadPage, ThreadsKind, ThreadsPage, User,
 };
