@@ -23,6 +23,20 @@
 #include <memory>
 #endif
 
+#ifdef ROCKETCHATQML_SPIX
+// Whether `warning` is an image that failed to download, not a bug of the QML: the Qt app loads
+// custom emoji by URL from the server, so a test that cuts the connection while one loads gets
+// "QML QQuickImage: Connection closed". A local file or resource that can't be read ("Cannot
+// open: qrc:/...", a wrong icon path) is a bug, and still counts.
+static bool isImageDownloadFailure(const QQmlError &warning)
+{
+    const QString description = warning.description();
+    const bool image = description.startsWith(QLatin1String("QML QQuickImage: "))
+        || description.startsWith(QLatin1String("QML QQuickAnimatedImage: "));
+    return image && !description.contains(QLatin1String("Cannot open: "));
+}
+#endif
+
 int main(int argc, char *argv[])
 {
     rc_qt::init_logging();
@@ -84,14 +98,21 @@ int main(int argc, char *argv[])
     // The GUI tests set RC_FATAL_QML_WARNINGS, so that a QML warning (a binding loop, a TypeError,
     // a failed assignment) fails the test that caused it instead of scrolling by: the app says
     // which and exits at once, and the test fails at its next call. Connected before Main.qml is
-    // loaded, so its warnings count too. Our own console.warn and Qt's other warnings don't.
+    // loaded, so its warnings count too. Our own console.warn, Qt's other warnings and images that
+    // fail to download don't.
     if (qEnvironmentVariableIsSet("RC_FATAL_QML_WARNINGS")) {
         QObject::connect(&engine, &QQmlEngine::warnings, [](const QList<QQmlError> &warnings) {
+            bool fatal = false;
             for (const QQmlError &warning : warnings) {
-                std::fprintf(stderr, "Fatal QML warning (RC_FATAL_QML_WARNINGS is set): %s\n", qPrintable(warning.toString()));
+                if (!isImageDownloadFailure(warning)) {
+                    std::fprintf(stderr, "Fatal QML warning (RC_FATAL_QML_WARNINGS is set): %s\n", qPrintable(warning.toString()));
+                    fatal = true;
+                }
             }
-            std::fflush(stderr);
-            std::_Exit(EXIT_FAILURE);
+            if (fatal) {
+                std::fflush(stderr);
+                std::_Exit(EXIT_FAILURE);
+            }
         });
     }
 #endif
