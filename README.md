@@ -1,5 +1,6 @@
 # RocketChatQml
 
+Project for learning purposes and explore AI workflows.<br>
 A Rocket.Chat client with a Rust core and a QML GUI, connected through cxx-qt.
 
 ## Building
