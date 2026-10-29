@@ -66,6 +66,8 @@ int main(int argc, char *argv[])
         "dev", "Fill in the login page for the local test server (RC_DEV_SERVER, RC_DEV_USER and RC_DEV_PASS override it).");
     parser.addOption(devOption);
 #endif
+    const QCommandLineOption ghOption("gh", "Turn on the GitHub integration (experimental): the GitHub tile in the rail.");
+    parser.addOption(ghOption);
     parser.process(app);
 
 #ifdef ROCKETCHATQML_SPIX
@@ -83,6 +85,9 @@ int main(int argc, char *argv[])
 
     // After QGuiApplication, so the core's events can reach the GUI thread; before the QML is
     // loaded, which creates the view models that listen to it.
+    if (parser.isSet(ghOption)) {
+        rc_qt::enable_github();
+    }
     const QByteArray cacheDir = QStandardPaths::writableLocation(QStandardPaths::CacheLocation).toUtf8();
     rc_qt::start_core(rust::Str(cacheDir.constData(), static_cast<size_t>(cacheDir.size())));
 #ifdef ROCKETCHATQML_DEVELOPER_MODE

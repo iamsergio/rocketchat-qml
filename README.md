@@ -31,6 +31,9 @@ To try a change against the local test server, `build-dev/bin/rocketchat_qml --d
 login page filled in for it (`http://127.0.0.1:3000`, `admin` / `admin`; `RC_DEV_SERVER`,
 `RC_DEV_USER` and `RC_DEV_PASS` override them). Only developer builds have `--dev`.
 
+The GitHub integration (the pull requests page, its tile in the rail) is experimental and off by
+default: `--gh` turns it on. Without it the GitHub service doesn't start. The Qt app only.
+
 ## Testing
 
     ctest --test-dir build-dev --output-on-failure

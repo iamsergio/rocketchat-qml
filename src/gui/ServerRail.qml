@@ -28,7 +28,7 @@ Rectangle {
 
     // The tiles scroll when they don't fit, above the settings button. The + follows the last one.
     ListView {
-        anchors.bottom: githubTile.top
+        anchors.bottom: githubTile.visible ? githubTile.top : settings.top
         anchors.bottomMargin: Theme.spacingL
         anchors.left: parent.left
         anchors.right: parent.right
@@ -117,13 +117,14 @@ Rectangle {
         }
     }
 
-    // GitHub, below the servers and above the settings.
+    // GitHub, below the servers and above the settings. Only with --gh.
     GithubTile {
         id: githubTile
 
         anchors.bottom: settings.top
         anchors.bottomMargin: Theme.spacingL
         anchors.horizontalCenter: parent.horizontalCenter
+        visible: AppInfo.github
 
         onTipShownChanged: root.setTip(githubTile, tipShown)
     }

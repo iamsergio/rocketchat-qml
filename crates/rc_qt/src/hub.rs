@@ -191,17 +191,20 @@ pub fn start(cache_dir: &str) {
     lock().github = Some(GithubHub::new());
     match Client::start(store, DiskFileCache::new(cache_dir), dispatch) {
         Ok(client) => {
-            let setup = startup::github_setup();
-            let service = client.github(
-                &setup.api_url,
-                setup.gh,
-                startup::github_store(),
-                GithubConfig::default(),
-                github::dispatch,
-            );
+            // Only with `--gh`: without the service, the GitHub commands are ignored.
+            let service = crate::lifecycle::github_enabled().then(|| {
+                let setup = startup::github_setup();
+                client.github(
+                    &setup.api_url,
+                    setup.gh,
+                    startup::github_store(),
+                    GithubConfig::default(),
+                    github::dispatch,
+                )
+            });
             let mut hub = lock();
             if let Some(github) = hub.github.as_mut() {
-                github.service = Some(service);
+                github.service = service;
             }
             hub.client = Some(client);
         }
