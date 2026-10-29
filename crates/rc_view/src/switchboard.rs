@@ -126,8 +126,12 @@ impl Switchboard {
     pub fn release_news(&self, mut release: impl FnMut(&AccountId)) -> bool {
         let mut sent = false;
         for id in self.accounts.holding_news() {
+            tracing::info!(account = %id, "F5: the cache says the account holds news");
             release(id);
             sent = true;
+        }
+        if !sent {
+            tracing::info!("F5: no account's cache holds news");
         }
         sent
     }

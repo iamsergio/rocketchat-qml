@@ -805,6 +805,7 @@ impl App {
     /// F5: shows the held channel news of every account (ROOM-012). Returns whether any account
     /// held some, going by the caches: if not, the page says there is nothing new.
     fn release_news(&self) -> bool {
+        tracing::info!("F5 pressed");
         self.switchboard
             .release_news(|id| self.client.account(id).release_channels())
     }

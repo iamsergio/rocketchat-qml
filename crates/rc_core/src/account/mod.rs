@@ -664,7 +664,10 @@ impl<C: Connector> Actor<C> {
             Command::DeleteMessage(id) => self.delete_own_message(id),
             Command::React { id, emoji, react } => self.react_to_message(id, emoji, react),
             Command::RoomAction { room, action } => self.act_on_room(room, action),
-            Command::ReleaseChannels => self.release_held_channels(),
+            Command::ReleaseChannels => {
+                tracing::info!("F5: releasing the held channel news");
+                self.release_held_channels();
+            }
             Command::WantEmojiImages(names) => self.want_emoji_images(names),
             Command::SearchDirectory(text) => self.search_directory(&text),
             Command::OpenDirect(username) => self.open_direct(username),
