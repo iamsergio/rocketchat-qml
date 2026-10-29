@@ -28,6 +28,7 @@ qt_add_qml_module(
   Avatar.qml
   CheckBar.qml
   Main.qml
+  MentionPopup.qml
   Composer.qml
   DirectoryLabel.qml
   DirectoryNote.qml
@@ -88,6 +89,7 @@ qt_add_qml_module(
   icons/file.svg
   icons/mark-github.svg
   icons/merge.svg
+  icons/people.svg
   icons/plus.svg
   icons/pr-draft.svg
   icons/pr-failed.svg

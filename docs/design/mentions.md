@@ -1,6 +1,6 @@
 # Mentions
 
-Typing `@` in the composer of a room or a thread opens a popup above it with the room's members that match what follows the `@` (ACT-013). This is the server call, the core and the logic of `rc_view::mention`, which both frontends use; the Qt popup and the Slint one come after (see PLAN.md).
+Typing `@` in the composer of a room or a thread opens a popup above it with the room's members that match what follows the `@` (ACT-013). This is the server call, the core and the logic of `rc_view::mention`, which both frontends use, and the Qt popup; the Slint one comes after (see PLAN.md).
 
 ## What the user gets
 
@@ -38,3 +38,14 @@ The contract tests (`crates/rc_api/tests/contract.rs`, `crates/rc_core/tests/con
 - `Suggestions`, which the `Cache` keeps (`Cache::mentions`) from `Event::MemberSearch`, keeps the last answer while the next search runs. `popup(room_kind, query)` gives the rows (`Row::Person`, `Row::More`, `Row::Special`) and a `Status` (`Searching` only when there are no rows, `Failed` with the text `FAILED_TEXT`), leaving out the people of the last answer that the query as typed now rules out (a substring of the username or of the name), so that `al` to `ali` doesn't show Alan while the new search runs. The highlight and `@all`/`@here` follow the typing the same way. The "more" count is the last answer's: its total minus the people it showed.
 
 **Units.** Positions in the text are UTF-16 code units, which is what Qt's cursor uses; a frontend with another unit converts at its edge. The highlight ranges are byte ranges of the name and the username, found ignoring case.
+
+## The Qt popup
+
+`Mentions` (`crates/rc_qt/src/mentions_model.rs`) is a QML singleton, a list model with the state of the popup as properties: `open`, `owner`, `cursor`, `status`, `failedText`, `direct`, `query`. There is one for both composers: only one field has the focus at a time, and the composer that drove it last is its `owner` (`room` or `thread`), so each `MentionPopup` (`src/gui/MentionPopup.qml`, a child of `Composer.qml`) shows itself only for its own. It registers with the hub like the other view models and is told to show its rows again on `Event::MemberSearch` (and on a switch of account); `Event::Avatars` announces only the avatar role of the rows that show the new files. The rows reset when they change: there are at most 8.
+
+- The composer calls `Mentions.update(owner, text, cursor)` when its text or its cursor changes, once per turn of the event loop (`Qt.callLater`), as the two changes go together. Rust decides: `word_at_cursor` says whether the popup is open and for which query, `search_members` is called for the room of that composer (the thread's room for the thread composer) when the room or the query is not the one last asked, and `cancel_member_search` when the popup closes. No logic is in QML beyond forwarding the keys.
+- The cursor (the row Enter and Tab insert) starts on the first person or `@all`/`@here` (never the "more" row) and follows the user: Up and Down wrap, the pointer over a row moves it. It stays on its row when the rows change only after the user moved it, and only for the same query; else it goes to the first.
+- Keys, in the field's `Keys.onPressed` before its own: with the popup open and a row to choose, Enter and Tab call `acceptCursor`, Up and Down move; Esc calls `escape`, which closes the popup and remembers the word (where it starts, and the whole text), so that it stays closed until the text changes (moving the cursor inside the word doesn't open it; a keystroke does). With nothing to choose Enter sends as before; Shift+Enter is a new line.
+- Choosing (Enter, Tab or a click) makes the model compute `rc_view::mention::insert`, close, and emit `inserted(start, end, replacement, cursor)`: the field removes the range and inserts the replacement, then sets the cursor, so the field's undo stack goes on and one undo gives back the typed word. The rows are plain items with a `MouseArea`, which doesn't take the focus: the field keeps it.
+- The popup closes when the field loses the focus, when another room or thread opens, and after sending (the text is gone). It opens again on the next change of the text when the field has the focus. A previewed channel's composer (no Send, a Join) has none.
+- The matched part of a name or username is marked `<b>` in styled text that Rust escapes; `Theme.matchStyled` turns the mark into the colour of what is the user's (`Theme.own`), bold since styled text has no semibold.

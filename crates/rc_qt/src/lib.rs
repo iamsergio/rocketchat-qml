@@ -39,6 +39,12 @@ pub mod logging;
     clippy::unnecessary_box_returns,
     clippy::must_use_candidate // The generated `dataChanged` signal.
 )]
+pub mod mentions_model;
+#[allow(
+    unsafe_code,
+    clippy::unnecessary_box_returns,
+    clippy::must_use_candidate // The generated `dataChanged` signal.
+)]
 pub mod message_list_model;
 #[allow(
     unsafe_code,

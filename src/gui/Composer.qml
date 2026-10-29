@@ -27,6 +27,9 @@ import RocketChat.Bridge
 // are listed in another bar until their messages are posted. Opening another room drops the files
 // that wait; the uploads go on in the core.
 //
+// Typing an @word opens the popup of the room's members above it (MentionPopup, ACT-013): the
+// field forwards its text and cursor to Mentions, which decides, and its keys while it is open.
+//
 // For a thread it replies in the open thread, with a check box to send the reply to the room too,
 // and Escape with nothing to cancel goes back to the list of threads. The edits, deletions and reactions go
 // through Room in both cases.
@@ -62,6 +65,16 @@ Rectangle {
     color: Theme.raised
     implicitHeight: column.implicitHeight + 2 * Theme.borderWidth
     radius: Theme.radiusPanel
+
+    // The name Mentions knows this composer by.
+    readonly property string mentionOwner: forThread ? "thread" : "room"
+
+    // Tells Mentions what the field holds. Called after the event loop turns, so that the change of
+    // the text and the one of the cursor that go together are seen as one.
+    function syncMentions() {
+        if (field.activeFocus && !root.previewing)
+            Mentions.update(mentionOwner, field.text, field.cursorPosition);
+    }
 
     function send() {
         const sent = root.staged.count > 0 ? root.staged.submit(field.text, quotingId, alsoToChannel.checked) : forThread ? Thread.send(field.text, quotingId, alsoToChannel.checked) : Room.send(field.text, quotingId);
@@ -161,6 +174,7 @@ Rectangle {
         }
 
         function onRoomIdChanged() {
+            Mentions.close(root.mentionOwner);
             if (root.editing)
                 root.endEdit();
             root.dropQuote();
@@ -171,6 +185,7 @@ Rectangle {
     // Another thread is another conversation: what was started for the last one is dropped.
     Connections {
         function onParentIdChanged() {
+            Mentions.close(root.mentionOwner);
             if (root.editing)
                 root.endEdit();
             root.dropQuote();
@@ -180,6 +195,24 @@ Rectangle {
 
         enabled: root.forThread
         target: Thread
+    }
+
+    // The popup's choice goes into the field as the replacement of the word, which the field's
+    // undo stack follows.
+    Connections {
+        function onInserted(start, end, replacement, cursor) {
+            if (Mentions.owner !== root.mentionOwner)
+                return;
+            field.remove(start, end);
+            field.insert(start, replacement);
+            field.cursorPosition = cursor;
+        }
+
+        target: Mentions as QtObject
+    }
+
+    MentionPopup {
+        owner: root.mentionOwner
     }
 
     FileDialog {
@@ -432,8 +465,33 @@ Rectangle {
                     topPadding: Theme.textAreaPaddingV
                     wrapMode: TextEdit.Wrap
 
+                    onActiveFocusChanged: {
+                        if (activeFocus)
+                            Qt.callLater(root.syncMentions);
+                        else
+                            Mentions.close(root.mentionOwner);
+                    }
+                    onCursorPositionChanged: Qt.callLater(root.syncMentions)
+                    onTextChanged: Qt.callLater(root.syncMentions)
+
                     Keys.onPressed: event => {
-                        if ((event.key === Qt.Key_Return || event.key === Qt.Key_Enter) && !(event.modifiers & Qt.ShiftModifier)) {
+                        // What the popup shows now, not as of the last turn of the event loop.
+                        if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter || event.key === Qt.Key_Tab || event.key === Qt.Key_Up || event.key === Qt.Key_Down || event.key === Qt.Key_Escape)
+                            root.syncMentions();
+                        const popup = Mentions.open && Mentions.owner === root.mentionOwner;
+                        if (popup && (event.key === Qt.Key_Return || event.key === Qt.Key_Enter || event.key === Qt.Key_Tab) && !(event.modifiers & Qt.ShiftModifier) && Mentions.cursor >= 0) {
+                            Mentions.acceptCursor();
+                            event.accepted = true;
+                        } else if (popup && event.key === Qt.Key_Up && Mentions.cursor >= 0) {
+                            Mentions.cursorUp();
+                            event.accepted = true;
+                        } else if (popup && event.key === Qt.Key_Down && Mentions.cursor >= 0) {
+                            Mentions.cursorDown();
+                            event.accepted = true;
+                        } else if (popup && event.key === Qt.Key_Escape) {
+                            Mentions.escape();
+                            event.accepted = true;
+                        } else if ((event.key === Qt.Key_Return || event.key === Qt.Key_Enter) && !(event.modifiers & Qt.ShiftModifier)) {
                             if (root.editing)
                                 root.save();
                             else
