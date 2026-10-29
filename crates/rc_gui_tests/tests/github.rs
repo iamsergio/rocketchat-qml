@@ -18,7 +18,7 @@ use std::time::Duration;
 use jiff::{SignedDuration, Timestamp};
 use rc_github::{JobState, MergeState, PrState, ReviewDecision};
 use rc_gui_tests::paths::github as gh;
-use rc_gui_tests::{App, Gui, Key, Modifiers, MouseButton};
+use rc_gui_tests::{App, Gui, Key, LaunchOptions, Modifiers, MouseButton};
 use rc_test_github::{Failure, GithubStub, Job, PullRequest};
 
 /// The app and the stub answer asynchronously: tests wait this long before they fail.
@@ -111,12 +111,13 @@ fn stub_with_pull_requests() -> GithubStub {
 
 fn launch(stub: GithubStub) -> Setup {
     let gh = FakeGh::printing(TOKEN);
-    let app = App::launch_with(&[
+    // The GitHub integration is off without --gh.
+    let options = LaunchOptions::new().arg("--gh").env(&[
         ("TZ", "UTC"),
         ("RC_GITHUB_API", stub.url()),
         ("RC_GH_PROGRAM", &gh.program()),
-    ])
-    .unwrap();
+    ]);
+    let app = App::launch_with_options(&options).unwrap();
     Setup { app, stub, _gh: gh }
 }
 
@@ -148,6 +149,18 @@ fn wait_for_text_containing(gui: &Gui, path: &str, part: &str) {
         Ok(gui.exists_and_visible(path)? && gui.text(path)?.contains(part))
     })
     .unwrap();
+}
+
+// GH-009
+#[test]
+#[ignore = "needs the app: run through ctest"]
+fn without_gh_there_is_no_tile() {
+    let app = App::launch().unwrap();
+    let gui = app.gui();
+
+    gui.wait_until_visible(rc_gui_tests::paths::main_window::SETTINGS_BUTTON, TIMEOUT)
+        .unwrap();
+    assert!(!gui.exists_and_visible(gh::TILE).unwrap());
 }
 
 // GH-009

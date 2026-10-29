@@ -16,6 +16,8 @@ pub mod qobject {
         #[qml_element]
         #[qml_singleton]
         #[qproperty(QString, version, READ, CONSTANT)]
+        // `--gh` was given: the rail shows the GitHub tile.
+        #[qproperty(bool, github, READ, CONSTANT)]
         type AppInfo = super::AppInfoRust;
     }
 }
@@ -25,12 +27,14 @@ use cxx_qt_lib::QString;
 /// Backing data of [`qobject::AppInfo`].
 pub struct AppInfoRust {
     version: QString,
+    github: bool,
 }
 
 impl Default for AppInfoRust {
     fn default() -> Self {
         Self {
             version: QString::from(rc_core::VERSION),
+            github: crate::lifecycle::github_enabled(),
         }
     }
 }

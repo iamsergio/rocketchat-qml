@@ -157,6 +157,8 @@ The tile is `connected` (grey otherwise), the failing count the service sent, th
 
 The tile, the connect page, the list and the page of the open pull request (header, approval banner, actions, checks, toast) are in the Qt app (`rc_qt` and `src/gui`). The desktop notification when a CI ends is a later step. The Slint app has none of it yet.
 
+It is off unless the app is started with `--gh`: `main.cpp` calls `rc_qt::enable_github()` before the core starts, so the hub doesn't start the service (its commands are then logged and ignored), and `AppInfo.github` is false, which hides the tile and lets the servers reach down to the settings button.
+
 ### Screens
 
 `rc_view::switchboard` keeps what fills the main area (`Screen`: `Account` or `GitHub`) apart from the current account, which stays current under the GitHub page: its events still reach the views, so going back needs no snapshot. While GitHub is shown no server tile looks current (the rows' `current` flag means "current and on screen"; their unread dot shows). `Shown::Screen` tells the frontend: Main.qml shows `GithubPage.qml` while `Github.shown`, and the hub tells the cache and the service (`set_on_screen`), which polls every minute then.

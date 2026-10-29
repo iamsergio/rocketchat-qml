@@ -20,7 +20,21 @@ pub mod ffi {
         /// `RC_DEV_USER` and `RC_DEV_PASS` override it). Only builds with `developer-mode` do it.
         /// Call before the QML is loaded.
         fn enable_dev_login();
+
+        /// `--gh`: the GitHub integration, which is off by default: without it the GitHub service
+        /// doesn't start and the rail has no GitHub tile. Call before `start_core`.
+        fn enable_github();
     }
+}
+
+use std::sync::atomic::{AtomicBool, Ordering};
+
+// Set once, before the core starts and the QML is loaded.
+static GITHUB: AtomicBool = AtomicBool::new(false);
+
+/// Whether `--gh` was given.
+pub(crate) fn github_enabled() -> bool {
+    GITHUB.load(Ordering::Relaxed)
 }
 
 fn start_core(cache_dir: &str) {
@@ -36,4 +50,9 @@ fn enable_dev_login() {
     rc_view::dev_login::enable();
     #[cfg(not(feature = "developer-mode"))]
     tracing::warn!("--dev needs a developer-mode build: ignored");
+}
+
+fn enable_github() {
+    tracing::info!("--gh: the GitHub integration is on");
+    GITHUB.store(true, Ordering::Relaxed);
 }
