@@ -75,6 +75,12 @@ QtObject {
     readonly property string richFaintStart: "<font color=\"" + textFaint + "\">"
     readonly property string richFaintEnd: "</font>"
 
+    // Styled text from the model marks what the user typed with <b>: in the colour of what is
+    // theirs, as the label of a mention would be.
+    function matchStyled(text: string): string {
+        return text.replace(/<b>/g, "<font color=\"" + own + "\"><b>").replace(/<\/b>/g, "</b></font>");
+    }
+
     readonly property string richTextStyle: "<style>"
         + "a { color: " + own + "; text-decoration: none; }"
         + "span.mention-me { color: " + signal + "; background-color: " + signalWash + "; font-weight: bold; }"
@@ -243,6 +249,15 @@ QtObject {
     readonly property int directoryNameGap: spacingM
     // The spinner in the row that says the directory is being searched.
     readonly property int directoryBusyIndicatorSize: 20
+    // The popup that completes an @mention above the composer: its width, the space between it and
+    // the composer, the padding inside it, and the icon in the square of @all and @here.
+    readonly property int mentionPopupWidth: 340
+    readonly property int mentionPopupGap: spacingM
+    readonly property int mentionPopupPadding: spacingS
+    readonly property int mentionSpecialIconSize: 14
+    // The hint line at its bottom: the space between its keys and words, and above it.
+    readonly property int mentionHintSpacing: spacingS
+    readonly property int mentionHintPaddingV: spacingL
     // The space each side of the server's name at the top of the sidebar.
     readonly property int sidebarHeaderPaddingH: 16
     readonly property int sidebarWidth: 264

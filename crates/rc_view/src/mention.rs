@@ -163,6 +163,8 @@ pub struct Suggestions {
     total: u32,
     searching: bool,
     failed: bool,
+    /// The query the core last said something about (a search started, answered or failed).
+    query: Option<String>,
 }
 
 impl Suggestions {
@@ -175,6 +177,7 @@ impl Suggestions {
             total: 0,
             searching: false,
             failed: false,
+            query: None,
         }
     }
 
@@ -192,6 +195,7 @@ impl Suggestions {
             };
         }
         (self.searching, self.failed) = (false, false);
+        self.query = Some(search.query.clone());
         match &search.state {
             MemberSearchState::Searching => self.searching = true,
             MemberSearchState::Found { members, total } => {
@@ -235,7 +239,9 @@ impl Suggestions {
         }
         let status = if self.failed {
             Status::Failed
-        } else if self.searching && rows.is_empty() {
+        } else if rows.is_empty() && (self.searching || self.query.as_deref() != Some(query)) {
+            // Also when the core has said nothing yet of this query: its `Searching` is on its
+            // way, and the popup must not say that nobody matches meanwhile.
             Status::Searching
         } else {
             Status::Idle
@@ -554,6 +560,39 @@ mod tests {
         let popup = suggestions.popup(RoomKind::Direct, "al");
         assert_eq!(usernames(&popup), ["alice"]);
         assert_eq!(popup.status, Status::Idle);
+    }
+
+    // ACT-013
+    #[test]
+    fn a_query_the_core_has_not_spoken_of_yet_spins_instead_of_saying_nobody_matches() {
+        let mut suggestions = with(&MemberSearch {
+            query: "bo".to_owned(),
+            ..answer(vec![], 0)
+        });
+
+        // Answered: nobody matches.
+        assert_eq!(
+            suggestions.popup(RoomKind::Direct, "bo").status,
+            Status::Idle
+        );
+        // Typed on: the search for "bob" has not been announced yet.
+        assert_eq!(
+            suggestions.popup(RoomKind::Direct, "bob").status,
+            Status::Searching
+        );
+        suggestions.apply(Some(&MemberSearch {
+            query: "bob".to_owned(),
+            ..answer(vec![], 0)
+        }));
+        assert_eq!(
+            suggestions.popup(RoomKind::Direct, "bob").status,
+            Status::Idle
+        );
+        // Nothing said at all yet.
+        assert_eq!(
+            Suggestions::default().popup(RoomKind::Direct, "a").status,
+            Status::Searching
+        );
     }
 
     // ACT-013

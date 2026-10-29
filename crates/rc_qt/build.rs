@@ -16,6 +16,7 @@ fn main() {
             "src/job_list_model.rs",
             "src/lifecycle.rs",
             "src/logging.rs",
+            "src/mentions_model.rs",
             "src/message_list_model.rs",
             "src/pull_request_list.rs",
             "src/room_list_model.rs",

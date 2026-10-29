@@ -570,6 +570,57 @@ pub mod staged_file_part {
     pub const THUMBNAIL: &str = "thumbnailImage";
 }
 
+/// The parts of the mention popup above a composer, for [`mention`].
+pub mod mention_part {
+    /// The popup itself: visible while it is open.
+    pub const POPUP: &str = "mentionPopup";
+    /// Its label, as its `text`: "Members", or "In this conversation" in a direct message (shown in
+    /// capitals).
+    pub const LABEL: &str = "mentionLabel";
+    /// "Searching members…", visible while the search runs and there is nothing to show yet.
+    pub const SEARCHING: &str = "mentionSearching";
+    /// Why the members could not be searched, as its `text`. Visible only then.
+    pub const ERROR: &str = "mentionError";
+    /// "No member matches “@query”.", visible when nothing is listed and the search is done.
+    pub const NONE: &str = "mentionNone";
+    /// "N more, keep typing", as its `text`.
+    pub const MORE: &str = "mentionMore";
+    /// The hint line with the keys.
+    pub const HINT: &str = "mentionHint";
+}
+
+/// A part of the mention popup above the composer `composer` (`main_window::COMPOSER` or
+/// `main_window::THREAD_COMPOSER`), see [`mention_part`].
+#[must_use]
+pub fn mention(composer: &str, part: &str) -> String {
+    format!("{composer}/{part}")
+}
+
+/// The parts of a row of the mention popup, for [`mention_row`].
+pub mod mention_row_part {
+    /// The display name, visible for a person who has one.
+    pub const NAME: &str = "mentionName";
+    /// `@username` of a person, as styled text.
+    pub const USERNAME: &str = "mentionUsername";
+    /// `@all` or `@here` as styled text, in the place of the name.
+    pub const SPECIAL_NAME: &str = "mentionSpecialName";
+    /// What `@all` or `@here` does, as its `text`.
+    pub const DESCRIPTION: &str = "mentionDescription";
+}
+
+/// The row of the person with this username (`all` or `here` for the two groups) in the popup of
+/// the composer `composer`, or a part of it (see [`mention_row_part`]; an empty `part` is the row
+/// itself, whose `text` is the username).
+#[must_use]
+pub fn mention_row(composer: &str, username: &str, part: &str) -> String {
+    let row = format!("{composer}/mentionRow_{username}");
+    if part.is_empty() {
+        row
+    } else {
+        format!("{row}/{part}")
+    }
+}
+
 /// The file with this index (0 is the first, in the order attached) that waits in the composer
 /// `composer` (`main_window::COMPOSER` or `main_window::THREAD_COMPOSER`), or a part of it (see
 /// [`staged_file_part`]; an empty `part` is the chip itself).
@@ -739,6 +790,23 @@ mod tests {
             "mainWindow/msg_m7/quote0/quoteAuthor"
         );
         assert_eq!(quote("m7", 1, ""), "mainWindow/msg_m7/quote1");
+    }
+
+    // INFRA-002
+    #[test]
+    fn mention_popup_parts_are_addressed_through_their_composer() {
+        assert_eq!(
+            mention(main_window::THREAD_COMPOSER, mention_part::HINT),
+            "mainWindow/threadComposer/mentionHint"
+        );
+        assert_eq!(
+            mention_row(main_window::COMPOSER, "ann", mention_row_part::NAME),
+            "mainWindow/roomComposer/mentionRow_ann/mentionName"
+        );
+        assert_eq!(
+            mention_row(main_window::COMPOSER, "ann", ""),
+            "mainWindow/roomComposer/mentionRow_ann"
+        );
     }
 
     // INFRA-002

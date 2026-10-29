@@ -29,7 +29,7 @@ use cxx_qt::CxxQtThread;
 use cxx_qt::Threading;
 use rc_core::adapters::DiskFileCache;
 use rc_core::directory::{ActionState, DirectoryAction};
-use rc_core::domain::{AccountId, AvatarOwner, MessageId, RoomId};
+use rc_core::domain::{AccountId, AvatarOwner, MessageId, RoomId, RoomKind};
 use rc_core::emoji::CustomEmojis;
 use rc_core::github::GithubConfig;
 use rc_core::policy::{ActionError, MessageAction};
@@ -42,6 +42,7 @@ use secrecy::SecretString;
 
 use crate::account_list_model::qobject::AccountListModel;
 use crate::emoji_picker_model::qobject::EmojiPickerModel;
+use crate::mentions_model::qobject::MentionsModel;
 use crate::message_list_model::qobject::MessageListModel;
 use crate::room_list_model::qobject::RoomListModel;
 use crate::room_search_model::qobject::RoomSearchModel;
@@ -57,6 +58,7 @@ use rc_view::attachment_view::ImageUrls;
 use rc_view::avatar_view::AvatarUrls;
 use rc_view::cache::Cache;
 use rc_view::directory::{SearchRow, search_rows};
+use rc_view::mention::Popup;
 use rc_view::rich_html::topic_html;
 use rc_view::room_search::{search_rooms as search, trimmed};
 use rc_view::room_view::RoomState;
@@ -160,6 +162,7 @@ struct Views {
     session: Registered<SessionVm>,
     rooms: Registered<RoomListModel>,
     room_search: Registered<RoomSearchModel>,
+    mentions: Registered<MentionsModel>,
     room: Registered<RoomVm>,
     messages: Registered<MessageListModel>,
     thread: Registered<ThreadVm>,
@@ -314,6 +317,53 @@ pub fn register_rooms(thread: CxxQtThread<RoomListModel>) -> (RoomChange, Avatar
 /// room list changes. It has nothing to replay: it asks for results with [`search_rooms`].
 pub fn register_room_search(thread: CxxQtThread<RoomSearchModel>) {
     lock().views.room_search.register(thread);
+}
+
+/// Registers the `Mentions` model. Call on the GUI thread; it is told to show its rows again when
+/// the member search says something. It has nothing to replay: it asks with [`mention_popup`].
+pub fn register_mentions(thread: CxxQtThread<MentionsModel>) {
+    lock().views.mentions.register(thread);
+}
+
+/// The room the composer of the open room (or of the open thread, which is in it) writes to, and
+/// whether it is a direct message. `None` while no room is open.
+pub fn mention_target(for_thread: bool) -> Option<(RoomId, bool)> {
+    let hub = lock();
+    let cache = hub.switchboard.accounts().current_cache();
+    let state = cache.room_state();
+    let id = if for_thread {
+        cache.thread_state().room_id
+    } else {
+        state.room_id
+    };
+    (!id.is_empty()).then(|| (RoomId::from(id), state.kind == "direct"))
+}
+
+/// The rows of the mention popup for what is typed after the `@`, with the avatars to show them
+/// with.
+pub fn mention_popup(direct: bool, query: &str) -> (Popup, AvatarUrls) {
+    let hub = lock();
+    let cache = hub.switchboard.accounts().current_cache();
+    let kind = if direct {
+        RoomKind::Direct
+    } else {
+        RoomKind::Channel
+    };
+    (cache.mentions().popup(kind, query), cache.avatars())
+}
+
+/// Searches the members of `room` for the mention popup.
+pub fn search_members(room: &RoomId, query: &str) {
+    current_account("search_members", |account| {
+        account.search_members(room, query);
+    });
+}
+
+/// Ends the member search, when the mention popup closes.
+pub fn cancel_member_search() {
+    current_account("cancel_member_search", |account| {
+        account.cancel_member_search();
+    });
 }
 
 /// What the room search shows for a query.
@@ -780,6 +830,7 @@ impl Views {
                 self.answer_directory_action(&action, &state);
                 self.show_room(cache);
             }
+            Event::MemberSearch(_) => self.mentions.queue(MentionsModel::refresh),
             Event::Directory(_) | Event::QuietRooms(_) => {
                 self.room_search.queue(RoomSearchModel::refresh);
             }
@@ -832,6 +883,7 @@ impl Views {
         let cache = accounts.current_cache();
         let (rooms, avatars) = (cache.rooms_snapshot(), cache.avatars());
         self.room_search.queue(RoomSearchModel::switched);
+        self.mentions.queue(MentionsModel::refresh);
         self.rooms.queue(move |model| model.show(rooms, avatars));
         let (messages, viewer, avatars, images) = (
             cache.timeline_snapshot(),
@@ -874,6 +926,7 @@ impl Views {
             session: Registered::new("Session"),
             rooms: Registered::new("RoomList"),
             room_search: Registered::new("RoomSearch"),
+            mentions: Registered::new("Mentions"),
             room: Registered::new("Room"),
             messages: Registered::new("MessageList"),
             thread: Registered::new("Thread"),
@@ -954,6 +1007,9 @@ impl Views {
         let for_search = changes.to_vec();
         self.room_search
             .queue(move |model| model.set_avatars(&for_search));
+        let for_mentions = changes.to_vec();
+        self.mentions
+            .queue(move |model| model.set_avatars(&for_mentions));
         let for_messages = changes.to_vec();
         self.messages
             .queue(move |model| model.set_avatars(&for_messages));
