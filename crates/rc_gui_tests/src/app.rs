@@ -97,16 +97,19 @@ impl Drop for CacheDir {
     }
 }
 
-/// How to start the app: which binary, under which wrapper, with which extra environment.
+/// How to start the app: which binary, under which wrapper, with which extra arguments and
+/// environment.
 #[derive(Debug, Default, Clone)]
 pub struct LaunchOptions {
     binary: Option<OsString>,
     wrapper: Vec<OsString>,
+    args: Vec<OsString>,
     env: Vec<(String, String)>,
 }
 
 impl LaunchOptions {
-    /// The defaults: the binary named by [`APP_ENV`], no wrapper, no extra environment.
+    /// The defaults: the binary named by [`APP_ENV`], no wrapper, no extra arguments or
+    /// environment.
     #[must_use]
     pub fn new() -> Self {
         Self::default()
@@ -132,6 +135,13 @@ impl LaunchOptions {
         self.wrapper = std::iter::once(program.into())
             .chain(args.into_iter().map(Into::into))
             .collect();
+        self
+    }
+
+    /// Adds `arg` to the app's arguments, after `--spix-port <port>`, e.g. `--gh`.
+    #[must_use]
+    pub fn arg(mut self, arg: impl Into<OsString>) -> Self {
+        self.args.push(arg.into());
         self
     }
 
@@ -280,6 +290,7 @@ fn app_command(options: &LaunchOptions, binary: &OsStr, port: u16, cache: &Path)
     command
         .arg("--spix-port")
         .arg(port.to_string())
+        .args(&options.args)
         .env("QT_QPA_PLATFORM", "offscreen")
         // The app starts the core at launch, and its default secret store is the OS keyring:
         // on a developer machine that is the user's real wallet, which may even ask them to
@@ -425,6 +436,15 @@ mod tests {
             env_of(&command, "QT_QPA_PLATFORM").as_deref(),
             Some("offscreen")
         );
+    }
+
+    // INFRA-002
+    #[test]
+    fn extra_arguments_follow_the_spix_port() {
+        let options = LaunchOptions::new().arg("--gh");
+        let command = app_command(&options, OsStr::new("/bin/app"), 1234, Path::new("/c"));
+        let args: Vec<_> = command.get_args().collect();
+        assert_eq!(args, ["--spix-port", "1234", "--gh"]);
     }
 
     // INFRA-002
