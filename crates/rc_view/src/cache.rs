@@ -23,6 +23,7 @@ use crate::attachment_view::ImageUrls;
 use crate::avatar_view::AvatarUrls;
 use crate::directory::{DirectoryView, directory_view};
 use crate::emoji_image_view::EmojiImageUrls;
+use crate::mention::Suggestions;
 use crate::message_view::{author_name, body, can_edit};
 use crate::room_view::{RoomState, room_state, typing_line, with_preview};
 use crate::session_view::{LoginMode, SessionView, host, session_view};
@@ -52,6 +53,8 @@ pub struct Cache {
     quiet_rooms: Vec<Room>,
     /// What the directory search holds, as the core last said.
     directory: Directory,
+    /// What the member search of the mention popup holds, as the core last said.
+    mentions: Suggestions,
     /// The last thing the core said of a directory action: `Working` while it is under way. `None`
     /// before the first, and after the session ends.
     directory_action: Option<(DirectoryAction, ActionState)>,
@@ -118,6 +121,7 @@ impl Cache {
             rooms: Vec::new(),
             quiet_rooms: Vec::new(),
             directory: Directory::cleared(),
+            mentions: Suggestions::new(),
             directory_action: None,
             preview: None,
             room: None,
@@ -216,6 +220,7 @@ impl Cache {
             }
             Event::QuietRooms(rooms) => self.quiet_rooms.clone_from(rooms),
             Event::Directory(directory) => self.directory.clone_from(directory),
+            Event::MemberSearch(search) => self.mentions.apply(search.as_ref()),
             Event::DirectoryAction { action, state } => {
                 self.directory_action = Some((action.clone(), state.clone()));
             }
@@ -396,6 +401,13 @@ impl Cache {
     pub fn directory_view(&self) -> DirectoryView {
         let own = self.username.as_deref().unwrap_or_default();
         directory_view(&self.directory, &self.rooms, &self.quiet_rooms, own)
+    }
+
+    /// The answers of the member search the mention popup shows (see
+    /// [`Suggestions::popup`]).
+    #[must_use]
+    pub fn mentions(&self) -> &Suggestions {
+        &self.mentions
     }
 
     /// The last thing the core said of a directory action: the action is under way if the state
@@ -1102,6 +1114,28 @@ mod tests {
         // The session ending leaves no action under way.
         cache.apply(&Event::Session(SessionState::LoggedOut { failure: None }));
         assert_eq!(cache.directory_action(), None);
+    }
+
+    // ACT-013
+    #[test]
+    fn the_mention_suggestions_are_the_last_member_search_the_core_sent() {
+        use rc_core::members::{MemberSearch, MemberSearchState};
+        let mut cache = Cache::new();
+        let search = MemberSearch {
+            room: "r".to_owned().into(),
+            query: String::new(),
+            state: MemberSearchState::Found {
+                members: Vec::new(),
+                total: 3,
+            },
+        };
+
+        cache.apply(&Event::MemberSearch(Some(search)));
+        let more = cache.mentions().popup(RoomKind::Direct, "").rows;
+        cache.apply(&Event::MemberSearch(None));
+
+        assert_eq!(more, [crate::mention::Row::More(3)]);
+        assert_eq!(cache.mentions().popup(RoomKind::Direct, "").rows, []);
     }
 
     // ACT-007

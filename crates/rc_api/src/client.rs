@@ -13,8 +13,8 @@ use tokio::io::AsyncReadExt as _;
 use crate::error::Error;
 use crate::types::{
     Credentials, CustomEmoji, DirectoryChannel, DirectoryPage, DirectoryUser, Download,
-    HistoryPage, LoginResult, Message, MessageChanges, MessageSettings, RoomInfo, RoomType,
-    ServerInfo, Subscription, ThreadPage, ThreadsKind, ThreadsPage, User,
+    HistoryPage, LoginResult, MemberPage, Message, MessageChanges, MessageSettings, RoomInfo,
+    RoomType, ServerInfo, Subscription, ThreadPage, ThreadsKind, ThreadsPage, User,
 };
 use crate::wire;
 
@@ -856,6 +856,38 @@ impl RestSession {
         let sort = json!({ "usersCount": -1 }).to_string();
         let body = self.directory("channels", text, count, Some(&sort)).await?;
         wire::parse_directory_channels(&body).map_err(Error::Decode)
+    }
+
+    /// The members of a channel or private group whose username or name contain `filter`, case
+    /// insensitively (`GET /api/v1/rooms.membersOrderedByRole`), at most `count`, owners first,
+    /// then moderators, then by name. An empty `filter` lists them all. The page's `total` is how
+    /// many match. The server refuses a direct message (`error-room-type-not-supported`).
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Unauthorized`] if the token is expired or revoked, [`Error::Server`] if the server
+    /// refuses, or any of the other errors.
+    pub async fn room_members(
+        &self,
+        room_id: &str,
+        filter: &str,
+        count: usize,
+    ) -> Result<MemberPage, Error> {
+        // Only a URL to escape the query with; the host is never used.
+        let mut escaped =
+            Url::parse("http://unused/").map_err(|e| Error::InvalidUrl(e.to_string()))?;
+        {
+            let mut pairs = escaped.query_pairs_mut();
+            pairs.append_pair("roomId", room_id);
+            pairs.append_pair("filter", filter);
+            pairs.append_pair("count", &count.to_string());
+        }
+        let path = format!(
+            "api/v1/rooms.membersOrderedByRole?{}",
+            escaped.query().unwrap_or_default()
+        );
+        let body = self.call(Method::GET, &path).await?;
+        wire::parse_room_members(&body).map_err(Error::Decode)
     }
 
     async fn directory(

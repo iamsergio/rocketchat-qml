@@ -79,6 +79,24 @@ pub struct DirectoryUser {
     pub name: Option<String>,
 }
 
+/// A member of a room, as the member search lists it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RoomMember {
+    pub id: String,
+    pub username: String,
+    /// The display name, when the user has one.
+    pub name: Option<String>,
+}
+
+/// A page of a room's members.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MemberPage {
+    /// In the server's order: owners, moderators, then by name.
+    pub items: Vec<RoomMember>,
+    /// How many members match, on all the pages.
+    pub total: u32,
+}
+
 /// A public channel of the server's directory. The directory doesn't say whether the user is in it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DirectoryChannel {

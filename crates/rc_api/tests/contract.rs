@@ -2821,6 +2821,86 @@ async fn the_directory_with_a_revoked_token_is_unauthorized() {
     assert!(matches!(result, Err(Error::Unauthorized)), "{result:?}");
 }
 
+// ACT-013
+#[tokio::test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+async fn the_members_filter_matches_a_substring_of_the_username_and_of_the_name() {
+    let fixture = Fixture::new();
+    let stem = unique();
+    let alice = fixture.admin.create_user_named(&format!("Alice Doe{stem}"));
+    let bob = fixture.admin.create_user_named(&format!("Bob Roe{stem}"));
+    let (room, _) = fixture
+        .admin
+        .create_channel(&[&alice.username, &bob.username]);
+    let session = fixture.client.session(fixture.login().await.credentials);
+
+    // The middle of the username, and the name in another case.
+    let by_username = session
+        .room_members(&room, &alice.username[3..], 10)
+        .await
+        .unwrap();
+    let by_name = session
+        .room_members(&room, &format!("doe{stem}"), 10)
+        .await
+        .unwrap();
+    let everybody = session.room_members(&room, "", 10).await.unwrap();
+
+    for found in [&by_username, &by_name] {
+        assert_eq!(found.total, 1);
+        assert_eq!(found.items[0].id, alice.id);
+        assert_eq!(found.items[0].username, alice.username);
+        assert_eq!(found.items[0].name.as_deref(), Some(alice.name.as_str()));
+    }
+    // Admin created the channel, so it is the owner and comes first, then the others by name.
+    let usernames: Vec<_> = everybody
+        .items
+        .iter()
+        .map(|m| m.username.as_str())
+        .collect();
+    assert_eq!(
+        usernames[1..],
+        [alice.username.as_str(), bob.username.as_str()]
+    );
+    assert_eq!(everybody.total, 3);
+}
+
+// ACT-013
+#[tokio::test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+async fn the_members_total_counts_beyond_the_count_and_a_private_group_works() {
+    let fixture = Fixture::new();
+    let first = fixture.admin.create_user();
+    let second = fixture.admin.create_user();
+    // The user must be in the group to list it.
+    let (group, _) =
+        fixture
+            .admin
+            .create_group(&[&first.username, &second.username, &fixture.user.username]);
+    let session = fixture.client.session(fixture.login().await.credentials);
+
+    let found = session.room_members(&group, "ct-user-", 1).await.unwrap();
+
+    assert_eq!(found.items.len(), 1);
+    assert_eq!(found.total, 3);
+}
+
+// ACT-013
+#[tokio::test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+async fn the_members_of_a_direct_message_are_refused() {
+    let fixture = Fixture::new();
+    let dm = fixture.admin.create_dm(&fixture.user.username);
+    let session = fixture.client.session(fixture.login().await.credentials);
+
+    let result = session.room_members(&dm, "", 10).await;
+
+    assert!(
+        matches!(result, Err(Error::Server { status: 400, ref message })
+            if message.contains("error-room-type-not-supported")),
+        "{result:?}"
+    );
+}
+
 // ACT-007
 #[tokio::test]
 #[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]

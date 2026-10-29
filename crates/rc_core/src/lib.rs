@@ -21,6 +21,7 @@ pub mod github;
 mod images;
 pub mod list_change;
 pub mod logging;
+pub mod members;
 pub mod policy;
 pub mod ports;
 mod quote;

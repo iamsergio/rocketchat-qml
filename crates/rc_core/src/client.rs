@@ -22,6 +22,7 @@ use crate::emoji_images::EmojiImageUpdate;
 use crate::error::Error;
 use crate::github::{GitHub, GithubConfig, GithubEvent, GithubPorts, GithubStore};
 use crate::images::ImageUpdate;
+use crate::members::MemberSearch;
 use crate::policy::{ActionError, MessageAction, MessagePolicy};
 use crate::ports::{Clock, Connector, FileCache, SecretStore};
 use crate::rooms::{RoomAction, RoomActionError, RoomChange, Unread};
@@ -150,6 +151,10 @@ pub enum Event {
     /// whenever it changes: a new query comes at once as `Searching` with no results, then the
     /// answer or the failure. The empty query clears it. A logout clears it, if it held any.
     Directory(Directory),
+    /// What the search of a room's members (see [`AccountHandle::search_members`]) holds, whenever
+    /// it changes: a new query comes at once as `Searching`, then the answer or the failure. `None`
+    /// when the search is cancelled, and on a logout, if there was one.
+    MemberSearch(Option<MemberSearch>),
     /// How something the user asked of a person or channel of the directory (see
     /// [`AccountHandle::open_direct`], [`preview_channel`](AccountHandle::preview_channel) and
     /// [`join_channel`](AccountHandle::join_channel)) goes: `Working` when it starts, then `Done`
@@ -235,6 +240,11 @@ pub(crate) enum Command {
     /// Without colons.
     WantEmojiImages(Vec<String>),
     SearchDirectory(String),
+    SearchMembers {
+        room: RoomId,
+        query: String,
+    },
+    CancelMemberSearch,
     OpenDirect(String),
     PreviewChannel(RoomId),
     JoinChannel(RoomId),
@@ -694,6 +704,30 @@ impl AccountHandle<'_> {
     /// results. Ignored unless logged in.
     pub fn search_directory(&self, text: &str) {
         self.send(Command::SearchDirectory(text.to_owned()));
+    }
+
+    /// Searches the members of `room` whose username or name contain `query` (ignoring case), for
+    /// the composer's mention popup: the first [`MEMBERS_PER_SEARCH`](crate::members::MEMBERS_PER_SEARCH)
+    /// in the server's order and how many there are in all, as [`Event::MemberSearch`]. Call it
+    /// on every change of the text after the `@`; an empty `query` lists the room's first members.
+    ///
+    /// A new search replaces the one under way, and its answer is dropped. The server is asked once
+    /// the query has not changed for a while (300 ms; `RC_MEMBERS_DEBOUNCE_MS` sets it for tests),
+    /// and the event with the query and `Searching` comes at once. The same search again does
+    /// nothing, unless the last one failed: then it asks again without waiting. A direct message
+    /// is answered at once and without a request, with the other person if they match. Ignored
+    /// unless logged in.
+    pub fn search_members(&self, room: &RoomId, query: &str) {
+        self.send(Command::SearchMembers {
+            room: room.clone(),
+            query: query.to_owned(),
+        });
+    }
+
+    /// Ends the member search and drops its answer, when the popup closes. The event
+    /// `MemberSearch(None)` comes if there was a search.
+    pub fn cancel_member_search(&self) {
+        self.send(Command::CancelMemberSearch);
     }
 
     /// Opens the direct message with the user `username`, which the server creates the first time:
