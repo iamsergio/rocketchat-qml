@@ -6,7 +6,12 @@
 
 use std::path::PathBuf;
 
-use rc_core::adapters::{MemoryStore, default_store};
+use std::ffi::OsString;
+
+use rc_core::adapters::{
+    GhProcess, MemoryGithubStore, MemoryStore, default_github_store, default_store,
+};
+use rc_core::github::{DEFAULT_API_URL, GithubStore};
 use rc_core::ports::SecretStore;
 
 /// Environment variable choosing where the session token is kept. `memory` keeps it in memory
@@ -71,6 +76,76 @@ pub fn secret_store() -> Box<dyn SecretStore> {
     }
 }
 
+/// The store of the GitHub login, which follows `RC_SECRET_STORE` like the accounts' does: memory
+/// for `memory`, the keyring otherwise. A plain file isn't offered for it: `file:` gets memory,
+/// and a log line saying so.
+#[must_use]
+pub fn github_store() -> Box<dyn GithubStore> {
+    let value = std::env::var(STORE_ENV).ok();
+    match store_choice(value.as_deref()) {
+        StoreChoice::Memory => {
+            tracing::info!("GitHub store: memory ({STORE_ENV}=memory)");
+            Box::new(MemoryGithubStore::default())
+        }
+        StoreChoice::File(_) => {
+            tracing::info!("GitHub store: memory ({STORE_ENV}=file:... has none for GitHub)");
+            Box::new(MemoryGithubStore::default())
+        }
+        StoreChoice::Keyring => {
+            tracing::info!("GitHub store: OS keyring, falling back to memory");
+            default_github_store()
+        }
+    }
+}
+
+/// Environment variable naming the API's address, instead of GitHub's. Developer-mode builds only.
+#[cfg_attr(not(feature = "developer-mode"), allow(dead_code))]
+const GITHUB_API_ENV: &str = "RC_GITHUB_API";
+
+/// Environment variable naming the program to run in place of `gh`, which a GUI test points at a
+/// script. Developer-mode builds only.
+#[cfg_attr(not(feature = "developer-mode"), allow(dead_code))]
+const GH_PROGRAM_ENV: &str = "RC_GH_PROGRAM";
+
+/// Where the GitHub service talks, and which program stands for the GitHub CLI.
+pub struct GithubSetup {
+    pub api_url: String,
+    pub gh: GhProcess,
+}
+
+/// GitHub's address and the `gh` found on the `PATH`; in developer-mode builds, `RC_GITHUB_API`
+/// and `RC_GH_PROGRAM` replace them, so that a GUI test never reaches the real GitHub nor runs the
+/// user's `gh`.
+#[must_use]
+pub fn github_setup() -> GithubSetup {
+    #[cfg(feature = "developer-mode")]
+    {
+        github_setup_from(
+            std::env::var(GITHUB_API_ENV).ok(),
+            std::env::var_os(GH_PROGRAM_ENV),
+        )
+    }
+    #[cfg(not(feature = "developer-mode"))]
+    {
+        github_setup_from(None, None)
+    }
+}
+
+fn github_setup_from(api: Option<String>, gh: Option<OsString>) -> GithubSetup {
+    let api_url = api.filter(|url| !url.is_empty());
+    if let Some(url) = &api_url {
+        tracing::info!(%url, "{GITHUB_API_ENV}: GitHub's API is at another address");
+    }
+    let gh = gh.filter(|program| !program.is_empty());
+    GithubSetup {
+        api_url: api_url.unwrap_or_else(|| DEFAULT_API_URL.to_owned()),
+        gh: gh.map_or_else(GhProcess::default, |program| {
+            tracing::info!(program = ?program, "{GH_PROGRAM_ENV}: another program stands for gh");
+            GhProcess::with_program(program, Vec::new())
+        }),
+    }
+}
+
 /// The paths in `value` (`RC_TEST_ATTACH_FILES`), if set.
 #[cfg_attr(not(feature = "test-attach-files"), allow(dead_code))]
 fn attachments_in(value: Option<&std::ffi::OsStr>) -> Vec<PathBuf> {
@@ -123,6 +198,20 @@ mod tests {
         assert_eq!(
             attachments_in(Some(&value)),
             [PathBuf::from("/tmp/a.txt"), PathBuf::from("/tmp/b c.png")]
+        );
+    }
+
+    // GH-009
+    #[test]
+    fn github_talks_to_github_unless_told_otherwise() {
+        assert_eq!(github_setup_from(None, None).api_url, DEFAULT_API_URL);
+        assert_eq!(
+            github_setup_from(Some(String::new()), None).api_url,
+            DEFAULT_API_URL
+        );
+        assert_eq!(
+            github_setup_from(Some("http://127.0.0.1:9".to_owned()), None).api_url,
+            "http://127.0.0.1:9"
         );
     }
 

@@ -16,6 +16,7 @@ pub mod directory;
 pub mod emoji_image_view;
 pub mod emoji_picker_view;
 pub mod file_urls;
+pub mod github;
 pub mod message_list;
 pub mod message_view;
 pub mod paste;

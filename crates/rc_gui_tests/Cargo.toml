@@ -15,7 +15,10 @@ thiserror.workspace = true
 ureq.workspace = true
 
 [dev-dependencies]
+jiff.workspace = true
 png.workspace = true
+rc_github.workspace = true
+rc_test_github.workspace = true
 rc_test_server.workspace = true
 
 [lints]

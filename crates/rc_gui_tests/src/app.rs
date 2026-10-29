@@ -289,6 +289,8 @@ fn app_command(options: &LaunchOptions, binary: &OsStr, port: u16, cache: &Path)
         .env("XDG_CACHE_HOME", cache)
         // Channels show their news at once, as most tests expect; the batching ones override it.
         .env("RC_CHANNEL_BATCH_SECS", "0")
+        // A QML warning (a binding loop, a TypeError) ends the Qt app, so the test fails on it.
+        .env("RC_FATAL_QML_WARNINGS", "1")
         .envs(options.env.iter().map(|(k, v)| (k, v)))
         .stdin(Stdio::null());
     command
@@ -385,6 +387,10 @@ mod tests {
         assert_eq!(
             env_of(&command, "QT_QPA_PLATFORM").as_deref(),
             Some("offscreen")
+        );
+        assert_eq!(
+            env_of(&command, "RC_FATAL_QML_WARNINGS").as_deref(),
+            Some("1")
         );
     }
 

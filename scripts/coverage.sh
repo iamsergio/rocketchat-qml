@@ -20,7 +20,7 @@ gui=1
 
 # Not code to measure: dependencies, the standard library, generated code (under target/), the test
 # crates and the tests/ directories of the others.
-ignore='(/\.cargo/|/\.rustup/|/rustc/|/target/|/crates/(rc_gui_tests|rc_test_server)/|/tests/)'
+ignore='(/\.cargo/|/\.rustup/|/rustc/|/target/|/crates/(rc_gui_tests|rc_test_server|rc_test_github)/|/tests/)'
 
 # Before the instrumentation environment below: Corrosion must not see it. The app is instrumented
 # by the 'coverage' preset instead, into its own build directory.

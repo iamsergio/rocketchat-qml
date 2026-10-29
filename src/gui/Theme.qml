@@ -49,7 +49,12 @@ QtObject {
     readonly property color ownBorder: "#807f9cff"
     // Own at 6%: the message whose thread is open beside the room.
     readonly property color ownTint: "#0f7f9cff"
+    // A passed check, and an idle runner's lamp. Success at 12%: the halo of that lamp.
+    readonly property color success: "#52c48c"
+    readonly property color successWash: "#1f52c48c"
     readonly property color warning: "#e8b44f"
+    // The text on a warning-coloured button.
+    readonly property color textOnWarning: "#1d1604"
     // Warning at 12%.
     readonly property color warningWash: "#1fe8b44f"
     readonly property color error: "#ff8a66"
@@ -66,6 +71,10 @@ QtObject {
     // names and no colours): links, mentions, channels, code and the bar of a quote. A Label's
     // `linkColor` doesn't colour the links of rich text. A QML colour with alpha turns into
     // `#AARRGGBB`, which Qt's CSS takes.
+    // The number after the title of a pull request, in styled text (which takes no style sheet).
+    readonly property string richFaintStart: "<font color=\"" + textFaint + "\">"
+    readonly property string richFaintEnd: "</font>"
+
     readonly property string richTextStyle: "<style>"
         + "a { color: " + own + "; text-decoration: none; }"
         + "span.mention-me { color: " + signal + "; background-color: " + signalWash + "; font-weight: bold; }"
@@ -90,6 +99,10 @@ QtObject {
     // The letter of a server's tile.
     readonly property real fontSizeRailTile: fontSizeBase * 1.13
     readonly property real fontSizeTitle: fontSizeBase * 1.7
+    // The title of a pull request over its page.
+    readonly property real fontSizePageTitle: fontSizeBase * 1.33
+    // Branch names.
+    readonly property string fontFamilyMono: "monospace"
     readonly property real avatarFontScale: 0.4
     readonly property int fontWeightNormal: Font.Normal
     readonly property int fontWeightMedium: Font.Medium
@@ -298,6 +311,79 @@ QtObject {
     // How far the tool tip of a tile overlaps the rail.
     readonly property int railTipOverlap: 4
 
+    // The GitHub tile in the rail takes the server tiles' sizes, and has a mark of its own.
+    readonly property int githubMarkSize: 21
+    // The connect page: the mark over its heading, and the column the page is in.
+    readonly property int githubConnectMarkSize: 36
+    readonly property int githubConnectWidth: 380
+    // The mark beside the repository and number on the page of a pull request.
+    readonly property int githubPageMarkSize: 16
+    // The check bar: one segment per job. Tall on the page, thin under a row of the list, with a
+    // gap between segments. The segments of passed jobs are dimmed.
+    readonly property int checkBarHeight: 10
+    readonly property int checkBarHeightRow: 3
+    readonly property int checkBarGap: 2
+    readonly property real checkPassedOpacity: 0.55
+    // A row of the pull request list: the state glyph, the vertical padding, the bell, and how
+    // far the check bar is under the title.
+    readonly property int prGlyphSize: 16
+    readonly property int prRowPaddingV: 9
+    readonly property int prBellSize: 12
+    readonly property int prCheckBarGap: 7
+    // The chevron of the Drafts heading, and the turns of the left-pointing icon to point right
+    // (folded) and down (open).
+    readonly property int prFoldChevronSize: 12
+    readonly property int prFoldClosedRotation: 180
+    readonly property int prFoldOpenRotation: -90
+    // The strip over the actions of a pull request that has runs waiting for approval, and the
+    // shield in it.
+    readonly property int prBannerPaddingV: 8
+    readonly property int prBannerIconSize: 16
+    // The bar of actions: its padding at the sides, its least height (so that it doesn't jump
+    // when the buttons give way to the question of a merge), and the icon in a button with one.
+    readonly property int prActionBarPaddingH: 24
+    readonly property int prActionBarMinHeight: 55
+    readonly property int prButtonIconSize: 14
+    // The small buttons (Approve runs, Rerun, the log of a job): their height, and the font of a
+    // Rerun button.
+    readonly property int prSmallButtonHeight: 26
+    // The line under the actions that says why a command failed.
+    readonly property int prErrorPaddingV: 8
+    // The checks: the padding around them, and the space between their parts.
+    readonly property int prChecksPaddingH: 24
+    // The header of a pull request's page: its sides line up with the action bar and the checks.
+    readonly property int prHeaderPaddingH: prActionBarPaddingH
+    readonly property int prHeaderPaddingTop: 18
+    readonly property int prHeaderPaddingBottom: 14
+    readonly property int prChecksPaddingV: 18
+    readonly property int prChecksSpacing: 16
+    // The square before each word of the tally, and the gaps between the words.
+    readonly property int prTallySwatchSize: 8
+    readonly property int prTallySpacing: 14
+    // How much taller a segment of the page's bar gets under the pointer, and the time it takes.
+    readonly property real checkBarHoverScale: 1.5
+    readonly property real checkBarRestScale: 1
+    readonly property int checkBarHoverDuration: 100
+    // A job row: its least height, and the glyph of its state.
+    readonly property int prJobRowMinHeight: 36
+    readonly property int prJobGlyphSize: 15
+    // A heading of a group of jobs: its height.
+    readonly property int prGroupHeadingHeight: 30
+    // The toast over the page: the space around its text, its distance from the bottom, and the
+    // check in it. It stays this long, in milliseconds.
+    readonly property int prToastPaddingH: 16
+    readonly property int prToastPaddingV: 10
+    readonly property int prToastBottomMargin: 24
+    readonly property int prToastIconSize: 14
+    readonly property int githubToastDuration: 2600
+    // A runner's lamp, and the halo around it while it is busy or idle.
+    readonly property int runnerLampSize: 8
+    readonly property int runnerLampHalo: 3
+    // One turn of the refresh button while it fetches.
+    readonly property int spinDuration: 1000
+    // How often the page shows the ages again, in milliseconds.
+    readonly property int ageInterval: 30000
+
     // Opacity
     readonly property real disabledOpacity: 0.6
     // What shows only while the pointer is over its row: shown, and clear but still clickable.
@@ -314,4 +400,21 @@ QtObject {
 
     // Timing
     readonly property int toolTipDelay: 400
+
+    // The colour of a job or a segment of a check bar by its state: failed, running, passed,
+    // cancelled, anything else (waiting for approval) being the quiet one.
+    function checkColor(state: string): color {
+        switch (state) {
+        case "failed":
+            return signal;
+        case "running":
+            return warning;
+        case "passed":
+            return success;
+        case "cancelled":
+            return textFaint;
+        default:
+            return raisedHover;
+        }
+    }
 }

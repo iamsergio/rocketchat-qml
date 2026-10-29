@@ -70,6 +70,8 @@ ApplicationWindow {
         anchors.right: parent.right
         anchors.top: parent.top
         source: {
+            if (Github.shown)
+                return "GithubPage.qml";
             switch (Session.state) {
             case Session.LoggedIn:
                 return "RoomPage.qml";

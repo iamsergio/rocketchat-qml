@@ -20,6 +20,16 @@ pub mod app_info;
 mod clipboard;
 #[allow(unsafe_code, clippy::unnecessary_box_returns)]
 pub mod emoji_picker_model;
+mod github_view;
+#[allow(unsafe_code, clippy::unnecessary_box_returns)]
+pub mod github_vm;
+#[allow(
+    unsafe_code,
+    clippy::unnecessary_box_returns,
+    clippy::must_use_candidate // The generated `dataChanged` signal.
+)]
+pub mod job_list_model;
+mod job_rows;
 #[allow(unsafe_code)]
 pub mod lifecycle;
 #[allow(unsafe_code)]
@@ -30,6 +40,12 @@ pub mod logging;
     clippy::must_use_candidate // The generated `dataChanged` signal.
 )]
 pub mod message_list_model;
+#[allow(
+    unsafe_code,
+    clippy::unnecessary_box_returns,
+    clippy::must_use_candidate // The generated `dataChanged` signal.
+)]
+pub mod pull_request_list;
 #[allow(
     unsafe_code,
     clippy::unnecessary_box_returns,
@@ -49,6 +65,8 @@ pub mod room_search_model;
     clippy::must_use_candidate // The generated `actionDone` signal.
 )]
 pub mod room_vm;
+#[allow(unsafe_code, clippy::unnecessary_box_returns)]
+pub mod runner_list_model;
 #[allow(unsafe_code, clippy::unnecessary_box_returns)]
 pub mod session_vm;
 #[allow(

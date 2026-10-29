@@ -12,12 +12,35 @@
 //! account's cache. Events of the current account are shown by the views; those of the others
 //! only update their cache, and their row in the account list. A logout removes the account, and
 //! the core adds a new logged-out one if it was the last, so the app goes on with that one.
+//!
+//! What fills the main area is a [`Screen`], apart from the current account: the GitHub page can
+//! be shown over it. The current account stays current then, and its events still reach the
+//! views, so going back needs no snapshot; only its tile (the row's `current`) stops looking
+//! current. Selecting or adding an account, or the GitHub tile, change the screen.
 
 use rc_core::Event;
 use rc_core::domain::AccountId;
 
 use crate::accounts::{AccountChange, Accounts};
 use crate::session_view::SessionView;
+
+/// What fills the main area.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Screen {
+    /// The current account.
+    #[default]
+    Account,
+    /// The GitHub pull requests.
+    GitHub,
+}
+
+/// What the user saw before a change, for [`Switchboard::switched_from`] to compare with.
+struct Seen {
+    current: Option<AccountId>,
+    /// The account whose tile looks current.
+    lit: Option<AccountId>,
+    screen: Screen,
+}
 
 /// What a frontend changes on screen, in this order, after the switchboard took something in.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -34,6 +57,8 @@ pub enum Shown {
     /// An event of the current account, which its cache has taken in: the views show what it
     /// changed.
     Event(Event),
+    /// The main area shows another screen, after the rows and the snapshot that came before it.
+    Screen(Screen),
 }
 
 /// The accounts, and the rules that turn what happens to them into [`Shown`].
@@ -42,6 +67,8 @@ pub struct Switchboard {
     /// The accounts, each with its cache, and the current one: the one the views show and the
     /// commands go to.
     accounts: Accounts,
+    /// What fills the main area.
+    screen: Screen,
 }
 
 impl Switchboard {
@@ -50,7 +77,39 @@ impl Switchboard {
     pub const fn new() -> Self {
         Self {
             accounts: Accounts::new(),
+            screen: Screen::Account,
         }
+    }
+
+    /// What fills the main area.
+    #[must_use]
+    pub const fn screen(&self) -> Screen {
+        self.screen
+    }
+
+    fn seen(&self) -> Seen {
+        Seen {
+            current: self.accounts.current().cloned(),
+            lit: self.accounts.on_screen().cloned(),
+            screen: self.screen,
+        }
+    }
+
+    /// Shows the GitHub page over the current account. Nothing if it is shown already.
+    pub fn show_github(&mut self) -> Vec<Shown> {
+        let mut shown = Vec::new();
+        if self.screen == Screen::GitHub {
+            return shown;
+        }
+        let before = self.seen();
+        self.set_screen(Screen::GitHub);
+        self.switched_from(&before, &mut shown);
+        shown
+    }
+
+    fn set_screen(&mut self, screen: Screen) {
+        self.screen = screen;
+        self.accounts.cover(screen == Screen::GitHub);
     }
 
     /// The accounts, for the views to read what they show.
@@ -76,7 +135,7 @@ impl Switchboard {
     /// Takes in an event of the core, and says what to show. Nothing for the event of an account
     /// that isn't known, other than `Added`.
     pub fn dispatch(&mut self, account: &AccountId, event: Event) -> Vec<Shown> {
-        let before = self.accounts.current().cloned();
+        let before = self.seen();
         let mut shown = Vec::new();
         match event {
             Event::Added => self.add_row(account, &mut shown),
@@ -91,7 +150,7 @@ impl Switchboard {
                 // The first state of an account that became current before it had one: show it
                 // whole.
                 let first_state = matches!(event, Event::Session(_))
-                    && before.as_ref() == Some(account)
+                    && before.current.as_ref() == Some(account)
                     && !self.accounts.current_cache().session_known();
                 let Some(applied) = self.accounts.apply(account, &event) else {
                     tracing::debug!(%account, "event of an unknown account ignored");
@@ -121,16 +180,19 @@ impl Switchboard {
                 return shown;
             }
         }
-        self.switched_from(before.as_ref(), &mut shown);
+        self.switched_from(&before, &mut shown);
         shown
     }
 
-    /// Makes the account current. Nothing to show if it is current already or isn't known.
+    /// Makes the account current and shows it, also when the GitHub page covers it. Nothing to
+    /// show if it is on screen already or isn't known.
     pub fn select(&mut self, id: &AccountId) -> Vec<Shown> {
-        let before = self.accounts.current().cloned();
+        let before = self.seen();
         let mut shown = Vec::new();
-        if self.accounts.select(id) {
-            self.switched_from(before.as_ref(), &mut shown);
+        let known = self.accounts.select(id) || self.accounts.current() == Some(id);
+        if known {
+            self.set_screen(Screen::Account);
+            self.switched_from(&before, &mut shown);
         }
         shown
     }
@@ -138,17 +200,19 @@ impl Switchboard {
     /// Lists the account, which the core just created, and makes it current, so that the login
     /// page shows for it. The core's `Added` for it is a no-op afterwards.
     pub fn add(&mut self, id: &AccountId) -> Vec<Shown> {
-        let before = self.accounts.current().cloned();
+        let before = self.seen();
         let mut shown = Vec::new();
         self.add_row(id, &mut shown);
         self.accounts.select(id);
-        self.switched_from(before.as_ref(), &mut shown);
+        self.set_screen(Screen::Account);
+        self.switched_from(&before, &mut shown);
         shown
     }
 
     /// Forgets every account, when the core stops.
     pub fn clear(&mut self) {
         self.accounts = Accounts::new();
+        self.accounts.cover(self.screen == Screen::GitHub);
     }
 
     /// Adds the account, unless it is known, and lists it.
@@ -176,22 +240,28 @@ impl Switchboard {
         }
     }
 
-    /// Brings the views and the account list up to date if the current account is not `before`
-    /// any more. Call it after every change to the accounts.
-    fn switched_from(&self, before: Option<&AccountId>, shown: &mut Vec<Shown>) {
+    /// Brings the views and the account list up to date if the current account, the one that
+    /// looks current or the screen is not what `before` saw. Call it after every change.
+    fn switched_from(&self, before: &Seen, shown: &mut Vec<Shown>) {
         let current = self.accounts.current().cloned();
-        if current.as_ref() == before {
-            return;
-        }
+        let lit = self.accounts.on_screen().cloned();
         // The two rows whose `current` changed. The one that was current may be gone.
-        for id in before.into_iter().chain(&current) {
-            self.update_row(id, shown);
+        if lit != before.lit {
+            for id in before.lit.iter().chain(&lit) {
+                self.update_row(id, shown);
+            }
         }
         // With no account left, the views keep showing the last one, logged out, until the next
         // account is added. An account added a moment ago is shown with its first `Session`
         // event (see `dispatch`): showing it before would flash the startup page.
-        if current.is_some() && self.accounts.current_cache().session_known() {
+        if current != before.current
+            && current.is_some()
+            && self.accounts.current_cache().session_known()
+        {
             shown.push(Shown::All);
+        }
+        if self.screen != before.screen {
+            shown.push(Shown::Screen(self.screen));
         }
     }
 }
@@ -492,5 +562,130 @@ mod tests {
             board.dispatch(&id("d"), logged_out()).last(),
             Some(&Shown::All)
         );
+    }
+
+    fn lit_rows(board: &Switchboard) -> Vec<bool> {
+        board.accounts().views().iter().map(|v| v.current).collect()
+    }
+
+    // ACCT-003
+    #[test]
+    fn showing_github_covers_the_current_account() {
+        let mut board = three();
+        let shown = board.show_github();
+        // Only `a`'s row changes, then the screen.
+        assert_eq!(shown.len(), 2);
+        assert!(is_updated(&shown[0], 0));
+        assert_eq!(shown[1], Shown::Screen(Screen::GitHub));
+        assert_eq!(board.screen(), Screen::GitHub);
+        assert_eq!(board.accounts().current(), Some(&id("a")));
+        assert_eq!(lit_rows(&board), [false, false, false]);
+        // Showing it again changes nothing.
+        assert!(board.show_github().is_empty());
+    }
+
+    // ACCT-004
+    #[test]
+    fn the_events_of_the_current_account_still_reach_the_views_under_github() {
+        let mut board = three();
+        board.show_github();
+        let event = Event::Typing {
+            room: "r".to_owned().into(),
+            names: Vec::new(),
+        };
+        assert_eq!(
+            board.dispatch(&id("a"), event.clone()),
+            [Shown::Event(event)]
+        );
+        // The unread dot shows on a tile that is not on screen.
+        let shown = board.dispatch(
+            &id("a"),
+            Event::Unread(Unread {
+                rooms: 1,
+                mentions: 0,
+            }),
+        );
+        assert!(is_updated(&shown[0], 0));
+        assert!(board.accounts().views()[0].unread);
+    }
+
+    // ACCT-003
+    #[test]
+    fn selecting_the_current_account_from_github_goes_back_without_a_snapshot() {
+        let mut board = three();
+        board.show_github();
+        let shown = board.select(&id("a"));
+        assert_eq!(shown.len(), 2);
+        assert!(is_updated(&shown[0], 0));
+        assert_eq!(shown[1], Shown::Screen(Screen::Account));
+        assert_eq!(lit_rows(&board), [true, false, false]);
+    }
+
+    // ACCT-003
+    #[test]
+    fn selecting_another_account_from_github_shows_it() {
+        let mut board = three();
+        board.show_github();
+        let shown = board.select(&id("c"));
+        // Only `c`'s row lights: `a` was dark already.
+        assert_eq!(shown.len(), 3);
+        assert!(is_updated(&shown[0], 2));
+        assert_eq!(shown[1], Shown::All);
+        assert_eq!(shown[2], Shown::Screen(Screen::Account));
+        assert_eq!(lit_rows(&board), [false, false, true]);
+        // An unknown account leaves GitHub where it is.
+        board.show_github();
+        assert!(board.select(&id("nobody")).is_empty());
+        assert_eq!(board.screen(), Screen::GitHub);
+    }
+
+    // ACCT-001
+    #[test]
+    fn adding_an_account_from_github_shows_its_login_page() {
+        let mut board = three();
+        board.show_github();
+        let shown = board.add(&id("d"));
+        assert!(matches!(
+            &shown[0],
+            Shown::AccountRow(AccountChange::Inserted { index: 3, view }) if view.id == "d"
+        ));
+        assert!(matches!(&shown[1], Shown::SessionView(view) if view.account_id == "a"));
+        assert!(is_updated(&shown[2], 3));
+        assert_eq!(shown[3], Shown::Screen(Screen::Account));
+        assert_eq!(shown.len(), 4);
+        assert_eq!(board.accounts().current(), Some(&id("d")));
+        assert_eq!(lit_rows(&board), [false, false, false, true]);
+    }
+
+    // ACCT-005
+    #[test]
+    fn removing_accounts_from_under_github_keeps_it_on_screen() {
+        let mut board = three();
+        board.show_github();
+        // Another account: the row goes, the session view is told.
+        let shown = board.dispatch(&id("b"), Event::Removed);
+        assert_eq!(shown.len(), 2);
+        assert_eq!(
+            shown[0],
+            Shown::AccountRow(AccountChange::Removed { index: 1 })
+        );
+        // The current one: `b` is next; the views get its snapshot, no row lights.
+        let shown = board.dispatch(&id("a"), Event::Removed);
+        assert_eq!(shown.len(), 3);
+        assert_eq!(
+            shown[0],
+            Shown::AccountRow(AccountChange::Removed { index: 0 })
+        );
+        assert!(matches!(&shown[1], Shown::SessionView(view) if view.account_id == "c"));
+        assert_eq!(shown[2], Shown::All);
+        assert_eq!(board.screen(), Screen::GitHub);
+        assert_eq!(lit_rows(&board), [false]);
+        // The last one: nothing more to show.
+        let shown = board.dispatch(&id("c"), Event::Removed);
+        assert_eq!(
+            shown,
+            [Shown::AccountRow(AccountChange::Removed { index: 0 })]
+        );
+        assert_eq!(board.screen(), Screen::GitHub);
     }
 }

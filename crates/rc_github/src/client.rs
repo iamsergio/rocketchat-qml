@@ -108,6 +108,19 @@ impl GithubClient {
         &self.base
     }
 
+    // --- the user ---
+
+    /// The login of the user the token belongs to (GraphQL `viewer`): the cheapest call that
+    /// tells a good token from a bad one.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Unauthorized`] if the token is refused, or any of the other errors.
+    pub async fn viewer(&self) -> Result<String, Error> {
+        let data: wire::ViewerData = self.graphql(wire::VIEWER_QUERY, json!({})).await?;
+        Ok(data.viewer.login)
+    }
+
     // --- lists ---
 
     /// The user's open pull requests, drafts included, most recently updated first (GraphQL

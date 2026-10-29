@@ -26,22 +26,36 @@ qt_add_qml_module(
   debugtools.cpp
   QML_FILES
   Avatar.qml
+  CheckBar.qml
   Main.qml
   Composer.qml
   DirectoryLabel.qml
   DirectoryNote.qml
   DirectoryRow.qml
   DropZone.qml
+  DraftsHeading.qml
   EmojiPicker.qml
   FieldLabel.qml
   FlatButton.qml
   Icon.qml
+  GithubActionBar.qml
+  GithubApproval.qml
+  GithubButton.qml
+  GithubChecks.qml
+  GithubConnectPage.qml
+  GithubJobRow.qml
+  GithubMain.qml
+  GithubPage.qml
+  GithubSidebar.qml
+  GithubTile.qml
+  GithubToast.qml
   InputField.qml
   LinkArea.qml
   LinkMenu.qml
   LoginPage.qml
   MessageDelegate.qml
   PrimaryButton.qml
+  PullRequestRow.qml
   RailTip.qml
   RoomDelegate.qml
   RoomPage.qml
@@ -61,6 +75,8 @@ qt_add_qml_module(
   fonts/InstrumentSans.ttf
   fonts/InstrumentSans-Italic.ttf
   icons/attach.svg
+  icons/bell-filled.svg
+  icons/bell.svg
   icons/channel.svg
   icons/chevron.svg
   icons/check.svg
@@ -68,11 +84,22 @@ qt_add_qml_module(
   icons/close.svg
   icons/corner.svg
   icons/direct.svg
+  icons/external.svg
   icons/file.svg
+  icons/mark-github.svg
+  icons/merge.svg
   icons/plus.svg
+  icons/pr-draft.svg
+  icons/pr-failed.svg
+  icons/pr-none.svg
+  icons/pr-passed.svg
+  icons/pr-running.svg
+  icons/pr-waiting.svg
   icons/private.svg
+  icons/refresh.svg
   icons/search.svg
   icons/settings.svg
+  icons/shield.svg
   icons/thread.svg
   icons/upload.svg
   IMPORT_PATH

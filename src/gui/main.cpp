@@ -6,12 +6,14 @@
 #include <QFontDatabase>
 #include <QGuiApplication>
 #include <QQmlApplicationEngine>
+#include <QQmlError>
 #include <QStandardPaths>
 #include <QUrl>
 
 #include <rc_qt/src/lifecycle.cxx.h>
 #include <rc_qt/src/logging.cxx.h>
 
+#include <cstdio>
 #include <cstdlib>
 
 #ifdef ROCKETCHATQML_SPIX
@@ -78,6 +80,21 @@ int main(int argc, char *argv[])
     QQmlApplicationEngine engine;
     QObject::connect(
         &engine, &QQmlApplicationEngine::objectCreationFailed, &app, [] { QCoreApplication::exit(1); }, Qt::QueuedConnection);
+#ifdef ROCKETCHATQML_SPIX
+    // The GUI tests set RC_FATAL_QML_WARNINGS, so that a QML warning (a binding loop, a TypeError,
+    // a failed assignment) fails the test that caused it instead of scrolling by: the app says
+    // which and exits at once, and the test fails at its next call. Connected before Main.qml is
+    // loaded, so its warnings count too. Our own console.warn and Qt's other warnings don't.
+    if (qEnvironmentVariableIsSet("RC_FATAL_QML_WARNINGS")) {
+        QObject::connect(&engine, &QQmlEngine::warnings, [](const QList<QQmlError> &warnings) {
+            for (const QQmlError &warning : warnings) {
+                std::fprintf(stderr, "Fatal QML warning (RC_FATAL_QML_WARNINGS is set): %s\n", qPrintable(warning.toString()));
+            }
+            std::fflush(stderr);
+            std::_Exit(EXIT_FAILURE);
+        });
+    }
+#endif
     engine.loadFromModule("rocketchat", "Main");
 
 #ifdef ROCKETCHATQML_SPIX

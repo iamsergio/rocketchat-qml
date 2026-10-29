@@ -1,0 +1,8 @@
+<!--
+  SPDX-FileCopyrightText: 2026 Sergio Martins
+  SPDX-License-Identifier: MIT
+-->
+<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="#ffffff" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+  <path d="M9.5 2.5h4v4M13.5 2.5 7.5 8.5"/>
+  <path d="M11.5 9.5v3a1 1 0 0 1-1 1h-7a1 1 0 0 1-1-1v-7a1 1 0 0 1 1-1h3"/>
+</svg>
