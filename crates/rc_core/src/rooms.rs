@@ -248,6 +248,12 @@ impl RoomList {
             .collect()
     }
 
+    /// How many rooms have news held back.
+    #[must_use]
+    pub fn held_rooms(&self) -> usize {
+        self.pending.len()
+    }
+
     /// Whether news is held back, waiting for [`release`](Self::release).
     #[must_use]
     pub fn holds_news(&self) -> bool {

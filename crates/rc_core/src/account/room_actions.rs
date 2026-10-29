@@ -196,6 +196,12 @@ impl<C: Connector> Actor<C> {
         let holding = self.rooms.holds_news();
         if holding != self.holding_news {
             self.holding_news = holding;
+            tracing::info!(
+                holding,
+                held = self.rooms.held_rooms(),
+                due = ?self.rooms.next_release(),
+                "holding channel news"
+            );
             (self.on_event)(Event::HoldingNews(holding));
         }
     }
@@ -243,7 +249,15 @@ impl<C: Connector> Actor<C> {
     /// Shows the news of the channels held back, due or not, and tells the frontend. The batch
     /// ends, so the next one starts with the next held change.
     pub(super) fn release_held_channels(&mut self) {
+        let held = self.rooms.held_rooms();
+        let due = self.rooms.next_release();
         let changes = self.rooms.release(self.clock.now());
+        tracing::info!(
+            held,
+            ?due,
+            changes = changes.len(),
+            "held channel news released"
+        );
         self.emit_rooms(changes);
     }
 

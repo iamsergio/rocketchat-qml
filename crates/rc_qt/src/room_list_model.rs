@@ -337,6 +337,7 @@ impl RoomListModel {
     }
 
     fn release_news(self: Pin<&mut Self>) {
+        tracing::info!("F5 pressed");
         if !hub::release_news() {
             self.nothing_held();
         }
