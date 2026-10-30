@@ -13,7 +13,8 @@ use crate::ports::{ApiError, Connector, Pushed, Realtime, ServerApi};
 use crate::session::SessionState;
 
 use super::{
-    Actor, Done, EmojiDone, PolicyDone, RealtimeDone, RealtimeLinks, RealtimeReport, RoomsDone,
+    Actor, Done, EmojiDone, FetchKind, PolicyDone, RealtimeDone, RealtimeLinks, RealtimeReport,
+    RoomsDone,
 };
 
 impl<C: Connector> Actor<C> {
@@ -414,9 +415,9 @@ impl<C: Connector> Actor<C> {
         let id = open.timeline.room().clone();
         if self.rooms.get(&id).is_some() || self.preview.as_ref().is_some_and(|p| p.id == id) {
             self.abort_history_task();
-            self.fetch_history(false);
+            self.fetch_history(FetchKind::Newest);
             if self.open_thread.is_some() {
-                self.fetch_thread(false);
+                self.fetch_thread(FetchKind::Newest);
             }
             self.refresh_thread_list();
         } else {

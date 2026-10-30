@@ -14,7 +14,7 @@ use crate::ports::{ApiError, Connector, ServerApi};
 use crate::session::SessionState;
 use crate::timeline::{PAGE_SIZE, Timeline, TimelineChange, TimelineError, TimelineStatus};
 
-use super::{Actor, ChangesDone, Done, Fetch, HistoryDone, OpenRoom};
+use super::{Actor, ChangesDone, Done, Fetch, FetchKind, HistoryDone, OpenRoom};
 
 /// How much earlier than the time a room was last up to date its changes are asked for: the
 /// server's clock may differ from ours.
@@ -152,7 +152,10 @@ impl<C: Connector> Actor<C> {
             .timeline
             .message(&message.id)
             .is_some_and(Message::is_unsent);
-        let newest_to_come = open.fetch.as_ref().is_some_and(|fetch| !fetch.older)
+        let newest_to_come = open
+            .fetch
+            .as_ref()
+            .is_some_and(|fetch| fetch.kind == FetchKind::Newest)
             || (!open.timeline.has_sent() && !open.timeline.reached_start());
         if newest_to_come {
             // A later copy of a message replaces the one waiting.
@@ -221,7 +224,7 @@ impl<C: Connector> Actor<C> {
         self.track_open_room(Some(id.clone()));
         self.watch_room(Some(id));
         self.mark_open_room_read();
-        self.fetch_history(false);
+        self.fetch_history(FetchKind::Newest);
     }
 
     /// The user is looking at the open room: nothing in it is unread. The server is told even if
@@ -254,11 +257,11 @@ impl<C: Connector> Actor<C> {
         {
             return;
         }
-        self.fetch_history(true);
+        self.fetch_history(FetchKind::Older);
     }
 
     /// Fetches a page of the open room: the newest, or the one before the oldest message held.
-    pub(super) fn fetch_history(&mut self, older: bool) {
+    pub(super) fn fetch_history(&mut self, kind: FetchKind) {
         let (Some(session), Some(open)) = (&self.session, &mut self.open) else {
             return;
         };
@@ -266,10 +269,11 @@ impl<C: Connector> Actor<C> {
         let attempt = self.history_attempt;
         let started = self.clock.now();
         // Only the newest page of a room that was up to date once needs the catch-up.
+        let older = kind == FetchKind::Older;
         let with_changes = !older && open.timeline.history().synced_at.is_some();
         open.fetch = Some(Fetch {
             attempt,
-            older,
+            kind,
             started,
             with_changes,
         });
@@ -370,7 +374,7 @@ impl<C: Connector> Actor<C> {
             applied.extend(timeline.remove(id));
         }
         timeline.set_synced_at(done.started);
-        self.messages.save(&done.room, timeline.history());
+        open.persist(&mut *self.messages);
         if !applied.is_empty() {
             let authors = authors_of(&applied);
             let images = images_of(&applied);
@@ -392,7 +396,7 @@ impl<C: Connector> Actor<C> {
             tracing::debug!("answer of a stale history fetch dropped");
             return;
         };
-        let older = fetch.older;
+        let older = fetch.kind == FetchKind::Older;
         self.history_task = None;
         let mut authors = Vec::new();
         let mut images = Vec::new();
@@ -413,7 +417,7 @@ impl<C: Connector> Actor<C> {
                     }
                     changes
                 };
-                self.messages.save(&done.room, open.timeline.history());
+                open.persist(&mut *self.messages);
                 if !changes.is_empty() {
                     authors = authors_of(&changes);
                     images = images_of(&changes);
@@ -458,7 +462,10 @@ impl<C: Connector> Actor<C> {
         if message.shows_in_room()
             && let Some(open) = self.open.as_mut().filter(|open| {
                 open.timeline.room() == &message.room_id
-                    && open.fetch.as_ref().is_some_and(|fetch| !fetch.older)
+                    && open
+                        .fetch
+                        .as_ref()
+                        .is_some_and(|fetch| fetch.kind == FetchKind::Newest)
             })
         {
             open.live.retain(|m| m.id != message.id);
@@ -467,7 +474,10 @@ impl<C: Connector> Actor<C> {
         if let Some(thread) = self.open_thread.as_mut().filter(|thread| {
             thread.concerns(message)
                 && thread.parent.id != message.id
-                && thread.fetch.as_ref().is_some_and(|fetch| !fetch.older)
+                && thread
+                    .fetch
+                    .as_ref()
+                    .is_some_and(|fetch| fetch.kind == FetchKind::Newest)
         }) {
             thread.live.retain(|m| m.id != message.id);
             thread.live.push(message.clone());
@@ -489,7 +499,7 @@ impl<C: Connector> Actor<C> {
         {
             let changes = change(&mut open.timeline);
             if !changes.is_empty() {
-                self.messages.save(room, open.timeline.history());
+                open.persist(&mut *self.messages);
                 let authors = authors_of(&changes);
                 let images = images_of(&changes);
                 (self.on_event)(Event::Timeline(changes));
@@ -520,8 +530,14 @@ impl<C: Connector> Actor<C> {
         let status = match &self.open {
             Some(open) => TimelineStatus {
                 room: Some(open.timeline.room().clone()),
-                loading: open.fetch.as_ref().is_some_and(|f| !f.older),
-                loading_older: open.fetch.as_ref().is_some_and(|f| f.older),
+                loading: open
+                    .fetch
+                    .as_ref()
+                    .is_some_and(|f| f.kind == FetchKind::Newest),
+                loading_older: open
+                    .fetch
+                    .as_ref()
+                    .is_some_and(|f| f.kind == FetchKind::Older),
                 reached_start: open.timeline.reached_start(),
                 error: open.error.clone(),
             },
