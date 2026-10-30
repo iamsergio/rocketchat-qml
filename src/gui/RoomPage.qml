@@ -17,6 +17,15 @@ ColumnLayout {
 
     spacing: Theme.spacingNone
 
+    // Opens the search of the room's messages, or focuses its field with the text selected.
+    Shortcut {
+        sequence: "Ctrl+F"
+        onActivated: {
+            ThreadList.openSearch();
+            searchPane.focusField();
+        }
+    }
+
     Label {
         objectName: "connectionBanner"
         Layout.fillWidth: true
@@ -455,6 +464,15 @@ ColumnLayout {
             Layout.fillHeight: true
             Layout.preferredWidth: Theme.threadPaneWidth
             visible: ThreadList.paneOpen
+        }
+
+        // The search of the room's messages takes the place of the threads.
+        MessageSearchPane {
+            id: searchPane
+
+            Layout.fillHeight: true
+            Layout.preferredWidth: Theme.threadPaneWidth
+            visible: ThreadList.searchOpen
         }
     }
 }

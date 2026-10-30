@@ -19,11 +19,13 @@ pub mod qobject {
         #[qobject]
         #[qml_element = "ThreadList"]
         #[qml_singleton]
-        // What the pane beside the room shows: `thread` while a thread is open, else `list` while
-        // the list is open, else `none`.
+        // What the pane beside the room shows: `thread` while a thread is open, else `search` while
+        // the room's messages are searched, else `list` while the list is open, else `none`.
         #[qproperty(QString, pane, READ, NOTIFY)]
-        // Whether the pane shows anything: the list or a thread.
+        // Whether the pane shows the list or a thread: the threads button is lit.
         #[qproperty(bool, pane_open, cxx_name = "paneOpen", READ, NOTIFY)]
+        // Whether the pane shows the search of the room's messages: its button is lit.
+        #[qproperty(bool, search_open, cxx_name = "searchOpen", READ, NOTIFY)]
         // Whether the list is open, whether or not a thread hides it.
         #[qproperty(bool, list_open, cxx_name = "listOpen", READ, NOTIFY)]
         // `all`, `following` or `unread`.
@@ -77,6 +79,17 @@ pub mod qobject {
         #[qinvokable]
         fn toggle(self: Pin<&mut ThreadListVm>);
 
+        /// The header button of the search: closes it if it is open, else opens it in place of
+        /// the threads.
+        #[qinvokable]
+        #[cxx_name = "toggleSearch"]
+        fn toggle_search(self: Pin<&mut ThreadListVm>);
+
+        /// Ctrl+F: opens the search in place of the threads, unless it is open.
+        #[qinvokable]
+        #[cxx_name = "openSearch"]
+        fn open_search(self: Pin<&mut ThreadListVm>);
+
         /// What Escape does in the pane: back from a thread, close the list from the list.
         #[qinvokable]
         fn escape(self: Pin<&mut ThreadListVm>);
@@ -99,6 +112,7 @@ use rc_view::thread_list_view::{ThreadListState, parse_filter};
 pub struct ThreadListVmRust {
     pane: QString,
     pane_open: bool,
+    search_open: bool,
     list_open: bool,
     filter: QString,
     loading: bool,
@@ -124,6 +138,7 @@ impl From<&ThreadListState> for ThreadListVmRust {
         Self {
             pane: QString::from(&state.pane),
             pane_open: state.pane_open,
+            search_open: state.search_open,
             list_open: state.list_open,
             filter: QString::from(&state.filter),
             loading: state.loading,
@@ -154,6 +169,7 @@ impl qobject::ThreadListVm {
         let new = ThreadListVmRust::from(state);
         let pane = self.pane != new.pane;
         let pane_open = self.pane_open != new.pane_open;
+        let search_open = self.search_open != new.search_open;
         let list_open = self.list_open != new.list_open;
         let filter = self.filter != new.filter;
         let loading = self.loading != new.loading;
@@ -172,6 +188,9 @@ impl qobject::ThreadListVm {
         }
         if pane_open {
             self.as_mut().pane_open_changed();
+        }
+        if search_open {
+            self.as_mut().search_open_changed();
         }
         if list_open {
             self.as_mut().list_open_changed();
@@ -241,6 +260,16 @@ impl qobject::ThreadListVm {
     #[allow(clippy::unused_self)]
     fn toggle(self: Pin<&mut Self>) {
         hub::toggle_pane();
+    }
+
+    #[allow(clippy::unused_self)]
+    fn toggle_search(self: Pin<&mut Self>) {
+        hub::toggle_search();
+    }
+
+    #[allow(clippy::unused_self)]
+    fn open_search(self: Pin<&mut Self>) {
+        hub::open_search();
     }
 
     #[allow(clippy::unused_self)]

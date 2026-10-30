@@ -6,10 +6,12 @@
 
 use std::collections::HashMap;
 
+use jiff::Timestamp;
+use jiff::tz::TimeZone;
+
 use rc_core::directory::{ActionState, Directory, DirectoryAction};
 use rc_core::domain::{AccountId, AvatarOwner, Identity, Message, MessageId, Room, RoomId, UserId};
 use rc_core::emoji::CustomEmojis;
-use rc_core::message_search::MessageSearch;
 use rc_core::policy::MessagePolicy;
 use rc_core::rooms::{RoomChange, Unread};
 use rc_core::session::{LoginFailure, SessionState};
@@ -25,6 +27,7 @@ use crate::avatar_view::AvatarUrls;
 use crate::directory::{DirectoryView, directory_view};
 use crate::emoji_image_view::EmojiImageUrls;
 use crate::mention::Suggestions;
+use crate::message_search_view::{Results, View, stale_room};
 use crate::message_view::{author_name, body, can_edit};
 use crate::room_view::{RoomState, room_state, typing_line, with_preview};
 use crate::session_view::{LoginMode, SessionView, host, session_view};
@@ -57,7 +60,8 @@ pub struct Cache {
     /// What the member search of the mention popup holds, as the core last said.
     mentions: Suggestions,
     /// What the search of a room's messages holds, as the core last said.
-    message_search: Option<MessageSearch>,
+    /// What the pane shows of it: the rows of the last answer stay while the next search runs.
+    message_results: Results,
     /// The last thing the core said of a directory action: `Working` while it is under way. `None`
     /// before the first, and after the session ends.
     directory_action: Option<(DirectoryAction, ActionState)>,
@@ -125,7 +129,7 @@ impl Cache {
             quiet_rooms: Vec::new(),
             directory: Directory::cleared(),
             mentions: Suggestions::new(),
-            message_search: None,
+            message_results: Results::new(),
             directory_action: None,
             preview: None,
             room: None,
@@ -225,7 +229,9 @@ impl Cache {
             Event::QuietRooms(rooms) => self.quiet_rooms.clone_from(rooms),
             Event::Directory(directory) => self.directory.clone_from(directory),
             Event::MemberSearch(search) => self.mentions.apply(search.as_ref()),
-            Event::MessageSearch(search) => self.message_search.clone_from(search),
+            Event::MessageSearch(search) => {
+                self.message_results.apply(search.as_ref());
+            }
             Event::DirectoryAction { action, state } => {
                 self.directory_action = Some((action.clone(), state.clone()));
             }
@@ -415,11 +421,32 @@ impl Cache {
         &self.mentions
     }
 
-    /// What the search of a room's messages holds, as the core last said; `None` when there is
-    /// none.
+    /// The room the core searches the messages of, while it does: the search pane is open.
     #[must_use]
-    pub fn message_search(&self) -> Option<&MessageSearch> {
-        self.message_search.as_ref()
+    pub fn message_search_room(&self) -> Option<&RoomId> {
+        self.message_results.room()
+    }
+
+    /// What the search pane shows now: the last answers of the core, for `zone` and `now`.
+    #[must_use]
+    pub fn message_search_view(&self, zone: &TimeZone, now: Timestamp) -> View {
+        let name = (self.message_results.room())
+            .and_then(|searched| self.rooms.iter().find(|room| room.id == *searched))
+            .map(|room| room.name.as_str())
+            .unwrap_or_default();
+        self.message_results.view(name, zone, now)
+    }
+
+    /// The open room, if the search is of another one: the search is to move to it.
+    #[must_use]
+    pub fn message_search_stale_room(&self) -> Option<RoomId> {
+        stale_room(self.message_results.room(), self.status.room.as_ref())
+    }
+
+    /// The room the timeline shows, if one is open.
+    #[must_use]
+    pub fn open_room(&self) -> Option<&RoomId> {
+        self.status.room.as_ref()
     }
 
     /// The last thing the core said of a directory action: the action is under way if the state
@@ -638,6 +665,7 @@ impl Cache {
             &self.thread_list_status,
             self.thread_list.len(),
             self.thread_status.parent.is_some(),
+            self.message_results.room().is_some(),
         )
     }
 
@@ -1152,24 +1180,34 @@ mod tests {
 
     // MSG-008
     #[test]
-    fn the_message_search_is_the_last_one_the_core_sent() {
-        use rc_core::message_search::{MessageSearchState, More};
+    fn the_search_pane_is_the_last_search_the_core_sent() {
+        use rc_core::message_search::{MessageSearch, MessageSearchState, More};
         let mut cache = Cache::new();
         let search = MessageSearch {
             room: "r".to_owned().into(),
-            query: "alpha".to_owned(),
+            query: String::new(),
             state: MessageSearchState::Found {
                 messages: Vec::new(),
-                more: More::Available,
+                more: More::No,
             },
         };
-        assert_eq!(cache.message_search(), None);
+        let view = |cache: &Cache| cache.message_search_view(&TimeZone::UTC, Timestamp::UNIX_EPOCH);
+        assert_eq!(cache.thread_list_state().pane, "none");
+        assert!(!view(&cache).open);
+        assert_eq!(cache.message_search_room(), None);
 
-        cache.apply(&Event::MessageSearch(Some(search.clone())));
-        assert_eq!(cache.message_search(), Some(&search));
+        cache.apply(&Event::MessageSearch(Some(search)));
+
+        let state = cache.thread_list_state();
+        assert_eq!(state.pane, "search");
+        assert!(state.search_open && !state.pane_open);
+        assert!(view(&cache).open);
+        assert_eq!(cache.message_search_room().map(RoomId::as_str), Some("r"));
+        // No room is open, so there is nothing to move to.
+        assert_eq!(cache.message_search_stale_room(), None);
         cache.apply(&Event::MessageSearch(None));
-
-        assert_eq!(cache.message_search(), None);
+        assert_eq!(cache.thread_list_state().pane, "none");
+        assert_eq!(cache.message_search_room(), None);
     }
 
     // ACT-007

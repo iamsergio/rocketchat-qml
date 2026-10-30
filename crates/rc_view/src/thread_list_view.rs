@@ -23,6 +23,9 @@ pub enum Pane {
     List,
     /// The open thread, which hides the list (it is still there, to come back to).
     Thread,
+    /// The search of the room's messages, which takes the place of the threads: opening one closes
+    /// the other.
+    Search,
 }
 
 impl Pane {
@@ -33,6 +36,7 @@ impl Pane {
             Self::None => "none",
             Self::List => "list",
             Self::Thread => "thread",
+            Self::Search => "search",
         }
     }
 }
@@ -88,8 +92,10 @@ pub fn row_summary(parent: &Message) -> String {
 pub struct ThreadListState {
     /// What the pane shows (see [`Pane::name`]).
     pub pane: String,
-    /// The pane shows something: the list or a thread.
+    /// The pane shows the list or a thread (not the search: see `search_open`).
     pub pane_open: bool,
+    /// The pane shows the search of the room's messages.
+    pub search_open: bool,
     /// Whether the list is open, whether or not the pane shows it.
     pub list_open: bool,
     /// A thread is open (and hides the list, if that is open).
@@ -136,7 +142,8 @@ pub fn empty_texts(filter: ThreadFilter, room_name: &str) -> (String, String) {
 }
 
 /// The state for the list `status` is about, which holds `rows` threads, in the open room `room`
-/// (with its name taken from `rooms`), when a thread is open or not.
+/// (with its name taken from `rooms`), when a thread is open or not, and when the search of the
+/// room's messages is open or not.
 #[must_use]
 pub fn thread_list_state(
     rooms: &[Room],
@@ -144,6 +151,7 @@ pub fn thread_list_state(
     status: &ThreadListStatus,
     rows: usize,
     thread_open: bool,
+    search_open: bool,
 ) -> ThreadListState {
     let held = room.and_then(|id| rooms.iter().find(|candidate| &candidate.id == id));
     let name = held.map(|room| room.name.clone()).unwrap_or_default();
@@ -154,6 +162,8 @@ pub fn thread_list_state(
     let list_open = status.room.is_some();
     let pane = if thread_open {
         Pane::Thread
+    } else if search_open {
+        Pane::Search
     } else if list_open {
         Pane::List
     } else {
@@ -172,7 +182,8 @@ pub fn thread_list_state(
     };
     ThreadListState {
         pane: pane.name().to_owned(),
-        pane_open: pane != Pane::None,
+        pane_open: matches!(pane, Pane::List | Pane::Thread),
+        search_open: pane == Pane::Search,
         list_open,
         thread_open,
         filter: filter_name(status.filter).to_owned(),
@@ -241,6 +252,9 @@ pub enum PaneStep {
     CloseThread,
     CloseList,
     OpenList(ThreadFilter),
+    /// Searches the open room's messages, for nothing yet: the pane opens.
+    OpenSearch,
+    CloseSearch,
 }
 
 /// The back button of a thread: the thread closes, and the list opens with `filter` unless it is
@@ -257,7 +271,7 @@ pub fn back_steps(state: &ThreadListState, filter: ThreadFilter) -> Vec<PaneStep
     steps
 }
 
-/// The pane's close button: the thread and the list close.
+/// The pane's close button: the thread, the list and the search close.
 #[must_use]
 pub fn close_pane_steps(state: &ThreadListState) -> Vec<PaneStep> {
     let mut steps = Vec::new();
@@ -267,26 +281,77 @@ pub fn close_pane_steps(state: &ThreadListState) -> Vec<PaneStep> {
     if state.list_open {
         steps.push(PaneStep::CloseList);
     }
+    if state.search_open {
+        steps.push(PaneStep::CloseSearch);
+    }
     steps
 }
 
-/// The header button: the pane closes if it shows anything, else the list opens with `filter`.
+/// The list opens with `filter`, after the search closes: they share the pane.
+#[must_use]
+pub fn open_list_steps(state: &ThreadListState, filter: ThreadFilter) -> Vec<PaneStep> {
+    let mut steps = open_thread_steps(state);
+    steps.push(PaneStep::OpenList(filter));
+    steps
+}
+
+/// A thread opens: the search closes first.
+#[must_use]
+pub fn open_thread_steps(state: &ThreadListState) -> Vec<PaneStep> {
+    if state.search_open {
+        vec![PaneStep::CloseSearch]
+    } else {
+        Vec::new()
+    }
+}
+
+/// The search opens, after the thread and the list close. Nothing if it is open.
+#[must_use]
+pub fn open_search_steps(state: &ThreadListState) -> Vec<PaneStep> {
+    if state.search_open {
+        return Vec::new();
+    }
+    let mut steps = Vec::new();
+    if state.thread_open {
+        steps.push(PaneStep::CloseThread);
+    }
+    if state.list_open {
+        steps.push(PaneStep::CloseList);
+    }
+    steps.push(PaneStep::OpenSearch);
+    steps
+}
+
+/// The header button of the search: the search closes if it is open, else it opens.
+#[must_use]
+pub fn toggle_search_steps(state: &ThreadListState) -> Vec<PaneStep> {
+    if state.search_open {
+        vec![PaneStep::CloseSearch]
+    } else {
+        open_search_steps(state)
+    }
+}
+
+/// The header button of the threads: the pane closes if it shows the list or a thread, else the
+/// list opens with `filter`.
 #[must_use]
 pub fn toggle_steps(state: &ThreadListState, filter: ThreadFilter) -> Vec<PaneStep> {
     if state.pane_open {
         close_pane_steps(state)
     } else {
-        vec![PaneStep::OpenList(filter)]
+        open_list_steps(state, filter)
     }
 }
 
-/// Escape in the pane: back from a thread, else the list closes.
+/// Escape in the pane: back from a thread, else the list or the search closes.
 #[must_use]
 pub fn escape_steps(state: &ThreadListState, filter: ThreadFilter) -> Vec<PaneStep> {
     if state.thread_open {
         back_steps(state, filter)
     } else if state.list_open {
         vec![PaneStep::CloseList]
+    } else if state.search_open {
+        vec![PaneStep::CloseSearch]
     } else {
         Vec::new()
     }
@@ -389,19 +454,33 @@ mod tests {
     fn the_pane_shows_the_thread_over_the_list_and_nothing_when_neither_is_open() {
         let rooms = [room("1", "general")];
         let id = RoomId::from("1".to_owned());
-        let closed = thread_list_state(&rooms, Some(&id), &ThreadListStatus::default(), 0, false);
+        let closed = thread_list_state(
+            &rooms,
+            Some(&id),
+            &ThreadListStatus::default(),
+            0,
+            false,
+            false,
+        );
         assert_eq!(closed.pane, "none");
         assert!(!closed.list_open);
         assert_eq!(closed.room_name, "general");
 
-        let list = thread_list_state(&rooms, Some(&id), &open(ThreadFilter::All), 2, false);
+        let list = thread_list_state(&rooms, Some(&id), &open(ThreadFilter::All), 2, false, false);
         assert_eq!((list.pane.as_str(), list.list_open), ("list", true));
 
-        let thread = thread_list_state(&rooms, Some(&id), &open(ThreadFilter::All), 2, true);
+        let thread = thread_list_state(&rooms, Some(&id), &open(ThreadFilter::All), 2, true, false);
         assert_eq!((thread.pane.as_str(), thread.list_open), ("thread", true));
 
         // A thread alone, opened from the summary under a message.
-        let alone = thread_list_state(&rooms, Some(&id), &ThreadListStatus::default(), 0, true);
+        let alone = thread_list_state(
+            &rooms,
+            Some(&id),
+            &ThreadListStatus::default(),
+            0,
+            true,
+            false,
+        );
         assert_eq!((alone.pane.as_str(), alone.list_open), ("thread", false));
     }
 
@@ -410,15 +489,21 @@ mod tests {
     fn an_empty_list_says_so_in_the_words_of_its_filter_once_it_has_loaded() {
         let rooms = [room("1", "general")];
         let id = RoomId::from("1".to_owned());
-        let all = thread_list_state(&rooms, Some(&id), &open(ThreadFilter::All), 0, false);
+        let all = thread_list_state(&rooms, Some(&id), &open(ThreadFilter::All), 0, false, false);
         assert!(all.empty);
         assert_eq!(all.empty_title, "No threads in #general yet");
         assert_eq!(
             all.empty_hint,
             "Start one with Reply in thread on a message."
         );
-        let following =
-            thread_list_state(&rooms, Some(&id), &open(ThreadFilter::Following), 0, false);
+        let following = thread_list_state(
+            &rooms,
+            Some(&id),
+            &open(ThreadFilter::Following),
+            0,
+            false,
+            false,
+        );
         assert_eq!(following.empty_title, "No threads you follow in #general");
         assert_eq!(following.empty_hint, "Reply in a thread to follow it.");
         assert_eq!(following.filter, "following");
@@ -428,13 +513,15 @@ mod tests {
             loading: true,
             ..open(ThreadFilter::All)
         };
-        assert!(!thread_list_state(&rooms, Some(&id), &loading, 0, false).empty);
-        assert!(!thread_list_state(&rooms, Some(&id), &open(ThreadFilter::All), 1, false).empty);
+        assert!(!thread_list_state(&rooms, Some(&id), &loading, 0, false, false).empty);
+        assert!(
+            !thread_list_state(&rooms, Some(&id), &open(ThreadFilter::All), 1, false, false).empty
+        );
         let failed = ThreadListStatus {
             error: Some(TimelineError::Unreachable),
             ..open(ThreadFilter::All)
         };
-        let state = thread_list_state(&rooms, Some(&id), &failed, 0, false);
+        let state = thread_list_state(&rooms, Some(&id), &failed, 0, false, false);
         assert!(!state.empty);
         assert_eq!(state.error_text, "Can't reach the server");
         assert_eq!(state.empty_title, "");
@@ -454,6 +541,10 @@ mod tests {
     }
 
     fn state(list_open: bool, thread_open: bool) -> ThreadListState {
+        state_with(list_open, thread_open, false)
+    }
+
+    fn state_with(list_open: bool, thread_open: bool, search_open: bool) -> ThreadListState {
         let rooms = [room("1", "general")];
         let id = RoomId::from("1".to_owned());
         let status = if list_open {
@@ -461,7 +552,7 @@ mod tests {
         } else {
             ThreadListStatus::default()
         };
-        thread_list_state(&rooms, Some(&id), &status, 1, thread_open)
+        thread_list_state(&rooms, Some(&id), &status, 1, thread_open, search_open)
     }
 
     // ACT-010
@@ -515,6 +606,56 @@ mod tests {
         assert!(escape_steps(&state(false, false), all).is_empty());
     }
 
+    // MSG-008
+    #[test]
+    fn the_search_takes_the_pane_and_is_not_the_threads_button_s_pane() {
+        let search = state_with(false, false, true);
+        assert_eq!(search.pane, "search");
+        assert!(search.search_open);
+        assert!(!search.pane_open);
+        let threads = state(true, false);
+        assert!(!threads.search_open);
+        assert_eq!(state_with(false, true, false).pane, "thread");
+    }
+
+    // MSG-008
+    #[test]
+    fn opening_the_search_closes_the_threads_and_opening_them_closes_the_search() {
+        use PaneStep::{CloseList, CloseSearch, CloseThread, OpenList, OpenSearch};
+        let all = ThreadFilter::All;
+        assert_eq!(open_search_steps(&state(false, false)), [OpenSearch]);
+        assert_eq!(
+            open_search_steps(&state(true, false)),
+            [CloseList, OpenSearch]
+        );
+        assert_eq!(
+            open_search_steps(&state(true, true)),
+            [CloseThread, CloseList, OpenSearch]
+        );
+        assert!(open_search_steps(&state_with(false, false, true)).is_empty());
+
+        let searching = state_with(false, false, true);
+        assert_eq!(toggle_steps(&searching, all), [CloseSearch, OpenList(all)]);
+        assert_eq!(open_thread_steps(&searching), [CloseSearch]);
+        assert!(open_thread_steps(&state(true, false)).is_empty());
+    }
+
+    // MSG-008
+    #[test]
+    fn the_search_button_toggles_and_the_close_button_and_escape_close_it() {
+        use PaneStep::{CloseList, CloseSearch, OpenSearch};
+        let all = ThreadFilter::All;
+        let searching = state_with(false, false, true);
+        assert_eq!(toggle_search_steps(&searching), [CloseSearch]);
+        assert_eq!(toggle_search_steps(&state(false, false)), [OpenSearch]);
+        assert_eq!(
+            toggle_search_steps(&state(true, false)),
+            [CloseList, OpenSearch]
+        );
+        assert_eq!(close_pane_steps(&searching), [CloseSearch]);
+        assert_eq!(escape_steps(&searching, all), [CloseSearch]);
+    }
+
     // ACT-011
     #[test]
     fn the_badge_counts_the_unread_threads_and_is_red_when_one_mentions_the_user() {
@@ -526,6 +667,7 @@ mod tests {
                 Some(&id),
                 &ThreadListStatus::default(),
                 0,
+                false,
                 false,
             );
             (state.unread_count, state.unread_mention)
@@ -545,7 +687,14 @@ mod tests {
     fn an_empty_unread_list_says_so() {
         let rooms = [room("1", "general")];
         let id = RoomId::from("1".to_owned());
-        let state = thread_list_state(&rooms, Some(&id), &open(ThreadFilter::Unread), 0, false);
+        let state = thread_list_state(
+            &rooms,
+            Some(&id),
+            &open(ThreadFilter::Unread),
+            0,
+            false,
+            false,
+        );
         assert_eq!(state.filter, "unread");
         assert_eq!(state.empty_title, "No unread threads in #general");
         assert_eq!(

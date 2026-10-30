@@ -44,6 +44,7 @@ use crate::account_list_model::qobject::AccountListModel;
 use crate::emoji_picker_model::qobject::EmojiPickerModel;
 use crate::mentions_model::qobject::MentionsModel;
 use crate::message_list_model::qobject::MessageListModel;
+use crate::message_search_model::qobject::MessageSearchModel;
 use crate::room_list_model::qobject::RoomListModel;
 use crate::room_search_model::qobject::RoomSearchModel;
 use crate::room_vm::qobject::RoomVm;
@@ -59,6 +60,7 @@ use rc_view::avatar_view::AvatarUrls;
 use rc_view::cache::Cache;
 use rc_view::directory::{SearchRow, search_rows};
 use rc_view::mention::Popup;
+use rc_view::message_search_view::View as MessageSearchView;
 use rc_view::rich_html::topic_html;
 use rc_view::room_search::{search_rooms as search, trimmed};
 use rc_view::room_view::RoomState;
@@ -68,7 +70,7 @@ use rc_view::startup;
 use rc_view::switchboard::{Screen, Shown, Switchboard};
 use rc_view::thread_list_view::{
     PaneStep, ThreadListState, ThreadUnread, back_steps, close_pane_steps, escape_steps,
-    toggle_steps,
+    open_search_steps, open_thread_steps, toggle_search_steps, toggle_steps,
 };
 use rc_view::thread_view::ThreadState;
 use rc_view::upload_view::UploadRow;
@@ -106,6 +108,18 @@ impl Hub {
             views: Views::new(),
             list: Registered::new("AccountList"),
             github: None,
+        }
+    }
+
+    /// Ends the message search of the current account when the user goes to another account
+    /// (`to`, or a new one): the pane closes with the room it was about.
+    fn close_search_before_leaving(&self, to: Option<&str>) {
+        let current = self.switchboard.accounts().current();
+        if current.is_some_and(|current| to == Some(current.as_str())) {
+            return;
+        }
+        if let (Some(client), Some(current)) = (&self.client, current) {
+            client.account(current).cancel_message_search();
         }
     }
 
@@ -163,6 +177,7 @@ struct Views {
     rooms: Registered<RoomListModel>,
     room_search: Registered<RoomSearchModel>,
     mentions: Registered<MentionsModel>,
+    message_search: Registered<MessageSearchModel>,
     room: Registered<RoomVm>,
     messages: Registered<MessageListModel>,
     thread: Registered<ThreadVm>,
@@ -266,6 +281,7 @@ pub fn register_accounts(thread: CxxQtThread<AccountListModel>) -> Vec<AccountVi
 pub fn select_account(id: &str) {
     let mut guard = lock();
     let hub = &mut *guard;
+    hub.close_search_before_leaving(Some(id));
     let shown = hub.switchboard.select(&AccountId::from(id.to_owned()));
     hub.carry_out(shown);
 }
@@ -275,6 +291,7 @@ pub fn select_account(id: &str) {
 pub fn add_account() {
     let mut guard = lock();
     let hub = &mut *guard;
+    hub.close_search_before_leaving(None);
     let Some(client) = &hub.client else {
         tracing::warn!("add ignored: the core isn't running");
         return;
@@ -363,6 +380,49 @@ pub fn search_members(room: &RoomId, query: &str) {
 pub fn cancel_member_search() {
     current_account("cancel_member_search", |account| {
         account.cancel_member_search();
+    });
+}
+
+/// Registers the `MessageSearch` model. Call on the GUI thread; it is told to show the pane again
+/// when the core says something of the search, and asks for it with [`message_search_shown`].
+pub fn register_message_search(thread: CxxQtThread<MessageSearchModel>) {
+    lock().views.message_search.register(thread);
+}
+
+/// What the search pane shows now, with the avatars to show it with, and the open room if the
+/// search is of another one (the pane is to move to it).
+pub fn message_search_shown(
+    zone: &jiff::tz::TimeZone,
+    now: jiff::Timestamp,
+) -> (MessageSearchView, AvatarUrls, Option<RoomId>) {
+    let hub = lock();
+    let cache = hub.switchboard.accounts().current_cache();
+    (
+        cache.message_search_view(zone, now),
+        cache.avatars(),
+        cache.message_search_stale_room(),
+    )
+}
+
+/// The open room, while the search pane is open: the room the field searches.
+pub fn message_search_room() -> Option<RoomId> {
+    let hub = lock();
+    let cache = hub.switchboard.accounts().current_cache();
+    cache.message_search_room()?;
+    cache.open_room().cloned()
+}
+
+/// Searches the messages of `room` for `query`.
+pub fn search_messages(room: &RoomId, query: &str) {
+    current_account("search_messages", |account| {
+        account.search_messages(room, query);
+    });
+}
+
+/// Asks for the next page of the search.
+pub fn more_message_search() {
+    current_account("more_message_search", |account| {
+        account.more_message_search();
     });
 }
 
@@ -526,7 +586,18 @@ pub fn register_thread_uploads(thread: CxxQtThread<ThreadUploadsModel>) -> Vec<U
 }
 
 pub fn open_thread(message_id: String) {
+    // The thread takes the pane from the search.
+    let steps = {
+        let hub = lock();
+        open_thread_steps(
+            &hub.switchboard
+                .accounts()
+                .current_cache()
+                .thread_list_state(),
+        )
+    };
     current_account("open_thread", |account| {
+        run_steps(&account, &steps, None);
         account.open_thread(MessageId::from(message_id));
     });
 }
@@ -550,13 +621,19 @@ pub fn load_more_threads() {
     current_account("load_more_threads", |account| account.load_more_threads());
 }
 
-/// Does what a command on the pane decided, in order.
-fn run_steps(account: &AccountHandle<'_>, steps: &[PaneStep]) {
+/// Does what a command on the pane decided, in order. A search opens in `room`, the open one.
+fn run_steps(account: &AccountHandle<'_>, steps: &[PaneStep], room: Option<&RoomId>) {
     for step in steps {
         match *step {
             PaneStep::CloseThread => account.close_thread(),
             PaneStep::CloseList => account.close_thread_list(),
             PaneStep::OpenList(filter) => account.open_thread_list(filter),
+            PaneStep::OpenSearch => {
+                if let Some(room) = room {
+                    account.search_messages(room, "");
+                }
+            }
+            PaneStep::CloseSearch => account.cancel_message_search(),
         }
     }
 }
@@ -568,7 +645,7 @@ fn pane_command(what: &str, decide: impl FnOnce(&ThreadListState, ThreadFilter) 
     let cache = hub.switchboard.accounts().current_cache();
     let steps = decide(&cache.thread_list_state(), cache.thread_list_filter());
     match (&hub.client, hub.switchboard.accounts().current()) {
-        (Some(client), Some(id)) => run_steps(&client.account(id), &steps),
+        (Some(client), Some(id)) => run_steps(&client.account(id), &steps, cache.open_room()),
         (Some(_), None) => tracing::warn!("{what} ignored: there is no current account"),
         (None, _) => tracing::warn!("{what} ignored: the core isn't running"),
     }
@@ -587,6 +664,16 @@ pub fn close_pane() {
 /// The header button.
 pub fn toggle_pane() {
     pane_command("toggle_pane", toggle_steps);
+}
+
+/// The header button of the search.
+pub fn toggle_search() {
+    pane_command("toggle_search", |state, _| toggle_search_steps(state));
+}
+
+/// Ctrl+F: opens the search unless it is open.
+pub fn open_search() {
+    pane_command("open_search", |state, _| open_search_steps(state));
 }
 
 /// Escape in the pane.
@@ -831,11 +918,18 @@ impl Views {
                 self.show_room(cache);
             }
             Event::MemberSearch(_) => self.mentions.queue(MentionsModel::refresh),
+            Event::MessageSearch(_) => {
+                self.message_search.queue(MessageSearchModel::refresh);
+                // The search takes the place of the threads in the pane.
+                self.show_thread_list(cache);
+            }
             Event::Directory(_) | Event::QuietRooms(_) => {
                 self.room_search.queue(RoomSearchModel::refresh);
             }
             Event::Rooms(changes) => {
                 self.room_search.queue(RoomSearchModel::refresh);
+                // The name of the room in the pane's header.
+                self.message_search.queue(MessageSearchModel::refresh);
                 self.rooms.queue(move |model| model.apply(&changes));
                 self.show_thread_unread(cache);
                 // The open room's name may have changed.
@@ -846,6 +940,8 @@ impl Views {
             Event::Uploads(_) | Event::UploadProgress { .. } => self.show_uploads(cache),
             Event::Timeline(changes) => self.messages.queue(move |model| model.apply(&changes)),
             Event::TimelineStatus(_) => {
+                // The search follows the room that is open.
+                self.message_search.queue(MessageSearchModel::refresh);
                 self.show_uploads(cache);
                 // The open room may be another: its threads are unread, or not.
                 self.show_thread_unread(cache);
@@ -884,6 +980,7 @@ impl Views {
         let (rooms, avatars) = (cache.rooms_snapshot(), cache.avatars());
         self.room_search.queue(RoomSearchModel::switched);
         self.mentions.queue(MentionsModel::refresh);
+        self.message_search.queue(MessageSearchModel::refresh);
         self.rooms.queue(move |model| model.show(rooms, avatars));
         let (messages, viewer, avatars, images) = (
             cache.timeline_snapshot(),
@@ -927,6 +1024,7 @@ impl Views {
             rooms: Registered::new("RoomList"),
             room_search: Registered::new("RoomSearch"),
             mentions: Registered::new("Mentions"),
+            message_search: Registered::new("MessageSearch"),
             room: Registered::new("Room"),
             messages: Registered::new("MessageList"),
             thread: Registered::new("Thread"),
@@ -1010,6 +1108,9 @@ impl Views {
         let for_mentions = changes.to_vec();
         self.mentions
             .queue(move |model| model.set_avatars(&for_mentions));
+        let for_found = changes.to_vec();
+        self.message_search
+            .queue(move |model| model.set_avatars(&for_found));
         let for_messages = changes.to_vec();
         self.messages
             .queue(move |model| model.set_avatars(&for_messages));

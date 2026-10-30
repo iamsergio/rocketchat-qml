@@ -140,6 +140,39 @@ Rectangle {
                     }
                 }
 
+                // The search of the room's messages: lit while the pane beside the room shows it.
+                ToolButton {
+                    id: searchButton
+
+                    objectName: "roomSearchMessagesButton"
+                    // Only the tool tip and the accessibility name show it.
+                    display: AbstractButton.IconOnly
+                    implicitHeight: Theme.iconButtonSize
+                    implicitWidth: Theme.iconButtonSize
+                    padding: Theme.spacingNone
+                    text: qsTr("Search messages (Ctrl+F)")
+                    onClicked: ThreadList.toggleSearch()
+
+                    ToolTip.delay: Theme.toolTipDelay
+                    ToolTip.text: text
+                    ToolTip.visible: hovered
+
+                    background: Rectangle {
+                        color: ThreadList.searchOpen ? Theme.ownWash : searchButton.hovered ? Theme.raised : Theme.transparent
+                        radius: Theme.radiusControl
+                    }
+
+                    contentItem: Item {
+                        Icon {
+                            anchors.centerIn: parent
+                            height: Theme.iconButtonIconSize
+                            source: "icons/search.svg"
+                            tint: ThreadList.searchOpen ? Theme.own : searchButton.hovered ? Theme.text : Theme.textMuted
+                            width: Theme.iconButtonIconSize
+                        }
+                    }
+                }
+
                 // The room's threads: lit while the pane beside the room shows them or a thread.
                 ToolButton {
                     id: threadsButton

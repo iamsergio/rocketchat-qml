@@ -18,6 +18,7 @@ fn main() {
             "src/logging.rs",
             "src/mentions_model.rs",
             "src/message_list_model.rs",
+            "src/message_search_model.rs",
             "src/pull_request_list.rs",
             "src/room_list_model.rs",
             "src/room_search_model.rs",
