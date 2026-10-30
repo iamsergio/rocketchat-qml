@@ -15,8 +15,8 @@ use crate::domain::{
 };
 use crate::members::Member;
 use crate::ports::{
-    ApiError, Changes, Connector, Image, Page, Pushed, Realtime, ServerApi, ThreadTarget,
-    ThreadsPage,
+    ApiError, Changes, Connector, Image, MessageWindow, NewerPage, Page, Pushed, Realtime,
+    ServerApi, ThreadTarget, ThreadsPage,
 };
 use crate::threads::ThreadFilter;
 
@@ -161,6 +161,49 @@ impl ServerApi for RestApi {
                 .filter(Message::shows_in_room)
                 .collect(),
             reached_start: page.reached_start,
+        })
+    }
+
+    async fn around(
+        &self,
+        credentials: &Credentials,
+        _room: &RoomId,
+        message: &MessageId,
+        limit: usize,
+    ) -> Result<Option<MessageWindow>, ApiError> {
+        let session = self.client.session(api_credentials(credentials));
+        let window = session
+            .surrounding_messages(message.as_str(), limit)
+            .await?;
+        Ok(window.map(|window| MessageWindow {
+            messages: window
+                .messages
+                .into_iter()
+                .map(message_from)
+                .filter(Message::shows_in_room)
+                .collect(),
+            more_before: window.more_before,
+            more_after: window.more_after,
+        }))
+    }
+
+    async fn newer(
+        &self,
+        credentials: &Credentials,
+        room: &RoomId,
+        after: Option<jiff::Timestamp>,
+        limit: usize,
+    ) -> Result<NewerPage, ApiError> {
+        let session = self.client.session(api_credentials(credentials));
+        let page = session.next_messages(room.as_str(), after, limit).await?;
+        Ok(NewerPage {
+            messages: page
+                .messages
+                .into_iter()
+                .map(message_from)
+                .filter(Message::shows_in_room)
+                .collect(),
+            reached_end: page.reached_end,
         })
     }
 

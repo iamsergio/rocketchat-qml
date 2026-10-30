@@ -65,7 +65,7 @@ The `Slint` column is how much of a feature's GUI tests run against `rocketchat_
 | MSG-005 | System messages rendered distinctly | done | unit: `crates/rc_api/src/wire.rs`, `crates/rc_core/src/domain.rs`, `crates/rc_view/src/message_view.rs`; contract: `crates/rc_api/tests/contract.rs`; GUI: `crates/rc_gui_tests/tests/messages.rs` |
 | MSG-006 | A name that fits is shown whole, not elided | done | GUI: `crates/rc_gui_tests/tests/messages.rs` |
 | MSG-007 | The view stays at the newest message while the list's height or rows change | done | GUI: `crates/rc_gui_tests/tests/messages.rs` |
-| MSG-008 | Search the messages of the open room on the server: results newest first with more pages, opening one shows it in the room | todo | unit: `crates/rc_api/src/wire.rs`, `crates/rc_core/src/client/tests/message_search.rs`, `crates/rc_view/src/cache.rs`, `crates/rc_view/src/message_search_view.rs`, `crates/rc_view/src/thread_list_view.rs`; contract: `crates/rc_api/tests/contract.rs`, `crates/rc_core/tests/contract.rs`; GUI: `crates/rc_gui_tests/tests/message_search.rs` |
+| MSG-008 | Search the messages of the open room on the server: results newest first with more pages, opening one shows it in the room | todo | unit: `crates/rc_api/src/wire.rs`, `crates/rc_api/tests/rest.rs`, `crates/rc_core/src/client/tests/around.rs`, `crates/rc_core/src/client/tests/message_search.rs`, `crates/rc_view/src/cache.rs`, `crates/rc_view/src/message_search_view.rs`, `crates/rc_view/src/thread_list_view.rs`; contract: `crates/rc_api/tests/contract.rs`, `crates/rc_core/tests/contract.rs`; GUI: `crates/rc_gui_tests/tests/message_search.rs` |
 
 ## Realtime
 

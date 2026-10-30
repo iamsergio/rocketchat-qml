@@ -335,6 +335,32 @@ pub struct HistoryPage {
     pub reached_start: bool,
 }
 
+/// The messages around one message (`loadSurroundingMessages`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Window {
+    /// Oldest first. The target is among them. Thread replies that were not sent to the room are
+    /// included, as the server sends them: the caller filters them (`thread_id` and
+    /// `thread_shown`).
+    pub messages: Vec<Message>,
+    /// The server holds messages older than the first.
+    pub more_before: bool,
+    /// The server holds messages newer than the last.
+    pub more_after: bool,
+}
+
+/// Messages after a point in time (`loadNextMessages`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NextPage {
+    /// Oldest first. Hidden thread replies are included.
+    pub messages: Vec<Message>,
+    /// The server had fewer messages than asked for, so there is nothing after them.
+    pub reached_end: bool,
+    /// When the last message the server sent was written, hidden thread replies included: where
+    /// the next page starts, which `messages` may not say once a caller leaves some out. `None`
+    /// for an empty page.
+    pub last: Option<jiff::Timestamp>,
+}
+
 /// One page of the replies of a thread.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ThreadPage {

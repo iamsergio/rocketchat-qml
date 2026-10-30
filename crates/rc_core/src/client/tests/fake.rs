@@ -31,6 +31,18 @@ pub(super) struct HistoryScript {
     pub(super) result: Result<Page, ApiError>,
 }
 
+pub(super) struct AroundScript {
+    /// Holds the fetch until the test notifies it.
+    pub(super) gate: Option<Arc<Notify>>,
+    pub(super) result: Result<Option<MessageWindow>, ApiError>,
+}
+
+pub(super) struct NewerScript {
+    /// Holds the fetch until the test notifies it.
+    pub(super) gate: Option<Arc<Notify>>,
+    pub(super) result: Result<NewerPage, ApiError>,
+}
+
 pub(super) struct ThreadScript {
     /// Holds the fetch until the test notifies it.
     pub(super) gate: Option<Arc<Notify>>,
@@ -226,6 +238,22 @@ pub(super) struct HistoryCall {
     pub(super) count: usize,
 }
 
+/// What `around` was asked.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct AroundCall {
+    pub(super) room: String,
+    pub(super) message: String,
+    pub(super) limit: usize,
+}
+
+/// What `newer` was asked.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct NewerCall {
+    pub(super) room: String,
+    pub(super) after: Option<jiff::Timestamp>,
+    pub(super) limit: usize,
+}
+
 #[derive(Default)]
 pub(super) struct FakeState {
     /// The fakes that answer for other servers than this one's, which stands in for the rest.
@@ -272,6 +300,15 @@ pub(super) struct FakeState {
     /// One per history fetch; an empty page at the start once they run out.
     pub(super) histories: VecDeque<HistoryScript>,
     pub(super) history_calls: Vec<HistoryCall>,
+    /// The messages the server holds of a room, hidden thread replies included, for `around` and
+    /// `newer` when no script is left. Any order.
+    pub(super) room_messages: HashMap<String, Vec<Message>>,
+    /// One per `around`; served from `room_messages` once they run out.
+    pub(super) arounds: VecDeque<AroundScript>,
+    pub(super) around_calls: Vec<AroundCall>,
+    /// One per `newer`; served from `room_messages` once they run out.
+    pub(super) newers: VecDeque<NewerScript>,
+    pub(super) newer_calls: Vec<NewerCall>,
     /// One per thread fetch; an empty page at the start once they run out.
     pub(super) threads: VecDeque<ThreadScript>,
     pub(super) thread_calls: Vec<ThreadCall>,
@@ -391,6 +428,57 @@ impl Fake {
             .insert(server.to_owned(), other.clone());
     }
 
+    /// The messages of the room as the server holds them, oldest first.
+    fn sorted_room_messages(&self, room: &RoomId) -> Vec<Message> {
+        let mut messages = (self.state().room_messages)
+            .get(room.as_str())
+            .cloned()
+            .unwrap_or_default();
+        messages.sort_by_key(|message| message.ts);
+        messages
+    }
+
+    /// What the server answers to `around`: floor(limit / 2) older messages, the target and up to
+    /// ceil(limit / 2) - 1 newer ones, a side that reaches the edge not made up by the other. The
+    /// replies the room doesn't show are filtered out after the count, as the adapter does.
+    fn window_from_rooms(
+        &self,
+        room: &RoomId,
+        target: &MessageId,
+        limit: usize,
+    ) -> Option<MessageWindow> {
+        let all = self.sorted_room_messages(room);
+        let at = all.iter().position(|message| message.id == *target)?;
+        let from = at.saturating_sub(limit / 2);
+        let to = (at + 1 + (limit.div_ceil(2)).saturating_sub(1)).min(all.len());
+        Some(MessageWindow {
+            messages: all[from..to]
+                .iter()
+                .filter(|message| message.shows_in_room())
+                .cloned()
+                .collect(),
+            more_before: from > 0,
+            more_after: to < all.len(),
+        })
+    }
+
+    /// What the server answers to `newer`: the messages after `after`, oldest first.
+    fn newer_from_rooms(
+        &self,
+        room: &RoomId,
+        after: Option<jiff::Timestamp>,
+        limit: usize,
+    ) -> NewerPage {
+        let raw: Vec<Message> = (self.sorted_room_messages(room).into_iter())
+            .filter(|message| after.is_none_or(|after| message.ts > after))
+            .take(limit)
+            .collect();
+        NewerPage {
+            reached_end: raw.len() < limit,
+            messages: raw.into_iter().filter(Message::shows_in_room).collect(),
+        }
+    }
+
     pub(super) fn state(&self) -> MutexGuard<'_, FakeState> {
         self.0.lock().unwrap()
     }
@@ -474,6 +562,28 @@ impl Fake {
         self.state()
             .histories
             .push_back(HistoryScript { gate, result });
+    }
+
+    pub(super) fn script_around(
+        &self,
+        gate: Option<Arc<Notify>>,
+        result: Result<Option<MessageWindow>, ApiError>,
+    ) {
+        self.state()
+            .arounds
+            .push_back(AroundScript { gate, result });
+    }
+
+    pub(super) fn script_newer(
+        &self,
+        gate: Option<Arc<Notify>>,
+        result: Result<NewerPage, ApiError>,
+    ) {
+        self.state().newers.push_back(NewerScript { gate, result });
+    }
+
+    pub(super) fn set_room_messages(&self, room: &str, messages: Vec<Message>) {
+        self.state().room_messages.insert(room.to_owned(), messages);
     }
 
     pub(super) fn script_thread(&self, gate: Option<Arc<Notify>>, result: Result<Page, ApiError>) {
@@ -1126,6 +1236,56 @@ impl ServerApi for Fake {
                 messages: Vec::new(),
                 reached_start: true,
             });
+        };
+        if let Some(gate) = script.gate {
+            gate.notified().await;
+        }
+        script.result
+    }
+
+    async fn around(
+        &self,
+        _credentials: &Credentials,
+        room: &RoomId,
+        message: &MessageId,
+        limit: usize,
+    ) -> Result<Option<MessageWindow>, ApiError> {
+        let script = {
+            let mut state = self.state();
+            state.around_calls.push(AroundCall {
+                room: room.to_string(),
+                message: message.to_string(),
+                limit,
+            });
+            state.arounds.pop_front()
+        };
+        let Some(script) = script else {
+            return Ok(self.window_from_rooms(room, message, limit));
+        };
+        if let Some(gate) = script.gate {
+            gate.notified().await;
+        }
+        script.result
+    }
+
+    async fn newer(
+        &self,
+        _credentials: &Credentials,
+        room: &RoomId,
+        after: Option<jiff::Timestamp>,
+        limit: usize,
+    ) -> Result<NewerPage, ApiError> {
+        let script = {
+            let mut state = self.state();
+            state.newer_calls.push(NewerCall {
+                room: room.to_string(),
+                after,
+                limit,
+            });
+            state.newers.pop_front()
+        };
+        let Some(script) = script else {
+            return Ok(self.newer_from_rooms(room, after, limit));
         };
         if let Some(gate) = script.gate {
             gate.notified().await;

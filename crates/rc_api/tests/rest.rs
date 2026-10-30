@@ -2340,3 +2340,237 @@ async fn confirm_upload_without_a_thread_sends_only_the_text() {
         .await
         .unwrap();
 }
+
+/// What `method.call` answers: the DDP result frame as a string inside a JSON object.
+fn method_answer(frame: &serde_json::Value) -> String {
+    json!({ "message": frame.to_string(), "success": true }).to_string()
+}
+
+/// A message as the DDP methods send it, with an EJSON time.
+fn ddp_message(id: &str, ms: i64, extra: &serde_json::Value) -> serde_json::Value {
+    let mut message = json!({
+        "_id": id, "rid": "rid", "msg": id, "ts": { "$date": ms },
+        "u": { "_id": "u1", "username": "alice" }, "_updatedAt": { "$date": ms },
+    });
+    if let (Some(base), Some(extra)) = (message.as_object_mut(), extra.as_object()) {
+        base.extend(extra.clone());
+    }
+    message
+}
+
+async fn mount_method(server: &MockServer, name: &str, status: u16, body: String) {
+    mount_authenticated(
+        server,
+        "POST",
+        &format!("/api/v1/method.call/{name}"),
+        json_response(status, &body),
+    )
+    .await;
+}
+
+// MSG-008
+#[tokio::test]
+async fn surrounding_messages_sends_the_frame_and_sorts_the_window_oldest_first() {
+    let server = MockServer::start().await;
+    // The server's order: the older half newest first, the target, then the newer ones.
+    let frame = json!({ "msg": "result", "id": "1", "result": {
+        "messages": [
+            ddp_message("m2", 2000, &json!({})),
+            ddp_message("m1", 1000, &json!({})),
+            ddp_message("m3", 3000, &json!({})),
+            ddp_message("m4", 4000, &json!({ "tmid": "m1", "tshow": false })),
+        ],
+        "moreBefore": true, "moreAfter": false,
+    } });
+    Mock::given(method("POST"))
+        .and(path("/api/v1/method.call/loadSurroundingMessages"))
+        .and(header("X-User-Id", USER_ID))
+        .and(header("X-Auth-Token", TOKEN))
+        .and(wiremock::matchers::body_string_contains(
+            r#"\"params\":[{\"_id\":\"m3\"},4]"#,
+        ))
+        .respond_with(json_response(200, &method_answer(&frame)))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let window = session(&RestClient::new(&server.uri()).unwrap())
+        .surrounding_messages("m3", 4)
+        .await
+        .unwrap()
+        .unwrap();
+    let ids: Vec<_> = window.messages.iter().map(|m| m.id.as_str()).collect();
+    assert_eq!(ids, ["m1", "m2", "m3", "m4"]);
+    assert_eq!(window.messages[0].ts.as_millisecond(), 1000);
+    assert_eq!(window.messages[3].thread_id.as_deref(), Some("m1"));
+    assert!(window.more_before);
+    assert!(!window.more_after);
+}
+
+// MSG-008
+#[tokio::test]
+async fn surrounding_messages_of_a_missing_message_is_none() {
+    let server = MockServer::start().await;
+    let frame = json!({ "msg": "result", "id": "1", "result": false });
+    mount_method(
+        &server,
+        "loadSurroundingMessages",
+        200,
+        method_answer(&frame),
+    )
+    .await;
+    let window = session(&RestClient::new(&server.uri()).unwrap())
+        .surrounding_messages("gone", 50)
+        .await
+        .unwrap();
+    assert_eq!(window, None);
+}
+
+// MSG-008
+#[tokio::test]
+async fn a_method_error_is_a_server_error_in_a_400_and_in_a_200() {
+    let frame = json!({ "msg": "result", "id": "1", "error": {
+        "error": "error-not-allowed", "reason": "Not allowed",
+        "message": "Not allowed [error-not-allowed]",
+    } });
+    for status in [400, 200] {
+        let server = MockServer::start().await;
+        mount_method(
+            &server,
+            "loadSurroundingMessages",
+            status,
+            method_answer(&frame),
+        )
+        .await;
+        let result = session(&RestClient::new(&server.uri()).unwrap())
+            .surrounding_messages("m", 50)
+            .await;
+        match result {
+            Err(Error::Server {
+                status: got,
+                message,
+            }) => {
+                assert_eq!(got, status);
+                assert_eq!(message, "Not allowed");
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+}
+
+// MSG-008
+#[tokio::test]
+async fn a_method_call_with_a_bad_token_is_unauthorized_and_a_rate_limit_is_an_error() {
+    let server = MockServer::start().await;
+    mount(
+        &server,
+        "POST",
+        "/api/v1/method.call/loadSurroundingMessages",
+        json_response(401, NOT_LOGGED_IN),
+    )
+    .await;
+    mount(
+        &server,
+        "POST",
+        "/api/v1/method.call/loadNextMessages",
+        json_response(
+            429,
+            r#"{"success":false,"error":"Error, too many requests. Please slow down."}"#,
+        ),
+    )
+    .await;
+    let session = session(&RestClient::new(&server.uri()).unwrap());
+    let result = session.surrounding_messages("m", 50).await;
+    assert!(matches!(result, Err(Error::Unauthorized)), "{result:?}");
+    let result = session.next_messages("rid", None, 50).await;
+    assert!(
+        matches!(result, Err(Error::Server { status: 429, .. })),
+        "{result:?}"
+    );
+}
+
+// MSG-008
+#[tokio::test]
+async fn next_messages_sends_the_date_and_counts_the_raw_length_against_the_limit() {
+    let server = MockServer::start().await;
+    let frame = json!({ "msg": "result", "id": "1", "result": { "messages": [
+        ddp_message("m1", 1_792_511_428_626, &json!({ "tmid": "p", "tshow": false })),
+        ddp_message("m2", 1_792_511_428_700, &json!({})),
+    ] } });
+    Mock::given(method("POST"))
+        .and(path("/api/v1/method.call/loadNextMessages"))
+        .and(wiremock::matchers::body_string_contains(
+            r#"\"params\":[\"rid\",{\"$date\":1792511428000},3]"#,
+        ))
+        .respond_with(json_response(200, &method_answer(&frame)))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let after = jiff::Timestamp::from_millisecond(1_792_511_428_000).unwrap();
+    let page = session(&RestClient::new(&server.uri()).unwrap())
+        .next_messages("rid", Some(after), 3)
+        .await
+        .unwrap();
+    assert_eq!(page.messages.len(), 2);
+    assert_eq!(page.messages[1].ts.as_millisecond(), 1_792_511_428_700);
+    assert!(page.reached_end);
+    assert_eq!(
+        page.last.map(jiff::Timestamp::as_millisecond),
+        Some(1_792_511_428_700)
+    );
+}
+
+// MSG-008
+#[tokio::test]
+async fn the_end_of_a_next_page_is_its_last_raw_message_even_when_that_is_a_hidden_reply() {
+    let server = MockServer::start().await;
+    let frame = json!({ "msg": "result", "id": "1", "result": { "messages": [
+        ddp_message("m1", 1000, &json!({})),
+        ddp_message("m2", 2000, &json!({ "tmid": "p", "tshow": false })),
+    ] } });
+    Mock::given(method("POST"))
+        .and(path("/api/v1/method.call/loadNextMessages"))
+        .respond_with(json_response(200, &method_answer(&frame)))
+        .mount(&server)
+        .await;
+    let page = session(&RestClient::new(&server.uri()).unwrap())
+        .next_messages("rid", None, 2)
+        .await
+        .unwrap();
+    assert_eq!(page.last.map(jiff::Timestamp::as_millisecond), Some(2000));
+    let empty = json!({ "msg": "result", "id": "1", "result": { "messages": [] } });
+    server.reset().await;
+    Mock::given(method("POST"))
+        .and(path("/api/v1/method.call/loadNextMessages"))
+        .respond_with(json_response(200, &method_answer(&empty)))
+        .mount(&server)
+        .await;
+    let page = session(&RestClient::new(&server.uri()).unwrap())
+        .next_messages("rid", None, 2)
+        .await
+        .unwrap();
+    assert_eq!(page.last, None);
+}
+
+// MSG-008
+#[tokio::test]
+async fn next_messages_from_the_start_sends_null_and_a_full_page_is_not_the_end() {
+    let server = MockServer::start().await;
+    let frame = json!({ "msg": "result", "id": "1", "result": { "messages": [
+        ddp_message("m1", 1000, &json!({})),
+        ddp_message("m2", 2000, &json!({})),
+    ] } });
+    Mock::given(method("POST"))
+        .and(path("/api/v1/method.call/loadNextMessages"))
+        .and(wiremock::matchers::body_string_contains(
+            r#"\"params\":[\"rid\",null,2]"#,
+        ))
+        .respond_with(json_response(200, &method_answer(&frame)))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let page = session(&RestClient::new(&server.uri()).unwrap())
+        .next_messages("rid", None, 2)
+        .await
+        .unwrap();
+    assert!(!page.reached_end);
+}
