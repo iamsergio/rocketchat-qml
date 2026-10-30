@@ -22,14 +22,14 @@ use crate::message_view::{author_name, body, day_label, first_of_day, system_tex
 const TEXT_LIMIT: usize = 240;
 
 /// What the note says while the field is empty.
-pub const EMPTY_HINT: &str =
-    "Type a word to find the messages that hold it. The server matches whole words, in any case.";
+pub const EMPTY_HINT: &str = "Type a word to find the messages that hold it. The server matches whole words, in any case. \
+Filters: from:user, mention:user, has:url, has:star, has:location, is:pinned, and before:, after: or on: with a day/month/year.";
 
 /// What the note says when nothing matches.
 pub const NONE_HINT: &str = "The search matches whole words: try the full word, or another one.";
 
 /// The hint under the field at rest, and while a search runs with rows on show.
-pub const FIELD_HINT: &str = "Whole words, any case";
+pub const FIELD_HINT: &str = "Whole words · from:user · has:url · on:dd/mm/yyyy";
 pub const FIELD_HINT_SEARCHING: &str = "Searching…";
 
 /// What the pane says when the messages couldn't be searched because the server didn't answer.

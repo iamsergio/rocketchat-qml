@@ -57,6 +57,21 @@ pub(super) struct MessageSearchDone {
     outcome: Result<Vec<Message>, ApiError>,
 }
 
+/// The query as it is searched: trimmed, without the `order:` words. The server would sort by
+/// `order:asc` oldest first, but the results are kept, paged and grouped newest first, so the
+/// order is not the user's to ask for (and the query told to the frontend is this one).
+fn clean_query(query: &str) -> String {
+    query
+        .split_whitespace()
+        .filter(|word| {
+            !word
+                .get(..6)
+                .is_some_and(|start| start.eq_ignore_ascii_case("order:"))
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 impl<C: Connector> Actor<C> {
     /// Starts a search of `room`'s messages for `query`, or retries one that failed. See
     /// [`AccountHandle::search_messages`](crate::AccountHandle::search_messages).
@@ -65,7 +80,7 @@ impl<C: Connector> Actor<C> {
             tracing::debug!("search_messages ignored: not logged in");
             return;
         }
-        let query = query.trim().to_owned();
+        let query = clean_query(query);
         if let Some(told) = &self.message_search.told
             && told.room == room
             && told.query == query

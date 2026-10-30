@@ -286,7 +286,7 @@ pub mod main_window {
     pub const MESSAGE_SEARCH_FIELD: &str = "mainWindow/messageSearchField";
     /// Empties the field; visible while it holds text.
     pub const MESSAGE_SEARCH_CLEAR: &str = "mainWindow/messageSearchClear";
-    /// Under the field: "Whole words, any case", and a spinner while a search runs with rows on
+    /// Under the field: "Whole words · from:user · has:url · on:dd/mm/yyyy", and a spinner while a search runs with rows on
     /// show.
     pub const MESSAGE_SEARCH_HINT: &str = "mainWindow/messageSearchHint";
     pub const MESSAGE_SEARCH_REFRESHING: &str = "mainWindow/messageSearchRefreshing";

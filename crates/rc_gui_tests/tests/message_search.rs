@@ -123,7 +123,7 @@ fn the_header_button_and_ctrl_f_open_the_pane_with_the_field_focused() {
     .unwrap();
     assert_eq!(
         gui.text(main_window::MESSAGE_SEARCH_HINT).unwrap(),
-        "Whole words, any case"
+        "Whole words · from:user · has:url · on:dd/mm/yyyy"
     );
     // The focus is in the field: what is typed goes there.
     search_for(gui, "abc");

@@ -52,6 +52,7 @@ Done when: day-to-day use works. Edit, delete, react, threads, DMs, search and u
   - [x] 3c: the core's detached window: `show_message`, `load_newer`, `show_latest`, the store kept attached, `Event::ShowMessage`, `TimelineStatus.found`
   - [x] 3d: `rc_view` and the Qt side: found mark (`MessageList::set_found`, the `found` role, `showRequested`), the picked row, jump to latest, loading newer, the not-found note, `RC_HISTORY_PAGE_SIZE`, GUI tests
   - [x] 3e: thread replies: `pick_target`, `ThreadListState.search_held` and the pane steps, the thread over the results with Back/Esc/× returning, GUI tests
+- [x] Search operators of `chat.search` (MSG-008, follow-up): probed which the server understands (`from:`, `mention:`, `has:url|link|star|location`, `is:pinned|starred`, `before:|after:|on:` as day/month/year, `order:asc`), recorded with contract tests, the design doc corrected, and the field hint and the empty note name the useful ones; the core drops `order:` words from the query, so the results stay newest first
 - [ ] Search the messages of all rooms (MSG-009; step 4 of 5): `messageSearch` over DDP with no room, gated on the server's `Search.defaultProvider.GlobalSearchEnabled`, which `rocketchatSearch.getProvider` reports; it is off by default, and then the server answers empty, not with an error
 - [ ] Search messages, the Slint panes (MSG-008 and MSG-009; step 5 of 5): the room's search and the global one
 - [ ] Features ACT-001…ACT-009 tested
