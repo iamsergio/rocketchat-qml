@@ -183,6 +183,8 @@ fn run_steps(account: &AccountHandle<'_>, steps: &[PaneStep]) {
             PaneStep::CloseThread => account.close_thread(),
             PaneStep::CloseList => account.close_thread_list(),
             PaneStep::OpenList(filter) => account.open_thread_list(filter),
+            // The Slint app has no search pane yet (step 5 of MSG-008), so no step asks for it.
+            PaneStep::OpenSearch | PaneStep::CloseSearch => {}
         }
     }
 }

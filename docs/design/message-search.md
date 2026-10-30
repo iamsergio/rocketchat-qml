@@ -1,10 +1,16 @@
 # Message search
 
-Searching the messages of the open room on the server (MSG-008). This step is the server call, the core and what `rc_view::Cache` keeps; the panel comes in the next steps (see PLAN.md), and so do jumping to a result in the room and the search across all rooms (MSG-009).
+Searching the messages of the open room on the server (MSG-008). This is the server call, the core, what `rc_view` decides and the Qt pane; jumping to a result in the room (step 3), the Slint pane (step 5) and the search across all rooms (MSG-009) come later (see PLAN.md).
 
 ## What the user gets
 
-The Qt panel is step 2 of the plan; nothing is shown yet.
+- A magnifier button in the room's header, left of the threads button, with the tool tip "Search messages (Ctrl+F)"; it is lit while the pane shows the search and toggles it. Ctrl+F in the room page opens the pane if it is closed and focuses its field with the text selected.
+- The search takes the place of the threads in the pane beside the room: opening it closes the list of threads or the open thread, and opening the list or a thread closes it. The header says "Search" and "in #room", and has the close button. Esc in the field closes the pane.
+- The field has a magnifier and a cross (while it holds text); under it a faint hint, "Whole words, any case", which reads "Searching…" with a small spinner while a search runs and rows are on show.
+- The results are grouped by day (a label: "Today", "Yesterday" or the date as the room's separators say it), newest first. A row has the avatar, the author, the time, and the start of the text on up to three lines with the words of the query in bold in the colour of what is the user's (nothing marked for a `/regex/` query). A reply in a thread has the line "In a thread". A system message shows the text the room shows for it.
+- The cursor row (Up and Down, wrapping over the day labels, starting on the first result) and the one under the pointer have a lighter background. Enter and a click only put the cursor there for now: showing the message in the room is step 3. A strip under the list shows the keys.
+- The list area says what is going on: with an empty field "Search #room" and how to search; a spinner while the first search runs with no rows to show; "No messages with “query”" when there are none; the error and a Retry button when the first page failed; at the end of the list a spinner while the next page loads, or the error and a Retry button when it failed. Reaching the end asks for the next page.
+- The previous rows stay while a new search runs. Another room keeps the pane open with an empty field and searches nothing; logging out or switching the account closes it.
 
 ## What the server does
 
@@ -34,4 +40,18 @@ The contract tests (`crates/rc_api/tests/contract.rs`, `crates/rc_core/tests/con
 
 ## What `rc_view` keeps
 
-`rc_view::Cache` keeps the last `MessageSearch` the core sent (`Cache::message_search`), `None` after a `MessageSearch(None)`, so that a view created late catches up. There are no rows or view logic yet: they come with the panel (step 2).
+`rc_view::Cache` keeps the last `MessageSearch` the core sent (`Cache::message_search`), `None` after a `MessageSearch(None)`, so that a view created late catches up. The pane being open is that: there is no other flag.
+
+## What `rc_view` decides
+
+`rc_view::message_search_view` is plain Rust (the time zone and the current time are parameters):
+
+- `Results`, which the `Cache` keeps from `Event::MessageSearch` (`Cache::message_search_view`), holds the last `Found` while the next search runs, as `mention::Suggestions` does, and forgets it for another room, after `None` and after a failure (rows of another query would mislead). Its `view` gives a `View`: the `Status` (`empty`, `searching` when there are no rows to keep, `none`, `failed`, `results`), the rows, the `Footer` (`nothing`, `available`, `loading`, `failed` with the text; `nothing` while a search runs), the texts of the notes, the error, the hint under the field and whether a search is running over rows.
+- `rows` gives a `Row::Day` label before the first message of each day (`message_view::first_of_day` and `day_label`) and a `Row::Message` per message: author, time (`time_text`), avatar owner, whether it is a reply in a thread, and the text, which is the message's body or the text the room shows for a system message (`system_text`), on one line and cut at 240 characters, escaped, with `<b>` around the whole words that are one of the query's words, ignoring case. The query's words are those of the query without the ones that start with `-` and not at all for a `/regex/`.
+- `step_cursor` and `first_cursor` move the cursor over the message rows, wrapping; `stale_room` says that the search is of another room than the open one.
+- The pane is a `Pane::Search` of `thread_list_view`: `ThreadListState` has `search_open` (the core has a search) and `pane` is `search` unless a thread is open; `pane_open` stays the list or a thread (the threads button). The commands are steps: `open_search_steps` closes the thread and the list first, `open_list_steps` and `open_thread_steps` close the search, `close_pane_steps` and `escape_steps` close it too, `toggle_search_steps` is the header button. Opening the search is `search_messages(room, "")`, answered at once as an empty `Found`, and closing it is `cancel_message_search()`.
+
+## The Qt pane
+
+- **Model:** `MessageSearch` (`rc_qt/src/message_search_model.rs`) is a list model and the view model of the pane. The hub tells it to show again on `Event::MessageSearch`, `TimelineStatus` (the search follows the open room: when it is of another one the model searches the new room for nothing and emits `fieldReset`, which empties the field), `Rooms` (the name) and when the account switches; switching the account cancels the search of the one left. It takes the `View` and announces the rows as an insert when they only add to the rows held (the next page, which keeps the scroll) and as a reset otherwise, moving the cursor to the first message; `Event::Avatars` announces the avatar role of the rows that show the new files. Text changes call `setQuery`, which searches the open room, `retry` and `retryMore` ask again, `reachedEnd` (QML calls it whenever the list's end is in view) asks for the next page only when the footer is `available` and there are rows. The pane's commands are `ThreadList`'s: `toggleSearch`, `openSearch`, `closePane`, `escape`, and `searchOpen`.
+- **QML:** `MessageSearchPane.qml` in `RoomPage` after the thread pane, `Theme.threadPaneWidth` wide, shown while `ThreadList.searchOpen`; `MessageSearchRow.qml` and `MessageSearchDay.qml` are the delegates of a `DelegateChooser` on `rowType`. The row's `checked` is the cursor (so that tests can read it); `picked`, the row chosen to be shown in the room, is a role that is always false until step 3, whose `MessageSearch.pick` is the hook. The keycaps of the strip are `Keycap.qml`, which the mention popup uses too.

@@ -92,6 +92,7 @@ impl Key {
     pub const ESCAPE: Self = Self(0x0100_0000);
     pub const TAB: Self = Self(0x0100_0001);
     pub const F5: Self = Self(0x0100_0034);
+    pub const F: Self = Self(0x46);
     pub const K: Self = Self(0x4B);
     pub const V: Self = Self(0x56);
     pub const BACKSPACE: Self = Self(0x0100_0003);

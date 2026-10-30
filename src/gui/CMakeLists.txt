@@ -28,7 +28,11 @@ qt_add_qml_module(
   Avatar.qml
   CheckBar.qml
   Main.qml
+  Keycap.qml
   MentionPopup.qml
+  MessageSearchDay.qml
+  MessageSearchPane.qml
+  MessageSearchRow.qml
   Composer.qml
   DirectoryLabel.qml
   DirectoryNote.qml

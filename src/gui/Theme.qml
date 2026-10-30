@@ -271,6 +271,10 @@ QtObject {
     readonly property int threadRowTextLines: 2
     readonly property int threadFilterHeight: 28
     readonly property int threadBackIconSize: 14
+    // The search of a room's messages takes the pane: the spinner beside the hint under its field,
+    // and the lines a result's text is clamped to.
+    readonly property int messageSearchSpinnerSize: 14
+    readonly property int messageSearchTextLines: 3
     // The badge on the room's threads button: a pill of at least this height and width, at the
     // button's top right corner, sticking out of it by the overhangs, with a ring in the header's
     // colour around it so that it reads as cut out.

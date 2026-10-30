@@ -19,6 +19,7 @@ pub mod file_urls;
 pub mod github;
 pub mod mention;
 pub mod message_list;
+pub mod message_search_view;
 pub mod message_view;
 pub mod paste;
 pub mod quote_view;

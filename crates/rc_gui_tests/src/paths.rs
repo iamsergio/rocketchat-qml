@@ -269,6 +269,50 @@ pub mod main_window {
     pub const THREAD_LIST_EMPTY: &str = "mainWindow/threadListEmpty";
     pub const THREAD_LIST_EMPTY_TITLE: &str = "mainWindow/threadListEmptyTitle";
     pub const THREAD_LIST_EMPTY_HINT: &str = "mainWindow/threadListEmptyHint";
+    /// In the header of the room, left of the threads button: shows the search of the room's
+    /// messages in the pane, or closes it. Ctrl+F opens it too. Its `checked` is not set: it is lit
+    /// while the search shows.
+    pub const ROOM_SEARCH_MESSAGES_BUTTON: &str = "mainWindow/roomSearchMessagesButton";
+    /// The search pane, beside the room, visible only while it shows the search. It replaces the
+    /// thread pane (`THREAD_PANE`): one of the two at a time.
+    pub const MESSAGE_SEARCH_PANE: &str = "mainWindow/messageSearchPane";
+    /// "Search" and "in #<room>" in its header, by their `text`.
+    pub const MESSAGE_SEARCH_TITLE: &str = "mainWindow/messageSearchTitle";
+    pub const MESSAGE_SEARCH_ROOM: &str = "mainWindow/messageSearchRoom";
+    /// Closes the search.
+    pub const MESSAGE_SEARCH_CLOSE: &str = "mainWindow/messageSearchClose";
+    /// What to look for: its `text` is the query, and `activeFocus` says it has the focus. Up and
+    /// Down move the cursor, Escape closes the pane.
+    pub const MESSAGE_SEARCH_FIELD: &str = "mainWindow/messageSearchField";
+    /// Empties the field; visible while it holds text.
+    pub const MESSAGE_SEARCH_CLEAR: &str = "mainWindow/messageSearchClear";
+    /// Under the field: "Whole words, any case", and a spinner while a search runs with rows on
+    /// show.
+    pub const MESSAGE_SEARCH_HINT: &str = "mainWindow/messageSearchHint";
+    pub const MESSAGE_SEARCH_REFRESHING: &str = "mainWindow/messageSearchRefreshing";
+    /// The results, newest first, with a label before each day; its `count` is the rows with the
+    /// labels.
+    pub const MESSAGE_SEARCH_LIST: &str = "mainWindow/messageSearchList";
+    /// The label of a day, as its `text`: "Today", "Yesterday" or the date.
+    pub const MESSAGE_SEARCH_DAY: &str = "mainWindow/messageSearchDay";
+    /// Visible while the field is empty, with the words as the `text` of its title and its hint.
+    pub const MESSAGE_SEARCH_EMPTY: &str = "mainWindow/messageSearchEmpty";
+    pub const MESSAGE_SEARCH_EMPTY_TITLE: &str = "mainWindow/messageSearchEmptyTitle";
+    /// Visible when the search found nothing, with its words as for `MESSAGE_SEARCH_EMPTY`.
+    pub const MESSAGE_SEARCH_NO_RESULTS: &str = "mainWindow/messageSearchNoResults";
+    pub const MESSAGE_SEARCH_NO_RESULTS_TITLE: &str = "mainWindow/messageSearchNoResultsTitle";
+    /// A spinner, visible while the first search runs and nothing is shown yet.
+    pub const MESSAGE_SEARCH_LOADING: &str = "mainWindow/messageSearchLoading";
+    /// Why the first page couldn't be fetched, as its `text`, with a button to try again.
+    pub const MESSAGE_SEARCH_FAILED: &str = "mainWindow/messageSearchFailed";
+    pub const MESSAGE_SEARCH_RETRY: &str = "mainWindow/messageSearchRetry";
+    /// Under the last row: a spinner while the next page loads, or why it couldn't, with a button
+    /// to ask again.
+    pub const MESSAGE_SEARCH_MORE_BUSY: &str = "mainWindow/messageSearchMoreBusy";
+    pub const MESSAGE_SEARCH_MORE_ERROR: &str = "mainWindow/messageSearchMoreError";
+    pub const MESSAGE_SEARCH_MORE_RETRY: &str = "mainWindow/messageSearchMoreRetry";
+    /// The keys, under the list.
+    pub const MESSAGE_SEARCH_KEYS: &str = "mainWindow/messageSearchKeys";
     /// The messages of the open thread, oldest first: the parent, then the replies. Its `count`
     /// is how many are loaded.
     pub const THREAD_MESSAGE_LIST: &str = "mainWindow/threadMessageList";
@@ -500,6 +544,31 @@ pub mod thread_list_row_part {
 #[must_use]
 pub fn thread_list_row(id: &str, part: &str) -> String {
     let row = format!("{}/threadListRow_{id}", main_window::WINDOW);
+    if part.is_empty() {
+        row
+    } else {
+        format!("{row}/{part}")
+    }
+}
+
+/// The parts of a result of the message search, for [`message_search_row`].
+pub mod message_search_row_part {
+    pub const AUTHOR: &str = "messageSearchAuthor";
+    pub const TIME: &str = "messageSearchTime";
+    /// The start of the message on at most three lines, as styled text: the words searched for
+    /// are in `<b>`.
+    pub const TEXT: &str = "messageSearchText";
+    /// "In a thread" with an icon, visible for a reply in a thread.
+    pub const THREAD: &str = "messageSearchThread";
+    pub const AVATAR_PLACEHOLDER: &str = "messageSearchAvatarPlaceholder";
+}
+
+/// The path of a result of the message search, or of a `part` of it (see
+/// [`message_search_row_part`]); an empty `part` is the row itself. Rows are addressed by the
+/// message's id, as messages are.
+#[must_use]
+pub fn message_search_row(id: &str, part: &str) -> String {
+    let row = format!("{}/messageSearchRow_{id}", main_window::WINDOW);
     if part.is_empty() {
         row
     } else {
