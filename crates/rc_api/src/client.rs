@@ -411,6 +411,38 @@ impl RestSession {
         wire::parse_history(&body, count).map_err(Error::Decode)
     }
 
+    /// The messages of a room that match `text` (`GET /api/v1/chat.search`), newest first, `count`
+    /// of them after the first `offset`. The server searches whole words, ignoring case, any of
+    /// them, and takes `/regex/i` too; it doesn't rank, whatever the `score` it sends. Replies in
+    /// a thread and system messages are among them. An empty `text` is refused.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Unauthorized`] if the token is expired or revoked, [`Error::Server`] if the server
+    /// refuses (a private group the user is not in, an invalid regular expression), or any of the
+    /// other errors.
+    pub async fn search_messages(
+        &self,
+        room_id: &str,
+        text: &str,
+        count: usize,
+        offset: usize,
+    ) -> Result<Vec<Message>, Error> {
+        // Only a URL to escape the query with; the host is never used.
+        let mut escaped =
+            Url::parse("http://unused/").map_err(|e| Error::InvalidUrl(e.to_string()))?;
+        {
+            let mut pairs = escaped.query_pairs_mut();
+            pairs.append_pair("roomId", room_id);
+            pairs.append_pair("searchText", text);
+            pairs.append_pair("count", &count.to_string());
+            pairs.append_pair("offset", &offset.to_string());
+        }
+        let path = format!("api/v1/chat.search?{}", escaped.query().unwrap_or_default());
+        let body = self.call(Method::GET, &path).await?;
+        wire::parse_search(&body).map_err(Error::Decode)
+    }
+
     /// What happened to a room's messages since `since` (`GET /api/v1/chat.syncMessages`): the
     /// ones sent or changed, whole, and the ids of the ones deleted. It works for every room type.
     /// The server decides by its own clock, so a caller that takes `since` from its clock should

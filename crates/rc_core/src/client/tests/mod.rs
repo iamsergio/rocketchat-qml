@@ -62,6 +62,7 @@ mod login;
 mod mark_read;
 mod members;
 mod message_actions;
+mod message_search;
 mod quiet;
 mod quotes;
 mod realtime;

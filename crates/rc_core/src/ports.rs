@@ -392,6 +392,23 @@ pub trait ServerApi: Clone + Send + Sync + 'static {
         count: usize,
     ) -> impl Future<Output = Result<Found<Member>, ApiError>> + Send;
 
+    /// The messages of `room` that match `text` (whole words, ignoring case, or `/regex/i`),
+    /// newest first: at most `count` of them after the first `offset`. Replies in threads and
+    /// system messages are among them. The server refuses an empty `text`.
+    ///
+    /// # Errors
+    ///
+    /// [`ApiError::Unauthorized`] if the credentials have expired or were revoked,
+    /// [`ApiError::Server`] if the server refuses.
+    fn search_messages(
+        &self,
+        credentials: &Credentials,
+        room: &RoomId,
+        text: &str,
+        count: usize,
+        offset: usize,
+    ) -> impl Future<Output = Result<Vec<Message>, ApiError>> + Send;
+
     /// Opens the direct message with the user `username`, which the server creates if there is
     /// none and shows again if the user had closed it, and returns its id. The server doesn't
     /// check that the user exists: it makes an empty room for a name nobody has, so only ask for

@@ -826,6 +826,12 @@ pub(crate) fn parse_history(bytes: &[u8], count: usize) -> Result<HistoryPage, s
     })
 }
 
+/// The messages of a `chat.search` answer, in the server's order.
+pub(crate) fn parse_search(bytes: &[u8]) -> Result<Vec<Message>, serde_json::Error> {
+    let body: HistoryBody = serde_json::from_slice(bytes)?;
+    Ok(body.messages.into_iter().map(Message::from).collect())
+}
+
 /// The answer of `chat.getThreadMessages`. `offset` is what was asked for: the page ends the
 /// thread if it reaches `total`.
 pub(crate) fn parse_thread_messages(
@@ -2022,6 +2028,29 @@ mod tests {
                 .unwrap()
                 .reached_start
         );
+    }
+
+    // MSG-008
+    #[test]
+    fn the_messages_of_a_search_are_parsed_like_the_history_and_the_score_is_dropped() {
+        let body = r#"{"messages":[
+            {"_id":"m2","rid":"r","msg":"alpha","ts":"2026-10-30T09:56:52.537Z",
+             "u":{"_id":"u1","username":"admin","name":"Administrator"},"tmid":"m1","score":0.75},
+            {"_id":"m1","rid":"r","msg":"alpha topic","t":"room_changed_topic",
+             "ts":"2026-10-30T09:56:44.361Z","u":{"_id":"u1","username":"admin"}}],
+            "success":true}"#;
+        let messages = parse_search(body.as_bytes()).unwrap();
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[0].id, "m2");
+        assert_eq!(messages[0].thread_id.as_deref(), Some("m1"));
+        assert_eq!(messages[0].author.username, "admin");
+        assert_eq!(messages[1].kind.as_deref(), Some("room_changed_topic"));
+    }
+
+    // MSG-008
+    #[test]
+    fn an_answer_without_messages_finds_none() {
+        assert!(parse_search(br#"{"success":true}"#).unwrap().is_empty());
     }
 
     const DDP_MESSAGE: &str = include_str!("../tests/fixtures/ddp_message.json");

@@ -113,6 +113,15 @@ pub(super) struct MemberCall {
     pub(super) count: usize,
 }
 
+/// What a request of a room's message search was asked.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct MessageSearchCall {
+    pub(super) room: String,
+    pub(super) text: String,
+    pub(super) count: usize,
+    pub(super) offset: usize,
+}
+
 /// What `send_message` was asked.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct SendCall {
@@ -327,6 +336,9 @@ pub(super) struct FakeState {
     /// One per request for a room's members; nobody found once they run out.
     pub(super) members: VecDeque<Scripted<Found<Member>>>,
     pub(super) member_calls: Vec<MemberCall>,
+    /// One per request for a room's message search; nothing found once they run out.
+    pub(super) message_searches: VecDeque<Scripted<Vec<Message>>>,
+    pub(super) message_search_calls: Vec<MessageSearchCall>,
     /// One per `create_direct`; refused once they run out.
     pub(super) directs: VecDeque<Scripted<RoomId>>,
     pub(super) direct_calls: Vec<String>,
@@ -729,6 +741,22 @@ impl Fake {
     pub(super) fn wait_for_member_calls(&self, count: usize) -> Vec<MemberCall> {
         wait_until(|| {
             let calls = self.state().member_calls.clone();
+            (calls.len() >= count).then_some(calls)
+        })
+    }
+
+    pub(super) fn script_message_search(
+        &self,
+        gate: Option<Arc<Notify>>,
+        result: Result<Vec<Message>, ApiError>,
+    ) {
+        (self.state().message_searches).push_back(Scripted { gate, result });
+    }
+
+    /// The message search requests have started: `count` of them.
+    pub(super) fn wait_for_message_search_calls(&self, count: usize) -> Vec<MessageSearchCall> {
+        wait_until(|| {
+            let calls = self.state().message_search_calls.clone();
             (calls.len() >= count).then_some(calls)
         })
     }
@@ -1488,6 +1516,30 @@ impl ServerApi for Fake {
                 state.members.pop_front()
             },
             Ok(empty),
+        )
+        .await
+    }
+
+    async fn search_messages(
+        &self,
+        _credentials: &Credentials,
+        room: &RoomId,
+        text: &str,
+        count: usize,
+        offset: usize,
+    ) -> Result<Vec<Message>, ApiError> {
+        let call = MessageSearchCall {
+            room: room.to_string(),
+            text: text.to_owned(),
+            count,
+            offset,
+        };
+        self.scripted(
+            |state| {
+                state.message_search_calls.push(call);
+                state.message_searches.pop_front()
+            },
+            Ok(Vec::new()),
         )
         .await
     }

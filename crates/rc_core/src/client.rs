@@ -23,6 +23,7 @@ use crate::error::Error;
 use crate::github::{GitHub, GithubConfig, GithubEvent, GithubPorts, GithubStore};
 use crate::images::ImageUpdate;
 use crate::members::MemberSearch;
+use crate::message_search::MessageSearch;
 use crate::policy::{ActionError, MessageAction, MessagePolicy};
 use crate::ports::{Clock, Connector, FileCache, SecretStore};
 use crate::rooms::{RoomAction, RoomActionError, RoomChange, Unread};
@@ -155,6 +156,12 @@ pub enum Event {
     /// it changes: a new query comes at once as `Searching`, then the answer or the failure. `None`
     /// when the search is cancelled, and on a logout, if there was one.
     MemberSearch(Option<MemberSearch>),
+    /// What the search of a room's messages (see [`AccountHandle::search_messages`]) holds,
+    /// whenever it changes: a new query comes at once as `Searching`, then the answer or the
+    /// failure, and the next page (see [`AccountHandle::more_message_search`]) as `Found` again:
+    /// with `more: Loading` at once, then with the messages appended, or with the same messages
+    /// and `more: Failed`. `None` when the search is cancelled, and on a logout, if there was one.
+    MessageSearch(Option<MessageSearch>),
     /// How something the user asked of a person or channel of the directory (see
     /// [`AccountHandle::open_direct`], [`preview_channel`](AccountHandle::preview_channel) and
     /// [`join_channel`](AccountHandle::join_channel)) goes: `Working` when it starts, then `Done`
@@ -245,6 +252,12 @@ pub(crate) enum Command {
         query: String,
     },
     CancelMemberSearch,
+    SearchMessages {
+        room: RoomId,
+        query: String,
+    },
+    MoreMessageSearch,
+    CancelMessageSearch,
     OpenDirect(String),
     PreviewChannel(RoomId),
     JoinChannel(RoomId),
@@ -728,6 +741,39 @@ impl AccountHandle<'_> {
     /// `MemberSearch(None)` comes if there was a search.
     pub fn cancel_member_search(&self) {
         self.send(Command::CancelMemberSearch);
+    }
+
+    /// Searches the messages of `room` on the server for `query` (trimmed), newest first: the
+    /// first [`MESSAGES_PER_SEARCH`](crate::message_search::MESSAGES_PER_SEARCH) of them, and
+    /// whether there are more (`More`), as [`Event::MessageSearch`]. The server matches whole words,
+    /// ignoring case, and takes `/regex/i` too. The results are a snapshot: they don't follow
+    /// edits and deletions.
+    ///
+    /// A new search replaces the one under way, and its answer is dropped. The server is asked once
+    /// the query has not changed for a while (300 ms; `RC_MESSAGE_SEARCH_DEBOUNCE_MS` sets it for
+    /// tests), and the event with the query and `Searching` comes at once. The same search again
+    /// does nothing, unless the last one failed: then it asks again without waiting. An empty
+    /// query asks nothing and is answered with no messages. Ignored unless logged in.
+    pub fn search_messages(&self, room: &RoomId, query: &str) {
+        self.send(Command::SearchMessages {
+            room: room.clone(),
+            query: query.to_owned(),
+        });
+    }
+
+    /// Asks for the next page of the message search, which is appended to the results in the next
+    /// `MessageSearch` event, told at once as the same messages with `more: Loading`. A page that
+    /// failed (`more: Failed`) is asked for again by calling it again. Does nothing while a page
+    /// is on its way, when there is no more, and when there is no search or its first page isn't
+    /// here.
+    pub fn more_message_search(&self) {
+        self.send(Command::MoreMessageSearch);
+    }
+
+    /// Ends the message search and drops its answer, when the panel closes. The event
+    /// `MessageSearch(None)` comes if there was a search.
+    pub fn cancel_message_search(&self) {
+        self.send(Command::CancelMessageSearch);
     }
 
     /// Opens the direct message with the user `username`, which the server creates the first time:

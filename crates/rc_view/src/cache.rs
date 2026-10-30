@@ -9,6 +9,7 @@ use std::collections::HashMap;
 use rc_core::directory::{ActionState, Directory, DirectoryAction};
 use rc_core::domain::{AccountId, AvatarOwner, Identity, Message, MessageId, Room, RoomId, UserId};
 use rc_core::emoji::CustomEmojis;
+use rc_core::message_search::MessageSearch;
 use rc_core::policy::MessagePolicy;
 use rc_core::rooms::{RoomChange, Unread};
 use rc_core::session::{LoginFailure, SessionState};
@@ -55,6 +56,8 @@ pub struct Cache {
     directory: Directory,
     /// What the member search of the mention popup holds, as the core last said.
     mentions: Suggestions,
+    /// What the search of a room's messages holds, as the core last said.
+    message_search: Option<MessageSearch>,
     /// The last thing the core said of a directory action: `Working` while it is under way. `None`
     /// before the first, and after the session ends.
     directory_action: Option<(DirectoryAction, ActionState)>,
@@ -122,6 +125,7 @@ impl Cache {
             quiet_rooms: Vec::new(),
             directory: Directory::cleared(),
             mentions: Suggestions::new(),
+            message_search: None,
             directory_action: None,
             preview: None,
             room: None,
@@ -221,6 +225,7 @@ impl Cache {
             Event::QuietRooms(rooms) => self.quiet_rooms.clone_from(rooms),
             Event::Directory(directory) => self.directory.clone_from(directory),
             Event::MemberSearch(search) => self.mentions.apply(search.as_ref()),
+            Event::MessageSearch(search) => self.message_search.clone_from(search),
             Event::DirectoryAction { action, state } => {
                 self.directory_action = Some((action.clone(), state.clone()));
             }
@@ -408,6 +413,13 @@ impl Cache {
     #[must_use]
     pub fn mentions(&self) -> &Suggestions {
         &self.mentions
+    }
+
+    /// What the search of a room's messages holds, as the core last said; `None` when there is
+    /// none.
+    #[must_use]
+    pub fn message_search(&self) -> Option<&MessageSearch> {
+        self.message_search.as_ref()
     }
 
     /// The last thing the core said of a directory action: the action is under way if the state
@@ -1136,6 +1148,28 @@ mod tests {
 
         assert_eq!(more, [crate::mention::Row::More(3)]);
         assert_eq!(cache.mentions().popup(RoomKind::Direct, "").rows, []);
+    }
+
+    // MSG-008
+    #[test]
+    fn the_message_search_is_the_last_one_the_core_sent() {
+        use rc_core::message_search::{MessageSearchState, More};
+        let mut cache = Cache::new();
+        let search = MessageSearch {
+            room: "r".to_owned().into(),
+            query: "alpha".to_owned(),
+            state: MessageSearchState::Found {
+                messages: Vec::new(),
+                more: More::Available,
+            },
+        };
+        assert_eq!(cache.message_search(), None);
+
+        cache.apply(&Event::MessageSearch(Some(search.clone())));
+        assert_eq!(cache.message_search(), Some(&search));
+        cache.apply(&Event::MessageSearch(None));
+
+        assert_eq!(cache.message_search(), None);
     }
 
     // ACT-007

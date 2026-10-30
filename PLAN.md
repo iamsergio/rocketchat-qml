@@ -44,6 +44,11 @@ Done when: day-to-day use works. Edit, delete, react, threads, DMs, search and u
 - [x] Mention autocomplete in the composer, the core and the view logic (ACT-013; step 1 of 3, no UI): `GET rooms.membersOrderedByRole` in `rc_api`, `AccountHandle::search_members` / `cancel_member_search` with `Event::MemberSearch` (debounced like the directory search, `RC_MEMBERS_DEBOUNCE_MS`; a direct message is answered locally), and `rc_view::mention` (the `@word` at the cursor, the popup's rows, the insertion): see [Mentions](docs/design/mentions.md)
 - [x] Mention autocomplete in the composer, the Qt UI (ACT-013; step 2 of 3): `Mentions` (`rc_qt/src/mentions_model.rs`), one list model and view model for both composers, tells the field's text and cursor to `rc_view::mention`, searches the room's members through the core and lists the rows; `MentionPopup.qml` above the room's and the thread's composer (Up/Down, Enter or Tab, Esc, click, hover), the field keeps the focus and takes the choice as a replacement of the word (its undo stack goes on). GUI tests in `mentions.rs`. See [Mentions](docs/design/mentions.md)
 - [ ] Mention autocomplete in the composer, the Slint UI (ACT-013 done in the Slint column; step 3 of 3, not started)
+- [x] Search a room's messages, the core (MSG-008; step 1 of 5, no UI): `GET chat.search` in `rc_api`, `AccountHandle::search_messages` / `more_message_search` / `cancel_message_search` with `Event::MessageSearch` (debounced like the member search, `RC_MESSAGE_SEARCH_DEBOUNCE_MS`; 20 a page, newest first, `more`), and `Cache::message_search`: see [Message search](docs/design/message-search.md)
+- [ ] Search a room's messages, the Qt pane (MSG-008; step 2 of 5)
+- [ ] Jump to a message (MSG-008; step 3 of 5): load the history around a message, so that a search result opens in the room
+- [ ] Search the messages of all rooms (MSG-009; step 4 of 5): `messageSearch` over DDP with no room, gated on the server's `Search.defaultProvider.GlobalSearchEnabled`, which `rocketchatSearch.getProvider` reports; it is off by default, and then the server answers empty, not with an error
+- [ ] Search messages, the Slint panes (MSG-008 and MSG-009; step 5 of 5): the room's search and the global one
 - [ ] Features ACT-001…ACT-009 tested
 
 ## Typing indicators

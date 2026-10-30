@@ -25,6 +25,7 @@ use rc_core::domain::{
 };
 use rc_core::emoji::{CustomEmojis, catalog};
 use rc_core::members::{MemberSearch, MemberSearchState};
+use rc_core::message_search::{MessageSearch, MessageSearchError, MessageSearchState, More};
 use rc_core::policy::{ActionError, MessageAction};
 use rc_core::ports::{
     CacheError, CacheKey, Connector, FileCache, Pushed, SecretStore, ServerApi, Stored,
@@ -3154,6 +3155,72 @@ fn the_members_of_a_direct_message_are_the_other_person_without_the_servers_help
     };
     assert_eq!(total, 1);
     assert_eq!(members[0].username, admin.username);
+}
+
+/// The answer to the message search of `room` for `query`.
+fn message_search_answer(events: &Receiver<Event>, room: &str, query: &str) -> MessageSearchState {
+    wait_for(events, |event| match event {
+        Event::MessageSearch(Some(MessageSearch {
+            room: found_room,
+            query: found_query,
+            state,
+        })) if found_room.as_str() == room
+            && found_query == query
+            && *state != MessageSearchState::Searching =>
+        {
+            Some(state.clone())
+        }
+        _ => None,
+    })
+}
+
+// MSG-008
+#[test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+fn the_messages_of_a_channel_are_searched_newest_first() {
+    let admin = Admin::login();
+    let user = admin.create_user();
+    let (channel, _) = admin.create_channel(&[&user.username]);
+    let first = admin.post_message(&channel, "alpha one");
+    admin.post_message(&channel, "unrelated");
+    let second = admin.post_message(&channel, "two alpha");
+    let (session, events) = logged_in(&user);
+
+    session
+        .account()
+        .search_messages(&channel.clone().into(), " alpha ");
+    let state = message_search_answer(&events, &channel, "alpha");
+
+    let MessageSearchState::Found { messages, more } = state else {
+        panic!("{state:?}");
+    };
+    assert_eq!(more, More::No);
+    let ids: Vec<_> = messages.iter().map(|m| m.id.as_str()).collect();
+    assert_eq!(ids, [second.id.as_str(), first.id.as_str()]);
+}
+
+// MSG-008
+#[test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+fn a_message_search_in_a_group_the_user_is_not_in_fails() {
+    let admin = Admin::login();
+    let user = admin.create_user();
+    let (group, _) = admin.create_group(&[]);
+    admin.post_message(&group, "alpha");
+    let (session, events) = logged_in(&user);
+
+    session
+        .account()
+        .search_messages(&group.clone().into(), "alpha");
+    let state = message_search_answer(&events, &group, "alpha");
+
+    assert!(
+        matches!(
+            state,
+            MessageSearchState::Failed(MessageSearchError::Server(_))
+        ),
+        "{state:?}"
+    );
 }
 
 // ACT-007

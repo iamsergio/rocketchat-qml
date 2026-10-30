@@ -2901,6 +2901,138 @@ async fn the_members_of_a_direct_message_are_refused() {
     );
 }
 
+// MSG-008
+#[tokio::test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+async fn the_search_finds_whole_words_newest_first_whatever_the_score_and_pages() {
+    let fixture = Fixture::new();
+    let (room, _) = fixture.create_channel();
+    let one = fixture.admin.post_message(&room, "alpha banana one");
+    // The server scores this one higher: it still comes second, by time.
+    let two = fixture
+        .admin
+        .post_message(&room, "banana alpha alpha alpha two");
+    let _other = fixture.admin.post_message(&room, "unrelated");
+    let reply = fixture
+        .admin
+        .post_in_thread(&room, &one.id, "alpha reply", false);
+    fixture.admin.set_topic(&room, "alpha topic");
+    let session = fixture.client.session(fixture.login().await.credentials);
+
+    let all = session
+        .search_messages(&room, "ALPHA", 20, 0)
+        .await
+        .unwrap();
+    let first = session.search_messages(&room, "alpha", 2, 0).await.unwrap();
+    let second = session.search_messages(&room, "alpha", 2, 2).await.unwrap();
+    let beyond = session
+        .search_messages(&room, "alpha", 2, 10)
+        .await
+        .unwrap();
+
+    // The topic's system message, the reply (not shown in the room, but found), two and one.
+    assert_eq!(all.len(), 4);
+    assert_eq!(all[0].kind.as_deref(), Some("room_changed_topic"));
+    assert_eq!(all[1].id, reply.id);
+    assert_eq!(all[1].thread_id.as_deref(), Some(one.id.as_str()));
+    assert_eq!(all[2].id, two.id);
+    assert_eq!(all[3].id, one.id);
+    assert_eq!(all[3].author.username, "admin");
+    assert_eq!(all[3].text, "alpha banana one");
+    let ids = |messages: &[rc_api::Message]| -> Vec<String> {
+        messages.iter().map(|m| m.id.clone()).collect()
+    };
+    assert_eq!(ids(&first), ids(&all)[..2]);
+    assert_eq!(ids(&second), ids(&all)[2..]);
+    assert!(beyond.is_empty());
+}
+
+// MSG-008
+#[tokio::test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+async fn the_search_does_not_match_part_of_a_word_but_a_regex_does() {
+    let fixture = Fixture::new();
+    let (room, _) = fixture.create_channel();
+    let first = fixture.admin.post_message(&room, "alpha banana");
+    let _second = fixture.admin.post_message(&room, "banana alpha");
+    let session = fixture.client.session(fixture.login().await.credentials);
+
+    let prefix = session.search_messages(&room, "alph", 20, 0).await.unwrap();
+    let regex = session
+        .search_messages(&room, "/alph/i", 20, 0)
+        .await
+        .unwrap();
+    let anchored = session
+        .search_messages(&room, "/^alpha/i", 20, 0)
+        .await
+        .unwrap();
+    let blank = session.search_messages(&room, "   ", 20, 0).await.unwrap();
+
+    assert!(prefix.is_empty());
+    assert_eq!(regex.len(), 2);
+    assert_eq!(anchored.len(), 1);
+    assert_eq!(anchored[0].id, first.id);
+    assert!(blank.is_empty());
+}
+
+// MSG-008
+#[tokio::test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+async fn the_search_works_in_a_direct_message() {
+    let fixture = Fixture::new();
+    let dm = fixture.create_dm();
+    let posted = fixture.admin.post_message(&dm, "alpha in private");
+    let session = fixture.client.session(fixture.login().await.credentials);
+
+    let found = session.search_messages(&dm, "alpha", 20, 0).await.unwrap();
+
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].id, posted.id);
+}
+
+// MSG-008
+#[tokio::test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+async fn the_search_is_refused_for_a_private_group_the_user_is_not_in_and_for_a_bad_request() {
+    let fixture = Fixture::new();
+    // The user is not in the group; it is in the channel.
+    let (group, _) = fixture.admin.create_group(&[]);
+    let (channel, _) = fixture.create_channel();
+    let session = fixture.client.session(fixture.login().await.credentials);
+
+    let outsider = session.search_messages(&group, "alpha", 20, 0).await;
+    let empty = session.search_messages(&channel, "", 20, 0).await;
+    let regex = session.search_messages(&channel, "/(/i", 20, 0).await;
+
+    assert!(
+        matches!(outsider, Err(Error::Server { status: 400, .. })),
+        "{outsider:?}"
+    );
+    assert!(
+        matches!(empty, Err(Error::Server { status: 400, .. })),
+        "{empty:?}"
+    );
+    assert!(
+        matches!(regex, Err(Error::Server { status: 400, ref message })
+            if message.contains("Regular expression is invalid")),
+        "{regex:?}"
+    );
+}
+
+// MSG-008
+#[tokio::test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+async fn the_search_with_a_revoked_token_is_unauthorized() {
+    let fixture = Fixture::new();
+    let (room, _) = fixture.create_channel();
+    let session = fixture.client.session(fixture.login().await.credentials);
+    session.logout().await.unwrap();
+
+    let result = session.search_messages(&room, "alpha", 20, 0).await;
+
+    assert!(matches!(result, Err(Error::Unauthorized)), "{result:?}");
+}
+
 // ACT-007
 #[tokio::test]
 #[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
