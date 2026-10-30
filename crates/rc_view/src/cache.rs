@@ -139,6 +139,9 @@ impl Cache {
                 loading: false,
                 loading_older: false,
                 reached_start: false,
+                detached: false,
+                loading_newer: false,
+                found: None,
                 error: None,
             },
             thread_messages: Vec::new(),
@@ -244,6 +247,8 @@ impl Cache {
                     }
                 }
             }
+            // `ShowMessage` falls through: it is one-shot, not state, and a view attached later
+            // has nothing to scroll to.
             Event::TimelineStatus(status) => self.status = status.clone(),
             Event::ThreadTimeline(changes) => {
                 for change in changes {
@@ -1010,6 +1015,7 @@ mod tests {
                 loading_older: older,
                 reached_start: start,
                 error: None,
+                ..TimelineStatus::default()
             })
         };
         let mut timeline = Timeline::new("a".to_owned().into(), RoomHistory::default());
@@ -1270,6 +1276,29 @@ mod tests {
         assert_eq!(cache.room_state().name, "beta");
         cache.apply(&Event::TimelineStatus(TimelineStatus::default()));
         assert_eq!(cache.room_state(), RoomState::default());
+    }
+
+    // MSG-008
+    #[test]
+    fn the_status_keeps_the_window_and_the_found_message_but_not_the_request_to_show_it() {
+        use rc_core::timeline::{Found, FoundState};
+        let mut cache = Cache::new();
+        let status = TimelineStatus {
+            room: Some("a".to_owned().into()),
+            detached: true,
+            loading_newer: true,
+            found: Some(Found {
+                message: "m".to_owned().into(),
+                state: FoundState::Shown,
+            }),
+            ..TimelineStatus::default()
+        };
+        cache.apply(&Event::TimelineStatus(status.clone()));
+        cache.apply(&Event::ShowMessage {
+            room: "a".to_owned().into(),
+            message: "m".to_owned().into(),
+        });
+        assert_eq!(cache.status, status);
     }
 
     // ROOM-009

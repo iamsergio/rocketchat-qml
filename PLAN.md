@@ -49,7 +49,7 @@ Done when: day-to-day use works. Edit, delete, react, threads, DMs, search and u
 - [ ] Jump to a message (MSG-008; step 3 of 5): load the history around a message, so that a search result opens in the room; see [Jumping to a message](docs/design/jump-to-message.md)
   - [x] 3a: refactor, no behaviour change: `FetchKind` instead of `Fetch.older`, the open room's saves through `OpenRoom::persist`
   - [x] 3b: `rc_api` and ports: `method_call`, `surrounding_messages`, `next_messages`, adapter, fake, wiremock and contract tests
-  - [ ] 3c: the core's detached window: `show_message`, `load_newer`, `show_latest`, the store kept attached, `Event::ShowMessage`, `TimelineStatus.found`
+  - [x] 3c: the core's detached window: `show_message`, `load_newer`, `show_latest`, the store kept attached, `Event::ShowMessage`, `TimelineStatus.found`
   - [ ] 3d: `rc_view` and the Qt side: found mark, jump to latest, loading newer, the not-found note, GUI tests
   - [ ] 3e: thread replies
 - [ ] Search the messages of all rooms (MSG-009; step 4 of 5): `messageSearch` over DDP with no room, gated on the server's `Search.defaultProvider.GlobalSearchEnabled`, which `rocketchatSearch.getProvider` reports; it is off by default, and then the server answers empty, not with an error

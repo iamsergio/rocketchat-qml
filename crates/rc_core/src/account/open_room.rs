@@ -10,11 +10,11 @@ use crate::avatars::authors_of;
 use crate::client::Event;
 use crate::domain::{Message, MessageId, Room, RoomId};
 use crate::images::images_of;
-use crate::ports::{ApiError, Connector, ServerApi};
+use crate::ports::{ApiError, Connector, MessageWindow, NewerPage, Page, ServerApi};
 use crate::session::SessionState;
-use crate::timeline::{PAGE_SIZE, Timeline, TimelineChange, TimelineError, TimelineStatus};
+use crate::timeline::{Found, FoundState, Timeline, TimelineChange, TimelineError, TimelineStatus};
 
-use super::{Actor, ChangesDone, Done, Fetch, FetchKind, HistoryDone, OpenRoom};
+use super::{Actor, ChangesDone, Done, Fetch, FetchKind, Fetched, HistoryDone, OpenRoom};
 
 /// How much earlier than the time a room was last up to date its changes are asked for: the
 /// server's clock may differ from ours.
@@ -46,6 +46,12 @@ impl<C: Connector> Actor<C> {
             open.deleted.insert(id.clone());
         }
         self.change_timeline(room, |timeline| timeline.remove(id).into_iter().collect());
+        if (self.open.as_ref())
+            .and_then(|open| open.found.as_ref())
+            .is_some_and(|found| &found.message == id)
+        {
+            self.clear_found();
+        }
         if (self.thread_list.as_ref()).is_some_and(|open| open.list.room() == room) {
             self.remove_from_thread_list(id);
         }
@@ -122,17 +128,17 @@ impl<C: Connector> Actor<C> {
     /// Adds a pushed message to the open room, or to the open thread, or both. Other rooms aren't
     /// held: they load their history when opened, and their unread counts arrive as subscription
     /// changes.
-    pub(super) fn add_live_message(&mut self, message: Message) {
-        self.message_ends_typing(&message);
-        self.push_to_thread_list(&message);
-        self.add_live_thread_message(&message);
+    pub(super) fn add_live_message(&mut self, message: &Message) {
+        self.message_ends_typing(message);
+        self.push_to_thread_list(message);
+        self.add_live_thread_message(message);
         if message.shows_in_room() {
             self.add_live_room_message(message);
         }
     }
 
     /// Adds a pushed message to the open room.
-    fn add_live_room_message(&mut self, message: Message) {
+    fn add_live_room_message(&mut self, message: &Message) {
         let room = message.room_id.clone();
         let echo = self.own_user().is_some_and(|me| me.id == message.author.id);
         let Some(open) = self
@@ -143,7 +149,7 @@ impl<C: Connector> Actor<C> {
             // The echo of a message sent from a room that isn't open any more.
             if echo {
                 self.change_timeline(&room, |timeline| {
-                    timeline.settle(message).into_iter().collect()
+                    timeline.settle(message.clone()).into_iter().collect()
                 });
             }
             return;
@@ -165,7 +171,7 @@ impl<C: Connector> Actor<C> {
                 return;
             }
         }
-        self.change_timeline(&room, |timeline| timeline.merge_live(message));
+        self.change_timeline(&room, |timeline| timeline.merge_live(message.clone()));
     }
 
     /// The room the user may open: one of the room list, or the channel being previewed.
@@ -219,6 +225,8 @@ impl<C: Connector> Actor<C> {
             live: Vec::new(),
             changes: None,
             deleted: HashSet::new(),
+            found: None,
+            newer_to: None,
         });
         self.end_typing();
         self.track_open_room(Some(id.clone()));
@@ -260,7 +268,8 @@ impl<C: Connector> Actor<C> {
         self.fetch_history(FetchKind::Older);
     }
 
-    /// Fetches a page of the open room: the newest, or the one before the oldest message held.
+    /// Fetches a page of the open room: the newest, the one before the oldest message held, the
+    /// one after the newest message held, or the window around a message.
     pub(super) fn fetch_history(&mut self, kind: FetchKind) {
         let (Some(session), Some(open)) = (&self.session, &mut self.open) else {
             return;
@@ -269,25 +278,45 @@ impl<C: Connector> Actor<C> {
         let attempt = self.history_attempt;
         let started = self.clock.now();
         // Only the newest page of a room that was up to date once needs the catch-up.
-        let older = kind == FetchKind::Older;
-        let with_changes = !older && open.timeline.history().synced_at.is_some();
+        let with_changes = kind == FetchKind::Newest && open.timeline.history().synced_at.is_some();
         open.fetch = Some(Fetch {
             attempt,
-            kind,
+            kind: kind.clone(),
             started,
             with_changes,
+            resume_newest: false,
         });
         open.error = None;
-        let before = if older { open.timeline.oldest() } else { None };
+        let before = if kind == FetchKind::Older {
+            open.timeline.oldest()
+        } else {
+            None
+        };
+        // The newest message is asked for again, and de-duplicated: messages sent in the same
+        // millisecond as it may come after it.
+        let after = (open.timeline.newest().max(open.newer_to))
+            .and_then(|newest| newest.checked_sub(Duration::from_millis(1)).ok());
         let room = open.timeline.room().clone();
-        let kind = open.kind;
+        let room_kind = open.kind;
+        let page_size = self.page_size;
         let api = session.api.clone();
         let credentials = session.credentials.clone();
         let done = self.done_tx.clone();
         self.history_task = Some(tokio::spawn(async move {
-            let outcome = api
-                .history(&credentials, &room, kind, before, PAGE_SIZE)
-                .await;
+            let outcome = match kind {
+                FetchKind::Newest | FetchKind::Older => api
+                    .history(&credentials, &room, room_kind, before, page_size)
+                    .await
+                    .map(Fetched::Page),
+                FetchKind::Newer => api
+                    .newer(&credentials, &room, after, page_size)
+                    .await
+                    .map(Fetched::Newer),
+                FetchKind::Around(message) => api
+                    .around(&credentials, &room, &message, page_size)
+                    .await
+                    .map(Fetched::Window),
+            };
             // Fails only if the actor is gone.
             let _ = done.send(Done::History(HistoryDone {
                 attempt,
@@ -364,16 +393,32 @@ impl<C: Connector> Actor<C> {
         let timeline = &mut open.timeline;
         let mut applied = Vec::new();
         let for_thread = self.open_thread.is_some().then(|| changes.clone());
+        let for_deleted = changes.deleted.clone();
         // Messages that aren't held come with the newest page.
-        for message in changes.updated {
-            if message.shows_in_room() && !open.deleted.contains(&message.id) {
-                applied.extend(timeline.replace(message));
-            }
+        let updated: Vec<_> = changes
+            .updated
+            .iter()
+            .filter(|m| m.shows_in_room() && !open.deleted.contains(&m.id))
+            .collect();
+        for message in &updated {
+            applied.extend(timeline.replace((*message).clone()));
         }
         for id in &changes.deleted {
             applied.extend(timeline.remove(id));
         }
         timeline.set_synced_at(done.started);
+        if timeline.is_detached() {
+            // The window isn't saved, so the copy that is gets the changes too.
+            let mut stored = Timeline::new(done.room.clone(), self.messages.load(&done.room));
+            for message in updated {
+                stored.replace(message.clone());
+            }
+            for id in &changes.deleted {
+                stored.remove(id);
+            }
+            stored.set_synced_at(done.started);
+            self.messages.save(&done.room, stored.history());
+        }
         open.persist(&mut *self.messages);
         if !applied.is_empty() {
             let authors = authors_of(&applied);
@@ -381,6 +426,12 @@ impl<C: Connector> Actor<C> {
             (self.on_event)(Event::Timeline(applied));
             self.want_avatars(authors);
             self.want_images(images);
+        }
+        if (self.open.as_ref())
+            .and_then(|open| open.found.as_ref())
+            .is_some_and(|found| for_deleted.contains(&found.message))
+        {
+            self.clear_found();
         }
         if let Some(changes) = for_thread {
             self.apply_changes_to_thread(&done.room, changes);
@@ -396,34 +447,9 @@ impl<C: Connector> Actor<C> {
             tracing::debug!("answer of a stale history fetch dropped");
             return;
         };
-        let older = fetch.kind == FetchKind::Older;
         self.history_task = None;
-        let mut authors = Vec::new();
-        let mut images = Vec::new();
-        match done.outcome {
-            Ok(page) => {
-                let mut messages = page.messages;
-                messages.retain(|m| !open.deleted.contains(&m.id));
-                let changes = if older {
-                    open.timeline.merge_older(messages, page.reached_start)
-                } else {
-                    // What was pushed meanwhile is newer than the page's copy of a message.
-                    messages.retain(|m| open.live.iter().all(|live| live.id != m.id));
-                    messages.append(&mut open.live);
-                    let changes = open.timeline.merge_latest(messages, page.reached_start);
-                    // Without a catch-up, the page is what brought the room up to date.
-                    if !fetch.with_changes {
-                        open.timeline.set_synced_at(fetch.started);
-                    }
-                    changes
-                };
-                open.persist(&mut *self.messages);
-                if !changes.is_empty() {
-                    authors = authors_of(&changes);
-                    images = images_of(&changes);
-                    (self.on_event)(Event::Timeline(changes));
-                }
-            }
+        let fetched = match done.outcome {
+            Ok(fetched) => fetched,
             Err(ApiError::Unauthorized) => {
                 self.expire_session();
                 return;
@@ -431,11 +457,281 @@ impl<C: Connector> Actor<C> {
             Err(error) => {
                 tracing::warn!(%error, room = %done.room, "can't load the messages");
                 open.error = Some(TimelineError::from(&error));
+                // Nothing was found, and "missing" would be a claim about the message.
+                if matches!(fetch.kind, FetchKind::Around(_)) {
+                    open.found = None;
+                }
+                self.emit_timeline_status();
+                return;
             }
+        };
+        match (fetch.kind.clone(), fetched) {
+            (FetchKind::Newest | FetchKind::Older, Fetched::Page(page)) => {
+                self.page_arrived(&fetch, page);
+            }
+            (FetchKind::Around(target), Fetched::Window(window)) => {
+                self.window_arrived(&fetch, target, window);
+            }
+            (FetchKind::Newer, Fetched::Newer(page)) => self.newer_arrived(page),
+            _ => tracing::warn!(room = %done.room, "a fetch got another kind of answer"),
+        }
+    }
+
+    /// Takes in the newest page, or the one before the oldest message held.
+    fn page_arrived(&mut self, fetch: &Fetch, page: Page) {
+        let Some(open) = &mut self.open else {
+            return;
+        };
+        let mut messages = page.messages;
+        messages.retain(|m| !open.deleted.contains(&m.id));
+        let changes = if fetch.kind == FetchKind::Older {
+            open.timeline.merge_older(messages, page.reached_start)
+        } else {
+            // What was pushed meanwhile is newer than the page's copy of a message.
+            messages.retain(|m| open.live.iter().all(|live| live.id != m.id));
+            messages.append(&mut open.live);
+            let changes = open.timeline.merge_latest(messages, page.reached_start);
+            // Without a catch-up, the page is what brought the room up to date.
+            if !fetch.with_changes {
+                open.timeline.set_synced_at(fetch.started);
+            }
+            changes
+        };
+        open.persist(&mut *self.messages);
+        let (mut authors, mut images) = (Vec::new(), Vec::new());
+        if !changes.is_empty() {
+            authors = authors_of(&changes);
+            images = images_of(&changes);
+            (self.on_event)(Event::Timeline(changes));
         }
         self.want_avatars(authors);
         self.want_images(images);
         self.emit_timeline_status();
+    }
+
+    /// Takes in the window around the message that `show_message` asked for.
+    fn window_arrived(&mut self, fetch: &Fetch, target: MessageId, window: Option<MessageWindow>) {
+        let Some(open) = &mut self.open else {
+            return;
+        };
+        let wanted = open
+            .found
+            .as_ref()
+            .is_some_and(|found| found.message == target && found.state == FoundState::Loading);
+        let window = window.map(|mut window| {
+            window.messages.retain(|m| !open.deleted.contains(&m.id));
+            window
+        });
+        // The target is deleted, or something else was asked for since, or sending cleared it.
+        let usable = wanted
+            && window
+                .as_ref()
+                .is_some_and(|window| window.messages.iter().any(|m| m.id == target));
+        if !usable {
+            if wanted {
+                // A message the server doesn't have, or a reply in a thread that the room doesn't
+                // show, which isn't in a window of the room (MSG-008, step 3e).
+                open.found = Some(Found {
+                    message: target,
+                    state: FoundState::Missing,
+                });
+            }
+            self.emit_timeline_status();
+            self.resume_newest(fetch);
+            return;
+        }
+        let Some(window) = window else {
+            return;
+        };
+        let room = open.timeline.room().clone();
+        open.newer_to = None;
+        let changes =
+            open.timeline
+                .merge_window(window.messages, window.more_before, window.more_after);
+        open.found = Some(Found {
+            message: target.clone(),
+            state: FoundState::Shown,
+        });
+        // Saves nothing while the window is detached.
+        open.persist(&mut *self.messages);
+        let authors = authors_of(&changes);
+        let images = images_of(&changes);
+        // The status first: a frontend that sticks to the bottom must know not to.
+        self.emit_timeline_status();
+        (self.on_event)(Event::Timeline(changes));
+        self.want_avatars(authors);
+        self.want_images(images);
+        (self.on_event)(Event::ShowMessage {
+            room,
+            message: target,
+        });
+        self.resume_newest(fetch);
+    }
+
+    /// Fetches the newest messages that a fetch cut short, if the timeline is attached: a
+    /// detached one is brought up to date by showing the latest.
+    fn resume_newest(&mut self, fetch: &Fetch) {
+        if fetch.resume_newest
+            && self
+                .open
+                .as_ref()
+                .is_some_and(|o| !o.timeline.is_detached())
+        {
+            self.fetch_history(FetchKind::Newest);
+        }
+    }
+
+    /// Takes in the page after the newest message of a detached window. A page that reaches the
+    /// end of the room, or a message the stored copy holds, joins the window to the newest
+    /// messages: the stored copy's messages after it come along, and the newest page is fetched,
+    /// with the catch-up, as opening the room does.
+    fn newer_arrived(&mut self, page: NewerPage) {
+        let Some(open) = &mut self.open else {
+            return;
+        };
+        let mut messages = page.messages;
+        messages.retain(|m| !open.deleted.contains(&m.id));
+        let mut joins = page.reached_end;
+        if !joins {
+            let stored = self.messages.load(open.timeline.room());
+            let held: HashSet<_> = stored.messages.iter().map(|m| &m.id).collect();
+            joins = messages.iter().any(|m| held.contains(&m.id));
+            if joins {
+                // Not the end of the room: what the stored copy holds after the page is the
+                // rest of what the room had when it was left.
+                let reached = messages
+                    .last()
+                    .map_or(open.timeline.newest(), |m| Some(m.ts));
+                messages.extend(
+                    stored
+                        .messages
+                        .iter()
+                        .filter(|m| m.is_unsent() || reached.is_none_or(|ts| m.ts > ts))
+                        .filter(|m| !open.deleted.contains(&m.id))
+                        .cloned(),
+                );
+            }
+        }
+        let changes = open.timeline.merge_newer(messages);
+        open.newer_to = open.newer_to.max(page.last);
+        if joins {
+            open.timeline.attach();
+            open.newer_to = None;
+        }
+        open.persist(&mut *self.messages);
+        let authors = authors_of(&changes);
+        let images = images_of(&changes);
+        if !changes.is_empty() {
+            (self.on_event)(Event::Timeline(changes));
+        }
+        self.want_avatars(authors);
+        self.want_images(images);
+        if joins {
+            self.fetch_history(FetchKind::Newest);
+        } else {
+            self.emit_timeline_status();
+        }
+    }
+
+    /// Shows a message of the open room (see [`AccountHandle::show_message`]).
+    ///
+    /// [`AccountHandle::show_message`]: crate::client::AccountHandle::show_message
+    pub(super) fn show_message(&mut self, id: MessageId) {
+        let Some(open) = &mut self.open else {
+            tracing::debug!("show_message ignored: no room is open");
+            return;
+        };
+        let room = open.timeline.room().clone();
+        let held = open.timeline.message(&id).is_some();
+        // The last request wins: an answer to an earlier jump is not wanted any more. The newest
+        // page and the catch-up are not given up: they are for the room, not for the jump.
+        let aborted = open.fetch.take_if(|fetch| match fetch.kind {
+            FetchKind::Around(_) => true,
+            FetchKind::Newest => !held,
+            FetchKind::Older | FetchKind::Newer => false,
+        });
+        if aborted.is_some()
+            && let Some(task) = self.history_task.take()
+        {
+            task.abort();
+        }
+        let resume_newest = aborted
+            .as_ref()
+            .is_some_and(|fetch| fetch.kind == FetchKind::Newest || fetch.resume_newest);
+        if held {
+            open.found = Some(Found {
+                message: id.clone(),
+                state: FoundState::Shown,
+            });
+            self.emit_timeline_status();
+            (self.on_event)(Event::ShowMessage { room, message: id });
+            if resume_newest {
+                self.fetch_history(FetchKind::Newest);
+            }
+            return;
+        }
+        open.found = Some(Found {
+            message: id.clone(),
+            state: FoundState::Loading,
+        });
+        self.fetch_history(FetchKind::Around(id));
+        if let Some(fetch) = self.open.as_mut().and_then(|open| open.fetch.as_mut()) {
+            fetch.resume_newest = resume_newest;
+        }
+    }
+
+    /// Fetches the page after a detached window (see [`AccountHandle::load_newer`]).
+    ///
+    /// [`AccountHandle::load_newer`]: crate::client::AccountHandle::load_newer
+    pub(super) fn load_newer(&mut self) {
+        let Some(open) = &self.open else {
+            tracing::debug!("load_newer ignored: no room is open");
+            return;
+        };
+        if open.fetch.is_some() || !open.timeline.is_detached() || open.timeline.newest().is_none()
+        {
+            return;
+        }
+        self.fetch_history(FetchKind::Newer);
+    }
+
+    /// Replaces a detached window with what is held of the room, and fetches the newest messages.
+    pub(super) fn show_latest(&mut self) {
+        let Some(open) = &mut self.open else {
+            tracing::debug!("show_latest ignored: no room is open");
+            return;
+        };
+        if !open.timeline.is_detached() {
+            self.clear_found();
+            return;
+        }
+        if let Some(task) = self.history_task.take() {
+            task.abort();
+        }
+        open.fetch = None;
+        open.found = None;
+        open.newer_to = None;
+        let room = open.timeline.room().clone();
+        open.timeline = Timeline::new(room, self.messages.load(open.timeline.room()));
+        let reset = open.timeline.reset();
+        let authors = authors_of(std::slice::from_ref(&reset));
+        let images = images_of(std::slice::from_ref(&reset));
+        self.emit_timeline_status();
+        (self.on_event)(Event::Timeline(vec![reset]));
+        self.want_avatars(authors);
+        self.want_images(images);
+        self.fetch_history(FetchKind::Newest);
+    }
+
+    /// Forgets the message that was marked, and tells the frontend, unless there was none.
+    pub(super) fn clear_found(&mut self) {
+        if self
+            .open
+            .as_mut()
+            .is_some_and(|open| open.found.take().is_some())
+        {
+            self.emit_timeline_status();
+        }
     }
 
     /// Changes the held copies of messages of `room`, in the open room (or what the store holds
@@ -486,11 +782,12 @@ impl<C: Connector> Actor<C> {
 
     /// Changes the messages of `room` and keeps the result: in the open timeline if it is the
     /// room's, which the frontend hears about, else in what the store holds of the room, which
-    /// nobody shows.
+    /// nobody shows. A detached window gets the change and so does the store, which holds the
+    /// attached copy.
     pub(super) fn change_timeline(
         &mut self,
         room: &RoomId,
-        change: impl FnOnce(&mut Timeline) -> Vec<TimelineChange>,
+        change: impl Fn(&mut Timeline) -> Vec<TimelineChange>,
     ) {
         if let Some(open) = self
             .open
@@ -498,6 +795,13 @@ impl<C: Connector> Actor<C> {
             .filter(|open| open.timeline.room() == room)
         {
             let changes = change(&mut open.timeline);
+            if open.timeline.is_detached() {
+                // The window isn't saved: the copy that is gets the change on its own.
+                let mut stored = Timeline::new(room.clone(), self.messages.load(room));
+                if !change(&mut stored).is_empty() {
+                    self.messages.save(room, stored.history());
+                }
+            }
             if !changes.is_empty() {
                 open.persist(&mut *self.messages);
                 let authors = authors_of(&changes);
@@ -538,6 +842,12 @@ impl<C: Connector> Actor<C> {
                     .fetch
                     .as_ref()
                     .is_some_and(|f| f.kind == FetchKind::Older),
+                loading_newer: open
+                    .fetch
+                    .as_ref()
+                    .is_some_and(|f| f.kind == FetchKind::Newer),
+                detached: open.timeline.is_detached(),
+                found: open.found.clone(),
                 reached_start: open.timeline.reached_start(),
                 error: open.error.clone(),
             },

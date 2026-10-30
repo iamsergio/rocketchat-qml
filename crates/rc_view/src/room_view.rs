@@ -371,6 +371,7 @@ mod tests {
             loading_older: true,
             reached_start: true,
             error: Some(TimelineError::Unreachable),
+            ..TimelineStatus::default()
         };
         let state = room_state(&[], &status);
         assert_eq!(state.room_id, "9");

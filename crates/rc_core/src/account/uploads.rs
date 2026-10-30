@@ -343,7 +343,7 @@ impl<C: Connector> Actor<C> {
                 self.uploads.running = None;
                 // Like the realtime echo of the message, which may come first or later: it finds
                 // the message held, and nothing shows twice.
-                self.add_live_message(message);
+                self.add_live_message(&message);
                 self.start_next_upload();
             }
             Err(error) => self.upload_failed(index, &error),

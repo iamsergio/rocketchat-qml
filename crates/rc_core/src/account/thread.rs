@@ -288,18 +288,16 @@ impl<C: Connector> Actor<C> {
         };
         self.history_attempt += 1;
         let attempt = self.history_attempt;
+        let older = kind == FetchKind::Older;
         thread.fetch = Some(Fetch {
             attempt,
             kind,
             started: self.clock.now(),
             with_changes: false,
+            resume_newest: false,
         });
         thread.error = None;
-        let offset = if kind == FetchKind::Older {
-            thread.replies_held()
-        } else {
-            0
-        };
+        let offset = if older { thread.replies_held() } else { 0 };
         let parent = thread.parent.id.clone();
         let api = session.api.clone();
         let credentials = session.credentials.clone();

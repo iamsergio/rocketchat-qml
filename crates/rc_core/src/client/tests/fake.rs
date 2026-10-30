@@ -475,6 +475,7 @@ impl Fake {
             .collect();
         NewerPage {
             reached_end: raw.len() < limit,
+            last: raw.last().map(|message| message.ts),
             messages: raw.into_iter().filter(Message::shows_in_room).collect(),
         }
     }
@@ -980,6 +981,11 @@ impl Fake {
             let calls = self.state().history_calls.clone();
             (calls.len() >= count).then_some(calls)
         })
+    }
+
+    /// The `around` task has started and is inside it.
+    pub(super) fn wait_for_around_calls(&self, count: usize) {
+        wait_until(|| (self.state().around_calls.len() >= count).then_some(()));
     }
 
     /// The send task has started and is inside `send_message`.

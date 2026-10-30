@@ -204,7 +204,7 @@ impl<C: Connector> Actor<C> {
                 let retitled = topic.and_then(|topic| self.rooms.set_topic(&room, topic, now));
                 self.emit_rooms(moved.into_iter().chain(retitled).collect());
             }
-            Pushed::Message(message) => self.add_live_message(message),
+            Pushed::Message(message) => self.add_live_message(&message),
             Pushed::MessageDeleted { room, id } => self.delete_message(&room, &id),
             Pushed::Typing {
                 room,
@@ -414,8 +414,21 @@ impl<C: Connector> Actor<C> {
         };
         let id = open.timeline.room().clone();
         if self.rooms.get(&id).is_some() || self.preview.as_ref().is_some_and(|p| p.id == id) {
-            self.abort_history_task();
-            self.fetch_history(FetchKind::Newest);
+            // The fetches go over REST, which the lost connection didn't touch. A detached window
+            // isn't brought to the newest messages by a reconnect, only caught up with the edits
+            // and deletions; neither is a jump that is still loading, which fetches the newest
+            // messages after it instead, if it ends up attached.
+            let jumping = (self.open.as_mut())
+                .and_then(|open| open.fetch.as_mut())
+                .filter(|fetch| matches!(fetch.kind, FetchKind::Around(_)))
+                .map(|fetch| fetch.resume_newest = true)
+                .is_some();
+            if jumping || self.open.as_ref().is_some_and(|o| o.timeline.is_detached()) {
+                self.fetch_changes();
+            } else {
+                self.abort_history_task();
+                self.fetch_history(FetchKind::Newest);
+            }
             if self.open_thread.is_some() {
                 self.fetch_thread(FetchKind::Newest);
             }

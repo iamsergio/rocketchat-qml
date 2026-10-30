@@ -24,13 +24,13 @@ use crate::downloads::Refresh;
 use crate::emoji::CustomEmojis;
 use crate::policy::{MessageAction, MessagePolicy};
 use crate::ports::{
-    ApiError, Changes, Clock, Connector, FileCache, MessageStore, Page, Pushed, ServerApi,
-    ThreadsPage,
+    ApiError, Changes, Clock, Connector, FileCache, MessageStore, MessageWindow, NewerPage, Page,
+    Pushed, ServerApi, ThreadsPage,
 };
 use crate::rooms::{RoomAction, RoomList, Unread};
 use crate::session::{Established, LoginFailure, SessionState, log_in, resume};
 use crate::store_worker::StoreHandle;
-use crate::timeline::{Timeline, TimelineError};
+use crate::timeline::{Found, Timeline, TimelineError};
 use crate::tuning::Tuning;
 use crate::typing::Typists;
 use crate::users::Users;
@@ -155,12 +155,22 @@ struct ThreadsListParentDone {
     outcome: Result<Message, ApiError>,
 }
 
+/// What a fetch of the open room's messages brings, by its kind.
+enum Fetched {
+    /// For `Newest` and `Older`.
+    Page(Page),
+    /// For `Around`: `None` if the server doesn't have the message.
+    Window(Option<MessageWindow>),
+    /// For `Newer`.
+    Newer(NewerPage),
+}
+
 /// A history fetch's answer.
 struct HistoryDone {
     /// Identifies the fetch: the answer is stale if the room was closed or another fetch began.
     attempt: u64,
     room: RoomId,
-    outcome: Result<Page, ApiError>,
+    outcome: Result<Fetched, ApiError>,
 }
 
 /// A send's answer.
@@ -244,12 +254,16 @@ enum Done<A> {
 }
 
 /// Which page of a timeline a fetch asks for.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 enum FetchKind {
     /// The newest messages, which is how a room is opened and brought up to date.
     Newest,
     /// The page before the oldest message held.
     Older,
+    /// The page after the newest message held, to extend a detached window.
+    Newer,
+    /// The window around a message that the timeline doesn't hold.
+    Around(MessageId),
 }
 
 /// A history fetch in flight.
@@ -261,6 +275,9 @@ struct Fetch {
     /// A catch-up goes with it (see [`Actor::fetch_changes`]), which is what brings the held
     /// messages up to date, not the page.
     with_changes: bool,
+    /// The fetch of the newest messages that this one cut short, which is still due unless the
+    /// timeline ends up detached: the user fetches the newest ones then, by showing the latest.
+    resume_newest: bool,
 }
 
 /// The room whose messages the frontend shows.
@@ -278,11 +295,22 @@ struct OpenRoom {
     /// The messages deleted while the room was open. An answer to a request sent before the
     /// deletion may still hold them.
     deleted: HashSet<MessageId>,
+    /// The message the frontend asked to see, while it is marked.
+    found: Option<Found>,
+    /// Where the pages after a detached window reached, replies the room doesn't show included:
+    /// the newest message held may be older, and asking from it again would bring the same page.
+    /// Forgotten when the window is replaced, joins the newest messages or is left.
+    newer_to: Option<jiff::Timestamp>,
 }
 
 impl OpenRoom {
-    /// The one place the open room's timeline goes to the store.
+    /// The one place the open room's timeline goes to the store. A detached window isn't saved:
+    /// the store keeps the attached copy, which the window's changes are applied to on their
+    /// own (see [`Actor::change_timeline`]).
     fn persist(&self, store: &mut dyn MessageStore) {
+        if self.timeline.is_detached() {
+            return;
+        }
         store.save(self.timeline.room(), self.timeline.history());
     }
 }
@@ -413,6 +441,8 @@ struct Actor<C: Connector> {
     thread_list_task: Option<JoinHandle<()>>,
     /// How many threads a request of the thread list asks for.
     threads_page_size: usize,
+    /// How many messages a request for a page of the open room's history asks for.
+    page_size: usize,
     /// The fetches of the parents that became unread threads, for the "Unread" list.
     thread_list_parents: JoinSet<()>,
     /// The open thread the connection was asked to mark read, until it is no longer unread.
@@ -506,6 +536,7 @@ impl<C: Connector> Actor<C> {
             thread_list: None,
             thread_list_task: None,
             threads_page_size: tuning.threads_page_size,
+            page_size: tuning.page_size,
             thread_list_parents: JoinSet::new(),
             read_requested: None,
             changes_task: None,
@@ -681,6 +712,9 @@ impl<C: Connector> Actor<C> {
             Command::Logout => self.logout(),
             Command::OpenRoom(room) => self.open_room(room),
             Command::LoadOlder => self.load_older(),
+            Command::ShowMessage(id) => self.show_message(id),
+            Command::LoadNewer => self.load_newer(),
+            Command::ShowLatest => self.show_latest(),
             Command::OpenThread(parent) => self.open_thread(&parent),
             Command::CloseThread => self.close_thread(),
             Command::LoadOlderThread => self.load_older_thread(),

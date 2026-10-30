@@ -3393,3 +3393,121 @@ fn a_file_uploaded_into_a_room_ends_as_one_message_with_that_attachment() {
     assert_eq!(admin.last_message(&room).id, message.id.as_str());
     drop(client);
 }
+
+/// Logs `user` in with a client whose history requests ask for `page_size` messages, so that a
+/// room of a few messages has windows that don't hold all of it.
+fn logged_in_paged(user: &TestUser, page_size: usize) -> (Session, Receiver<Event>) {
+    let (tx, rx) = mpsc::channel();
+    let (added_tx, added) = mpsc::channel();
+    let client = Client::start_with_page_size(
+        MemoryStore::default(),
+        NoCache,
+        move |id, event| {
+            let _ = if event == Event::Added {
+                added_tx.send(id).is_ok()
+            } else {
+                tx.send(event).is_ok()
+            };
+        },
+        page_size,
+    )
+    .unwrap();
+    let id = added.recv_timeout(TIMEOUT).expect("no account added");
+    let session = Session { client, id };
+    assert_eq!(next(&rx), SessionState::LoggedOut { failure: None });
+    session
+        .account()
+        .login(&server_url(), &user.username, password(user));
+    assert!(matches!(outcome(&rx), SessionState::LoggedIn(_)));
+    loop {
+        if let Event::Rooms(_) = rx.recv_timeout(TIMEOUT).expect("no rooms event") {
+            return (session, rx);
+        }
+    }
+}
+
+/// Follows the events like a frontend until one satisfies `last`, and returns the last status.
+fn follow_window(
+    events: &Receiver<Event>,
+    mirror: &mut Vec<Message>,
+    last: impl Fn(&Event, &TimelineStatus) -> bool,
+) -> TimelineStatus {
+    let mut status = TimelineStatus::default();
+    loop {
+        let event = events.recv_timeout(TIMEOUT).expect("no event");
+        match &event {
+            Event::Timeline(changes) => changes.iter().for_each(|change| change.apply(mirror)),
+            Event::TimelineStatus(now) => status = now.clone(),
+            _ => {}
+        }
+        if last(&event, &status) {
+            return status;
+        }
+    }
+}
+
+// MSG-008
+#[test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+fn an_old_message_is_shown_in_a_window_and_the_newer_pages_reach_the_latest() {
+    let admin = Admin::login();
+    let user = admin.create_user();
+    let (id, _) = admin.create_channel(&[&user.username]);
+    let posted: Vec<_> = (0..15)
+        .map(|n| admin.post_message(&id, &format!("message {n:02}")))
+        .collect();
+    let texts_of = |from: usize, to: usize| -> Vec<String> {
+        (from..=to).map(|n| format!("message {n:02}")).collect()
+    };
+    let (client, events) = logged_in_paged(&user, 4);
+    client.account().open_room(id.clone().into());
+    let mut mirror = Vec::new();
+    let status = settle(&events, &mut mirror);
+    assert!(!status.detached && !status.reached_start);
+    assert_eq!(texts(&mirror), texts_of(11, 14));
+
+    // Message 3 is not held: the window is two messages before it and one after.
+    let target = MessageId::from(posted[3].id.clone());
+    client.account().show_message(target.clone());
+    let status = follow_window(
+        &events,
+        &mut mirror,
+        |event, _| matches!(event, Event::ShowMessage { message, .. } if *message == target),
+    );
+    assert!(status.detached && !status.loading_newer);
+    let found = status.found.expect("nothing marked");
+    assert_eq!(found.message, target);
+    assert_eq!(found.state, rc_core::timeline::FoundState::Shown);
+    assert_eq!(texts(&mirror), texts_of(1, 4));
+
+    // The pages after it, until the window joins the newest messages.
+    let mut pages = 0;
+    loop {
+        client.account().load_newer();
+        let status = follow_window(
+            &events,
+            &mut mirror,
+            |event, _| matches!(event, Event::TimelineStatus(s) if !s.loading && !s.loading_newer),
+        );
+        if !status.detached {
+            break;
+        }
+        pages += 1;
+        assert!(pages < 10, "the window never reaches the newest messages");
+    }
+    assert!(pages >= 2, "the window joined too early: {pages} pages");
+    assert_eq!(texts(&mirror), texts_of(1, 14));
+    // Still marked, and attached: a new message arrives as for any open room.
+    let posted_now = admin.post_message(&id, "message 15");
+    wait_for(&events, |event| {
+        if let Event::Timeline(changes) = event {
+            for change in changes {
+                change.apply(&mut mirror);
+            }
+        }
+        mirror
+            .iter()
+            .any(|m| m.id.as_str() == posted_now.id)
+            .then_some(())
+    });
+}
