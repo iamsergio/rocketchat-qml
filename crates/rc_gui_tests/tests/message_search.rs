@@ -4,18 +4,24 @@
 //! The search of a room's messages in the pane beside it, against the local test server
 //! (`RC_TEST_SERVER_URL`): the header button and Ctrl+F, the results newest first with their day,
 //! the words marked, a reply in a thread, the notes, the pane taking the place of the threads, and
-//! the keys. Each test makes its own user and channels. The Qt app only for now.
+//! the keys, and showing a result in the room: marked, with the pill when the room holds only a
+//! window onto the past (a history page of a few messages, `RC_HISTORY_PAGE_SIZE`). Each test makes
+//! its own user and channels. The Qt app only for now.
 
 // Helpers outside #[test] fns may unwrap: a failed step should just fail the test.
 #![allow(clippy::unwrap_used)]
 
 mod common;
 
-use rc_gui_tests::paths::{main_window, message_search_row, message_search_row_part as part};
+use std::time::Duration;
+
+use rc_gui_tests::paths::{
+    main_window, message, message_row, message_search_row, message_search_row_part as part,
+};
 use rc_gui_tests::{App, Gui, Key, Modifiers};
 use rc_test_server::{Admin, Posted, TestUser};
 
-use common::{TIMEOUT, log_in_and_wait_for_room, open_room};
+use common::{TIMEOUT, log_in_and_wait_for_room, open_room, type_and_send};
 
 /// Starts the app without the pause before the messages are searched for, and in UTC.
 fn launch() -> App {
@@ -384,11 +390,327 @@ fn up_and_down_move_the_cursor_through_the_messages_and_wrap() {
     on(0);
     press(gui, Key::UP);
     on(2);
-    // Enter doesn't leave the search yet.
+    // Enter shows the message in the room and keeps the search open, the cursor where it was.
     press(gui, Key::RETURN);
+    gui.wait_until_visible(&message(&rows[2].id, message_row::FOUND), TIMEOUT)
+        .unwrap();
     on(2);
     assert!(
         gui.exists_and_visible(main_window::MESSAGE_SEARCH_PANE)
             .unwrap()
     );
+}
+
+/// How many messages a history page holds in the tests of showing a result, and how many filler
+/// messages come between the oldest result and the newest.
+const PAGE: &str = "6";
+const FILLERS: usize = 12;
+
+/// Starts the app with a small history page, so that a channel of a few posts has messages the
+/// room does not hold.
+fn launch_paged() -> App {
+    App::launch_with(&[
+        ("TZ", "UTC"),
+        ("RC_MESSAGE_SEARCH_DEBOUNCE_MS", "0"),
+        ("RC_HISTORY_PAGE_SIZE", PAGE),
+    ])
+    .unwrap()
+}
+
+/// A channel the user is in with a result older than the page the room loads (`first`), twelve
+/// fillers of many lines each (so that a few of them fill the view) and a result among the newest
+/// (`last`), all with the word "zebra" in the results only.
+struct History {
+    user: TestUser,
+    channel_id: String,
+    first: Posted,
+    last: Posted,
+}
+
+impl History {
+    fn new(admin: &Admin) -> Self {
+        let user = admin.create_user();
+        let (channel_id, _) = admin.create_channel(&[&user.username]);
+        let first = admin.post_message(&channel_id, "zebra at the start");
+        let tall = "line\n".repeat(14);
+        for n in 0..FILLERS {
+            admin.post_message(&channel_id, &format!("filler {n}\n{tall}"));
+        }
+        let last = admin.post_message(&channel_id, "zebra at the end");
+        Self {
+            user,
+            channel_id,
+            first,
+            last,
+        }
+    }
+
+    /// The app, logged in, with the room open and the search for "zebra" showing its two results.
+    fn open_and_search(&self, gui: &Gui) {
+        log_in_and_wait_for_room(gui, &self.user, &self.channel_id);
+        open_room(gui, &self.channel_id);
+        gui.wait_until_visible(&message(&self.last.id, message_row::BODY), TIMEOUT)
+            .unwrap();
+        open_search(gui);
+        search_for(gui, "zebra");
+        for found in [&self.first, &self.last] {
+            gui.wait_until_visible(&row(found, ""), TIMEOUT).unwrap();
+        }
+    }
+}
+
+fn pill_shows(gui: &Gui) -> bool {
+    gui.exists_and_visible(main_window::ROOM_JUMP_TO_LATEST)
+        .unwrap()
+}
+
+fn marked(gui: &Gui, found: &Posted) -> bool {
+    gui.exists_and_visible(&message(&found.id, message_row::FOUND))
+        .unwrap()
+}
+
+fn picked(gui: &Gui, found: &Posted) -> bool {
+    gui.exists_and_visible(&row(found, part::PICKED)).unwrap()
+}
+
+/// Jumps to the oldest result with a click: the room holds a window around it.
+fn jump_to_the_first(gui: &Gui, history: &History) {
+    gui.mouse_click(&row(&history.first, "")).unwrap();
+    gui.wait_until_visible(&message(&history.first.id, message_row::FOUND), TIMEOUT)
+        .unwrap();
+}
+
+// MSG-008
+#[test]
+#[ignore = "needs the app and a Rocket.Chat server: run through ctest"]
+fn a_click_on_a_recent_result_marks_the_message_in_the_room_and_picks_the_row() {
+    let admin = Admin::login();
+    let history = History::new(&admin);
+    let app = launch_paged();
+    let gui = app.gui();
+    history.open_and_search(gui);
+    assert!(!marked(gui, &history.last) && !picked(gui, &history.last));
+
+    gui.mouse_click(&row(&history.last, "")).unwrap();
+
+    gui.wait_until_visible(&message(&history.last.id, message_row::FOUND), TIMEOUT)
+        .unwrap();
+    gui.wait_until_visible(&row(&history.last, part::PICKED), TIMEOUT)
+        .unwrap();
+    // The room holds it: nothing was cut off, and the search stays open on the other row too.
+    assert!(!pill_shows(gui));
+    assert!(!picked(gui, &history.first));
+    assert!(
+        gui.exists_and_visible(main_window::MESSAGE_SEARCH_PANE)
+            .unwrap()
+    );
+    assert!(
+        !gui.exists_and_visible(main_window::MESSAGE_SEARCH_MISSING)
+            .unwrap()
+    );
+}
+
+// MSG-008
+#[test]
+#[ignore = "needs the app and a Rocket.Chat server: run through ctest"]
+fn enter_on_the_cursors_row_shows_the_message_like_a_click() {
+    let admin = Admin::login();
+    let history = History::new(&admin);
+    let app = launch_paged();
+    let gui = app.gui();
+    history.open_and_search(gui);
+
+    // The cursor starts on the newest result.
+    press(gui, Key::RETURN);
+
+    gui.wait_until_visible(&message(&history.last.id, message_row::FOUND), TIMEOUT)
+        .unwrap();
+    gui.wait_until_visible(&row(&history.last, part::PICKED), TIMEOUT)
+        .unwrap();
+    assert!(!pill_shows(gui));
+
+    // Down and Enter: the mark moves to the other message, and so does the pick.
+    press(gui, Key::DOWN);
+    press(gui, Key::RETURN);
+    gui.wait_until_visible(&message(&history.first.id, message_row::FOUND), TIMEOUT)
+        .unwrap();
+    gui.wait_until_hidden(&message(&history.last.id, message_row::FOUND), TIMEOUT)
+        .unwrap();
+    assert!(picked(gui, &history.first) && !picked(gui, &history.last));
+}
+
+// MSG-008
+#[test]
+#[ignore = "needs the app and a Rocket.Chat server: run through ctest"]
+fn a_result_older_than_the_loaded_page_is_marked_in_a_window_with_the_pill() {
+    let admin = Admin::login();
+    let history = History::new(&admin);
+    let app = launch_paged();
+    let gui = app.gui();
+    history.open_and_search(gui);
+    assert!(!pill_shows(gui));
+
+    jump_to_the_first(gui, &history);
+
+    gui.wait_until_visible(main_window::ROOM_JUMP_TO_LATEST, TIMEOUT)
+        .unwrap();
+    gui.wait_until_visible(&row(&history.first, part::PICKED), TIMEOUT)
+        .unwrap();
+    // The room does not hold the newest message, and the search is still there.
+    assert!(
+        !gui.exists_and_visible(&message(&history.last.id, message_row::BODY))
+            .unwrap()
+    );
+    assert!(
+        gui.exists_and_visible(main_window::MESSAGE_SEARCH_PANE)
+            .unwrap()
+    );
+    // The message is in the view, not left at the edge of the content.
+    let list = gui.bounding_box(main_window::MESSAGE_LIST).unwrap();
+    let found = gui
+        .bounding_box(&message(&history.first.id, message_row::BODY))
+        .unwrap();
+    assert!(
+        found.y >= list.y && found.y < list.y + list.height,
+        "{found:?} in {list:?}"
+    );
+}
+
+// MSG-008
+#[test]
+#[ignore = "needs the app and a Rocket.Chat server: run through ctest"]
+fn scrolling_down_a_window_loads_the_newer_messages_until_the_pill_goes() {
+    let admin = Admin::login();
+    let history = History::new(&admin);
+    let app = launch_paged();
+    let gui = app.gui();
+    history.open_and_search(gui);
+    jump_to_the_first(gui, &history);
+    gui.wait_until_visible(main_window::ROOM_JUMP_TO_LATEST, TIMEOUT)
+        .unwrap();
+
+    // Wheel down until the room joins the newest messages: the pill goes, the newest message is
+    // there, and the mark stays on the message that was shown.
+    let mut batches = 0;
+    while pill_shows(gui) {
+        assert!(batches < 60, "the wheel did not reach the newest messages");
+        gui.mouse_wheel(
+            main_window::MESSAGE_LIST,
+            0,
+            -120,
+            10,
+            Duration::from_millis(10),
+        )
+        .unwrap();
+        gui.wait(Duration::from_millis(300)).unwrap();
+        batches += 1;
+    }
+    // The mark is the core's and stays; the message itself may have been scrolled out of the
+    // created rows, so the row in the search says it.
+    assert!(picked(gui, &history.first));
+}
+
+// MSG-008
+#[test]
+#[ignore = "needs the app and a Rocket.Chat server: run through ctest"]
+fn the_pill_brings_the_newest_messages_and_clears_the_mark() {
+    let admin = Admin::login();
+    let history = History::new(&admin);
+    let app = launch_paged();
+    let gui = app.gui();
+    history.open_and_search(gui);
+    jump_to_the_first(gui, &history);
+    gui.wait_until_visible(main_window::ROOM_JUMP_TO_LATEST, TIMEOUT)
+        .unwrap();
+
+    gui.mouse_click(main_window::ROOM_JUMP_TO_LATEST).unwrap();
+
+    gui.wait_until_hidden(main_window::ROOM_JUMP_TO_LATEST, TIMEOUT)
+        .unwrap();
+    gui.wait_until_visible(&message(&history.last.id, message_row::BODY), TIMEOUT)
+        .unwrap();
+    assert!(!marked(gui, &history.first));
+    // The row is not picked any more either.
+    gui.wait_until_hidden(&row(&history.first, part::PICKED), TIMEOUT)
+        .unwrap();
+}
+
+// MSG-008
+#[test]
+#[ignore = "needs the app and a Rocket.Chat server: run through ctest"]
+fn end_in_the_room_shows_the_latest_like_the_pill() {
+    let admin = Admin::login();
+    let history = History::new(&admin);
+    let app = launch_paged();
+    let gui = app.gui();
+    history.open_and_search(gui);
+    jump_to_the_first(gui, &history);
+    gui.wait_until_visible(main_window::ROOM_JUMP_TO_LATEST, TIMEOUT)
+        .unwrap();
+
+    // The keys are in the search field until the messages are clicked.
+    gui.mouse_click(&message(&history.first.id, message_row::BODY))
+        .unwrap();
+    gui.enter_key(main_window::MESSAGE_LIST, Key::END, Modifiers::NONE)
+        .unwrap();
+
+    gui.wait_until_hidden(main_window::ROOM_JUMP_TO_LATEST, TIMEOUT)
+        .unwrap();
+    gui.wait_until_visible(&message(&history.last.id, message_row::BODY), TIMEOUT)
+        .unwrap();
+    assert!(!marked(gui, &history.first));
+}
+
+// MSG-008
+#[test]
+#[ignore = "needs the app and a Rocket.Chat server: run through ctest"]
+fn sending_while_detached_shows_the_latest() {
+    let admin = Admin::login();
+    let history = History::new(&admin);
+    let app = launch_paged();
+    let gui = app.gui();
+    history.open_and_search(gui);
+    jump_to_the_first(gui, &history);
+    gui.wait_until_visible(main_window::ROOM_JUMP_TO_LATEST, TIMEOUT)
+        .unwrap();
+
+    type_and_send(gui, "hello from afar");
+
+    gui.wait_until_hidden(main_window::ROOM_JUMP_TO_LATEST, TIMEOUT)
+        .unwrap();
+    gui.wait_until_visible(&message(&history.last.id, message_row::BODY), TIMEOUT)
+        .unwrap();
+    assert!(!marked(gui, &history.first));
+}
+
+// MSG-008
+#[test]
+#[ignore = "needs the app and a Rocket.Chat server: run through ctest"]
+fn a_deleted_message_says_so_in_the_pane_and_leaves_the_room_alone() {
+    let admin = Admin::login();
+    let history = History::new(&admin);
+    let app = launch_paged();
+    let gui = app.gui();
+    history.open_and_search(gui);
+    admin.delete_message(&history.channel_id, &history.first.id);
+
+    gui.mouse_click(&row(&history.first, "")).unwrap();
+
+    gui.wait_until_text(
+        main_window::MESSAGE_SEARCH_MISSING,
+        "This message no longer exists.",
+        TIMEOUT,
+    )
+    .unwrap();
+    assert!(!pill_shows(gui));
+    assert!(!picked(gui, &history.first));
+    assert!(
+        gui.exists_and_visible(&message(&history.last.id, message_row::BODY))
+            .unwrap()
+    );
+
+    // The next search takes the note away.
+    search_for(gui, "s");
+    gui.wait_until_hidden(main_window::MESSAGE_SEARCH_MISSING, TIMEOUT)
+        .unwrap();
 }

@@ -50,7 +50,7 @@ Done when: day-to-day use works. Edit, delete, react, threads, DMs, search and u
   - [x] 3a: refactor, no behaviour change: `FetchKind` instead of `Fetch.older`, the open room's saves through `OpenRoom::persist`
   - [x] 3b: `rc_api` and ports: `method_call`, `surrounding_messages`, `next_messages`, adapter, fake, wiremock and contract tests
   - [x] 3c: the core's detached window: `show_message`, `load_newer`, `show_latest`, the store kept attached, `Event::ShowMessage`, `TimelineStatus.found`
-  - [ ] 3d: `rc_view` and the Qt side: found mark, jump to latest, loading newer, the not-found note, GUI tests
+  - [x] 3d: `rc_view` and the Qt side: found mark (`MessageList::set_found`, the `found` role, `showRequested`), the picked row, jump to latest, loading newer, the not-found note, `RC_HISTORY_PAGE_SIZE`, GUI tests
   - [ ] 3e: thread replies
 - [ ] Search the messages of all rooms (MSG-009; step 4 of 5): `messageSearch` over DDP with no room, gated on the server's `Search.defaultProvider.GlobalSearchEnabled`, which `rocketchatSearch.getProvider` reports; it is off by default, and then the server answers empty, not with an error
 - [ ] Search messages, the Slint panes (MSG-008 and MSG-009; step 5 of 5): the room's search and the global one

@@ -24,6 +24,13 @@ pub mod qobject {
         #[qproperty(bool, loading, READ, NOTIFY)]
         #[qproperty(bool, loading_older, cxx_name = "loadingOlder", READ, NOTIFY)]
         #[qproperty(bool, reached_start, cxx_name = "reachedStart", READ, NOTIFY)]
+        // `detached`: the messages are a window onto the past, newer ones exist that are not
+        // held. `loadingNewer`: the window is being extended. `followsNewest`: the view sticks to
+        // the newest message (it does not while detached). `showJumpToLatest`: the pill shows.
+        #[qproperty(bool, detached, READ, NOTIFY)]
+        #[qproperty(bool, loading_newer, cxx_name = "loadingNewer", READ, NOTIFY)]
+        #[qproperty(bool, follows_newest, cxx_name = "followsNewest", READ, NOTIFY)]
+        #[qproperty(bool, show_jump_to_latest, cxx_name = "showJumpToLatest", READ, NOTIFY)]
         #[qproperty(QString, error_text, cxx_name = "errorText", READ, NOTIFY)]
         // `actionError`: why the last edit, deletion or reaction failed, to show until it is
         // dismissed. Cleared by the next one, by `dismissActionError` and by opening another room.
@@ -46,6 +53,17 @@ pub mod qobject {
         #[qinvokable]
         #[cxx_name = "loadOlder"]
         fn load_older(self: Pin<&mut RoomVm>);
+
+        /// Fetches the messages after the newest one of a detached window. Ignored when the room
+        /// is attached or a load is in progress, so QML can call it whenever the bottom is reached.
+        #[qinvokable]
+        #[cxx_name = "loadNewer"]
+        fn load_newer(self: Pin<&mut RoomVm>);
+
+        /// Leaves the detached window for the newest messages and drops the mark.
+        #[qinvokable]
+        #[cxx_name = "showLatest"]
+        fn show_latest(self: Pin<&mut RoomVm>);
 
         /// Sends the text to the open room, quoting the message `quoted_id` (empty for none). It
         /// shows in `MessageList` at once as pending. Returns whether there was anything to send,
@@ -137,6 +155,10 @@ pub struct RoomVmRust {
     loading: bool,
     loading_older: bool,
     reached_start: bool,
+    detached: bool,
+    loading_newer: bool,
+    follows_newest: bool,
+    show_jump_to_latest: bool,
     error_text: QString,
     action_error: QString,
     typing: QString,
@@ -161,6 +183,10 @@ impl RoomVmRust {
             loading: state.loading,
             loading_older: state.loading_older,
             reached_start: state.reached_start,
+            detached: state.detached,
+            loading_newer: state.loading_newer,
+            follows_newest: state.follows_newest,
+            show_jump_to_latest: state.show_jump_to_latest,
             error_text: QString::from(&state.error_text),
             action_error: QString::default(),
             typing: QString::from(&state.typing),
@@ -190,6 +216,10 @@ impl qobject::RoomVm {
         let loading = self.loading != new.loading;
         let loading_older = self.loading_older != new.loading_older;
         let reached_start = self.reached_start != new.reached_start;
+        let detached = self.detached != new.detached;
+        let loading_newer = self.loading_newer != new.loading_newer;
+        let follows_newest = self.follows_newest != new.follows_newest;
+        let show_jump_to_latest = self.show_jump_to_latest != new.show_jump_to_latest;
         let error_text = self.error_text != new.error_text;
         let typing = self.typing != new.typing;
         let preview = self.preview != new.preview;
@@ -220,6 +250,18 @@ impl qobject::RoomVm {
         }
         if reached_start {
             self.as_mut().reached_start_changed();
+        }
+        if detached {
+            self.as_mut().detached_changed();
+        }
+        if loading_newer {
+            self.as_mut().loading_newer_changed();
+        }
+        if follows_newest {
+            self.as_mut().follows_newest_changed();
+        }
+        if show_jump_to_latest {
+            self.as_mut().show_jump_to_latest_changed();
         }
         if error_text {
             self.as_mut().error_text_changed();
@@ -276,6 +318,16 @@ impl qobject::RoomVm {
     #[allow(clippy::unused_self)]
     fn load_older(self: Pin<&mut Self>) {
         hub::load_older();
+    }
+
+    #[allow(clippy::unused_self)]
+    fn load_newer(self: Pin<&mut Self>) {
+        hub::load_newer();
+    }
+
+    #[allow(clippy::unused_self)]
+    fn show_latest(self: Pin<&mut Self>) {
+        hub::show_latest();
     }
 
     fn send(self: Pin<&mut Self>, text: &QString, quoted_id: &QString) -> bool {

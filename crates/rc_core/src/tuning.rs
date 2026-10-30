@@ -22,6 +22,10 @@ const CHANNEL_BATCH_VAR: &str = "RC_CHANNEL_BATCH_SECS";
 /// (see [`Tuning::from_env`]).
 const THREADS_PAGE_VAR: &str = "RC_THREADS_PAGE_SIZE";
 
+/// The environment variable that overrides how many messages a request for the open room's history
+/// asks for (see [`Tuning::from_env`]).
+const HISTORY_PAGE_VAR: &str = "RC_HISTORY_PAGE_SIZE";
+
 /// The environment variable that overrides how long the directory search waits for the typing to
 /// stop, in whole milliseconds (see [`Tuning::from_env`]). `0` searches at once.
 const DIRECTORY_DEBOUNCE_VAR: &str = "RC_DIRECTORY_DEBOUNCE_MS";
@@ -78,8 +82,9 @@ impl Tuning {
     /// `RC_THREADS_PAGE_SIZE` sets (a testing aid too: the thread list loads more without hundreds
     /// of threads), and `directory_debounce`, which `RC_DIRECTORY_DEBOUNCE_MS` sets in whole
     /// milliseconds (a testing aid too), and `members_debounce`, which `RC_MEMBERS_DEBOUNCE_MS` sets
-    /// the same way, and `message_search_debounce`, which `RC_MESSAGE_SEARCH_DEBOUNCE_MS` sets. A value that isn't a number of the kind is ignored, with
-    /// a warning.
+    /// the same way, and `message_search_debounce`, which `RC_MESSAGE_SEARCH_DEBOUNCE_MS` sets, and
+    /// `page_size`, which `RC_HISTORY_PAGE_SIZE` sets (a room with a few posts has old messages
+    /// that are not loaded). A value that isn't a number of the kind is ignored, with a warning.
     pub(crate) fn from_env() -> Self {
         let mut tuning = Self::default();
         match std::env::var(QUIET_AFTER_VAR) {
@@ -116,6 +121,16 @@ impl Tuning {
             Err(std::env::VarError::NotPresent) => {}
             Err(std::env::VarError::NotUnicode(_)) => {
                 tracing::warn!("{THREADS_PAGE_VAR} isn't a positive number");
+            }
+        }
+        match std::env::var(HISTORY_PAGE_VAR) {
+            Ok(value) => match value.trim().parse::<usize>() {
+                Ok(size) if size > 0 => tuning.page_size = size,
+                _ => tracing::warn!(value, "{HISTORY_PAGE_VAR} isn't a positive number"),
+            },
+            Err(std::env::VarError::NotPresent) => {}
+            Err(std::env::VarError::NotUnicode(_)) => {
+                tracing::warn!("{HISTORY_PAGE_VAR} isn't a positive number");
             }
         }
         match std::env::var(DIRECTORY_DEBOUNCE_VAR) {

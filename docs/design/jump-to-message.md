@@ -1,6 +1,6 @@
 # Jumping to a message
 
-Choosing a result of the [message search](message-search.md) shows that message in the room, even when it is far older than what the room holds (MSG-008, step 3). This is the target design of the whole step; it is built in five parts (see Steps), and parts 3a to 3c are done: the open room's fetch has a kind and its timeline goes to the store through one function, the server calls and their ports exist, and the core has the detached window. The frontends' side (from "The highlight" on) is not built yet.
+Choosing a result of the [message search](message-search.md) shows that message in the room, even when it is far older than what the room holds (MSG-008, step 3). This is the target design of the whole step; it is built in five parts (see Steps), and parts 3a to 3d are done: the open room's fetch has a kind and its timeline goes to the store through one function, the server calls and their ports exist, the core has the detached window, and the Qt side shows it. Thread replies (3e) and Slint (step 5 of the search) are not built yet.
 
 ## What the user gets
 
@@ -36,11 +36,14 @@ The state is the core's `TimelineStatus.found`. `rc_view::MessageList` holds the
 
 ## What the Qt side does
 
-- `MessageMirror` gets a `found` role; the message list model a `showRequested(row)` signal; `RoomVm` gets `detached`, `loadingNewer`, `loadNewer()` and `showLatest()`. `MessageSearch.pick` calls `show_message`.
-- `RoomView.qml`: on `showRequested` it sets `followsNewest` to false and calls `positionViewAtIndex(row, ListView.Center)`; on a model reset `followsNewest` is `!Room.detached`; reaching the bottom while detached calls `loadNewer`, with a spinner in the header (the list is BottomToTop); End while detached calls `showLatest`.
-- `MessageDelegate`: `msgFound` gives `Theme.ownTint` as the background and a `Theme.own` bar `Theme.accentBarWidth` wide.
-- "Jump to latest": a floating pill centred above the bottom of the list, only while detached: `Theme.raised` fill (`raisedHover` hovered), `Theme.line` border, radius half the height, the chevron turned down tinted `Theme.own` and the text in `Theme.text`, `fontSizeSmall`; its sizes are in `Theme.qml`.
-- A target that is gone: a note in the search pane.
+As built (3d):
+
+- **`rc_view`.** `MessageList` holds the found id (`set_found` returns the runs of rows to announce, the one that was marked and the new one; `is_found`, `row_of`). `Cache::found` gives the core's `TimelineStatus.found`. `RoomState` has `detached`, `loading_newer`, `follows_newest` (not while detached) and `show_jump_to_latest`. `message_search_view` has `pick_state` (a row is picked while its message is `Loading` or `Shown`, and opening while `Loading`) and `missing_note`.
+- **`rc_qt`.** The hub tells the `MessageList` model `set_found` on every `TimelineStatus` (in the model's own queue, before the window's reset) and `request_show` on `Event::ShowMessage`, which emits `showRequested(row)` if the model holds the message. `MessageMirror` has the `found` role. `RoomVm` has `detached`, `loadingNewer`, `followsNewest`, `showJumpToLatest` and the invokables `loadNewer` and `showLatest`. `MessageSearch.pick` calls `show_message`; the model keeps the core's `Found` (the one copy it reads `picked` and `opening` from), a `missingNote` property, and hides the note once the text changes. `show_all` (an account switch) tells the `Room` view model before the list, which reads `followsNewest` when it resets.
+- **`RoomView.qml`.** A model reset sets `followsNewest` from `Room.followsNewest`; `showRequested(row)` clears it and calls `positionViewAtIndex(row, ListView.Center)`. The bottom of a detached list (reaching it by the wheel, a drag of the scroll bar or Page Down, or a content that does not fill the view) calls `Room.loadNewer()`, except between a reset and the `showRequested` that follows it (`awaitingShow`), when the bottom shown is not one the user reached. A header (the bottom in this direction) holds the spinner `loadingNewer`. End while detached calls `Room.showLatest()`. The pill `roomJumpToLatest` is a button over the bottom of the list, shown by `Room.showJumpToLatest`; there is no shadow because the app has none elsewhere.
+- **`MessageDelegate.qml`.** `found` gives `msgFound`: `Theme.ownTint` behind the message and a `Theme.own` bar `Theme.accentBarWidth` wide at its left. The thread pane's model answers `found` with `false`.
+- **The search pane.** The picked row has `Theme.ownWash` (`messageSearchPicked`), "Opening…" beside the time (`messageSearchOpening`), and `messageSearchMissing` under the hint.
+- **Testing knob.** `RC_HISTORY_PAGE_SIZE` (a positive whole number) sets `Tuning::page_size`, as `RC_THREADS_PAGE_SIZE` does for the thread list: the GUI tests make a room whose old messages are not loaded with a dozen posts.
 
 ## Thread replies
 
@@ -53,7 +56,7 @@ One PR each.
 - **3a** (done): a refactor with no behaviour change in `rc_core`. `Fetch.older: bool` is `FetchKind`; the open room's saves go through `OpenRoom::persist`.
 - **3b** (done): `rc_api` and the ports: `method_call`, `surrounding_messages`, `next_messages`, the adapter and the fake. wiremock tests in `rc_api/tests/rest.rs` (`result: false`, an error frame, a `401`); contract tests: the order, the edges, the flags, hidden replies, a deleted message giving `false`, a group, a direct message, `loadNextMessages` excluding the end, a group the user is not in.
 - **3c** (done): the detached window in the core: unit tests in `timeline.rs` including a mirror following windows; `client/tests/jump.rs` (a held target makes no request; a second jump drops the first; live messages are dropped while detached and present after `show_latest`; `load_newer` joins; a missing or deleted message; reconnect, sending and another room; the store is never overwritten); an `rc_core` contract test: jump in a 15-message channel read four at a time (`start_with_page_size`), then `load_newer` until attached.
-- **3d**: `rc_view` and the Qt side, with GUI tests: click and Enter show the old message with `msgFound` in view; the pane stays with the row picked; scrolling down reaches the latest; the pill; the not-found note.
+- **3d** (done): `rc_view` and the Qt side, with GUI tests: click and Enter show the old message with `msgFound` in view; the pane stays with the row picked; scrolling down reaches the latest; the pill; the not-found note.
 - **3e**: thread replies.
 
 ## Costs and risks
