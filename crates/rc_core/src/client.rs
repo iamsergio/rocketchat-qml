@@ -82,8 +82,17 @@ pub enum Event {
     /// Changes to the message list of the open room, to apply in order. Opening a room starts with
     /// a reset, to what is held of it already. Logging out resets to nothing, if a room was open.
     Timeline(Vec<TimelineChange>),
-    /// What the frontend shows about the message list. Comes after the changes it goes with.
+    /// What the frontend shows about the message list. Comes after the changes it goes with, except
+    /// when a detached window replaces the messages: the status comes first then, so that the
+    /// frontend knows not to stick to the bottom.
     TimelineStatus(TimelineStatus),
+    /// The open room holds the message that [`AccountHandle::show_message`] was asked for, for the
+    /// frontend to scroll to. Comes once, after the change that brought the message in (or at
+    /// once if the room held it). Not state: a frontend that attaches later doesn't get it.
+    ShowMessage {
+        room: RoomId,
+        message: MessageId,
+    },
     /// Changes to the list of the open room's threads, to apply in order: the parent messages, the
     /// one with the most recent reply last-replied-to first. Opening the list starts with a reset
     /// to nothing, then a reset to the first page; later pages are inserts at the end, and live
@@ -214,6 +223,9 @@ pub(crate) enum Command {
     Logout,
     OpenRoom(RoomId),
     LoadOlder,
+    ShowMessage(MessageId),
+    LoadNewer,
+    ShowLatest,
     OpenThread(MessageId),
     CloseThread,
     LoadOlderThread,
@@ -315,6 +327,33 @@ impl Client {
             SystemClock,
             on_event,
             Tuning::from_env(),
+        )
+    }
+
+    /// [`start`](Self::start) with the open room's history asking for `page_size` messages at a
+    /// time, so that a test of the real server needn't post hundreds of messages to get a window
+    /// that doesn't hold the whole room.
+    ///
+    /// # Errors
+    ///
+    /// If the async runtime can't be started.
+    #[doc(hidden)]
+    pub fn start_with_page_size(
+        store: impl SecretStore,
+        cache: impl FileCache,
+        on_event: impl Fn(AccountId, Event) + Send + Sync + 'static,
+        page_size: usize,
+    ) -> Result<Self, Error> {
+        Self::with_tuning(
+            RestConnector,
+            store,
+            cache,
+            SystemClock,
+            on_event,
+            Tuning {
+                page_size,
+                ..Tuning::from_env()
+            },
         )
     }
 
@@ -485,6 +524,31 @@ impl AccountHandle<'_> {
     /// when a fetch is in flight, or when the start of the room is reached.
     pub fn load_older(&self) {
         self.send(Command::LoadOlder);
+    }
+
+    /// Shows a message of the open room, which may be far older than the messages the room holds
+    /// (MSG-008). If the room holds it, `found` is `Shown` and `Event::ShowMessage` follows at
+    /// once. Else the window around it is fetched, replacing the messages, and the room is
+    /// detached from the newest ones (see [`load_newer`](Self::load_newer)), unless the window
+    /// joins what is held or reaches the newest message. `found` is `Loading` meanwhile, and
+    /// `Missing` if the server has no such message, or it is a thread reply the room doesn't show.
+    /// A later call replaces an earlier one that is still loading. Ignored when no room is open.
+    pub fn show_message(&self, message: MessageId) {
+        self.send(Command::ShowMessage(message));
+    }
+
+    /// Fetches the messages after the newest one of a detached window. When they reach the
+    /// newest messages of the room the window joins them and the room is attached again. Ignored
+    /// when no room is open, when it isn't detached, or when a fetch is in flight.
+    pub fn load_newer(&self) {
+        self.send(Command::LoadNewer);
+    }
+
+    /// Replaces a detached window with what is held of the room, and fetches its newest messages,
+    /// as opening the room does. Clears `found`. Sending a message does this first. Ignored when
+    /// no room is open; when it isn't detached, it only clears `found`.
+    pub fn show_latest(&self) {
+        self.send(Command::ShowLatest);
     }
 
     /// Shows the replies of a message of the open room, in a thread beside the room: a reset to

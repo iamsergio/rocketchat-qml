@@ -155,6 +155,7 @@ pub(super) fn raw_client(
         clock,
         backoff,
         jiff::SignedDuration::ZERO,
+        crate::timeline::PAGE_SIZE,
     )
 }
 
@@ -166,6 +167,7 @@ pub(super) fn raw_client_batching(
     clock: FakeClock,
     backoff: Backoff,
     channel_batch: jiff::SignedDuration,
+    page_size: usize,
 ) -> (Client, Receiver<(AccountId, Event)>) {
     let (tx, events) = mpsc::channel();
     let client = Client::with_tuning(
@@ -179,6 +181,7 @@ pub(super) fn raw_client_batching(
         Tuning {
             backoff,
             channel_batch,
+            page_size,
             ..Tuning::default()
         },
     )
@@ -239,6 +242,20 @@ impl Harness {
             Backoff::new(NEVER, NEVER, NEVER),
             true,
             jiff::SignedDuration::ZERO,
+            crate::timeline::PAGE_SIZE,
+        )
+    }
+
+    /// A harness whose history requests ask for `page` messages.
+    pub(super) fn with_page_size(fake: &Fake, backoff: Backoff, page: usize) -> Self {
+        Self::build_for(
+            fake,
+            MemoryStore::default(),
+            FakeCache::default(),
+            backoff,
+            false,
+            jiff::SignedDuration::ZERO,
+            page,
         )
     }
 
@@ -251,6 +268,7 @@ impl Harness {
             Backoff::new(NEVER, NEVER, NEVER),
             false,
             batch,
+            crate::timeline::PAGE_SIZE,
         )
     }
 
@@ -267,6 +285,7 @@ impl Harness {
             backoff,
             false,
             jiff::SignedDuration::ZERO,
+            crate::timeline::PAGE_SIZE,
         )
     }
 
@@ -277,10 +296,11 @@ impl Harness {
         backoff: Backoff,
         several: bool,
         batch: jiff::SignedDuration,
+        page_size: usize,
     ) -> Self {
         let clock = FakeClock::default();
         let (client, events) =
-            raw_client_batching(fake, store, cache, clock.clone(), backoff, batch);
+            raw_client_batching(fake, store, cache, clock.clone(), backoff, batch, page_size);
         let (account, added) = events.recv_timeout(TIMEOUT).expect("no event");
         assert_eq!(added, Event::Added);
         let mut harness = Self {
@@ -631,6 +651,7 @@ pub(super) fn status(
         loading_older,
         reached_start,
         error,
+        ..TimelineStatus::default()
     })
 }
 
@@ -648,6 +669,11 @@ pub(super) fn logged_in_harness(fake: &Fake) -> Harness {
 }
 
 pub(super) fn logged_in_harness_with(fake: &Fake, backoff: Backoff) -> Harness {
+    logged_in_harness_paged(fake, backoff, crate::timeline::PAGE_SIZE)
+}
+
+/// Like [`logged_in_harness_with`], with the history requests asking for `page_size` messages.
+pub(super) fn logged_in_harness_paged(fake: &Fake, backoff: Backoff, page_size: usize) -> Harness {
     fake.script_login(None, Ok(()));
     fake.script_fetch(
         None,
@@ -656,7 +682,7 @@ pub(super) fn logged_in_harness_with(fake: &Fake, backoff: Backoff) -> Harness {
             subscription("2", "secret", rc_api::RoomType::Private),
         ]),
     );
-    let harness = Harness::with_backoff(fake, MemoryStore::default(), backoff);
+    let harness = Harness::with_page_size(fake, backoff, page_size);
     harness.login("http://h", "alice");
     harness.expect_events(vec![
         session_event(SessionState::Connecting),

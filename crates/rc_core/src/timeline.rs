@@ -111,8 +111,28 @@ impl From<&ApiError> for TimelineError {
     }
 }
 
+/// How far the room got with showing a message it was asked to (see
+/// [`AccountHandle::show_message`](crate::client::AccountHandle::show_message)).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FoundState {
+    /// The message is being fetched.
+    Loading,
+    /// The message is among those the room shows.
+    Shown,
+    /// The server has no such message (any more), or the room doesn't show it.
+    Missing,
+}
+
+/// The message the room was asked to show, for the frontend to mark.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Found {
+    pub message: MessageId,
+    pub state: FoundState,
+}
+
 /// What the frontend shows next to the messages.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[allow(clippy::struct_excessive_bools)] // A flag each, for the frontend to show.
 pub struct TimelineStatus {
     /// The open room; `None` when there is none.
     pub room: Option<RoomId>,
@@ -122,6 +142,13 @@ pub struct TimelineStatus {
     pub loading_older: bool,
     /// Nothing exists before the first message.
     pub reached_start: bool,
+    /// The messages are a window onto the room's past: newer ones exist that aren't held. Comes
+    /// before the reset that brings the window in, so that a frontend doesn't stick to the bottom.
+    pub detached: bool,
+    /// Newer messages are being fetched, to extend a detached window.
+    pub loading_newer: bool,
+    /// The message the room was asked to show, until something else is shown or it is deleted.
+    pub found: Option<Found>,
     /// Why the last request failed; cleared when the next one starts.
     pub error: Option<TimelineError>,
 }
@@ -159,6 +186,9 @@ fn display_order(a: &Message, b: &Message) -> Ordering {
 pub struct Timeline {
     room: RoomId,
     history: RoomHistory,
+    /// The messages are a window onto the room's past: newer ones exist that aren't held. The
+    /// window isn't part of the history, which is what gets stored, so it is never stored.
+    detached: bool,
 }
 
 impl Timeline {
@@ -166,7 +196,11 @@ impl Timeline {
     /// leaves it.
     #[must_use]
     pub fn new(room: RoomId, history: RoomHistory) -> Self {
-        Self { room, history }
+        Self {
+            room,
+            history,
+            detached: false,
+        }
     }
 
     #[must_use]
@@ -209,6 +243,20 @@ impl Timeline {
             .messages
             .first()
             .is_some_and(|m| !m.is_unsent())
+    }
+
+    /// The messages are a window onto the room's past, with newer messages not held.
+    #[must_use]
+    pub fn is_detached(&self) -> bool {
+        self.detached
+    }
+
+    /// Where the next page of newer messages starts: the time of the newest confirmed message.
+    #[must_use]
+    pub fn newest(&self) -> Option<jiff::Timestamp> {
+        self.history.messages[..self.sent_len()]
+            .last()
+            .map(|m| m.ts)
     }
 
     /// Where the next page of older messages starts.
@@ -358,19 +406,59 @@ impl Timeline {
         changes
     }
 
+    /// Takes in a page of messages newer than those held, which is how a detached window grows.
+    pub fn merge_newer(&mut self, page: Vec<Message>) -> Vec<TimelineChange> {
+        let (mut changes, rest) = self.settle_page(page);
+        changes.extend(self.merge(rest, false));
+        changes
+    }
+
+    /// Takes in the window the server gave around a message. If it shares a message with what is
+    /// held the two join and the timeline stays as attached as it was, else the window replaces
+    /// what is held and is detached, unless it reaches the room's newest message. A window that
+    /// reaches it makes the timeline attached either way. Unsent messages go with a replaced
+    /// timeline: they are in the stored copy, which the window is not.
+    pub fn merge_window(
+        &mut self,
+        window: Vec<Message>,
+        more_before: bool,
+        more_after: bool,
+    ) -> Vec<TimelineChange> {
+        let shares = window.iter().any(|m| self.message(&m.id).is_some());
+        if shares {
+            let changes = self.merge_older(window, !more_before);
+            self.detached &= more_after;
+            return changes;
+        }
+        self.history.messages = window;
+        self.history.reached_start = !more_before;
+        self.detached = more_after;
+        vec![self.reset()]
+    }
+
+    /// Ends the detached state: the messages held reach the newest ones now, or the newest page
+    /// is about to be merged in. Does nothing to the messages.
+    pub fn attach(&mut self) {
+        self.detached = false;
+    }
+
     /// Takes in a message the server pushed. It is the server's copy of an unsent one if the ids
     /// match, else it is inserted after the confirmed messages, which is almost always where it
     /// belongs; one that isn't the newest takes the same way in as a page would, except that one
     /// older than everything held is dropped while older messages exist: it is an edit of a
     /// message far back, and showing it would leave a hole between it and the rest. A copy of a
     /// confirmed message that is held replaces it (an edit, a reaction), or changes nothing if it
-    /// is the same.
+    /// is the same. A detached window holds the past, so a message it doesn't hold is dropped.
     pub fn merge_live(&mut self, message: Message) -> Vec<TimelineChange> {
         if self.unsent_position(&message.id).is_some() {
             return self.settle(message).into_iter().collect();
         }
         if self.message(&message.id).is_some() {
             return self.replace(message).into_iter().collect();
+        }
+        // A window shows the past: what is new belongs after it, where it isn't held.
+        if self.detached {
+            return Vec::new();
         }
         let sent = self.sent_len();
         let newest = self.history.messages[..sent]
@@ -1197,5 +1285,138 @@ mod tests {
         });
         assert_eq!(ids(m), ["b", "c"]);
         assert!(m[0].edited && m[1].edited);
+    }
+
+    fn window(ids_secs: &[(&str, i64)]) -> Vec<Message> {
+        ids_secs.iter().map(|(id, secs)| msg(id, *secs)).collect()
+    }
+
+    // MSG-008
+    #[test]
+    fn a_window_that_shares_nothing_replaces_the_messages_and_detaches() {
+        let mut timeline = timeline_of(window(&[("x", 90), ("y", 91)]));
+        let changes = timeline.merge_window(window(&[("a", 1), ("b", 2)]), true, true);
+        assert!(matches!(changes.as_slice(), [TimelineChange::Reset { .. }]));
+        assert_eq!(ids(timeline.messages()), ["a", "b"]);
+        assert!(timeline.is_detached());
+        assert!(!timeline.reached_start());
+        assert_eq!(timeline.newest(), Some(msg("b", 2).ts));
+    }
+
+    // MSG-008
+    #[test]
+    fn a_window_from_the_start_of_the_room_reaches_it() {
+        let mut timeline = timeline_of(window(&[("x", 90)]));
+        timeline.merge_window(window(&[("a", 1), ("b", 2)]), false, true);
+        assert!(timeline.reached_start());
+    }
+
+    // MSG-008
+    #[test]
+    fn a_window_reaching_the_newest_message_is_attached() {
+        let mut timeline = timeline_of(window(&[("x", 90)]));
+        timeline.merge_window(window(&[("a", 1), ("b", 2)]), true, false);
+        assert!(!timeline.is_detached());
+        assert_eq!(ids(timeline.messages()), ["a", "b"]);
+    }
+
+    // MSG-008
+    #[test]
+    fn a_window_sharing_a_message_joins_what_is_held_and_stays_attached() {
+        let mut timeline = timeline_of(window(&[("c", 3), ("d", 4)]));
+        let changes = timeline.merge_window(window(&[("a", 1), ("b", 2), ("c", 3)]), true, true);
+        assert_eq!(
+            changes,
+            [TimelineChange::Prepended(window(&[("a", 1), ("b", 2)]))]
+        );
+        assert_eq!(ids(timeline.messages()), ["a", "b", "c", "d"]);
+        assert!(!timeline.is_detached());
+    }
+
+    // MSG-008
+    #[test]
+    fn a_window_sharing_a_message_with_a_window_stays_detached_unless_it_reaches_the_newest() {
+        let mut timeline = timeline_of(window(&[("x", 90)]));
+        timeline.merge_window(window(&[("c", 3), ("d", 4)]), true, true);
+        timeline.merge_window(window(&[("d", 4), ("e", 5)]), true, true);
+        assert!(timeline.is_detached());
+        assert_eq!(ids(timeline.messages()), ["c", "d", "e"]);
+        timeline.merge_window(window(&[("e", 5), ("f", 6)]), true, false);
+        assert!(!timeline.is_detached());
+    }
+
+    // MSG-008
+    #[test]
+    fn a_detached_window_drops_pushed_messages_it_doesnt_hold_but_takes_the_edits() {
+        let mut timeline = timeline_of(window(&[("x", 90)]));
+        timeline.merge_window(window(&[("a", 1), ("b", 2)]), true, true);
+        assert_eq!(timeline.merge_live(msg("new", 100)), []);
+        assert_eq!(timeline.merge_live(msg("old", 0)), []);
+        assert_eq!(ids(timeline.messages()), ["a", "b"]);
+        assert_eq!(
+            timeline.merge_live(edited("b", 2)),
+            [TimelineChange::Updated {
+                index: 1,
+                message: edited("b", 2)
+            }]
+        );
+        assert_eq!(
+            timeline.remove(&id("a")),
+            Some(TimelineChange::Removed { index: 0 })
+        );
+    }
+
+    // MSG-008
+    #[test]
+    fn newer_pages_are_appended_to_a_window_without_the_duplicate() {
+        let mut timeline = timeline_of(window(&[("x", 90)]));
+        timeline.merge_window(window(&[("a", 1), ("b", 2)]), true, true);
+        let changes = timeline.merge_newer(window(&[("b", 2), ("c", 3), ("d", 4)]));
+        assert_eq!(
+            changes,
+            [TimelineChange::Appended(window(&[("c", 3), ("d", 4)]))]
+        );
+        assert!(timeline.is_detached());
+        timeline.attach();
+        assert!(!timeline.is_detached());
+        assert_eq!(timeline.merge_live(msg("e", 5)).len(), 1);
+        assert_eq!(ids(timeline.messages()), ["a", "b", "c", "d", "e"]);
+    }
+
+    // MSG-008
+    #[test]
+    fn a_mirror_following_a_jump_newer_pages_a_join_and_the_latest_equals_the_timeline() {
+        let (mut timeline, mut mirror) = (empty(), Vec::new());
+        let (t, m) = (&mut timeline, &mut mirror);
+        step(t, m, |t| {
+            t.merge_latest(window(&[("x", 90), ("y", 91)]), false)
+        });
+        // A jump that shares nothing.
+        step(t, m, |t| {
+            t.merge_window(window(&[("a", 1), ("b", 2), ("c", 3)]), true, true)
+        });
+        // A second jump that overlaps the window.
+        step(t, m, |t| {
+            t.merge_window(window(&[("c", 3), ("d", 4)]), true, true)
+        });
+        step(t, m, |t| t.merge_live(edited("b", 2)));
+        step(t, m, |t| t.merge_live(msg("new", 100)));
+        step(t, m, |t| {
+            t.merge_newer(window(&[("d", 4), ("e", 5), ("f", 6)]))
+        });
+        step(t, m, |t| t.remove(&id("e")).into_iter().collect());
+        step(t, m, |t| t.merge_newer(window(&[("f", 6), ("x", 90)])));
+        t.attach();
+        // The newest page, as opening the room does.
+        step(t, m, |t| {
+            t.merge_latest(window(&[("x", 90), ("y", 91), ("z", 92)]), false)
+        });
+        assert_eq!(ids(m), ["a", "b", "c", "d", "f", "x", "y", "z"]);
+        // Showing the latest: the mirror is reset to a timeline made of what is stored.
+        let stored = timeline_of(window(&[("x", 90), ("y", 91)]));
+        let mut mirror = Vec::new();
+        stored.reset().apply(&mut mirror);
+        assert_eq!(mirror.as_slice(), stored.messages());
+        assert!(!stored.is_detached());
     }
 }

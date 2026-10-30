@@ -640,6 +640,9 @@ pub struct NewerPage {
     pub messages: Vec<Message>,
     /// There is nothing after them.
     pub reached_end: bool,
+    /// When the last message the server sent was written, the replies the room doesn't show
+    /// included: where the next page starts. `None` for an empty page.
+    pub last: Option<jiff::Timestamp>,
 }
 
 /// What [`ServerApi::threads_list`] returns.

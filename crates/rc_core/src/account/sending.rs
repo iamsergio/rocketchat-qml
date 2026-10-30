@@ -79,7 +79,15 @@ impl<C: Connector> Actor<C> {
             self.change_thread_timeline(|timeline| vec![timeline.add_unsent(message.clone())]);
         }
         if message.shows_in_room() {
-            self.change_timeline(&room, |timeline| vec![timeline.add_unsent(message)]);
+            // The message goes after the newest ones, and what was found is not what is looked at.
+            if self
+                .open
+                .as_ref()
+                .is_some_and(|open| open.timeline.room() == &room)
+            {
+                self.show_latest();
+            }
+            self.change_timeline(&room, |timeline| vec![timeline.add_unsent(message.clone())]);
         }
         self.post(room, id, wire, target);
     }

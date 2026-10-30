@@ -59,6 +59,7 @@ mod emoji_images;
 mod fake;
 mod harness;
 mod images;
+mod jump;
 mod login;
 mod mark_read;
 mod members;

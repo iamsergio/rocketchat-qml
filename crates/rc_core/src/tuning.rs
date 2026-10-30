@@ -42,6 +42,9 @@ pub(crate) struct Tuning {
     pub(crate) channel_batch: jiff::SignedDuration,
     /// How many threads one request of the thread list asks for.
     pub(crate) threads_page_size: usize,
+    /// How many messages a request for the open room's history asks for: the newest page, the
+    /// one before the oldest message held, the window around a message and the page after it.
+    pub(crate) page_size: usize,
     /// How long the directory search waits after the last change of the text. Zero searches at
     /// once.
     pub(crate) directory_debounce: jiff::SignedDuration,
@@ -59,6 +62,7 @@ impl Default for Tuning {
             quiet_after: QUIET_AFTER,
             channel_batch: CHANNEL_BATCH,
             threads_page_size: PAGE_SIZE,
+            page_size: PAGE_SIZE,
             directory_debounce: DEBOUNCE,
             members_debounce: MEMBERS_DEBOUNCE,
             message_search_debounce: MESSAGE_SEARCH_DEBOUNCE,

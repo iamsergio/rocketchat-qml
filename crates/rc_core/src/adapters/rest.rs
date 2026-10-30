@@ -204,6 +204,7 @@ impl ServerApi for RestApi {
                 .filter(Message::shows_in_room)
                 .collect(),
             reached_end: page.reached_end,
+            last: page.last,
         })
     }
 
