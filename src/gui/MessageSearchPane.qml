@@ -283,6 +283,21 @@ Rectangle {
             }
         }
 
+        // Why nothing happened in the room: the message picked is gone.
+        Label {
+            objectName: "messageSearchMissing"
+            Layout.bottomMargin: Theme.spacingL
+            Layout.fillWidth: true
+            Layout.leftMargin: Theme.spacingXXXL + Theme.fieldPaddingH
+            Layout.rightMargin: Theme.spacingXXXL
+            color: Theme.error
+            font.pointSize: Theme.fontSizeSmall
+            text: MessageSearch.missingNote
+            textFormat: Text.PlainText
+            visible: text !== ""
+            wrapMode: Text.Wrap
+        }
+
         Item {
             Layout.fillHeight: true
             Layout.fillWidth: true

@@ -8,8 +8,8 @@ import RocketChat.Bridge
 
 // A message the search found: who wrote it and when, the start of its text with the words searched
 // for marked, and, for a reply in a thread, a line that says so. Named by the message's id, as the
-// messages are. A click puts the cursor on it; showing it in the room comes with MSG-008's next
-// step.
+// messages are. A click, or Enter with the cursor on it, shows the message in the room; the row
+// stays lit as picked while it is the one shown.
 ItemDelegate {
     id: root
 
@@ -23,8 +23,9 @@ ItemDelegate {
     required property string avatar
     required property string avatarInitials
     required property string avatarColor
-    // The message the user chose to be shown in the room.
+    // The message the user chose to be shown in the room, and the room is still getting it.
     required property bool picked
+    required property bool opening
 
     // The cursor is on this row (tests read it as `checked`).
     checked: index === MessageSearch.cursor
@@ -43,7 +44,15 @@ ItemDelegate {
     }
 
     background: Rectangle {
-        color: root.picked ? Theme.ownWash : root.checked ? Theme.raised : Theme.transparent
+        color: root.checked ? Theme.raised : Theme.transparent
+
+        // The picked row is lit whether or not the cursor is on it.
+        Rectangle {
+            objectName: "messageSearchPicked"
+            anchors.fill: parent
+            color: Theme.ownWash
+            visible: root.picked
+        }
     }
 
     contentItem: RowLayout {
@@ -76,6 +85,15 @@ ItemDelegate {
                     font.weight: Theme.fontWeightSemibold
                     text: root.author
                     textFormat: Text.PlainText
+                }
+
+                Label {
+                    objectName: "messageSearchOpening"
+                    color: Theme.textFaint
+                    font.pointSize: Theme.fontSizeTiny
+                    text: qsTr("Opening…")
+                    textFormat: Text.PlainText
+                    visible: root.opening
                 }
 
                 Label {

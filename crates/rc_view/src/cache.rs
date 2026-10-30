@@ -16,7 +16,7 @@ use rc_core::policy::MessagePolicy;
 use rc_core::rooms::{RoomChange, Unread};
 use rc_core::session::{LoginFailure, SessionState};
 use rc_core::threads::{ThreadFilter, ThreadListChange, ThreadListStatus};
-use rc_core::timeline::{ThreadStatus, TimelineChange, TimelineStatus};
+use rc_core::timeline::{Found, ThreadStatus, TimelineChange, TimelineStatus};
 use rc_core::uploads::{Upload, UploadState};
 use rc_core::{AvatarUpdate, EmojiImageUpdate, ImageUpdate};
 use rc_core::{Connection, Event};
@@ -446,6 +446,12 @@ impl Cache {
     #[must_use]
     pub fn message_search_stale_room(&self) -> Option<RoomId> {
         stale_room(self.message_results.room(), self.status.room.as_ref())
+    }
+
+    /// The message the open room was asked to show (a search result), and how that stands.
+    #[must_use]
+    pub fn found(&self) -> Option<&Found> {
+        self.status.found.as_ref()
     }
 
     /// The room the timeline shows, if one is open.

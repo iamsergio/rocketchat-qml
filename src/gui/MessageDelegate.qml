@@ -59,6 +59,8 @@ Item {
     required property string threadParentText
     // Whether the message can start a thread: it is a sent text message that is not a reply.
     required property bool canStartThread
+    // The room was asked to show this message (a result of the search): it is marked.
+    required property bool found
 
     // The message is in the thread pane and not in the room: it has no thread of its own to start
     // or to show.
@@ -70,6 +72,8 @@ Item {
     signal quoteRequested(string messageId)
     // The user wants to add a reaction to the message: the emoji picker opens.
     signal reactRequested(string messageId)
+    // The user pressed the message: the list is to take the keys.
+    signal focusRequested
     // The user right-clicked a link, at `x`, `y` in `origin`: the menu of the link opens.
     signal linkMenuRequested(string url, Item origin, real x, real y)
 
@@ -102,6 +106,7 @@ Item {
         acceptedButtons: Qt.LeftButton | Qt.RightButton
         anchors.fill: parent
         enabled: root.hasMenu
+        onPressed: root.focusRequested()
         onClicked: mouse => {
             if (mouse.button === Qt.RightButton)
                 menu.popup(root, mouse.x, mouse.y);
@@ -220,6 +225,25 @@ Item {
         visible: root.threadOpen
         width: parent.width
         y: column.y + root.rowItem.y - Theme.messagePaddingV
+    }
+
+    // Marks the message the room was asked to show, a result of the search: a tint and an edge at
+    // its left, in the colour of what is the user's.
+    Rectangle {
+        objectName: "msgFound"
+        color: Theme.ownTint
+        height: root.rowItem.height + 2 * Theme.messagePaddingV
+        visible: root.found
+        width: parent.width
+        y: column.y + root.rowItem.y - Theme.messagePaddingV
+
+        Rectangle {
+            anchors.bottom: parent.bottom
+            anchors.left: parent.left
+            anchors.top: parent.top
+            color: Theme.own
+            width: Theme.accentBarWidth
+        }
     }
 
     // Marks a message that mentions the user: the row washed in the colour of mentions, and an edge

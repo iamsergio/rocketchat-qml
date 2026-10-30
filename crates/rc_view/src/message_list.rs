@@ -9,7 +9,7 @@
 use std::collections::HashSet;
 
 use jiff::tz::TimeZone;
-use rc_core::domain::{AvatarOwner, Message};
+use rc_core::domain::{AvatarOwner, Message, MessageId};
 use rc_core::timeline::TimelineChange;
 
 use crate::attachment_view::{ImageUrls, paths, shows_image};
@@ -30,6 +30,9 @@ pub struct MessageList {
     avatars: AvatarUrls,
     images: ImageUrls,
     emoji_images: EmojiImageUrls,
+    /// The message the room was asked to show (a search result), which is marked: the core's
+    /// `TimelineStatus.found`. Whether it is among the held messages is for the rows to tell.
+    found: Option<MessageId>,
 }
 
 impl Default for MessageList {
@@ -53,6 +56,7 @@ impl MessageList {
             avatars,
             images,
             emoji_images: EmojiImageUrls::default(),
+            found: None,
         }
     }
 
@@ -95,6 +99,38 @@ impl MessageList {
         }
         self.viewer = viewer;
         self.messages.len().checked_sub(1).map(|last| (0, last))
+    }
+
+    /// Marks the message `found` (none for no mark). Returns the runs of rows (first and last) that
+    /// change: the one that was marked and the one that is now, if the list holds them.
+    pub fn set_found(&mut self, found: Option<MessageId>) -> Vec<(usize, usize)> {
+        if self.found == found {
+            return Vec::new();
+        }
+        let before = std::mem::replace(&mut self.found, found);
+        let rows = [before, self.found.clone()]
+            .iter()
+            .flatten()
+            .filter_map(|id| self.row_of(id.as_str()))
+            .collect::<Vec<_>>();
+        runs(self.messages.len(), |at| rows.contains(&at))
+    }
+
+    /// Whether the message at `row` is the marked one.
+    #[must_use]
+    pub fn is_found(&self, row: usize) -> bool {
+        match (&self.found, self.messages.get(row)) {
+            (Some(found), Some(message)) => *found == message.id,
+            _ => false,
+        }
+    }
+
+    /// The row of the message with this id, if the list holds it.
+    #[must_use]
+    pub fn row_of(&self, id: &str) -> Option<usize> {
+        self.messages
+            .iter()
+            .position(|message| message.id.as_str() == id)
     }
 
     /// Takes new avatar files in. Returns the runs of rows (first and last) that show them.
@@ -371,5 +407,47 @@ mod tests {
             list.set_emoji_images(&[("other".to_owned(), "file:///o".to_owned())])
                 .is_empty()
         );
+    }
+
+    // MSG-008
+    #[test]
+    fn marking_a_message_touches_its_row_and_the_one_that_was_marked() {
+        let mut list = list_in_utc(vec![
+            message("a", "2026-10-20T10:00:00Z", "alice"),
+            message("b", "2026-10-20T11:00:00Z", "alice"),
+            message("c", "2026-10-20T12:00:00Z", "alice"),
+        ]);
+        // Rows: c, b, a.
+        assert_eq!(list.set_found(Some("b".to_owned().into())), [(1, 1)]);
+        assert!(list.is_found(1) && !list.is_found(0) && !list.is_found(2));
+        assert_eq!(list.row_of("a"), Some(2));
+
+        // Another one: both rows change, as one run when they are next to each other and else as
+        // two.
+        assert_eq!(list.set_found(Some("a".to_owned().into())), [(1, 2)]);
+        assert_eq!(
+            list.set_found(Some("c".to_owned().into())),
+            [(0, 0), (2, 2)]
+        );
+        // The same one again changes nothing; none clears the mark.
+        assert!(list.set_found(Some("c".to_owned().into())).is_empty());
+        assert_eq!(list.set_found(None), [(0, 0)]);
+        assert!(!list.is_found(0));
+    }
+
+    // MSG-008
+    #[test]
+    fn a_mark_on_a_message_the_list_does_not_hold_touches_nothing_until_it_arrives() {
+        let mut list = list_in_utc(vec![message("a", "2026-10-20T10:00:00Z", "alice")]);
+        assert!(list.set_found(Some("old".to_owned().into())).is_empty());
+        assert!(!list.is_found(0));
+
+        // The window brings it in with a reset: the mark is on it at once.
+        list.apply(&reset(vec![
+            message("old", "2026-10-01T10:00:00Z", "alice"),
+            message("a", "2026-10-20T10:00:00Z", "alice"),
+        ]));
+        assert!(list.is_found(1));
+        assert!(!list.is_found(7));
     }
 }

@@ -291,6 +291,10 @@ Rectangle {
             // True when a room opens, and whenever the user stops moving the view at the newest.
             property bool followsNewest: true
 
+            // A window onto the past was put in place and the message to show is yet to be put in
+            // the middle of the view: the bottom it shows meanwhile is not one the user reached.
+            property bool awaitingShow: false
+
             // Whether the bottom of the content, the newest message, is the bottom of the view. Worked
             // out from the geometry: `atYEnd` is updated later than the changes that call this.
             function showsNewest() {
@@ -305,13 +309,29 @@ Rectangle {
                     positionViewAtBeginning();
             }
 
-            onContentHeightChanged: followNewest()
+            // Reaching the bottom of a window onto the past asks for the messages after it; the core
+            // ignores the request when a load is in progress or the window is attached.
+            function loadNewerAtEnd() {
+                if (atYEnd && Room.detached && count > 0 && !awaitingShow)
+                    Room.loadNewer();
+            }
+
+            // A window shorter than the view has no bottom to scroll to, so it grows by itself.
+            onContentHeightChanged: {
+                followNewest();
+                loadNewerAtEnd();
+            }
             onOriginYChanged: followNewest()
             onHeightChanged: followNewest()
 
             // Wheel, drag and flicks end in a movementEnded. The scroll bar sets the position without
             // moving the view, so it says when it lets go itself.
-            onMovementEnded: followsNewest = atYEnd
+            onMovementEnded: {
+                followsNewest = atYEnd && Room.followsNewest;
+                awaitingShow = false;
+                loadNewerAtEnd();
+            }
+            onAtYEndChanged: loadNewerAtEnd()
 
             objectName: "messageList"
             Layout.fillWidth: true
@@ -321,6 +341,7 @@ Rectangle {
             focus: true
             model: MessageList
             delegate: MessageDelegate {
+                onFocusRequested: messages.forceActiveFocus()
                 onEditRequested: messageId => composer.beginEdit(messageId)
                 onQuoteRequested: messageId => composer.beginQuote(messageId)
                 onReactRequested: messageId => picker.openFor(messageId)
@@ -333,8 +354,29 @@ Rectangle {
                 id: scrollBar
 
                 onPressedChanged: {
-                    if (!pressed)
-                        messages.followsNewest = messages.atYEnd;
+                    if (!pressed) {
+                        messages.followsNewest = messages.atYEnd && Room.followsNewest;
+                        messages.awaitingShow = false;
+                        messages.loadNewerAtEnd();
+                    }
+                }
+            }
+
+            // Below the newest message held, which in this direction is the header: a spinner while
+            // the messages after a window onto the past load.
+            header: Item {
+                width: parent?.width ?? 0
+                height: newerBusy.visible ? Theme.historyFooterHeight : Theme.spacingNone
+
+                BusyIndicator {
+                    id: newerBusy
+
+                    objectName: "loadingNewer"
+                    anchors.centerIn: parent
+                    palette.dark: Theme.textMuted
+                    height: Theme.busyIndicatorSize
+                    visible: Room.loadingNewer
+                    running: visible
                 }
             }
 
@@ -386,8 +428,14 @@ Rectangle {
                     positionViewAtEnd();
                     break;
                 case Qt.Key_End:
-                    positionViewAtBeginning();
-                    followsNewest = true;
+                    // A window onto the past does not hold the newest messages: they come with
+                    // the reset, which makes the view follow them.
+                    if (Room.detached) {
+                        Room.showLatest();
+                    } else {
+                        positionViewAtBeginning();
+                        followsNewest = true;
+                    }
                     break;
                 case Qt.Key_PageUp:
                     followsNewest = false;
@@ -395,7 +443,8 @@ Rectangle {
                     break;
                 case Qt.Key_PageDown:
                     contentY = Math.min(contentY + height, originY + contentHeight - height);
-                    followsNewest = showsNewest();
+                    followsNewest = showsNewest() && Room.followsNewest;
+                    loadNewerAtEnd();
                     break;
                 default:
                     return;
@@ -403,10 +452,24 @@ Rectangle {
                 event.accepted = true;
             }
 
-            // A room opens at its newest message.
+            // A click in the messages takes the keys (End, Home, the page keys) from whatever else
+            // had them, such as the field of the search.
+            TapHandler {
+                onTapped: messages.forceActiveFocus()
+            }
+
+            // A room opens at its newest message, and a window onto the past stays where it is.
+            // The message a search result stands for is put in the middle of the view.
             Connections {
                 function onModelReset() {
-                    messages.followsNewest = true;
+                    messages.followsNewest = Room.followsNewest;
+                    messages.awaitingShow = Room.detached;
+                }
+
+                function onShowRequested(row) {
+                    messages.followsNewest = false;
+                    messages.awaitingShow = false;
+                    messages.positionViewAtIndex(row, ListView.Center);
                 }
 
                 target: messages.model
@@ -498,6 +561,47 @@ Rectangle {
                 if (visible && root.focusWhenShown)
                     focusField();
                 root.focusWhenShown = false;
+            }
+        }
+    }
+
+    // Over the bottom of the message list while it is a window onto the past: back to the newest
+    // messages.
+    Button {
+        id: jumpToLatest
+
+        objectName: "roomJumpToLatest"
+        anchors.horizontalCenter: parent.horizontalCenter
+        height: Theme.jumpToLatestHeight
+        horizontalPadding: Theme.jumpToLatestPaddingH
+        verticalPadding: Theme.spacingNone
+        visible: Room.roomId !== "" && Room.showJumpToLatest
+        y: messages.y + messages.height - height - Theme.jumpToLatestMarginBottom
+        onClicked: Room.showLatest()
+
+        background: Rectangle {
+            border.color: Theme.line
+            border.width: Theme.borderWidth
+            color: jumpToLatest.hovered ? Theme.raisedHover : Theme.raised
+            radius: height / 2
+        }
+
+        contentItem: RowLayout {
+            spacing: Theme.spacingL
+
+            Icon {
+                Layout.preferredHeight: Theme.jumpToLatestIconSize
+                Layout.preferredWidth: Theme.jumpToLatestIconSize
+                rotation: Theme.jumpToLatestChevronRotation
+                source: "icons/chevron.svg"
+                tint: Theme.own
+            }
+
+            Label {
+                color: Theme.text
+                font.pointSize: Theme.fontSizeSmall
+                text: qsTr("Jump to latest")
+                textFormat: Text.PlainText
             }
         }
     }

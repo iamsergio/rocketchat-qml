@@ -275,6 +275,14 @@ QtObject {
     // and the lines a result's text is clamped to.
     readonly property int messageSearchSpinnerSize: 14
     readonly property int messageSearchTextLines: 3
+    // The pill "Jump to latest" over the bottom of the message list, shown while the list is a
+    // window onto the past: its height and its padding at the sides, the chevron in it, how far
+    // it floats above the bottom, and the turn that makes the left-pointing chevron point down.
+    readonly property int jumpToLatestHeight: 32
+    readonly property int jumpToLatestPaddingH: 14
+    readonly property int jumpToLatestIconSize: 14
+    readonly property int jumpToLatestMarginBottom: 16
+    readonly property int jumpToLatestChevronRotation: -90
     // The badge on the room's threads button: a pill of at least this height and width, at the
     // button's top right corner, sticking out of it by the overhangs, with a ring in the header's
     // colour around it so that it reads as cut out.

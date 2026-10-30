@@ -313,6 +313,15 @@ pub mod main_window {
     pub const MESSAGE_SEARCH_MORE_RETRY: &str = "mainWindow/messageSearchMoreRetry";
     /// The keys, under the list.
     pub const MESSAGE_SEARCH_KEYS: &str = "mainWindow/messageSearchKeys";
+    /// Under the field: "This message no longer exists.", as its `text`, visible only while the
+    /// message picked is gone. It goes with the next search or pick.
+    pub const MESSAGE_SEARCH_MISSING: &str = "mainWindow/messageSearchMissing";
+    /// Over the bottom of the message list: "Jump to latest", visible only while the list is a
+    /// window onto the past, with newer messages it does not hold. Clicking it shows the newest.
+    pub const ROOM_JUMP_TO_LATEST: &str = "mainWindow/roomJumpToLatest";
+    /// Under the newest message held, a spinner, visible while the messages after a window onto
+    /// the past load.
+    pub const LOADING_NEWER: &str = "mainWindow/loadingNewer";
     /// The messages of the open thread, oldest first: the parent, then the replies. Its `count`
     /// is how many are loaded.
     pub const THREAD_MESSAGE_LIST: &str = "mainWindow/threadMessageList";
@@ -497,6 +506,8 @@ pub mod message_row {
     pub const THREAD_LAST_REPLY: &str = "msgThreadLastReply";
     /// Marks the message whose thread is open: visible only then, and only in the room.
     pub const THREAD_OPEN: &str = "msgThreadOpen";
+    /// Marks the message the room was asked to show, a result of the search: visible only then.
+    pub const FOUND: &str = "msgFound";
     /// Above a reply that was also sent to the room, in the room: "Replied in a thread", and the
     /// start of the parent's text when the room holds it, as its `text`. Clicking opens the thread.
     pub const IN_THREAD: &str = "msgInThread";
@@ -561,6 +572,10 @@ pub mod message_search_row_part {
     /// "In a thread" with an icon, visible for a reply in a thread.
     pub const THREAD: &str = "messageSearchThread";
     pub const AVATAR_PLACEHOLDER: &str = "messageSearchAvatarPlaceholder";
+    /// The wash of the row picked to be shown in the room: visible only on that row.
+    pub const PICKED: &str = "messageSearchPicked";
+    /// "Opening…" beside the time, visible while the room is getting the picked message.
+    pub const OPENING: &str = "messageSearchOpening";
 }
 
 /// The path of a result of the message search, or of a `part` of it (see

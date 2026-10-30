@@ -79,6 +79,14 @@ pub struct RoomState {
     pub loading: bool,
     pub loading_older: bool,
     pub reached_start: bool,
+    /// The messages are a window onto the past: newer ones exist that the room does not hold.
+    pub detached: bool,
+    /// Newer messages are being fetched, to extend the window.
+    pub loading_newer: bool,
+    /// The view sticks to the newest message: not while the room is a detached window.
+    pub follows_newest: bool,
+    /// The "Jump to latest" pill shows.
+    pub show_jump_to_latest: bool,
     /// Why the last load failed, as it is to be shown. Empty if it didn't.
     pub error_text: String,
     /// Who is typing in the room, as [`typing_line`] says it. Empty for nobody.
@@ -107,6 +115,10 @@ pub fn room_state(rooms: &[Room], status: &TimelineStatus) -> RoomState {
         loading: status.loading,
         loading_older: status.loading_older,
         reached_start: status.reached_start,
+        detached: status.detached,
+        loading_newer: status.loading_newer,
+        follows_newest: !status.detached,
+        show_jump_to_latest: status.detached,
         error_text: status
             .error
             .as_ref()
@@ -330,6 +342,7 @@ mod tests {
                 room_id: "2".into(),
                 name: "Bob".into(),
                 kind: "direct".into(),
+                follows_newest: true,
                 loading: true,
                 ..RoomState::default()
             }
@@ -405,5 +418,27 @@ mod tests {
         let other = room("x", "other", RoomKind::Channel);
         let state = with_preview(room_state(&[], &status), Some(&other), false);
         assert!(!state.preview && state.name.is_empty());
+    }
+
+    // MSG-008
+    #[test]
+    fn a_detached_window_shows_the_pill_and_does_not_follow_the_newest() {
+        let status = TimelineStatus {
+            room: Some("1".to_owned().into()),
+            ..TimelineStatus::default()
+        };
+        let attached = room_state(&[], &status);
+        assert!(attached.follows_newest && !attached.show_jump_to_latest && !attached.detached);
+
+        let detached = room_state(
+            &[],
+            &TimelineStatus {
+                detached: true,
+                loading_newer: true,
+                ..status
+            },
+        );
+        assert!(!detached.follows_newest && detached.show_jump_to_latest);
+        assert!(detached.detached && detached.loading_newer);
     }
 }

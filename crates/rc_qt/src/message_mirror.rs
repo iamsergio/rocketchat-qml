@@ -58,6 +58,8 @@ pub const THREAD_ID_ROLE: i32 = 281;
 pub const IN_THREAD_SHOWN_ROLE: i32 = 282;
 pub const CAN_START_THREAD_ROLE: i32 = 283;
 pub const THREAD_PARENT_TEXT_ROLE: i32 = 284;
+/// The message is the one the room was asked to show (a search result): marked.
+pub const FOUND_ROLE: i32 = 285;
 
 /// The attachments as a `QVariantList` of `QVariantMap`s, with the keys QML reads.
 fn attachments_variant(views: &[AttachmentView]) -> QVariant {
@@ -190,6 +192,7 @@ pub fn data(list: &MessageList, row: i32, role: i32) -> QVariant {
         IN_THREAD_SHOWN_ROLE => QVariant::from(&in_thread_shown(message)),
         CAN_START_THREAD_ROLE => QVariant::from(&can_start_thread(message)),
         THREAD_PARENT_TEXT_ROLE => text(&list.thread_parent_text(at)),
+        FOUND_ROLE => QVariant::from(&list.is_found(at)),
         _ => QVariant::default(),
     }
 }
@@ -229,6 +232,7 @@ pub fn role_names() -> QHash<QHashPair_i32_QByteArray> {
         (IN_THREAD_SHOWN_ROLE, "inThreadShown"),
         (CAN_START_THREAD_ROLE, "canStartThread"),
         (THREAD_PARENT_TEXT_ROLE, "threadParentText"),
+        (FOUND_ROLE, "found"),
     ] {
         names.insert(role, QByteArray::from(name));
     }

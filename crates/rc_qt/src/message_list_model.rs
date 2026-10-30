@@ -34,6 +34,12 @@ pub mod qobject {
         #[base = QAbstractListModel]
         type MessageListModel = super::MessageListModelRust;
 
+        /// The core has brought the message the room was asked to show into the list, at `row`
+        /// (the message list model's, newest first): the view is to scroll to it.
+        #[qsignal]
+        #[cxx_name = "showRequested"]
+        fn show_requested(self: Pin<&mut MessageListModel>, row: i32);
+
         #[qsignal]
         #[inherit]
         #[cxx_name = "dataChanged"]
@@ -149,7 +155,8 @@ use core::pin::Pin;
 use cxx_qt::{CxxQtType, Threading};
 
 use crate::hub;
-use crate::message_mirror::message_model;
+use crate::message_mirror::{FOUND_ROLE, message_model, row};
+use rc_core::domain::MessageId;
 use rc_view::message_list::MessageList;
 
 use qobject::MessageListModel;
@@ -163,9 +170,28 @@ pub struct MessageListModelRust {
 
 impl cxx_qt::Initialize for MessageListModel {
     fn initialize(mut self: Pin<&mut Self>) {
-        let (snapshot, viewer, avatars, images) = hub::register_messages(self.qt_thread());
-        self.as_mut().rust_mut().mirror = MessageList::new(viewer, avatars, images);
-        self.as_mut().apply(&[snapshot]);
+        let shown = hub::register_messages(self.qt_thread());
+        self.as_mut().rust_mut().mirror =
+            MessageList::new(shown.viewer, shown.avatars, shown.images);
+        self.as_mut().apply(&[shown.snapshot]);
+        self.set_found(shown.found);
+    }
+}
+
+impl MessageListModel {
+    /// Marks the message the room was asked to show (none for no mark), announcing only the
+    /// `found` role of the rows that change.
+    pub fn set_found(mut self: Pin<&mut Self>, found: Option<MessageId>) {
+        let runs = self.as_mut().rust_mut().mirror.set_found(found);
+        self.role_changed(&runs, FOUND_ROLE);
+    }
+
+    /// Tells the view that the message is in the list, to scroll to it. Nothing if it is not (it
+    /// was deleted since).
+    pub fn request_show(self: Pin<&mut Self>, message: &MessageId) {
+        if let Some(at) = self.mirror.row_of(message.as_str()) {
+            self.show_requested(row(at));
+        }
     }
 }
 

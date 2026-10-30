@@ -35,7 +35,7 @@ use rc_core::github::GithubConfig;
 use rc_core::policy::{ActionError, MessageAction};
 use rc_core::rooms::{RoomActionError, RoomChange};
 use rc_core::threads::{ThreadFilter, ThreadListChange};
-use rc_core::timeline::TimelineChange;
+use rc_core::timeline::{Found, TimelineChange};
 use rc_core::uploads::UploadId;
 use rc_core::{AccountHandle, Client, Event};
 use secrecy::SecretString;
@@ -389,18 +389,20 @@ pub fn register_message_search(thread: CxxQtThread<MessageSearchModel>) {
     lock().views.message_search.register(thread);
 }
 
-/// What the search pane shows now, with the avatars to show it with, and the open room if the
-/// search is of another one (the pane is to move to it).
+/// What the search pane shows now, with the avatars to show it with, the open room if the search
+/// is of another one (the pane is to move to it), and the message the room was asked to show,
+/// which the rows mark as picked.
 pub fn message_search_shown(
     zone: &jiff::tz::TimeZone,
     now: jiff::Timestamp,
-) -> (MessageSearchView, AvatarUrls, Option<RoomId>) {
+) -> (MessageSearchView, AvatarUrls, Option<RoomId>, Option<Found>) {
     let hub = lock();
     let cache = hub.switchboard.accounts().current_cache();
     (
         cache.message_search_view(zone, now),
         cache.avatars(),
         cache.message_search_stale_room(),
+        cache.found().cloned(),
     )
 }
 
@@ -488,6 +490,23 @@ pub fn open_room(room_id: String) {
 
 pub fn load_older() {
     current_account("load_older", |account| account.load_older());
+}
+
+/// Shows the message with this id in the open room, wherever it is in the past.
+pub fn show_message(message_id: String) {
+    current_account("show_message", |account| {
+        account.show_message(MessageId::from(message_id));
+    });
+}
+
+/// Fetches the messages after the newest one of a detached window.
+pub fn load_newer() {
+    current_account("load_newer", |account| account.load_newer());
+}
+
+/// Leaves the detached window for the newest messages.
+pub fn show_latest() {
+    current_account("show_latest", |account| account.show_latest());
 }
 
 pub fn send_message(room: RoomId, text: &str, quote: Option<MessageId>) {
@@ -805,20 +824,32 @@ fn room_shown(cache: &Cache) -> (RoomState, String) {
 /// Registers the `MessageList` model and returns the change that brings it up to date, who it
 /// shows the messages to, and the avatars and attachment images it shows. Call on the GUI thread;
 /// the events that follow are queued to `thread`.
-pub fn register_messages(
-    thread: CxxQtThread<MessageListModel>,
-) -> (TimelineChange, Viewer, AvatarUrls, ImageUrls) {
+pub fn register_messages(thread: CxxQtThread<MessageListModel>) -> MessagesShown {
     let mut hub = lock();
     hub.views.messages.register(thread);
-    (
-        hub.switchboard
-            .accounts()
-            .current_cache()
-            .timeline_snapshot(),
-        hub.switchboard.accounts().current_cache().viewer(),
-        hub.switchboard.accounts().current_cache().avatars(),
-        hub.switchboard.accounts().current_cache().images(),
-    )
+    let cache = hub.switchboard.accounts().current_cache();
+    MessagesShown {
+        snapshot: cache.timeline_snapshot(),
+        viewer: cache.viewer(),
+        avatars: cache.avatars(),
+        images: cache.images(),
+        found: found_id(cache),
+    }
+}
+
+/// What the `MessageList` model starts with: [`register_messages`]'s answer.
+pub struct MessagesShown {
+    pub snapshot: TimelineChange,
+    pub viewer: Viewer,
+    pub avatars: AvatarUrls,
+    pub images: ImageUrls,
+    /// The message to mark.
+    pub found: Option<MessageId>,
+}
+
+/// The id of the message the open room was asked to show, which the list marks.
+fn found_id(cache: &Cache) -> Option<MessageId> {
+    cache.found().map(|found| found.message.clone())
 }
 
 /// Registers the `Thread` view model and returns what it shows now. Call on the GUI thread; the
@@ -939,7 +970,15 @@ impl Views {
             }
             Event::Uploads(_) | Event::UploadProgress { .. } => self.show_uploads(cache),
             Event::Timeline(changes) => self.messages.queue(move |model| model.apply(&changes)),
+            // After the change that brought the message in, so the model has its row.
+            Event::ShowMessage { message, .. } => {
+                self.messages
+                    .queue(move |model| model.request_show(&message));
+            }
             Event::TimelineStatus(_) => {
+                // In the queue of the messages, before the window's reset that follows.
+                let found = found_id(cache);
+                self.messages.queue(move |model| model.set_found(found));
                 // The search follows the room that is open.
                 self.message_search.queue(MessageSearchModel::refresh);
                 self.show_uploads(cache);
@@ -982,14 +1021,6 @@ impl Views {
         self.mentions.queue(MentionsModel::refresh);
         self.message_search.queue(MessageSearchModel::refresh);
         self.rooms.queue(move |model| model.show(rooms, avatars));
-        let (messages, viewer, avatars, images) = (
-            cache.timeline_snapshot(),
-            cache.viewer(),
-            cache.avatars(),
-            cache.images(),
-        );
-        self.messages
-            .queue(move |model| model.show(&messages, viewer, avatars, images));
         let (replies, viewer, avatars, images) = (
             cache.thread_snapshot(),
             cache.viewer(),
@@ -1004,6 +1035,19 @@ impl Views {
             vm.as_mut().show(&state, &topic_html);
             // What failed for the other account means nothing for this one.
             vm.dismiss_action_error();
+        });
+        // After the room's state, which the list reads when it resets: whether to follow the
+        // newest.
+        let (messages, viewer, avatars, images) = (
+            cache.timeline_snapshot(),
+            cache.viewer(),
+            cache.avatars(),
+            cache.images(),
+        );
+        let found = found_id(cache);
+        self.messages.queue(move |mut model| {
+            model.as_mut().show(&messages, viewer, avatars, images);
+            model.set_found(found);
         });
         let (threads, avatars, unread) = (
             cache.thread_list_snapshot(),

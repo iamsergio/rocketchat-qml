@@ -13,6 +13,7 @@ use jiff::Timestamp;
 use jiff::tz::TimeZone;
 use rc_core::domain::{AvatarOwner, Message, MessageId, MessageKind, RoomId};
 use rc_core::message_search::{MessageSearch, MessageSearchError, MessageSearchState, More};
+use rc_core::timeline::{Found, FoundState};
 
 use crate::avatar_view::message_owner;
 use crate::message_view::{author_name, body, day_label, first_of_day, system_text, time_text};
@@ -40,6 +41,36 @@ pub fn error_text(error: &MessageSearchError) -> String {
     match error {
         MessageSearchError::Unreachable => FAILED_TEXT.to_owned(),
         MessageSearchError::Server(_) => error.to_string(),
+    }
+}
+
+/// What the pane says under the field when the message chosen is gone.
+pub const MISSING_NOTE: &str = "This message no longer exists.";
+
+/// The note under the field for the message the room was asked to show: empty unless the server
+/// has no such message.
+#[must_use]
+pub fn missing_note(found: Option<&Found>) -> &'static str {
+    match found {
+        Some(Found {
+            state: FoundState::Missing,
+            ..
+        }) => MISSING_NOTE,
+        _ => "",
+    }
+}
+
+/// How the row of message `id` stands with the message the room was asked to show: `picked` while
+/// it is the one being or already shown, and `opening` while the room is still getting it.
+#[must_use]
+pub fn pick_state(found: Option<&Found>, id: &MessageId) -> (bool, bool) {
+    match found {
+        Some(found) if found.message == *id => match found.state {
+            FoundState::Loading => (true, true),
+            FoundState::Shown => (true, false),
+            FoundState::Missing => (false, false),
+        },
+        _ => (false, false),
     }
 }
 
@@ -764,5 +795,48 @@ mod tests {
         assert_eq!(first_cursor(&[]), None);
         assert_eq!(message_at(&rows, 3).map(MessageId::as_str), Some("b"));
         assert_eq!(message_at(&rows, 2), None);
+    }
+
+    fn shown(id: &str, state: FoundState) -> Found {
+        Found {
+            message: id.to_owned().into(),
+            state,
+        }
+    }
+
+    // MSG-008
+    #[test]
+    fn the_row_of_the_message_being_or_already_shown_is_picked() {
+        let id = MessageId::from("m".to_owned());
+        assert_eq!(pick_state(None, &id), (false, false));
+        assert_eq!(
+            pick_state(Some(&shown("m", FoundState::Loading)), &id),
+            (true, true)
+        );
+        assert_eq!(
+            pick_state(Some(&shown("m", FoundState::Shown)), &id),
+            (true, false)
+        );
+        // A message that is gone is no row's to show, and another message's state is not ours.
+        assert_eq!(
+            pick_state(Some(&shown("m", FoundState::Missing)), &id),
+            (false, false)
+        );
+        assert_eq!(
+            pick_state(Some(&shown("other", FoundState::Shown)), &id),
+            (false, false)
+        );
+    }
+
+    // MSG-008
+    #[test]
+    fn only_a_missing_message_has_a_note() {
+        assert_eq!(missing_note(None), "");
+        assert_eq!(missing_note(Some(&shown("m", FoundState::Loading))), "");
+        assert_eq!(missing_note(Some(&shown("m", FoundState::Shown))), "");
+        assert_eq!(
+            missing_note(Some(&shown("m", FoundState::Missing))),
+            "This message no longer exists."
+        );
     }
 }
