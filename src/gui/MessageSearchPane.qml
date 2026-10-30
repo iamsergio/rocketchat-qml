@@ -65,9 +65,10 @@ Rectangle {
     }
 
     Connections {
-        // The pane closed: the next search starts from an empty field.
-        function onSearchOpenChanged() {
-            if (!ThreadList.searchOpen)
+        // The search ended: the next one starts from an empty field. A thread over the pane
+        // doesn't end it.
+        function onSearchHeldChanged() {
+            if (!ThreadList.searchHeld)
                 field.clear();
         }
 

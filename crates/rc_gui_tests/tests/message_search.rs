@@ -17,6 +17,7 @@ use std::time::Duration;
 
 use rc_gui_tests::paths::{
     main_window, message, message_row, message_search_row, message_search_row_part as part,
+    thread_message,
 };
 use rc_gui_tests::{App, Gui, Key, Modifiers};
 use rc_test_server::{Admin, Posted, TestUser};
@@ -713,4 +714,156 @@ fn a_deleted_message_says_so_in_the_pane_and_leaves_the_room_alone() {
     search_for(gui, "s");
     gui.wait_until_hidden(main_window::MESSAGE_SEARCH_MISSING, TIMEOUT)
         .unwrap();
+}
+
+/// The app with the fixture's channel open and the search for "alpha" showing, the hidden reply
+/// among the results.
+fn search_alpha(gui: &Gui, fixture: &Fixture) {
+    fixture.open(gui);
+    open_search(gui);
+    search_for(gui, "alpha");
+    gui.wait_until_visible(&row(&fixture.reply, ""), TIMEOUT)
+        .unwrap();
+}
+
+/// Picks the hidden reply: the room marks its parent and the thread opens over the results.
+fn pick_the_reply(gui: &Gui, fixture: &Fixture) {
+    gui.mouse_click(&row(&fixture.reply, "")).unwrap();
+    gui.wait_until_visible(
+        &message(&fixture.messages[3].id, message_row::FOUND),
+        TIMEOUT,
+    )
+    .unwrap();
+    gui.wait_until_visible(main_window::THREAD_BACK_BUTTON, TIMEOUT)
+        .unwrap();
+    gui.wait_until_visible(
+        &thread_message(&fixture.reply.id, message_row::BODY),
+        TIMEOUT,
+    )
+    .unwrap();
+}
+
+// MSG-008
+#[test]
+#[ignore = "needs the app and a Rocket.Chat server: run through ctest"]
+fn a_hidden_reply_marks_its_parent_in_the_room_and_opens_its_thread_over_the_results() {
+    let admin = Admin::login();
+    let fixture = Fixture::new(&admin);
+    let app = launch();
+    let gui = app.gui();
+    search_alpha(gui, &fixture);
+
+    pick_the_reply(gui, &fixture);
+
+    // The thread takes the pane; the results are hidden, not gone. The room did not scroll to
+    // nor mark the reply, which it does not show.
+    gui.wait_until_hidden(main_window::MESSAGE_SEARCH_PANE, TIMEOUT)
+        .unwrap();
+    assert!(!marked(gui, &fixture.reply));
+    assert!(
+        !gui.exists_and_visible(main_window::MESSAGE_SEARCH_MISSING)
+            .unwrap()
+    );
+
+    // Back returns to the results, with the query and the picked row.
+    gui.mouse_click(main_window::THREAD_BACK_BUTTON).unwrap();
+    gui.wait_until_visible(main_window::MESSAGE_SEARCH_PANE, TIMEOUT)
+        .unwrap();
+    gui.wait_until_hidden(main_window::THREAD_PANE, TIMEOUT)
+        .unwrap();
+    assert!(picked(gui, &fixture.reply));
+    assert!(!picked(gui, &fixture.messages[0]));
+    assert!(marked(gui, &fixture.messages[3]));
+    assert_eq!(
+        gui.text(main_window::MESSAGE_SEARCH_FIELD).unwrap(),
+        "alpha"
+    );
+}
+
+// MSG-008
+#[test]
+#[ignore = "needs the app and a Rocket.Chat server: run through ctest"]
+fn escape_in_the_thread_returns_to_the_results_and_a_plain_result_shows_in_the_room() {
+    let admin = Admin::login();
+    let fixture = Fixture::new(&admin);
+    let app = launch();
+    let gui = app.gui();
+    search_alpha(gui, &fixture);
+    pick_the_reply(gui, &fixture);
+
+    gui.enter_key(
+        main_window::THREAD_COMPOSER_FIELD,
+        Key::ESCAPE,
+        Modifiers::NONE,
+    )
+    .unwrap();
+
+    gui.wait_until_visible(main_window::MESSAGE_SEARCH_PANE, TIMEOUT)
+        .unwrap();
+    gui.wait_until_hidden(main_window::THREAD_PANE, TIMEOUT)
+        .unwrap();
+    assert!(picked(gui, &fixture.reply));
+
+    // A plain result afterwards: no thread, the room marks that message.
+    gui.mouse_click(&row(&fixture.messages[0], "")).unwrap();
+    gui.wait_until_visible(
+        &message(&fixture.messages[0].id, message_row::FOUND),
+        TIMEOUT,
+    )
+    .unwrap();
+    assert!(picked(gui, &fixture.messages[0]) && !picked(gui, &fixture.reply));
+    assert!(!gui.exists_and_visible(main_window::THREAD_PANE).unwrap());
+    assert!(
+        gui.exists_and_visible(main_window::MESSAGE_SEARCH_PANE)
+            .unwrap()
+    );
+}
+
+// MSG-008
+#[test]
+#[ignore = "needs the app and a Rocket.Chat server: run through ctest"]
+fn the_close_button_of_a_thread_over_the_results_closes_both() {
+    let admin = Admin::login();
+    let fixture = Fixture::new(&admin);
+    let app = launch();
+    let gui = app.gui();
+    search_alpha(gui, &fixture);
+    pick_the_reply(gui, &fixture);
+
+    gui.mouse_click(main_window::THREAD_CLOSE).unwrap();
+
+    gui.wait_until_hidden(main_window::THREAD_PANE, TIMEOUT)
+        .unwrap();
+    assert!(
+        !gui.exists_and_visible(main_window::MESSAGE_SEARCH_PANE)
+            .unwrap()
+    );
+}
+
+// MSG-008
+#[test]
+#[ignore = "needs the app and a Rocket.Chat server: run through ctest"]
+fn a_reply_also_sent_to_the_room_is_marked_itself_and_opens_its_thread() {
+    let admin = Admin::login();
+    let user = admin.create_user();
+    let (channel_id, _) = admin.create_channel(&[&user.username]);
+    let parent = admin.post_message(&channel_id, "a parent");
+    let reply = admin.post_in_thread(&channel_id, &parent.id, "gamma in the room too", true);
+    let app = launch();
+    let gui = app.gui();
+    log_in_and_wait_for_room(gui, &user, &channel_id);
+    open_room(gui, &channel_id);
+    gui.wait_until_visible(main_window::ROOM_SEARCH_MESSAGES_BUTTON, TIMEOUT)
+        .unwrap();
+    open_search(gui);
+    search_for(gui, "gamma");
+    gui.wait_until_visible(&row(&reply, ""), TIMEOUT).unwrap();
+
+    gui.mouse_click(&row(&reply, "")).unwrap();
+
+    gui.wait_until_visible(&message(&reply.id, message_row::FOUND), TIMEOUT)
+        .unwrap();
+    gui.wait_until_visible(main_window::THREAD_BACK_BUTTON, TIMEOUT)
+        .unwrap();
+    assert!(!marked(gui, &parent));
 }

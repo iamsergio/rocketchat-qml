@@ -24,7 +24,7 @@ pub enum Pane {
     /// The open thread, which hides the list (it is still there, to come back to).
     Thread,
     /// The search of the room's messages, which takes the place of the threads: opening one closes
-    /// the other.
+    /// the other. A thread opened from a result hides it, as it hides the list.
     Search,
 }
 
@@ -96,6 +96,9 @@ pub struct ThreadListState {
     pub pane_open: bool,
     /// The pane shows the search of the room's messages.
     pub search_open: bool,
+    /// The core has a search, whether or not the pane shows it: a thread opened from a result
+    /// hides it, to come back to.
+    pub search_held: bool,
     /// Whether the list is open, whether or not the pane shows it.
     pub list_open: bool,
     /// A thread is open (and hides the list, if that is open).
@@ -143,7 +146,8 @@ pub fn empty_texts(filter: ThreadFilter, room_name: &str) -> (String, String) {
 
 /// The state for the list `status` is about, which holds `rows` threads, in the open room `room`
 /// (with its name taken from `rooms`), when a thread is open or not, and when the search of the
-/// room's messages is open or not.
+/// room's messages is held or not. A thread open with the search held was opened from a result:
+/// opening one from the room closes the search.
 #[must_use]
 pub fn thread_list_state(
     rooms: &[Room],
@@ -151,7 +155,7 @@ pub fn thread_list_state(
     status: &ThreadListStatus,
     rows: usize,
     thread_open: bool,
-    search_open: bool,
+    search_held: bool,
 ) -> ThreadListState {
     let held = room.and_then(|id| rooms.iter().find(|candidate| &candidate.id == id));
     let name = held.map(|room| room.name.clone()).unwrap_or_default();
@@ -162,7 +166,7 @@ pub fn thread_list_state(
     let list_open = status.room.is_some();
     let pane = if thread_open {
         Pane::Thread
-    } else if search_open {
+    } else if search_held {
         Pane::Search
     } else if list_open {
         Pane::List
@@ -184,6 +188,7 @@ pub fn thread_list_state(
         pane: pane.name().to_owned(),
         pane_open: matches!(pane, Pane::List | Pane::Thread),
         search_open: pane == Pane::Search,
+        search_held,
         list_open,
         thread_open,
         filter: filter_name(status.filter).to_owned(),
@@ -258,20 +263,22 @@ pub enum PaneStep {
 }
 
 /// The back button of a thread: the thread closes, and the list opens with `filter` unless it is
-/// open. It leads nowhere from the list.
+/// open. A thread opened from a result goes back to the results, which are still there. It leads
+/// nowhere from the list.
 #[must_use]
 pub fn back_steps(state: &ThreadListState, filter: ThreadFilter) -> Vec<PaneStep> {
     if !state.thread_open {
         return Vec::new();
     }
     let mut steps = vec![PaneStep::CloseThread];
-    if !state.list_open {
+    if !state.list_open && !state.search_held {
         steps.push(PaneStep::OpenList(filter));
     }
     steps
 }
 
-/// The pane's close button: the thread, the list and the search close.
+/// The pane's close button: the thread, the list and the search close, the search being held
+/// under a thread too.
 #[must_use]
 pub fn close_pane_steps(state: &ThreadListState) -> Vec<PaneStep> {
     let mut steps = Vec::new();
@@ -281,7 +288,7 @@ pub fn close_pane_steps(state: &ThreadListState) -> Vec<PaneStep> {
     if state.list_open {
         steps.push(PaneStep::CloseList);
     }
-    if state.search_open {
+    if state.search_held {
         steps.push(PaneStep::CloseSearch);
     }
     steps
@@ -295,21 +302,37 @@ pub fn open_list_steps(state: &ThreadListState, filter: ThreadFilter) -> Vec<Pan
     steps
 }
 
-/// A thread opens: the search closes first.
+/// A thread opens from the room: the search closes first. (From a result the search stays, so it
+/// needs no steps.)
 #[must_use]
 pub fn open_thread_steps(state: &ThreadListState) -> Vec<PaneStep> {
-    if state.search_open {
+    if state.search_held {
         vec![PaneStep::CloseSearch]
     } else {
         Vec::new()
     }
 }
 
-/// The search opens, after the thread and the list close. Nothing if it is open.
+/// A result is chosen. One that isn't a reply closes the thread an earlier choice opened; one that
+/// is opens its thread, which the caller does, and the search stays.
+#[must_use]
+pub fn pick_steps(state: &ThreadListState, opens_thread: bool) -> Vec<PaneStep> {
+    if state.thread_open && !opens_thread {
+        vec![PaneStep::CloseThread]
+    } else {
+        Vec::new()
+    }
+}
+
+/// The search opens, after the thread and the list close. Nothing if it is open; if a thread
+/// hides it, the thread closes and the results are as they were.
 #[must_use]
 pub fn open_search_steps(state: &ThreadListState) -> Vec<PaneStep> {
     if state.search_open {
         return Vec::new();
+    }
+    if state.search_held {
+        return vec![PaneStep::CloseThread];
     }
     let mut steps = Vec::new();
     if state.thread_open {
@@ -654,6 +677,50 @@ mod tests {
         );
         assert_eq!(close_pane_steps(&searching), [CloseSearch]);
         assert_eq!(escape_steps(&searching, all), [CloseSearch]);
+    }
+
+    // MSG-008
+    #[test]
+    fn a_thread_opened_from_a_result_hides_the_search_and_back_returns_to_it() {
+        use PaneStep::{CloseSearch, CloseThread, OpenList, OpenSearch};
+        let all = ThreadFilter::All;
+        let over = state_with(false, true, true);
+        assert_eq!(over.pane, "thread");
+        assert!(over.search_held && !over.search_open && over.pane_open && over.thread_open);
+        // From a room the thread closes the search; from a result it doesn't (no steps).
+        assert_eq!(
+            open_thread_steps(&state_with(false, false, true)),
+            [CloseSearch]
+        );
+        assert!(open_thread_steps(&state_with(false, false, false)).is_empty());
+        // Back and Escape return to the results, with no thread list.
+        assert_eq!(back_steps(&over, all), [CloseThread]);
+        assert_eq!(escape_steps(&over, all), [CloseThread]);
+        assert_eq!(
+            back_steps(&state_with(false, true, false), all),
+            [CloseThread, OpenList(all)]
+        );
+        // The close button, and the header button of the threads, close both.
+        assert_eq!(close_pane_steps(&over), [CloseThread, CloseSearch]);
+        assert_eq!(toggle_steps(&over, all), [CloseThread, CloseSearch]);
+        // The search button and Ctrl+F show the results again instead of searching afresh.
+        assert_eq!(toggle_search_steps(&over), [CloseThread]);
+        assert_eq!(open_search_steps(&over), [CloseThread]);
+        assert_eq!(open_search_steps(&state(false, false)), [OpenSearch]);
+        // The threads button of the room closes the search, as before.
+        assert_eq!(
+            toggle_steps(&state_with(false, false, true), all),
+            [CloseSearch, OpenList(all)]
+        );
+    }
+
+    // MSG-008
+    #[test]
+    fn choosing_a_plain_result_closes_the_thread_of_an_earlier_choice() {
+        let over = state_with(false, true, true);
+        assert_eq!(pick_steps(&over, false), [PaneStep::CloseThread]);
+        assert!(pick_steps(&over, true).is_empty());
+        assert!(pick_steps(&state_with(false, false, true), false).is_empty());
     }
 
     // ACT-011

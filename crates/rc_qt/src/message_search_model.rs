@@ -184,11 +184,12 @@ use cxx_qt_lib::{
 };
 use jiff::Timestamp;
 use jiff::tz::TimeZone;
-use rc_core::domain::AvatarOwner;
+use rc_core::domain::{AvatarOwner, MessageId};
 use rc_core::timeline::Found;
 use rc_view::avatar_view::{AvatarUrls, color, initials, owners, rows_using};
 use rc_view::message_search_view::{
-    Footer, Row, View, first_cursor, message_at, missing_note, pick_state, step_cursor,
+    Footer, MessageRow, Row, View, first_cursor, message_at, missing_note, pick_state, step_cursor,
+    target_at,
 };
 
 use crate::hub;
@@ -228,6 +229,9 @@ pub struct MessageSearchModelRust {
     rows: Vec<Row>,
     /// The message the room was asked to show, as the core says: what makes a row picked.
     found: Option<Found>,
+    /// The result the user picked: with the room's `found`, what makes its row picked. A reply
+    /// the room doesn't show is shown by its parent, so the message alone can't say which row.
+    picked: Option<MessageId>,
     /// The user searched or picked since the note appeared: it is not shown again for the same
     /// state of the message.
     note_dismissed: bool,
@@ -254,6 +258,7 @@ impl Default for MessageSearchModelRust {
             avatars: AvatarUrls::default(),
             rows: Vec::new(),
             found: None,
+            picked: None,
             note_dismissed: false,
             text: String::new(),
             zone: TimeZone::system(),
@@ -302,17 +307,32 @@ impl MessageSearchModel {
         if self.found != found {
             self.as_mut().rust_mut().found = found;
             self.as_mut().rust_mut().note_dismissed = false;
-            if !self.rows.is_empty() {
-                let no_parent = QModelIndex::default();
-                let top_left = self.index(0, 0, &no_parent);
-                let bottom_right = self.index(row(self.rows.len() - 1), 0, &no_parent);
-                let mut roles = QVector::<i32>::default();
-                roles.append(PICKED_ROLE);
-                roles.append(OPENING_ROLE);
-                self.as_mut().data_changed(&top_left, &bottom_right, &roles);
-            }
+            self.as_mut().announce_picked();
         }
         self.show_note();
+    }
+
+    /// The rows' `picked` and `opening` may have changed.
+    fn announce_picked(mut self: Pin<&mut Self>) {
+        if !self.rows.is_empty() {
+            let no_parent = QModelIndex::default();
+            let top_left = self.index(0, 0, &no_parent);
+            let bottom_right = self.index(row(self.rows.len() - 1), 0, &no_parent);
+            let mut roles = QVector::<i32>::default();
+            roles.append(PICKED_ROLE);
+            roles.append(OPENING_ROLE);
+            self.as_mut().data_changed(&top_left, &bottom_right, &roles);
+        }
+    }
+
+    /// How the row of `found` stands with the message the room was asked to show: only the row
+    /// that was picked is, not another that is shown by the same message.
+    fn pick_state_of(&self, found: &MessageRow) -> (bool, bool) {
+        if self.picked.as_ref() == Some(&found.id) {
+            pick_state(self.found.as_ref(), &found.target.show)
+        } else {
+            (false, false)
+        }
     }
 
     /// Shows the note of a missing message, unless the user went on to search since.
@@ -486,15 +506,18 @@ impl MessageSearchModel {
         }
     }
 
-    fn pick(self: Pin<&mut Self>, at: i32) {
+    fn pick(mut self: Pin<&mut Self>, at: i32) {
         let at = if at < 0 { self.cursor } else { at };
-        let picked = usize::try_from(at)
-            .ok()
-            .and_then(|at| message_at(&self.rows, at))
-            .map(ToString::to_string);
-        self.set_cursor_to(at);
-        if let Some(id) = picked {
-            hub::show_message(id);
+        let picked = usize::try_from(at).ok().and_then(|at| {
+            let id = message_at(&self.rows, at)?;
+            Some((id.clone(), target_at(&self.rows, at)?.clone()))
+        });
+        self.as_mut().set_cursor_to(at);
+        if let Some((id, target)) = picked {
+            self.as_mut().rust_mut().picked = Some(id);
+            // The same message may be asked for again by another row: the rows follow the pick.
+            self.announce_picked();
+            hub::show_result(&target);
         }
     }
 
@@ -529,12 +552,8 @@ impl MessageSearchModel {
             (Row::Message(found), AVATAR_COLOR_ROLE) => text(&color(&found.username)),
             // The delegate reads every role of every row, so a row answers the ones it has no
             // use for with nothing.
-            (Row::Message(found), PICKED_ROLE) => {
-                QVariant::from(&pick_state(self.found.as_ref(), &found.id).0)
-            }
-            (Row::Message(found), OPENING_ROLE) => {
-                QVariant::from(&pick_state(self.found.as_ref(), &found.id).1)
-            }
+            (Row::Message(found), PICKED_ROLE) => QVariant::from(&self.pick_state_of(found).0),
+            (Row::Message(found), OPENING_ROLE) => QVariant::from(&self.pick_state_of(found).1),
             (_, IN_THREAD_ROLE | PICKED_ROLE | OPENING_ROLE) => QVariant::from(&false),
             (_, LABEL_ROLE..=AVATAR_COLOR_ROLE) => text(""),
             _ => QVariant::default(),

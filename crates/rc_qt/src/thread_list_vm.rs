@@ -26,6 +26,9 @@ pub mod qobject {
         #[qproperty(bool, pane_open, cxx_name = "paneOpen", READ, NOTIFY)]
         // Whether the pane shows the search of the room's messages: its button is lit.
         #[qproperty(bool, search_open, cxx_name = "searchOpen", READ, NOTIFY)]
+        // The room's messages are searched, whether or not a thread opened from a result hides the
+        // pane: the field keeps its text while it is hidden.
+        #[qproperty(bool, search_held, cxx_name = "searchHeld", READ, NOTIFY)]
         // Whether the list is open, whether or not a thread hides it.
         #[qproperty(bool, list_open, cxx_name = "listOpen", READ, NOTIFY)]
         // `all`, `following` or `unread`.
@@ -113,6 +116,7 @@ pub struct ThreadListVmRust {
     pane: QString,
     pane_open: bool,
     search_open: bool,
+    search_held: bool,
     list_open: bool,
     filter: QString,
     loading: bool,
@@ -139,6 +143,7 @@ impl From<&ThreadListState> for ThreadListVmRust {
             pane: QString::from(&state.pane),
             pane_open: state.pane_open,
             search_open: state.search_open,
+            search_held: state.search_held,
             list_open: state.list_open,
             filter: QString::from(&state.filter),
             loading: state.loading,
@@ -170,6 +175,7 @@ impl qobject::ThreadListVm {
         let pane = self.pane != new.pane;
         let pane_open = self.pane_open != new.pane_open;
         let search_open = self.search_open != new.search_open;
+        let search_held = self.search_held != new.search_held;
         let list_open = self.list_open != new.list_open;
         let filter = self.filter != new.filter;
         let loading = self.loading != new.loading;
@@ -191,6 +197,9 @@ impl qobject::ThreadListVm {
         }
         if search_open {
             self.as_mut().search_open_changed();
+        }
+        if search_held {
+            self.as_mut().search_held_changed();
         }
         if list_open {
             self.as_mut().list_open_changed();

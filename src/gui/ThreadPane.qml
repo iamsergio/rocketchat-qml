@@ -64,7 +64,7 @@ Rectangle {
                     focusPolicy: Qt.NoFocus
                     implicitHeight: Theme.iconButtonSize
                     implicitWidth: backRow.implicitWidth + 2 * Theme.spacingL
-                    text: qsTr("Threads")
+                    text: ThreadList.searchHeld ? qsTr("Results") : qsTr("Threads")
                     visible: ThreadList.pane === "thread"
                     onClicked: ThreadList.back()
 
@@ -93,7 +93,7 @@ Rectangle {
                     }
 
                     ToolTip.delay: Theme.toolTipDelay
-                    ToolTip.text: qsTr("Back to the threads")
+                    ToolTip.text: ThreadList.searchHeld ? qsTr("Back to the search results") : qsTr("Back to the threads")
                     ToolTip.visible: hovered
                 }
 
