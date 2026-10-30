@@ -243,11 +243,19 @@ enum Done<A> {
     UploadConfirmed(UploadConfirmedDone),
 }
 
+/// Which page of a timeline a fetch asks for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FetchKind {
+    /// The newest messages, which is how a room is opened and brought up to date.
+    Newest,
+    /// The page before the oldest message held.
+    Older,
+}
+
 /// A history fetch in flight.
 struct Fetch {
     attempt: u64,
-    /// Older messages, not the newest.
-    older: bool,
+    kind: FetchKind,
     /// The client's clock when the request was sent.
     started: jiff::Timestamp,
     /// A catch-up goes with it (see [`Actor::fetch_changes`]), which is what brings the held
@@ -270,6 +278,13 @@ struct OpenRoom {
     /// The messages deleted while the room was open. An answer to a request sent before the
     /// deletion may still hold them.
     deleted: HashSet<MessageId>,
+}
+
+impl OpenRoom {
+    /// The one place the open room's timeline goes to the store.
+    fn persist(&self, store: &mut dyn MessageStore) {
+        store.save(self.timeline.room(), self.timeline.history());
+    }
 }
 
 /// What the actor keeps while logged in; the next features need both.

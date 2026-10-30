@@ -13,7 +13,7 @@ use crate::ports::{ApiError, Changes, Connector, RoomHistory, ServerApi};
 use crate::session::SessionState;
 use crate::timeline::{PAGE_SIZE, ThreadStatus, Timeline, TimelineChange, TimelineError};
 
-use super::{Actor, Done, Fetch, ThreadDone, ThreadParentDone};
+use super::{Actor, Done, Fetch, FetchKind, ThreadDone, ThreadParentDone};
 
 /// The thread whose messages the frontend shows beside the open room.
 pub(super) struct OpenThread {
@@ -94,7 +94,10 @@ impl<C: Connector> Actor<C> {
             .timeline
             .message(&message.id)
             .is_some_and(Message::is_unsent);
-        let newest_to_come = thread.fetch.as_ref().is_some_and(|fetch| !fetch.older)
+        let newest_to_come = thread
+            .fetch
+            .as_ref()
+            .is_some_and(|fetch| fetch.kind == FetchKind::Newest)
             || (!thread.timeline.has_sent() && !thread.timeline.reached_start());
         if newest_to_come {
             thread.live.retain(|m| m.id != message.id);
@@ -260,7 +263,7 @@ impl<C: Connector> Actor<C> {
         });
         // Typists in this thread show at once, and the old thread's are told to be gone.
         self.tell_typing();
-        self.fetch_thread(false);
+        self.fetch_thread(FetchKind::Newest);
         self.read_open_thread_if_unread();
     }
 
@@ -273,13 +276,13 @@ impl<C: Connector> Actor<C> {
         if thread.fetch.is_some() || thread.timeline.reached_start() || thread.replies_held() == 0 {
             return;
         }
-        self.fetch_thread(true);
+        self.fetch_thread(FetchKind::Older);
     }
 
     /// Fetches a page of the open thread's replies: the newest, or the one after the replies held.
     /// The server counts from the newest, and the replies that arrived since shift it, which the
     /// timeline absorbs by de-duplicating.
-    pub(super) fn fetch_thread(&mut self, older: bool) {
+    pub(super) fn fetch_thread(&mut self, kind: FetchKind) {
         let (Some(session), Some(thread)) = (&self.session, &mut self.open_thread) else {
             return;
         };
@@ -287,12 +290,16 @@ impl<C: Connector> Actor<C> {
         let attempt = self.history_attempt;
         thread.fetch = Some(Fetch {
             attempt,
-            older,
+            kind,
             started: self.clock.now(),
             with_changes: false,
         });
         thread.error = None;
-        let offset = if older { thread.replies_held() } else { 0 };
+        let offset = if kind == FetchKind::Older {
+            thread.replies_held()
+        } else {
+            0
+        };
         let parent = thread.parent.id.clone();
         let api = session.api.clone();
         let credentials = session.credentials.clone();
@@ -332,7 +339,7 @@ impl<C: Connector> Actor<C> {
                 if page.reached_start {
                     messages.push(thread.parent.clone());
                 }
-                if fetch.older {
+                if fetch.kind == FetchKind::Older {
                     thread.timeline.merge_older(messages, page.reached_start)
                 } else {
                     // What was pushed meanwhile is newer than the page's copy of a message.
@@ -383,8 +390,14 @@ impl<C: Connector> Actor<C> {
         let status = match &self.open_thread {
             Some(thread) => ThreadStatus {
                 parent: Some(thread.parent.id.clone()),
-                loading: thread.fetch.as_ref().is_some_and(|f| !f.older),
-                loading_older: thread.fetch.as_ref().is_some_and(|f| f.older),
+                loading: thread
+                    .fetch
+                    .as_ref()
+                    .is_some_and(|f| f.kind == FetchKind::Newest),
+                loading_older: thread
+                    .fetch
+                    .as_ref()
+                    .is_some_and(|f| f.kind == FetchKind::Older),
                 reached_start: thread.timeline.reached_start(),
                 error: thread.error.clone(),
             },
