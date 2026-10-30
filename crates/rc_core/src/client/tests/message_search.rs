@@ -165,6 +165,39 @@ fn the_query_is_trimmed() {
 
 // MSG-008
 #[test]
+fn order_words_are_dropped_so_the_results_stay_newest_first() {
+    let fake = Fake::new();
+    let harness = logged_in_harness(&fake);
+    fake.script_message_search(None, Ok(results(5, 1)));
+
+    search(&harness, "1", " ORDER:asc zebra  order:desc ");
+
+    assert_eq!(next_search(&harness), searching("1", "zebra"));
+    harness.clock.advance(PAUSE);
+    assert_eq!(fake.wait_for_message_search_calls(1)[0].text, "zebra");
+    next_search(&harness);
+    // The same search without the word is the same search.
+    search(&harness, "1", "zebra");
+    assert_no_search(&harness);
+    assert_eq!(fake.state().message_search_calls.len(), 1);
+}
+
+// MSG-008
+#[test]
+fn an_order_word_alone_is_the_empty_query() {
+    let fake = Fake::new();
+    let harness = logged_in_harness(&fake);
+
+    search(&harness, "1", "order:asc");
+
+    assert_eq!(next_search(&harness), found("1", "", Vec::new(), false));
+    harness.clock.advance(PAUSE);
+    std::thread::sleep(QUIET);
+    assert!(fake.state().message_search_calls.is_empty());
+}
+
+// MSG-008
+#[test]
 fn an_empty_query_asks_nothing_and_finds_nothing() {
     let fake = Fake::new();
     let harness = logged_in_harness(&fake);

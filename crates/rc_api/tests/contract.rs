@@ -3251,6 +3251,288 @@ async fn the_search_is_refused_for_a_private_group_the_user_is_not_in_and_for_a_
     );
 }
 
+/// A channel for the search operators: the fixture's user (who searches, "a") and another one ("b")
+/// post six messages that all hold "zebra", so that an operator can be tried alone and with a
+/// word. The rows are told apart by the label of the message they are.
+struct OperatorRoom {
+    room: String,
+    /// The username of b.
+    other: String,
+    session: rc_api::RestSession,
+    labels: Vec<(String, &'static str)>,
+    /// The day the messages were posted, in UTC.
+    today: jiff::civil::Date,
+}
+
+impl OperatorRoom {
+    /// a1 plain, b1 a link, a2 pinned (by admin), b2 mentions a, a3 starred (by a), b3 a location.
+    async fn new(fixture: &Fixture) -> Self {
+        let other = fixture.admin.create_user();
+        let (room, _) = fixture
+            .admin
+            .create_channel(&[&fixture.user.username, &other.username]);
+        let a = Admin::login_as(&fixture.user.username, &fixture.user.password);
+        let b = Admin::login_as(&other.username, &other.password);
+        let a1 = a.post_message(&room, "zebra plain");
+        let b1 = b.post_message(&room, "zebra link https://example.com/page");
+        let a2 = a.post_message(&room, "zebra pinned");
+        let b2 = b.post_message(&room, &format!("zebra mention @{}", fixture.user.username));
+        let a3 = a.post_message(&room, "zebra starred");
+        let b3 = b.post_location(&room, "zebra place");
+        fixture.admin.pin_message(&a2.id);
+        a.star_message(&a3.id);
+        let today = b3
+            .ts
+            .parse::<jiff::Timestamp>()
+            .unwrap()
+            .to_zoned(jiff::tz::TimeZone::UTC)
+            .date();
+        let first = a1.ts.parse::<jiff::Timestamp>().unwrap();
+        assert_eq!(
+            first.to_zoned(jiff::tz::TimeZone::UTC).date(),
+            today,
+            "the test ran across midnight: run it again"
+        );
+        let labels = [
+            (a1.id, "a1"),
+            (b1.id, "b1"),
+            (a2.id, "a2"),
+            (b2.id, "b2"),
+            (a3.id, "a3"),
+            (b3.id, "b3"),
+        ]
+        .into_iter()
+        .collect();
+        let session = fixture.client.session(fixture.login().await.credentials);
+        Self {
+            room,
+            other: other.username,
+            session,
+            labels,
+            today,
+        }
+    }
+
+    /// The labels of the messages the server finds, in its order; "?" is one of none of the six.
+    async fn found(&self, query: &str) -> Vec<&'static str> {
+        let messages = self
+            .session
+            .search_messages(&self.room, query, 50, 0)
+            .await
+            .unwrap();
+        messages
+            .iter()
+            .map(|m| {
+                self.labels
+                    .iter()
+                    .find(|(id, _)| *id == m.id)
+                    .map_or("?", |(_, label)| *label)
+            })
+            .collect()
+    }
+
+    /// The date `days` from today, as the search takes it: day/month/year.
+    fn date(&self, days: i8) -> String {
+        let day = self
+            .today
+            .checked_add(jiff::Span::new().days(days))
+            .unwrap();
+        format!("{:02}/{:02}/{}", day.day(), day.month(), day.year())
+    }
+}
+
+const ALL_NEWEST_FIRST: [&str; 6] = ["b3", "a3", "b2", "a2", "b1", "a1"];
+
+// MSG-008
+#[tokio::test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+async fn the_search_understands_from_and_mention_alone_and_with_a_word_and_searches_the_rest() {
+    let fixture = Fixture::new();
+    let room = OperatorRoom::new(&fixture).await;
+    let a = &fixture.user.username;
+    let b = &room.other;
+
+    // `from:<username>` filters to the author, alone or with a word; the word's own matching goes on.
+    assert_eq!(room.found(&format!("from:{a}")).await, ["a3", "a2", "a1"]);
+    assert_eq!(
+        room.found(&format!("from:{a} zebra")).await,
+        ["a3", "a2", "a1"]
+    );
+    assert_eq!(room.found(&format!("from:{b} link")).await, ["b1"]);
+    assert_eq!(
+        room.found(&format!("from:{}", a.to_uppercase())).await,
+        ["a3", "a2", "a1"]
+    );
+    assert_eq!(
+        room.found(&format!("zebra FROM:{a}")).await,
+        ["a3", "a2", "a1"]
+    );
+    assert_eq!(room.found("from:nobody").await, [] as [&str; 0]);
+    // `from:me` is the user who searches.
+    assert_eq!(room.found("from:me").await, ["a3", "a2", "a1"]);
+    // With an `@` it is no filter: "@a" is searched as a word, which only b2 holds.
+    assert_eq!(room.found(&format!("from:@{a}")).await, ["b2"]);
+    // Another operator narrows further; two `from:` do not combine into a filter.
+    assert_eq!(
+        room.found(&format!("from:{a} has:url")).await,
+        [] as [&str; 0]
+    );
+    assert_eq!(room.found(&format!("from:{b} has:url")).await, ["b1"]);
+    assert_eq!(
+        room.found(&format!("from:{a} from:{b}")).await,
+        ALL_NEWEST_FIRST
+    );
+
+    // `mention:<username>`, with or without `@`; `mention:me` is not understood as the user.
+    assert_eq!(room.found(&format!("mention:{a}")).await, ["b2"]);
+    assert_eq!(room.found(&format!("mention:@{a}")).await, ["b2"]);
+    assert_eq!(room.found(&format!("mention:{a} zebra")).await, ["b2"]);
+    assert_eq!(room.found("mention:me").await, [] as [&str; 0]);
+
+    // What is not an operator is a word: alone it finds nothing, with another word that one finds.
+    assert_eq!(room.found("foo:bar").await, [] as [&str; 0]);
+    assert_eq!(room.found("foo:bar zebra").await, ALL_NEWEST_FIRST);
+    assert_eq!(room.found("from:").await, [] as [&str; 0]);
+    assert_eq!(room.found("from: zebra").await, ALL_NEWEST_FIRST);
+}
+
+// MSG-008
+#[tokio::test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+async fn the_search_understands_has_and_is_filters_alone_and_with_a_word() {
+    let fixture = Fixture::new();
+    let room = OperatorRoom::new(&fixture).await;
+
+    assert_eq!(room.found("has:url").await, ["b1"]);
+    assert_eq!(room.found("has:link").await, ["b1"]);
+    assert_eq!(room.found("has:url zebra").await, ["b1"]);
+    // Starred is the searching user's own star, and `is:starred` is the same as `has:star`.
+    assert_eq!(room.found("has:star").await, ["a3"]);
+    assert_eq!(room.found("has:star zebra").await, ["a3"]);
+    assert_eq!(room.found("is:starred").await, ["a3"]);
+    assert_eq!(room.found("is:pinned").await, ["a2"]);
+    assert_eq!(room.found("is:pinned zebra").await, ["a2"]);
+    assert_eq!(room.found("has:location").await, ["b3"]);
+    assert_eq!(room.found("has:location zebra").await, ["b3"]);
+    // Several of them all have to hold; an unknown one is searched as a word.
+    assert_eq!(room.found("has:url is:pinned").await, [] as [&str; 0]);
+    assert_eq!(room.found("has:locations").await, [] as [&str; 0]);
+    assert_eq!(room.found("has:pinned").await, [] as [&str; 0]);
+    // The operator's name is case sensitive: this is a word, and zebra is found as such.
+    assert_eq!(room.found("IS:PINNED zebra").await, ALL_NEWEST_FIRST);
+}
+
+// MSG-008
+#[tokio::test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+async fn the_search_orders_oldest_first_with_order_asc_and_pages_in_that_order() {
+    let fixture = Fixture::new();
+    let room = OperatorRoom::new(&fixture).await;
+    let a = &fixture.user.username;
+
+    assert_eq!(
+        room.found("order:asc zebra").await,
+        ["a1", "b1", "a2", "b2", "a3", "b3"]
+    );
+    assert_eq!(room.found("order:desc zebra").await, ALL_NEWEST_FIRST);
+    assert_eq!(
+        room.found(&format!("from:{a} order:asc")).await,
+        ["a1", "a2", "a3"]
+    );
+    // Alone it has nothing to order and finds nothing.
+    assert_eq!(room.found("order:asc").await, [] as [&str; 0]);
+
+    // The pages follow that order, so a frontend that pages by offset gets them right.
+    let page = room
+        .session
+        .search_messages(&room.room, "order:asc zebra", 2, 2)
+        .await
+        .unwrap();
+    let ids: Vec<_> = page.iter().map(|m| m.id.as_str()).collect();
+    let expected: Vec<_> = ["a2", "b2"]
+        .iter()
+        .map(|label| {
+            room.labels
+                .iter()
+                .find(|(_, l)| l == label)
+                .map(|(id, _)| id.as_str())
+                .unwrap()
+        })
+        .collect();
+    assert_eq!(ids, expected);
+}
+
+// MSG-008
+#[tokio::test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+async fn the_search_filters_by_day_with_before_after_and_on_in_day_month_year() {
+    let fixture = Fixture::new();
+    let room = OperatorRoom::new(&fixture).await;
+    let none: [&str; 0] = [];
+    let (yesterday, today, tomorrow) = (room.date(-1), room.date(0), room.date(1));
+
+    // `before:` and `after:` leave out the day itself; `on:` is that day. The day is the server's
+    // (UTC on the test server), which the messages' own time says.
+    assert_eq!(
+        room.found(&format!("before:{tomorrow} zebra")).await,
+        ALL_NEWEST_FIRST
+    );
+    assert_eq!(room.found(&format!("before:{today} zebra")).await, none);
+    assert_eq!(
+        room.found(&format!("after:{yesterday} zebra")).await,
+        ALL_NEWEST_FIRST
+    );
+    assert_eq!(room.found(&format!("after:{today} zebra")).await, none);
+    assert_eq!(
+        room.found(&format!("on:{today} zebra")).await,
+        ALL_NEWEST_FIRST
+    );
+    assert_eq!(room.found(&format!("on:{yesterday} zebra")).await, none);
+    assert_eq!(room.found(&format!("on:{tomorrow} zebra")).await, none);
+    assert_eq!(
+        room.found(&format!("after:{yesterday} before:{tomorrow} zebra"))
+            .await,
+        ALL_NEWEST_FIRST
+    );
+
+    // Alone it is a filter of every message of the room, the system ones too ("?").
+    let on_today = room.found(&format!("on:{today}")).await;
+    assert!(on_today.contains(&"?"), "{on_today:?}");
+    for label in ALL_NEWEST_FIRST {
+        assert!(on_today.contains(&label), "{label} in {on_today:?}");
+    }
+    assert_eq!(room.found(&format!("before:{today}")).await, none);
+    assert!(
+        room.found(&format!("before:{tomorrow}"))
+            .await
+            .contains(&"a1")
+    );
+    assert_eq!(room.found(&format!("after:{today}")).await, none);
+
+    // With another filter, and with `-` or a two digit year as the separator and year.
+    let day: Vec<_> = today.split('/').collect();
+    assert_eq!(
+        room.found(&format!("on:{}-{}-{} zebra", day[0], day[1], day[2]))
+            .await,
+        ALL_NEWEST_FIRST
+    );
+    assert_eq!(
+        room.found(&format!("on:{}/{}/{} zebra", day[0], day[1], &day[2][2..]))
+            .await,
+        ALL_NEWEST_FIRST
+    );
+    assert_eq!(room.found(&format!("on:{today} has:url")).await, ["b1"]);
+
+    // A year-first date (ISO) is no date: with a word it is searched like one, alone it finds nothing.
+    assert_eq!(
+        room.found("before:2026-01-01 zebra").await,
+        ALL_NEWEST_FIRST
+    );
+    assert_eq!(room.found("on:2020-01-01 zebra").await, ALL_NEWEST_FIRST);
+    assert_eq!(room.found("before:2026-01-01").await, none);
+    assert_eq!(room.found("on:today zebra").await, ALL_NEWEST_FIRST);
+}
+
 // MSG-008
 #[tokio::test]
 #[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]

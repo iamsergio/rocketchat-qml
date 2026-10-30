@@ -414,6 +414,46 @@ impl Admin {
         }
     }
 
+    /// Posts `text` with a location (`chat.sendMessage` with a `location` point, as the clients
+    /// that share one do).
+    ///
+    /// # Panics
+    ///
+    /// If the server refuses.
+    #[allow(clippy::must_use_candidate)]
+    pub fn post_location(&self, room_id: &str, text: &str) -> Posted {
+        let json = self.post(
+            "chat.sendMessage",
+            &json!({ "message": {
+                "rid": room_id, "msg": text,
+                "location": { "type": "Point", "coordinates": [8.5, 47.3] },
+            } }),
+        );
+        Posted {
+            id: json["message"]["_id"].as_str().unwrap().to_owned(),
+            ts: json["message"]["ts"].as_str().unwrap().to_owned(),
+        }
+    }
+
+    /// Pins a message (`chat.pinMessage`): the user needs the permission, which a room's owner and
+    /// the admin have.
+    ///
+    /// # Panics
+    ///
+    /// If the server refuses.
+    pub fn pin_message(&self, message_id: &str) {
+        self.post("chat.pinMessage", &json!({ "messageId": message_id }));
+    }
+
+    /// Stars a message for this user (`chat.starMessage`).
+    ///
+    /// # Panics
+    ///
+    /// If the server refuses.
+    pub fn star_message(&self, message_id: &str) {
+        self.post("chat.starMessage", &json!({ "messageId": message_id }));
+    }
+
     /// The server's own URL (`Site_Url`), which the links of quotes must begin with: the server
     /// makes no quote from a link to it by any other name (`localhost` for `127.0.0.1`, the
     /// container's name in CI).
