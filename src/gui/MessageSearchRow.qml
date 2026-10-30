@@ -36,9 +36,14 @@ ItemDelegate {
     topPadding: Theme.spacingXL
     bottomPadding: Theme.spacingXL
     onClicked: MessageSearch.pick(index)
+    // The pointer moves the cursor, as the keys do, so that only one row is lit.
+    onHoveredChanged: {
+        if (hovered)
+            MessageSearch.setCursor(index);
+    }
 
     background: Rectangle {
-        color: root.picked ? Theme.ownWash : root.hovered || root.checked ? Theme.raised : Theme.transparent
+        color: root.picked ? Theme.ownWash : root.checked ? Theme.raised : Theme.transparent
     }
 
     contentItem: RowLayout {
