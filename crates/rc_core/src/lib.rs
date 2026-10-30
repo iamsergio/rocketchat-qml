@@ -22,6 +22,7 @@ mod images;
 pub mod list_change;
 pub mod logging;
 pub mod members;
+pub mod message_search;
 pub mod policy;
 pub mod ports;
 mod quote;

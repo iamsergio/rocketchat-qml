@@ -6,6 +6,7 @@
 use crate::backoff::Backoff;
 use crate::directory::DEBOUNCE;
 use crate::members::DEBOUNCE as MEMBERS_DEBOUNCE;
+use crate::message_search::DEBOUNCE as MESSAGE_SEARCH_DEBOUNCE;
 use crate::rooms::{CHANNEL_BATCH, QUIET_AFTER};
 use crate::timeline::PAGE_SIZE;
 
@@ -28,6 +29,7 @@ const DIRECTORY_DEBOUNCE_VAR: &str = "RC_DIRECTORY_DEBOUNCE_MS";
 /// The environment variable that overrides how long the member search waits for the typing to
 /// stop, in whole milliseconds (see [`Tuning::from_env`]). `0` searches at once.
 const MEMBERS_DEBOUNCE_VAR: &str = "RC_MEMBERS_DEBOUNCE_MS";
+const MESSAGE_SEARCH_DEBOUNCE_VAR: &str = "RC_MESSAGE_SEARCH_DEBOUNCE_MS";
 
 /// Timings that the core has a default for and tests change.
 #[derive(Clone, Debug)]
@@ -45,6 +47,9 @@ pub(crate) struct Tuning {
     pub(crate) directory_debounce: jiff::SignedDuration,
     /// How long the member search waits after the last change of the query. Zero searches at once.
     pub(crate) members_debounce: jiff::SignedDuration,
+    /// How long the message search waits after the last change of the query. Zero searches at
+    /// once.
+    pub(crate) message_search_debounce: jiff::SignedDuration,
 }
 
 impl Default for Tuning {
@@ -56,6 +61,7 @@ impl Default for Tuning {
             threads_page_size: PAGE_SIZE,
             directory_debounce: DEBOUNCE,
             members_debounce: MEMBERS_DEBOUNCE,
+            message_search_debounce: MESSAGE_SEARCH_DEBOUNCE,
         }
     }
 }
@@ -68,7 +74,7 @@ impl Tuning {
     /// `RC_THREADS_PAGE_SIZE` sets (a testing aid too: the thread list loads more without hundreds
     /// of threads), and `directory_debounce`, which `RC_DIRECTORY_DEBOUNCE_MS` sets in whole
     /// milliseconds (a testing aid too), and `members_debounce`, which `RC_MEMBERS_DEBOUNCE_MS` sets
-    /// the same way. A value that isn't a number of the kind is ignored, with
+    /// the same way, and `message_search_debounce`, which `RC_MESSAGE_SEARCH_DEBOUNCE_MS` sets. A value that isn't a number of the kind is ignored, with
     /// a warning.
     pub(crate) fn from_env() -> Self {
         let mut tuning = Self::default();
@@ -139,6 +145,23 @@ impl Tuning {
             Err(std::env::VarError::NotPresent) => {}
             Err(std::env::VarError::NotUnicode(_)) => {
                 tracing::warn!("{MEMBERS_DEBOUNCE_VAR} isn't a number of milliseconds");
+            }
+        }
+        match std::env::var(MESSAGE_SEARCH_DEBOUNCE_VAR) {
+            Ok(value) => {
+                if let Ok(millis) = value.trim().parse::<u32>() {
+                    tuning.message_search_debounce =
+                        jiff::SignedDuration::from_millis(i64::from(millis));
+                } else {
+                    tracing::warn!(
+                        value,
+                        "{MESSAGE_SEARCH_DEBOUNCE_VAR} isn't a number of milliseconds"
+                    );
+                }
+            }
+            Err(std::env::VarError::NotPresent) => {}
+            Err(std::env::VarError::NotUnicode(_)) => {
+                tracing::warn!("{MESSAGE_SEARCH_DEBOUNCE_VAR} isn't a number of milliseconds");
             }
         }
         tuning

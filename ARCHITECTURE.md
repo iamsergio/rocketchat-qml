@@ -59,6 +59,7 @@ There is no fake Rocket.Chat. Contract and GUI tests use the real local test ser
 - [File upload](docs/design/uploads.md): the server's two steps, the queue, states, cancel and retry, how the message enters the timeline, the rows of `rc_view`
 - [Editing and deleting your own messages](docs/design/editing-own-messages.md): server policy, rules, answers, composer edit mode
 - [Mentions](docs/design/mentions.md): the room member search behind the composer's `@` popup, and the `@word`, rows and insertion logic of `rc_view::mention`
+- [Message search](docs/design/message-search.md): the server's full-text search of a room's messages, with paging, in the core and what `rc_view::Cache` keeps
 - [Quoting](docs/design/quoting.md): permalinks, `Site_Url`, hiding quote links, sending
 - [Threads](docs/design/threads.md): what the server does, opening a thread, replying, the thread pane, Qt side, the list of a room's threads
 - [GUI testing contract](docs/design/gui-testing.md): Spix protocol subset, element paths, harness environment

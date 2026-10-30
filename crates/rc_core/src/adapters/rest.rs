@@ -382,6 +382,21 @@ impl ServerApi for RestApi {
         })
     }
 
+    async fn search_messages(
+        &self,
+        credentials: &Credentials,
+        room: &RoomId,
+        text: &str,
+        count: usize,
+        offset: usize,
+    ) -> Result<Vec<Message>, ApiError> {
+        let session = self.client.session(api_credentials(credentials));
+        let found = session
+            .search_messages(room.as_str(), text, count, offset)
+            .await?;
+        Ok(found.into_iter().map(message_from).collect())
+    }
+
     async fn directory_channels(
         &self,
         credentials: &Credentials,

@@ -39,6 +39,7 @@ mod directory;
 mod media;
 mod members;
 mod message_actions;
+mod message_search;
 mod open_room;
 mod room_actions;
 mod sending;
@@ -51,6 +52,7 @@ mod uploads;
 use directory::{DirectoryActionDone, DirectoryDone, DirectorySearch, RunningAction};
 use media::{DownloadDone, Media};
 use members::{MembersDone, MembersSearch};
+use message_search::{MessageSearchDone, MessagesSearch};
 use thread::{OpenThread, PendingThread};
 use thread_list::OpenThreadList;
 use uploads::{UploadConfirmedDone, UploadProgressDone, UploadStoredDone, Uploads};
@@ -235,6 +237,7 @@ enum Done<A> {
     Directory(DirectoryDone),
     DirectoryAction(DirectoryActionDone),
     Members(MembersDone),
+    MessageSearch(MessageSearchDone),
     UploadProgress(UploadProgressDone),
     UploadStored(UploadStoredDone),
     UploadConfirmed(UploadConfirmedDone),
@@ -363,6 +366,8 @@ struct Actor<C: Connector> {
     directory: DirectorySearch,
     /// The search of the members of a room, for the composer's mention popup.
     members: MembersSearch,
+    /// The search of the messages of a room on the server.
+    message_search: MessagesSearch,
     /// The directory action under way: only one runs at a time.
     directory_action: Option<RunningAction>,
     /// Counts the directory actions, to tell the answer of the current one from a stale one.
@@ -471,6 +476,7 @@ impl<C: Connector> Actor<C> {
             uploads: Uploads::new(),
             directory: DirectorySearch::new(tuning.directory_debounce),
             members: MembersSearch::new(tuning.members_debounce),
+            message_search: MessagesSearch::new(tuning.message_search_debounce),
             directory_action: None,
             directory_actions: 0,
             open_thread: None,
@@ -535,6 +541,7 @@ impl<C: Connector> Actor<C> {
                     Done::Directory(done) => self.handle_directory_done(done),
                     Done::DirectoryAction(done) => self.handle_directory_action_done(done),
                     Done::Members(done) => self.handle_members_done(done),
+                    Done::MessageSearch(done) => self.handle_message_search_done(done),
                     Done::UploadProgress(done) => self.handle_upload_progress(&done),
                     Done::UploadStored(done) => self.handle_upload_stored(done),
                     Done::UploadConfirmed(done) => self.handle_upload_confirmed(done),
@@ -559,6 +566,7 @@ impl<C: Connector> Actor<C> {
             self.typists.next_deadline(),
             self.directory.due(),
             self.members.due(),
+            self.message_search.due(),
         ]
         .into_iter()
         .flatten()
@@ -573,6 +581,7 @@ impl<C: Connector> Actor<C> {
         self.expire_typists();
         self.start_due_directory_search();
         self.start_due_members_search();
+        self.start_due_message_search();
     }
 
     /// Tells who the stored account is, if there is one, and resumes it if it holds a token. A stored
@@ -627,6 +636,7 @@ impl<C: Connector> Actor<C> {
         self.abort_history_task();
         self.abort_directory();
         self.abort_members();
+        self.abort_message_search();
         self.abort_uploads();
         if let Some(task) = self.thread_task.take() {
             task.abort();
@@ -682,6 +692,9 @@ impl<C: Connector> Actor<C> {
             Command::SearchDirectory(text) => self.search_directory(&text),
             Command::SearchMembers { room, query } => self.search_members(room, query),
             Command::CancelMemberSearch => self.cancel_members_search(),
+            Command::SearchMessages { room, query } => self.search_messages(room, &query),
+            Command::MoreMessageSearch => self.more_message_search(),
+            Command::CancelMessageSearch => self.cancel_message_search(),
             Command::OpenDirect(username) => self.open_direct(username),
             Command::PreviewChannel(room) => self.preview_channel(room),
             Command::JoinChannel(room) => self.join_channel(room),
