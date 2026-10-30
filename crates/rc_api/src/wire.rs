@@ -14,8 +14,8 @@ use crate::md;
 use crate::types::{
     Attachment, AttachmentImage, Author, AvatarOwner, Credentials, CustomEmoji, DdpEvent,
     DirectoryChannel, DirectoryPage, DirectoryUser, HistoryPage, LoginResult, MemberPage, Message,
-    MessageChanges, MessageSettings, Quote, Reaction, RoomInfo, RoomMember, RoomType, ServerInfo,
-    ServerVersion, Subscription, ThreadPage, ThreadsPage, User,
+    MessageChanges, MessageSettings, NextPage, Quote, Reaction, RoomInfo, RoomMember, RoomType,
+    ServerInfo, ServerVersion, Subscription, ThreadPage, ThreadsPage, User, Window,
 };
 
 #[derive(Deserialize)]
@@ -823,6 +823,103 @@ pub(crate) fn parse_history(bytes: &[u8], count: usize) -> Result<HistoryPage, s
     Ok(HistoryPage {
         reached_start: body.messages.len() < count,
         messages: body.messages.into_iter().map(Message::from).collect(),
+    })
+}
+
+/// What a `method.call` answer holds: the result of the method, or the error it was refused with.
+pub(crate) enum MethodOutcome {
+    Result(serde_json::Value),
+    /// The human-readable text of the DDP error (`reason`, else `message`, else `error`).
+    Error(String),
+}
+
+#[derive(Deserialize)]
+struct MethodEnvelope {
+    /// The DDP frame of the answer, as a JSON string.
+    message: String,
+}
+
+#[derive(Deserialize)]
+struct MethodFrame {
+    #[serde(default)]
+    result: serde_json::Value,
+    error: Option<MethodFrameError>,
+}
+
+#[derive(Deserialize)]
+struct MethodFrameError {
+    reason: Option<String>,
+    message: Option<String>,
+    error: Option<serde_json::Value>,
+}
+
+/// The answer of `POST /api/v1/method.call/<name>`: a JSON object whose `message` is the DDP result
+/// frame as a string. The frame is there in a `200` and in a `400` alike.
+pub(crate) fn parse_method_call(bytes: &[u8]) -> Result<MethodOutcome, serde_json::Error> {
+    let envelope: MethodEnvelope = serde_json::from_slice(bytes)?;
+    let frame: MethodFrame = serde_json::from_str(&envelope.message)?;
+    Ok(match frame.error {
+        None => MethodOutcome::Result(frame.result),
+        Some(error) => MethodOutcome::Error(
+            error
+                .reason
+                .or(error.message)
+                .or_else(|| {
+                    error.error.map(|code| match code {
+                        serde_json::Value::String(code) => code,
+                        other => other.to_string(),
+                    })
+                })
+                .unwrap_or_default(),
+        ),
+    })
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WindowBody {
+    #[serde(default)]
+    messages: Vec<MessageBody>,
+    #[serde(default)]
+    more_before: bool,
+    #[serde(default)]
+    more_after: bool,
+}
+
+/// The result of `loadSurroundingMessages`: `false` for a message that doesn't exist.
+///
+/// The server sends the older half newest first, then the target, then the newer half oldest first
+/// (a result of `[3, 2, 1, T, 4, 5]` for the target `T`). The messages are sorted by time here, the
+/// one place that knows, so the window is oldest first whatever the server does; the sort is
+/// stable, so messages of one millisecond keep the server's order.
+pub(crate) fn parse_surrounding(
+    result: serde_json::Value,
+) -> Result<Option<Window>, serde_json::Error> {
+    if result == serde_json::Value::Bool(false) {
+        return Ok(None);
+    }
+    let body: WindowBody = serde_json::from_value(result)?;
+    let mut messages: Vec<Message> = body.messages.into_iter().map(Message::from).collect();
+    messages.sort_by_key(|message| message.ts);
+    Ok(Some(Window {
+        messages,
+        more_before: body.more_before,
+        more_after: body.more_after,
+    }))
+}
+
+/// The result of `loadNextMessages`, oldest first. `limit` is what was asked for: fewer messages
+/// than that means there are no newer ones, counted before any filtering.
+pub(crate) fn parse_next(
+    result: serde_json::Value,
+    limit: usize,
+) -> Result<NextPage, serde_json::Error> {
+    let body: HistoryBody = serde_json::from_value(result)?;
+    let messages: Vec<Message> = body.messages.into_iter().map(Message::from).collect();
+    Ok(NextPage {
+        reached_end: messages.len() < limit,
+        last: messages.last().map(|m| m.ts),
+        messages,
     })
 }
 

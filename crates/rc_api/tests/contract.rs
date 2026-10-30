@@ -719,6 +719,238 @@ async fn history_pages_back_with_latest_until_the_start() {
     assert_eq!(texts, ["m3", "m2", "m1"]);
 }
 
+fn texts(messages: &[Message]) -> Vec<&str> {
+    ordinary(messages).iter().map(|m| m.text.as_str()).collect()
+}
+
+// MSG-008
+#[tokio::test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+async fn a_window_has_half_the_limit_older_and_fewer_newer_with_flags_at_the_edges() {
+    let fixture = Fixture::new();
+    let (room_id, _) = fixture.create_channel();
+    let ids = post_all(
+        &fixture,
+        &room_id,
+        &["m1", "m2", "m3", "m4", "m5", "m6", "m7"],
+    );
+    let session = fixture.client.session(fixture.login().await.credentials);
+
+    // Limit 4: two older, the target, and 4/2 - 1 = one newer, oldest first once parsed.
+    let window = session
+        .surrounding_messages(&ids[3], 4)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(texts(&window.messages), ["m2", "m3", "m4", "m5"]);
+    assert!(window.more_before && window.more_after);
+
+    // Limit 5: two older, the target, two newer.
+    let window = session
+        .surrounding_messages(&ids[3], 5)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(texts(&window.messages), ["m2", "m3", "m4", "m5", "m6"]);
+
+    // At the newest message the newer half is not filled by older ones.
+    let window = session
+        .surrounding_messages(&ids[6], 4)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(texts(&window.messages), ["m5", "m6", "m7"]);
+    assert!(window.more_before);
+    assert!(!window.more_after);
+
+    // A limit beyond the room holds all of it, with no flags.
+    let window = session
+        .surrounding_messages(&ids[0], 20)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        texts(&window.messages),
+        ["m1", "m2", "m3", "m4", "m5", "m6", "m7"]
+    );
+    assert!(!window.more_before);
+    assert!(!window.more_after);
+    assert!(window.messages.windows(2).all(|w| w[0].ts <= w[1].ts));
+}
+
+// MSG-008
+#[tokio::test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+async fn a_window_holds_the_thread_replies_that_are_not_in_the_room() {
+    let fixture = Fixture::new();
+    let (room_id, _) = fixture.create_channel();
+    let ids = post_all(&fixture, &room_id, &["parent", "after"]);
+    let hidden = fixture
+        .admin
+        .post_in_thread(&room_id, &ids[0], "hidden reply", false);
+    let shown = fixture
+        .admin
+        .post_in_thread(&room_id, &ids[0], "shown reply", true);
+    let session = fixture.client.session(fixture.login().await.credentials);
+
+    let window = session
+        .surrounding_messages(&ids[1], 20)
+        .await
+        .unwrap()
+        .unwrap();
+    let find = |id: &str| window.messages.iter().find(|m| m.id == id).unwrap();
+    assert_eq!(find(&hidden.id).thread_id.as_deref(), Some(ids[0].as_str()));
+    assert!(!find(&hidden.id).thread_shown);
+    assert!(find(&shown.id).thread_shown);
+}
+
+// MSG-008
+#[tokio::test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+async fn a_deleted_or_unknown_message_has_no_window() {
+    let fixture = Fixture::new();
+    let (room_id, _) = fixture.create_channel();
+    let ids = post_all(&fixture, &room_id, &["kept", "doomed"]);
+    fixture.admin.delete_message(&room_id, &ids[1]);
+    let session = fixture.client.session(fixture.login().await.credentials);
+
+    assert_eq!(
+        session.surrounding_messages(&ids[1], 4).await.unwrap(),
+        None
+    );
+    assert_eq!(
+        session
+            .surrounding_messages("no-such-message", 4)
+            .await
+            .unwrap(),
+        None
+    );
+    assert!(
+        session
+            .surrounding_messages(&ids[0], 4)
+            .await
+            .unwrap()
+            .is_some()
+    );
+}
+
+// MSG-008
+#[tokio::test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+async fn a_window_of_a_group_and_a_direct_message_and_none_of_a_group_the_user_is_not_in() {
+    let fixture = Fixture::new();
+    let (group_id, _) = fixture.create_group();
+    let dm_id = fixture.create_dm();
+    let (secret_id, _) = fixture.admin.create_group(&[]);
+    let in_group = post_all(&fixture, &group_id, &["g1", "g2", "g3"]);
+    let in_dm = post_all(&fixture, &dm_id, &["d1", "d2", "d3"]);
+    let secret = post_all(&fixture, &secret_id, &["secret"]);
+    let session = fixture.client.session(fixture.login().await.credentials);
+
+    let window = session
+        .surrounding_messages(&in_group[1], 4)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(texts(&window.messages), ["g1", "g2", "g3"]);
+    let window = session
+        .surrounding_messages(&in_dm[1], 4)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(texts(&window.messages), ["d1", "d2", "d3"]);
+
+    // The server does not say that the message exists: it is the same answer as for a missing one.
+    assert_eq!(
+        session.surrounding_messages(&secret[0], 4).await.unwrap(),
+        None
+    );
+}
+
+// MSG-008
+#[tokio::test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+async fn a_window_with_a_revoked_token_is_unauthorized() {
+    let fixture = Fixture::new();
+    let (room_id, _) = fixture.create_channel();
+    let ids = post_all(&fixture, &room_id, &["m1"]);
+    let session = fixture.client.session(fixture.login().await.credentials);
+    session.logout().await.unwrap();
+
+    let result = session.surrounding_messages(&ids[0], 4).await;
+    assert!(matches!(result, Err(Error::Unauthorized)), "{result:?}");
+    let result = session.next_messages(&room_id, None, 4).await;
+    assert!(matches!(result, Err(Error::Unauthorized)), "{result:?}");
+}
+
+// MSG-008
+#[tokio::test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+async fn the_next_messages_exclude_the_time_given_and_page_oldest_first_to_the_end() {
+    let fixture = Fixture::new();
+    let (room_id, _) = fixture.create_channel();
+    let posted: Vec<_> = ["m1", "m2", "m3", "m4", "m5"]
+        .iter()
+        .map(|text| fixture.admin.post_message(&room_id, text))
+        .collect();
+    let hidden = fixture
+        .admin
+        .post_in_thread(&room_id, &posted[4].id, "hidden reply", false);
+    let session = fixture.client.session(fixture.login().await.credentials);
+    let ts = |i: usize| posted[i].ts.parse::<jiff::Timestamp>().unwrap();
+
+    let page = session
+        .next_messages(&room_id, Some(ts(1)), 2)
+        .await
+        .unwrap();
+    assert_eq!(texts(&page.messages), ["m3", "m4"]);
+    assert!(!page.reached_end);
+
+    // A page short of the limit is the end, and it has the hidden reply of a thread.
+    let page = session
+        .next_messages(&room_id, Some(ts(3)), 5)
+        .await
+        .unwrap();
+    assert_eq!(texts(&page.messages), ["m5", "hidden reply"]);
+    assert_eq!(page.messages[1].id, hidden.id);
+    assert_eq!(
+        page.messages[1].thread_id.as_deref(),
+        Some(posted[4].id.as_str())
+    );
+    assert!(page.reached_end);
+
+    // Without a time it starts at the room's beginning.
+    let page = session.next_messages(&room_id, None, 50).await.unwrap();
+    assert!(page.reached_end);
+    assert_eq!(
+        texts(&page.messages),
+        ["m1", "m2", "m3", "m4", "m5", "hidden reply"]
+    );
+    assert!(page.messages.windows(2).all(|w| w[0].ts <= w[1].ts));
+
+    // Nothing after the newest.
+    let page = session
+        .next_messages(&room_id, Some(page.messages[page.messages.len() - 1].ts), 5)
+        .await
+        .unwrap();
+    assert!(page.messages.is_empty());
+    assert!(page.reached_end);
+}
+
+// MSG-008
+#[tokio::test]
+#[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]
+async fn the_next_messages_of_something_that_is_not_a_room_are_refused() {
+    let fixture = Fixture::new();
+    let session = fixture.client.session(fixture.login().await.credentials);
+
+    let result = session.next_messages("no-such-room", None, 5).await;
+    assert!(
+        matches!(result, Err(Error::Server { status: 400, .. })),
+        "{result:?}"
+    );
+}
+
 // MSG-005
 #[tokio::test]
 #[ignore = "needs a Rocket.Chat server: set RC_TEST_SERVER_URL"]

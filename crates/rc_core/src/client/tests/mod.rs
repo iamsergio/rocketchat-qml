@@ -36,9 +36,9 @@ use crate::images::ImageUpdate;
 use crate::members::{Member, MemberError, MemberSearch, MemberSearchState};
 use crate::policy::{ActionError, MessageAction, MessagePolicy};
 use crate::ports::{
-    ApiError, CacheError, CacheKey, Changes, Clock, Connector, FileCache, Image, Page, Pushed,
-    Realtime, SecretStore, ServerApi, StoreError, Stored, ThreadTarget, ThreadsPage,
-    image_extension,
+    ApiError, CacheError, CacheKey, Changes, Clock, Connector, FileCache, Image, MessageWindow,
+    NewerPage, Page, Pushed, Realtime, SecretStore, ServerApi, StoreError, Stored, ThreadTarget,
+    ThreadsPage, image_extension,
 };
 use crate::rooms::{RoomAction, RoomActionError, RoomChange, Unread};
 use crate::session::{LoginFailure, SessionState};
@@ -49,6 +49,7 @@ use crate::uploads::{Upload, UploadError, UploadId, UploadState};
 
 mod accounts;
 mod activity;
+mod around;
 mod avatars;
 mod batch;
 mod changes;

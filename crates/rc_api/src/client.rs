@@ -13,8 +13,9 @@ use tokio::io::AsyncReadExt as _;
 use crate::error::Error;
 use crate::types::{
     Credentials, CustomEmoji, DirectoryChannel, DirectoryPage, DirectoryUser, Download,
-    HistoryPage, LoginResult, MemberPage, Message, MessageChanges, MessageSettings, RoomInfo,
-    RoomType, ServerInfo, Subscription, ThreadPage, ThreadsKind, ThreadsPage, User,
+    HistoryPage, LoginResult, MemberPage, Message, MessageChanges, MessageSettings, NextPage,
+    RoomInfo, RoomType, ServerInfo, Subscription, ThreadPage, ThreadsKind, ThreadsPage, User,
+    Window,
 };
 use crate::wire;
 
@@ -409,6 +410,91 @@ impl RestSession {
         let path = format!("api/v1/{endpoint}?{}", escaped.query().unwrap_or_default());
         let body = self.call(Method::GET, &path).await?;
         wire::parse_history(&body, count).map_err(Error::Decode)
+    }
+
+    /// The messages around one message (`loadSurroundingMessages` through `method.call`), `limit`
+    /// of them at most: about half older, the message, the rest newer, fewer on a side that
+    /// reaches the room's edge. `None` if the message doesn't exist (or no longer). The window also
+    /// holds the thread replies that were not sent to the room; filtering them is for the caller.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Unauthorized`] if the token is expired or revoked, [`Error::Server`] if the server
+    /// refuses (a room the user can't read), or any of the other errors.
+    pub async fn surrounding_messages(
+        &self,
+        message_id: &str,
+        limit: usize,
+    ) -> Result<Option<Window>, Error> {
+        let result = self
+            .method_call(
+                "loadSurroundingMessages",
+                &serde_json::json!([{ "_id": message_id }, limit]),
+            )
+            .await?;
+        wire::parse_surrounding(result).map_err(Error::Decode)
+    }
+
+    /// The messages of a room after `after` (exclusive; from the room's beginning without it),
+    /// oldest first, `limit` of them at most (`loadNextMessages` through `method.call`).
+    /// [`NextPage::reached_end`] says when there are no more. Thread replies that were not sent to
+    /// the room are included, and count towards `limit`.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Unauthorized`] if the token is expired or revoked, [`Error::Server`] if the room
+    /// doesn't exist or isn't visible to the user, or any of the other errors.
+    pub async fn next_messages(
+        &self,
+        room_id: &str,
+        after: Option<jiff::Timestamp>,
+        limit: usize,
+    ) -> Result<NextPage, Error> {
+        let after = after.map_or(
+            serde_json::Value::Null,
+            |after| serde_json::json!({ "$date": after.as_millisecond() }),
+        );
+        let result = self
+            .method_call(
+                "loadNextMessages",
+                &serde_json::json!([room_id, after, limit]),
+            )
+            .await?;
+        wire::parse_next(result, limit).map_err(Error::Decode)
+    }
+
+    /// Calls a server method the way the realtime connection would
+    /// (`POST /api/v1/method.call/<name>`). The body wraps the DDP call frame as a string and the
+    /// answer wraps the DDP result frame the same way. A refused call is a `400` with the error in
+    /// the frame, or a `200` with it: both give [`Error::Server`] with the text of the error.
+    async fn method_call(
+        &self,
+        name: &str,
+        params: &serde_json::Value,
+    ) -> Result<serde_json::Value, Error> {
+        let frame = serde_json::json!({
+            "msg": "method", "id": "1", "method": name, "params": params,
+        });
+        let payload = serde_json::json!({ "message": frame.to_string() });
+        let path = format!("api/v1/method.call/{}", segment(name)?);
+        let (status, body) = self
+            .client
+            .send(Method::POST, &path, Some(&self.credentials), Some(&payload))
+            .await?;
+        if status == StatusCode::UNAUTHORIZED {
+            return Err(Error::Unauthorized);
+        }
+        let outcome = wire::parse_method_call(&body);
+        match outcome {
+            Ok(wire::MethodOutcome::Result(result)) if status.is_success() => Ok(result),
+            Ok(wire::MethodOutcome::Error(message)) => Err(Error::Server {
+                status: status.as_u16(),
+                message,
+            }),
+            // Not the envelope of a method call (a 429, a proxy's page), or a success that isn't.
+            Err(e) if status.is_success() => Err(Error::Decode(e)),
+            _ => Err(server_error(status, &body)),
+        }
     }
 
     /// The messages of a room that match `text` (`GET /api/v1/chat.search`), newest first, `count`

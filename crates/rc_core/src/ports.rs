@@ -154,6 +154,40 @@ pub trait ServerApi: Clone + Send + Sync + 'static {
         count: usize,
     ) -> impl Future<Output = Result<Page, ApiError>> + Send;
 
+    /// The messages around `message` of `room`, `limit` of them at most: about half older, the
+    /// message, the rest newer, fewer on a side that reaches the room's edge. `None` if the message
+    /// doesn't exist, or no longer. The server finds the message by its id; `room` is for the
+    /// implementations that need it. Like [`history`](Self::history) it leaves out the replies in
+    /// a thread that the room doesn't show, and the flags count the ones that were left out.
+    ///
+    /// # Errors
+    ///
+    /// [`ApiError::Unauthorized`] if the credentials have expired or were revoked,
+    /// [`ApiError::Server`] if the server refuses.
+    fn around(
+        &self,
+        credentials: &Credentials,
+        room: &RoomId,
+        message: &MessageId,
+        limit: usize,
+    ) -> impl Future<Output = Result<Option<MessageWindow>, ApiError>> + Send;
+
+    /// The messages of `room` sent after `after` (exclusive; from the room's beginning without
+    /// it), oldest first, `limit` of the room's messages at most. The replies in a thread that the
+    /// room doesn't show are left out, after they were counted against `limit`.
+    ///
+    /// # Errors
+    ///
+    /// [`ApiError::Unauthorized`] if the credentials have expired or were revoked,
+    /// [`ApiError::Server`] if the server refuses.
+    fn newer(
+        &self,
+        credentials: &Credentials,
+        room: &RoomId,
+        after: Option<jiff::Timestamp>,
+        limit: usize,
+    ) -> impl Future<Output = Result<NewerPage, ApiError>> + Send;
+
     /// Posts a text message under the id the caller picked and returns it as the server stored it,
     /// with the server's time. With `thread` it is a reply in that thread. The server stores a
     /// message once per id, and sending an id it holds already (a retry whose first attempt got
@@ -585,6 +619,27 @@ pub struct Page {
     pub messages: Vec<Message>,
     /// There is nothing before them.
     pub reached_start: bool,
+}
+
+/// What [`ServerApi::around`] returns.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MessageWindow {
+    /// The messages the timeline shows, oldest first. The one asked for is among them, unless it
+    /// is a reply the room doesn't show.
+    pub messages: Vec<Message>,
+    /// The room has messages older than the window.
+    pub more_before: bool,
+    /// The room has messages newer than the window.
+    pub more_after: bool,
+}
+
+/// What [`ServerApi::newer`] returns.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NewerPage {
+    /// The messages the timeline shows, oldest first.
+    pub messages: Vec<Message>,
+    /// There is nothing after them.
+    pub reached_end: bool,
 }
 
 /// What [`ServerApi::threads_list`] returns.
