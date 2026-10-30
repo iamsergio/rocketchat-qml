@@ -74,6 +74,30 @@ pub fn pick_state(found: Option<&Found>, id: &MessageId) -> (bool, bool) {
     }
 }
 
+/// What choosing a result does: the message the room shows, and the thread to open over the
+/// results, if the result is a reply.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PickTarget {
+    pub show: MessageId,
+    pub thread: Option<MessageId>,
+}
+
+/// What to show for `message` found by the search. A reply the room doesn't show has no place
+/// there, so the room shows the thread's parent; a reply that was also sent to the room shows
+/// itself. Either way its thread opens (it doesn't scroll to the reply: the server can't load
+/// the replies around one).
+#[must_use]
+pub fn pick_target(message: &Message) -> PickTarget {
+    let show = match &message.thread_id {
+        Some(parent) if !message.shows_in_room() => parent.clone(),
+        _ => message.id.clone(),
+    };
+    PickTarget {
+        show,
+        thread: message.thread_id.clone(),
+    }
+}
+
 /// A message found, as its row shows it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MessageRow {
@@ -89,6 +113,8 @@ pub struct MessageRow {
     pub text: String,
     /// The message is a reply in a thread.
     pub in_thread: bool,
+    /// What choosing the row shows and opens.
+    pub target: PickTarget,
 }
 
 /// A row of the results.
@@ -334,6 +360,7 @@ pub fn rows(messages: &[Message], query: &str, zone: &TimeZone, now: Timestamp) 
             time: time_text(message.ts, zone),
             text: styled(&text, &ranges),
             in_thread: message.thread_id.is_some(),
+            target: pick_target(message),
         }));
     }
     rows
@@ -455,6 +482,15 @@ pub fn step_cursor(rows: &[Row], cursor: Option<usize>, down: bool) -> Option<us
             }
         })
         .find(|at| is_message(rows, *at))
+}
+
+/// What choosing the row `at` does, if it is a message.
+#[must_use]
+pub fn target_at(rows: &[Row], at: usize) -> Option<&PickTarget> {
+    match rows.get(at) {
+        Some(Row::Message(row)) => Some(&row.target),
+        _ => None,
+    }
 }
 
 /// The id of the message at row `at`, if it is one.
@@ -795,6 +831,38 @@ mod tests {
         assert_eq!(first_cursor(&[]), None);
         assert_eq!(message_at(&rows, 3).map(MessageId::as_str), Some("b"));
         assert_eq!(message_at(&rows, 2), None);
+    }
+
+    fn reply(id: &str, parent: &str, in_room: bool) -> Message {
+        Message {
+            thread_id: Some(parent.to_owned().into()),
+            thread_shown: in_room,
+            ..message(id, "2026-10-20T10:00:00Z", "reply")
+        }
+    }
+
+    // MSG-008
+    #[test]
+    fn a_hidden_reply_shows_its_parent_and_opens_the_thread() {
+        let target = pick_target(&reply("r1", "p", false));
+        assert_eq!(target.show.as_str(), "p");
+        assert_eq!(target.thread.as_ref().map(MessageId::as_str), Some("p"));
+    }
+
+    // MSG-008
+    #[test]
+    fn a_reply_also_sent_to_the_room_shows_itself_and_opens_the_thread() {
+        let target = pick_target(&reply("r1", "p", true));
+        assert_eq!(target.show.as_str(), "r1");
+        assert_eq!(target.thread.as_ref().map(MessageId::as_str), Some("p"));
+    }
+
+    // MSG-008
+    #[test]
+    fn a_plain_message_shows_itself_and_opens_nothing() {
+        let target = pick_target(&message("m", "2026-10-20T10:00:00Z", "text"));
+        assert_eq!(target.show.as_str(), "m");
+        assert_eq!(target.thread, None);
     }
 
     fn shown(id: &str, state: FoundState) -> Found {

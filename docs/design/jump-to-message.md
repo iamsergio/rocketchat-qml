@@ -1,6 +1,6 @@
 # Jumping to a message
 
-Choosing a result of the [message search](message-search.md) shows that message in the room, even when it is far older than what the room holds (MSG-008, step 3). This is the target design of the whole step; it is built in five parts (see Steps), and parts 3a to 3d are done: the open room's fetch has a kind and its timeline goes to the store through one function, the server calls and their ports exist, the core has the detached window, and the Qt side shows it. Thread replies (3e) and Slint (step 5 of the search) are not built yet.
+Choosing a result of the [message search](message-search.md) shows that message in the room, even when it is far older than what the room holds (MSG-008, step 3). This is the target design of the whole step; it is built in five parts (see Steps), and all of them are done: the open room's fetch has a kind and its timeline goes to the store through one function, the server calls and their ports exist, the core has the detached window, the Qt side shows it, and thread replies open their thread. Slint (step 5 of the search) is not built yet.
 
 ## What the user gets
 
@@ -47,7 +47,12 @@ As built (3d):
 
 ## Thread replies
 
-The room shows the parent, and the thread opens in the pane over the results; Back returns to the results. There is no "around" for threads, so the thread does not scroll to the reply. `ThreadListState` needs a "search held" input apart from `pane`; `back_steps` returns to the results; `open_thread_steps` from a result keeps the search; `RoomPage.qml` shows the search pane by `pane === "search"` and keeps it alive while hidden, so its scroll position survives.
+The room shows the parent, and the thread opens in the pane over the results; Back returns to the results. There is no "around" for threads, so the thread does not scroll to the reply. As built (3e):
+
+- `rc_view::message_search_view::pick_target(message)` gives a `PickTarget { show, thread }`, kept in the row (`MessageRow.target`): a reply the room does not show (`shows_in_room`) shows its parent, one that was also sent to the room shows itself, and either opens the thread of its `tmid`; any other message shows itself and opens nothing. The core is unchanged: the frontend never asks it to show a hidden reply.
+- `ThreadListState` has `search_held` (the core has a search) apart from `search_open` (the pane shows it). `pane` is `thread` while a thread is open, so a thread open with the search held is one opened from a result: opening a thread from the room still closes the search (`open_thread_steps`), while a result keeps it. `back_steps` / `escape_steps` from such a thread are `CloseThread` only (no thread list); `close_pane_steps` (the ×, and the threads button while the pane is open) closes thread and search; `open_search_steps` (Ctrl+F, the search button) closes the thread and shows the results as they were. `pick_steps` closes a thread left by an earlier pick when the new result is not a reply.
+- `hub::show_result` runs `pick_steps`, `show_message(target.show)` and `open_thread(thread)`. The search model keeps the id of the picked row: a row is picked when it is that row and the room's `found` is its `target.show`, since a reply is shown by its parent.
+- `RoomPage.qml` keeps `MessageSearchPane` (hidden, not destroyed, while `ThreadList.searchOpen` is false) so the rows, scroll and field survive; the field clears when `ThreadList.searchHeld` goes false. The thread's back button says "Results" while `searchHeld`.
 
 ## Steps
 
@@ -57,7 +62,7 @@ One PR each.
 - **3b** (done): `rc_api` and the ports: `method_call`, `surrounding_messages`, `next_messages`, the adapter and the fake. wiremock tests in `rc_api/tests/rest.rs` (`result: false`, an error frame, a `401`); contract tests: the order, the edges, the flags, hidden replies, a deleted message giving `false`, a group, a direct message, `loadNextMessages` excluding the end, a group the user is not in.
 - **3c** (done): the detached window in the core: unit tests in `timeline.rs` including a mirror following windows; `client/tests/jump.rs` (a held target makes no request; a second jump drops the first; live messages are dropped while detached and present after `show_latest`; `load_newer` joins; a missing or deleted message; reconnect, sending and another room; the store is never overwritten); an `rc_core` contract test: jump in a 15-message channel read four at a time (`start_with_page_size`), then `load_newer` until attached.
 - **3d** (done): `rc_view` and the Qt side, with GUI tests: click and Enter show the old message with `msgFound` in view; the pane stays with the row picked; scrolling down reaches the latest; the pill; the not-found note.
-- **3e**: thread replies.
+- **3e** (done): thread replies: `pick_target`, the pane steps with `search_held`, `hub::show_result`, GUI tests in `message_search.rs`.
 
 ## Costs and risks
 

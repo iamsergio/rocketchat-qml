@@ -60,7 +60,7 @@ use rc_view::avatar_view::AvatarUrls;
 use rc_view::cache::Cache;
 use rc_view::directory::{SearchRow, search_rows};
 use rc_view::mention::Popup;
-use rc_view::message_search_view::View as MessageSearchView;
+use rc_view::message_search_view::{PickTarget, View as MessageSearchView};
 use rc_view::rich_html::topic_html;
 use rc_view::room_search::{search_rooms as search, trimmed};
 use rc_view::room_view::RoomState;
@@ -70,7 +70,7 @@ use rc_view::startup;
 use rc_view::switchboard::{Screen, Shown, Switchboard};
 use rc_view::thread_list_view::{
     PaneStep, ThreadListState, ThreadUnread, back_steps, close_pane_steps, escape_steps,
-    open_search_steps, open_thread_steps, toggle_search_steps, toggle_steps,
+    open_search_steps, open_thread_steps, pick_steps, toggle_search_steps, toggle_steps,
 };
 use rc_view::thread_view::ThreadState;
 use rc_view::upload_view::UploadRow;
@@ -492,13 +492,6 @@ pub fn load_older() {
     current_account("load_older", |account| account.load_older());
 }
 
-/// Shows the message with this id in the open room, wherever it is in the past.
-pub fn show_message(message_id: String) {
-    current_account("show_message", |account| {
-        account.show_message(MessageId::from(message_id));
-    });
-}
-
 /// Fetches the messages after the newest one of a detached window.
 pub fn load_newer() {
     current_account("load_newer", |account| account.load_newer());
@@ -618,6 +611,29 @@ pub fn open_thread(message_id: String) {
     current_account("open_thread", |account| {
         run_steps(&account, &steps, None);
         account.open_thread(MessageId::from(message_id));
+    });
+}
+
+/// Shows the message a search result stands for in the room and, for a reply, opens its thread
+/// over the results (the search stays). A result that isn't a reply closes the thread an earlier
+/// one opened.
+pub fn show_result(target: &PickTarget) {
+    let steps = {
+        let hub = lock();
+        pick_steps(
+            &hub.switchboard
+                .accounts()
+                .current_cache()
+                .thread_list_state(),
+            target.thread.is_some(),
+        )
+    };
+    current_account("show_result", |account| {
+        run_steps(&account, &steps, None);
+        account.show_message(target.show.clone());
+        if let Some(thread) = &target.thread {
+            account.open_thread(thread.clone());
+        }
     });
 }
 

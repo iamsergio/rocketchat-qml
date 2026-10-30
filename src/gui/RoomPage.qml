@@ -466,7 +466,8 @@ ColumnLayout {
             visible: ThreadList.paneOpen
         }
 
-        // The search of the room's messages takes the place of the threads.
+        // The search of the room's messages takes the place of the threads. A thread opened from a
+        // result hides it (it is not destroyed, so the rows, the scroll and the field stay).
         MessageSearchPane {
             id: searchPane
 
