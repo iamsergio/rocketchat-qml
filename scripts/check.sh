@@ -10,10 +10,10 @@
 # Usage:
 #   scripts/check.sh quick [-p <crate>]... [-g <gui test file>]... [-s <gui test file>]...
 #       While working: fmt, then clippy and the unit tests of the given crates (the workspace if
-#       none), then the given GUI test files (crates/rc_gui_tests/tests/<name>.rs) against the
-#       Qt app in build-dev (-g) or, for the tests of the file listed in
-#       crates/rc_gui_tests/slint.txt, the Slint app in build-dev-slint (-s). The build is
-#       rebuilt first.
+#       none; clippy also covers rc_gui_tests when GUI test files are given), then the given GUI
+#       test files (crates/rc_gui_tests/tests/<name>.rs) against the Qt app in build-dev (-g) or,
+#       for the tests of the file listed in crates/rc_gui_tests/slint.txt, the Slint app in
+#       build-dev-slint (-s). The build is rebuilt first.
 #   scripts/check.sh full
 #       Before a commit, what CI runs on the dev and dev-slint presets: fmt, clippy (also with
 #       Slint's Spix), cargo deny, the workspace's tests, the contract tests, both builds, qmllint,
@@ -148,8 +148,14 @@ quick)
         esac
     done
     [ ${#crates[@]} -eq 0 ] && crates=(--workspace)
+    # The GUI test files are targets of rc_gui_tests: lint them too, but don't run its tests here.
+    lint_crates=("${crates[@]}")
+    gui_given=$(( ${#guis[@]} + ${#slint_guis[@]} ))
+    if [ "${crates[0]}" != --workspace ] && [ "$gui_given" -gt 0 ]; then
+        lint_crates+=(-p rc_gui_tests)
+    fi
     step fmt cargo fmt --all --check
-    step clippy cargo clippy "${crates[@]}" --all-targets --locked -- -D warnings
+    step clippy cargo clippy "${lint_crates[@]}" --all-targets --locked -- -D warnings
     step test cargo test "${crates[@]}" --locked
     if [ ${#guis[@]} -gt 0 ] || [ ${#slint_guis[@]} -gt 0 ]; then
         server_up
